@@ -1,0 +1,218 @@
+"""Yunshu Gateway — Monitoring router.
+
+L1 gateway monitoring endpoints: system stats, model status, active requests.
+These are distinct from the L2 control-plane monitoring endpoints in
+yunshu_api/routers/monitoring.py — these are for real-time gateway
+observability by operators and Prometheus scraping.
+"""
+
+from __future__ import annotations
+
+import os
+import platform
+import subprocess
+import time
+from typing import Any, Optional
+
+from fastapi import APIRouter, Query
+from fastapi.responses import PlainTextResponse
+
+from ..middleware.metrics_aggregator import get_metrics_aggregator
+from ..middleware.prometheus_exporter import get_prometheus_metrics
+
+router = APIRouter(prefix="/gw/monitoring", tags=["monitoring"])
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _sysctl(name: str) -> Optional[int]:
+    """Read a macOS sysctl integer value, or None on failure."""
+    try:
+        r = subprocess.run(
+            ["sysctl", "-n", name], capture_output=True, text=True, timeout=2
+        )
+        return int(r.stdout.strip())
+    except Exception:
+        return None
+
+
+def _get_cpu_info() -> dict[str, Any]:
+    """Return CPU usage percent and core count."""
+    try:
+        import psutil
+        cpu_pct = psutil.cpu_percent(interval=0.1)
+        cores = psutil.cpu_count(logical=True)
+        phys_cores = psutil.cpu_count(logical=False)
+    except ImportError:
+        cpu_pct = 0.0
+        phys_cores = _sysctl("hw.physicalcpu") or 0
+        cores = _sysctl("hw.logicalcpu") or phys_cores
+    return {"percent": cpu_pct, "physical_cores": phys_cores, "logical_cores": cores}
+
+
+def _get_memory_info() -> dict[str, Any]:
+    """Return RAM usage stats."""
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        return {
+            "total_bytes": mem.total,
+            "used_bytes": mem.used,
+            "available_bytes": mem.available,
+            "percent": mem.percent,
+        }
+    except ImportError:
+        total = _sysctl("hw.memsize") or 0
+        return {
+            "total_bytes": total,
+            "used_bytes": 0,
+            "available_bytes": 0,
+            "percent": 0.0,
+            "note": "psutil not available — install for detailed memory stats",
+        }
+
+
+def _get_gpu_info() -> dict[str, Any]:
+    """Return Apple GPU / UMA memory info via MLX."""
+    try:
+        import mlx.core as mx
+        active = mx.get_active_memory()
+        peak = mx.get_peak_memory()
+        cache = mx.get_cache_memory()
+        total = _sysctl("hw.memsize") or 0
+        util = (active / total * 100) if total > 0 else 0.0
+        mlx_version = getattr(mx, "__version__", "unknown")
+        return {
+            "active_bytes": active,
+            "peak_bytes": peak,
+            "cache_bytes": cache,
+            "total_uma_bytes": total,
+            "utilization_pct": round(util, 1),
+            "mlx_version": mlx_version,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _get_model_status() -> list[dict[str, Any]]:
+    """Return status list of loaded/registered models."""
+    from ..engine import get_engine, get_model_manager
+
+    results: list[dict[str, Any]] = []
+
+    manager = get_model_manager()
+    if manager is not None:
+        for mid, entry in ((e.model_id, e) for e in manager.list_entries()):
+            info: dict[str, Any] = {
+                "model_id": mid,
+                "loaded": entry.is_loaded,
+                "pinned": entry.is_pinned,
+                "size_bytes": entry.estimated_bytes,
+            }
+            if entry.is_loaded and entry.engine and hasattr(entry.engine, "get_stats"):
+                try:
+                    info["stats"] = entry.engine.get_stats()
+                except Exception:
+                    pass
+            results.append(info)
+        return results
+
+    engine = get_engine()
+    if engine and engine.is_loaded:
+        results.append({
+            "model_id": engine.model_name,
+            "loaded": True,
+            "stats": engine.get_stats() if hasattr(engine, "get_stats") else {},
+        })
+    return results
+
+
+def _get_active_requests() -> dict[str, Any]:
+    """Return active request statistics."""
+    from ..engine import get_engine, get_model_manager
+    from ..middleware.metrics import get_metrics
+
+    active = 0
+    waiting = 0
+    processed = 0
+
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and entry.engine and hasattr(entry.engine, "get_stats"):
+                s = entry.engine.get_stats()
+                active += s.get("active", 0)
+                waiting += s.get("waiting", 0)
+                processed += s.get("num_requests_processed", 0)
+    else:
+        engine = get_engine()
+        if engine and hasattr(engine, "get_stats"):
+            s = engine.get_stats()
+            active = s.get("active", 0)
+            waiting = s.get("waiting", 0)
+            processed = s.get("num_requests_processed", 0)
+
+    # Also include metrics aggregator data.
+    agg = get_metrics_aggregator()
+    summary = agg.get_summary(window_seconds=60)
+
+    return {
+        "active": active,
+        "waiting": waiting,
+        "total_processed": processed,
+        "last_minute": summary,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/system")
+async def system_stats() -> dict[str, Any]:
+    """System-level statistics: CPU, memory, GPU, runtime info."""
+    return {
+        "cpu": _get_cpu_info(),
+        "memory": _get_memory_info(),
+        "gpu": _get_gpu_info(),
+        "platform": platform.platform(),
+        "python_version": platform.python_version(),
+        "pid": os.getpid(),
+        "hostname": platform.node(),
+    }
+
+
+@router.get("/models")
+async def models_status() -> dict[str, Any]:
+    """Model status list (loaded, stats, etc.)."""
+    models = _get_model_status()
+    return {
+        "models": models,
+        "total": len(models),
+    }
+
+
+@router.get("/requests")
+async def requests_stats(
+    window: int = Query(60, ge=1, le=3600, description="Aggregation window in seconds"),
+) -> dict[str, Any]:
+    """Active and recent request statistics."""
+    data = _get_active_requests()
+    # Add aggregator percentiles.
+    agg = get_metrics_aggregator()
+    data["latency_percentiles"] = agg.get_percentiles("duration_ms", window_seconds=window)
+    data["token_percentiles"] = agg.get_percentiles("tokens_out", window_seconds=window)
+    data["endpoint_breakdown"] = agg.get_endpoint_breakdown(window_seconds=window)
+    return data
+
+
+@router.get("/prometheus", response_class=PlainTextResponse)
+async def prometheus_export() -> str:
+    """Full Prometheus exposition-format output.
+
+    This is a superset of the /metrics endpoint that also includes
+    the richer PrometheusMetrics registry (histogram buckets, gauges).
+    """
+    return get_prometheus_metrics().generate()

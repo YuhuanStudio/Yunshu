@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture — Yunshu</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        nav {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+        nav .brand { font-size: 1.25rem; font-weight: 700; color: #fff; }
+        nav a {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a:hover, nav a.active { color: #4fc3f7; }
+        .container {
+            max-width: 1000px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+        .subtitle { color: #888; margin-bottom: 2rem; }
+        .section {
+            margin-bottom: 3rem;
+        }
+        .section h2 {
+            font-size: 1.4rem;
+            color: #fff;
+            border-bottom: 1px solid #222;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .section h3 {
+            font-size: 1.1rem;
+            color: #ccc;
+            margin: 1.25rem 0 0.75rem;
+        }
+        .section p, .section li {
+            font-size: 0.92rem;
+            color: #bbb;
+            margin-bottom: 0.5rem;
+        }
+        .section ul { padding-left: 1.5rem; }
+        .section code {
+            background: #1a1a1a;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.85rem;
+            color: #82b1ff;
+        }
+        /* Layer diagram */
+        .layer-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin: 1.5rem 0;
+            border: 1px solid #222;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .layer-row {
+            display: flex;
+            align-items: stretch;
+            min-height: 64px;
+        }
+        .layer-label {
+            width: 120px;
+            min-width: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: #fff;
+            padding: 0.5rem;
+        }
+        .layer-content {
+            flex: 1;
+            background: #151515;
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .layer-content .title {
+            font-weight: 600;
+            color: #fff;
+            font-size: 0.9rem;
+            margin-bottom: 0.25rem;
+        }
+        .layer-content .desc {
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .layer-content .components {
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+        .l0 .layer-label { background: #1b5e20; }
+        .l1 .layer-label { background: #0d47a1; }
+        .l2 .layer-label { background: #4a148c; }
+        .l3 .layer-label { background: #e65100; }
+        .l4 .layer-label { background: #880e4f; }
+        .l5 .layer-label { background: #263238; }
+
+        /* KV diagram */
+        .kv-diagram {
+            display: flex;
+            gap: 1rem;
+            margin: 1.5rem 0;
+            flex-wrap: wrap;
+        }
+        .kv-tier {
+            flex: 1;
+            min-width: 180px;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .kv-tier .tier-name {
+            font-weight: 700;
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+        }
+        .kv-tier .tier-location {
+            font-size: 0.8rem;
+            margin-bottom: 0.5rem;
+        }
+        .kv-tier .tier-details {
+            font-size: 0.75rem;
+            color: #888;
+            text-align: left;
+        }
+        .kv-hot { border-color: #66bb6a; }
+        .kv-hot .tier-name { color: #66bb6a; }
+        .kv-hot .tier-location { color: #a5d6a7; }
+        .kv-warm { border-color: #ffa726; }
+        .kv-warm .tier-name { color: #ffa726; }
+        .kv-warm .tier-location { color: #ffcc80; }
+        .kv-cool { border-color: #42a5f5; }
+        .kv-cool .tier-name { color: #42a5f5; }
+        .kv-cool .tier-location { color: #90caf9; }
+        .kv-cold { border-color: #ab47bc; }
+        .kv-cold .tier-name { color: #ab47bc; }
+        .kv-cold .tier-location { color: #ce93d8; }
+        .kv-arrow {
+            color: #444;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+        }
+
+        /* Flow diagram */
+        .flow-diagram {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.8rem;
+            color: #c0c0c0;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.5;
+        }
+
+        /* Metal kernels */
+        .kernel-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+        .kernel-card {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem;
+        }
+        .kernel-card .kernel-name {
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: #4fc3f7;
+            margin-bottom: 0.5rem;
+        }
+        .kernel-card .kernel-desc {
+            font-size: 0.8rem;
+            color: #888;
+        }
+        .kernel-card .kernel-status {
+            font-size: 0.75rem;
+            margin-top: 0.5rem;
+        }
+        .status-planned { color: #ffa726; }
+        .status-wip { color: #42a5f5; }
+        .status-done { color: #66bb6a; }
+
+        .file-tree {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.8rem;
+            color: #999;
+            line-height: 1.6;
+        }
+        .file-tree .dir { color: #4fc3f7; }
+        .file-tree .file { color: #c0c0c0; }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #555;
+            font-size: 0.8rem;
+            border-top: 1px solid #222;
+            margin-top: 3rem;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Yunshu</span>
+        <a href="index.html">Docs</a>
+        <a href="api_reference.html">API Reference</a>
+        <a href="benchmark.html">Benchmarks</a>
+        <a href="architecture.html" class="active">Architecture</a>
+        <a href="development.html">Development</a>
+    </nav>
+
+    <div class="container">
+        <h1>Architecture</h1>
+        <p class="subtitle">5-layer stack designed for production inference on Apple Silicon clusters.</p>
+
+        <!-- 5-Layer Stack -->
+        <div class="section">
+            <h2>5-Layer Stack (L0-L5)</h2>
+            <p>Yunshu follows a strict layered architecture. Each layer only depends on the layer below it. The entire L1-L5 stack is implemented in Python with FastAPI &mdash; no Rust, no gRPC cross-language FFI.</p>
+
+            <div class="layer-stack">
+                <div class="layer-row l0">
+                    <div class="layer-label">L0</div>
+                    <div class="layer-content">
+                        <div class="title">Client</div>
+                        <div class="desc">Swift app, CLI, SDK &mdash; connects via HTTP/WebSocket to L1</div>
+                        <div class="components">SwiftUI app / yunshu_cli (Typer) / yunshu_sdk (Python)</div>
+                    </div>
+                </div>
+                <div class="layer-row l1">
+                    <div class="layer-label">L1</div>
+                    <div class="layer-content">
+                        <div class="title">Gateway</div>
+                        <div class="desc">FastAPI HTTP server &mdash; OpenAI / Anthropic / MCP / Realtime / Admin protocols</div>
+                        <div class="components">python/yunshu_gateway/ &mdash; routers: chat, completions, models, embeddings, audio, images, realtime, anthropic, mcp, admin, batch</div>
+                    </div>
+                </div>
+                <div class="layer-row l2">
+                    <div class="layer-label">L2</div>
+                    <div class="layer-content">
+                        <div class="title">Control Plane</div>
+                        <div class="desc">Scheduling, RBAC, multi-tenant management, model registry</div>
+                        <div class="components">python/yunshu_control/ + python/yunshu_api/ &mdash; scheduler, auth, tenant management, model discovery</div>
+                    </div>
+                </div>
+                <div class="layer-row l3">
+                    <div class="layer-label">L3</div>
+                    <div class="layer-content">
+                        <div class="title">Compute Mesh</div>
+                        <div class="desc">Distributed inference across Apple Silicon nodes via mx.distributed</div>
+                        <div class="components">python/yunshu_mesh/ &mdash; JACCL / Ring / MPI topology, node discovery, load balancing</div>
+                    </div>
+                </div>
+                <div class="layer-row l4">
+                    <div class="layer-label">L4</div>
+                    <div class="layer-content">
+                        <div class="title">Engine</div>
+                        <div class="desc">5-modality inference with continuous batching, speculative decoding</div>
+                        <div class="components">python/yunshu_engine/ &mdash; Engine, BatchGenerator, Sampler, SequenceStateMachine, detokenizer, modality handlers (LLM/VLM/TTS/ASR/Image)</div>
+                    </div>
+                </div>
+                <div class="layer-row l5">
+                    <div class="layer-label">L5</div>
+                    <div class="layer-content">
+                        <div class="title">KV Hierarchy</div>
+                        <div class="desc">4-tier KV cache: Hot (GPU) / Warm (CPU+quantized) / Cool (SSD) / Cold (distributed)</div>
+                        <div class="components">python/yunshu_kv/ &mdash; paged attention, KIVI quantization, prefix caching, distributed cache</div>
+                    </div>
+                </div>
+            </div>
+
+            <h3>Key Design Decisions</h3>
+            <ul>
+                <li><strong>Single-language Python stack</strong> (L1-L5) &mdash; no Rust, no gRPC cross-language FFI</li>
+                <li><strong>FastAPI</strong> for both L1 gateway and L2 management API</li>
+                <li><strong>mlx-lm BatchGenerator</strong> as continuous batching engine (not a simple wrapper)</li>
+                <li><strong>Per-request sampler + SequenceStateMachine</strong> &mdash; Aho-Corasick trie for stop/eos/reasoning state tracking</li>
+                <li><strong>Per-request detokenizer</strong> &mdash; never pool detokenizers (reset() leaks byte buffers)</li>
+                <li><strong>Single Metal thread</strong> &mdash; all GPU work via <code>ThreadPoolExecutor(max_workers=1)</code></li>
+                <li><strong>uv</strong> as sole Python package manager (no pip/poetry/pip-tools)</li>
+            </ul>
+        </div>
+
+        <!-- KV Hierarchy -->
+        <div class="section">
+            <h2>KV Cache Hierarchy</h2>
+            <p>The 4-tier KV cache enables prefix sharing, memory compression, and distributed caching across the compute mesh.</p>
+
+            <div class="kv-diagram">
+                <div class="kv-tier kv-hot">
+                    <div class="tier-name">Hot</div>
+                    <div class="tier-location">GPU Resident</div>
+                    <div class="tier-details">
+                        <ul style="padding-left: 1rem; list-style: none;">
+                            <li>PagedAttention Metal kernel</li>
+                            <li>fp16/bf16 precision</li>
+                            <li>Fastest access (&lt;1us)</li>
+                            <li>Limited by UMA size</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="kv-arrow">&rarr;</div>
+                <div class="kv-tier kv-warm">
+                    <div class="tier-name">Warm</div>
+                    <div class="tier-location">CPU + Quantized</div>
+                    <div class="tier-details">
+                        <ul style="padding-left: 1rem; list-style: none;">
+                            <li>KIVI 2-bit/4-bit quantization</li>
+                            <li>Metal-accelerated dequant</li>
+                            <li>~8x compression ratio</li>
+                            <li>Good for prefix reuse</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="kv-arrow">&rarr;</div>
+                <div class="kv-tier kv-cool">
+                    <div class="tier-name">Cool</div>
+                    <div class="tier-location">SSD-backed</div>
+                    <div class="tier-details">
+                        <ul style="padding-left: 1rem; list-style: none;">
+                            <li>Disk-backed cache files</li>
+                            <li>Prefix sharing across requests</li>
+                            <li>Async I/O, non-blocking</li>
+                            <li>Large capacity (TB+)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="kv-arrow">&rarr;</div>
+                <div class="kv-tier kv-cold">
+                    <div class="tier-name">Cold</div>
+                    <div class="tier-location">Distributed</div>
+                    <div class="tier-details">
+                        <ul style="padding-left: 1rem; list-style: none;">
+                            <li>Across mesh nodes</li>
+                            <li>JACCL/Ring transport</li>
+                            <li>Multi-node prefix sharing</li>
+                            <li>Cluster-scale capacity</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <h3>Promotion / Demotion</h3>
+            <p>KV blocks are promoted from Cold &rarr; Cool &rarr; Warm &rarr; Hot on access, and demoted in reverse when memory pressure increases. The ProcessMemoryEnforcer monitors GPU memory and triggers eviction when usage exceeds <code>YUNSHU_MAX_MEMORY_GB</code>.</p>
+        </div>
+
+        <!-- Scheduler Lifecycle -->
+        <div class="section">
+            <h2>Scheduler Lifecycle</h2>
+            <p>The scheduler manages request queuing, batching, and execution across the 5 modalities.</p>
+
+            <div class="flow-diagram">  Client Request
+       |
+       v
+  [L1 Gateway Router]  -- parse request, validate params
+       |
+       v
+  [L2 Control Plane]   -- auth check, rate limit, model selection
+       |
+       v
+  [Engine Queue]       -- per-model request queue
+       |
+       v
+  [Scheduler]          -- continuous batching loop
+       |
+       +-- BatchGenerator.insert()  -- add to current batch
+       |
+       +-- BatchGenerator.next()    -- step generation
+       |       |
+       |       v
+       |   [Response Parser]  -- per-request SequenceStateMachine
+       |       |                    +-- Aho-Corasick trie (stop/eos)
+       |       v                    +-- Reasoning state tracking
+       |   [Detokenizer]     -- per-request detokenizer
+       |       |                    +-- add_token(id)
+       |       v                    +-- last_segment
+       |   [Output]          -- SSE stream or JSON response
+       |
+       v
+  [Memory Enforcer]    -- poll GPU memory, evict idle models
+  [KV Cache]           -- store/retrieve KV blocks across tiers</div>
+        </div>
+
+        <!-- Request Flow -->
+        <div class="section">
+            <h2>Request Flow Diagram</h2>
+            <p>A typical chat completion request travels through the following path:</p>
+
+            <div class="flow-diagram">  HTTP POST /v1/chat/completions
+       |
+       v
+  [Auth Middleware]     Bearer token validation (if enabled)
+       |
+       v
+  [CORS Middleware]     Origin validation
+       |
+       v
+  [Chat Router]        Parse messages, model_id, params
+       |
+       v
+  [Engine Module]      Resolve model_id to loaded Engine
+       |
+       v
+  [Engine.generate()]  -- or Engine.stream_generate()
+       |
+       +-- Tokenize prompt (tokenizer.encode)
+       +-- Create Sampler (temperature, top_p, seed)
+       +-- Create SequenceStateMachine (stop sequences)
+       +-- BatchGenerator.insert([prompt], max_tokens, [sampler], [ssm])
+       |
+       v
+  [Generation Loop]    ThreadPoolExecutor(max_workers=1)
+       |
+       +-- BatchGenerator.next()  -> (prompt_responses, gen_responses)
+       |       |
+       |       +-- For each response:
+       |             +-- SequenceStateMachine.advance(token)
+       |             +-- Detokenizer.add_token(token)
+       |             +-- Check finish_reason (stop/length/tool_calls)
+       |             +-- Yield SSE chunk if streaming
+       |
+       v
+  [Response]
+       |
+       +-- Streaming: SSE chunks + "data: [DONE]"
+       +-- Non-streaming: Full JSON response</div>
+        </div>
+
+        <!-- Metal Kernels -->
+        <div class="section">
+            <h2>Metal Kernel Overview</h2>
+            <p>Custom Metal compute shaders for performance-critical operations on Apple GPU. Located in <code>metal/</code> directory.</p>
+
+            <div class="kernel-grid">
+                <div class="kernel-card">
+                    <div class="kernel-name">paged_attn</div>
+                    <div class="kernel-desc">Paged attention kernel for L4 engine. Supports paged KV cache with block tables, eliminating contiguous memory requirements.</div>
+                    <div class="kernel-status status-planned">Status: Phase 1 (porting)</div>
+                </div>
+                <div class="kernel-card">
+                    <div class="kernel-name">fa3</div>
+                    <div class="kernel-desc">Flash Attention 3 for Apple GPU. Memory-efficient attention with tiled computation, reducing peak memory from O(n^2) to O(n).</div>
+                    <div class="kernel-status status-planned">Status: Phase 2</div>
+                </div>
+                <div class="kernel-card">
+                    <div class="kernel-name">mla</div>
+                    <div class="kernel-desc">Multi-head Latent Attention for DeepSeek-style models. Compressed KV projection in Metal.</div>
+                    <div class="kernel-status status-planned">Status: Phase 3</div>
+                </div>
+                <div class="kernel-card">
+                    <div class="kernel-name">nsa</div>
+                    <div class="kernel-desc">Native Sparse Attention kernel. Supports block-sparse attention patterns for long-context models.</div>
+                    <div class="kernel-status status-planned">Status: Phase 3</div>
+                </div>
+                <div class="kernel-card">
+                    <div class="kernel-name">sgmv</div>
+                    <div class="kernel-desc">Segmented Matrix-Vector multiplication for Mixture-of-Experts (MoE) models. Batched expert routing.</div>
+                    <div class="kernel-status status-planned">Status: Phase 2</div>
+                </div>
+                <div class="kernel-card">
+                    <div class="kernel-name">kivi_quant</div>
+                    <div class="kernel-desc">KIVI KV cache quantization kernel. 2-bit and 4-bit quantization/dequantization for warm tier KV compression.</div>
+                    <div class="kernel-status status-planned">Status: Phase 0 (validation)</div>
+                </div>
+            </div>
+
+            <h3>Build Pipeline</h3>
+            <p>Metal kernels are compiled with <code>xcrun metal</code> and loaded via MLX's metal framework:</p>
+            <pre style="background: #111; border: 1px solid #222; border-radius: 6px; padding: 1rem; overflow-x: auto;"><code style="background: none; padding: 0; color: #c0c0c0;">just build-metal    # Compile all .metal files to .metallib
+just build          # metal + python + webui (full build)</code></pre>
+        </div>
+
+        <!-- Project Structure -->
+        <div class="section">
+            <h2>Project Structure</h2>
+            <div class="file-tree"><span class="dir">yunshu/</span>
+<span class="file">  justfile               # Build orchestration</span>
+<span class="file">  pyproject.toml         # Python package config (uv)</span>
+<span class="dir">  python/</span>
+<span class="dir">    yunshu_gateway/      # L1: FastAPI HTTP server</span>
+<span class="dir">      routers/           #   Protocol routers (chat, admin, mcp...)</span>
+<span class="dir">    yunshu_control/      # L2: Scheduling, RBAC</span>
+<span class="dir">    yunshu_api/          # L2: Management API</span>
+<span class="dir">    yunshu_mesh/         # L3: Compute mesh (mx.distributed)</span>
+<span class="dir">    yunshu_engine/       # L4: Inference engine</span>
+<span class="dir">      models/            #   Modality model handlers</span>
+<span class="dir">    yunshu_kv/           # L5: KV cache hierarchy</span>
+<span class="dir">    yunshu_sdk/          # Python SDK client</span>
+<span class="dir">    yunshu_cli/          # CLI (Typer)</span>
+<span class="dir">  metal/                 # Metal compute shaders</span>
+<span class="dir">  tests/</span>
+<span class="dir">    unit/                # Unit tests</span>
+<span class="dir">    integration/         # Integration tests</span>
+<span class="dir">    e2e/                 # End-to-end HTTP tests</span>
+<span class="dir">  scripts/               # Utility scripts</span>
+<span class="dir">  docs/                  # Documentation (this site)</span>
+<span class="dir">  webui/                 # Next.js 16 dashboard</span></div>
+        </div>
+    </div>
+
+    <footer>
+        Yunshu v0.1.0.dev0 &middot; Apache-2.0 &middot; Apple Silicon
+    </footer>
+</body>
+</html>

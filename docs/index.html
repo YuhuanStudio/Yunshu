@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yunshu Documentation</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        nav {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        nav .brand {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #fff;
+        }
+        nav a {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a:hover, nav a.active {
+            color: #4fc3f7;
+        }
+        .version-badge {
+            background: #1a237e;
+            color: #82b1ff;
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+        .hero {
+            text-align: center;
+            padding: 4rem 2rem 3rem;
+            border-bottom: 1px solid #222;
+            background: linear-gradient(180deg, #0d1117 0%, #0a0a0a 100%);
+        }
+        .hero h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+        .hero .tagline {
+            font-size: 1.1rem;
+            color: #888;
+            max-width: 650px;
+            margin: 0 auto 1rem;
+        }
+        .hero .badges {
+            display: flex;
+            justify-content: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .hero .badges span {
+            font-size: 0.75rem;
+            padding: 0.3rem 0.7rem;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .badge-modality { background: #1b5e20; color: #a5d6a7; }
+        .badge-protocol { background: #0d47a1; color: #90caf9; }
+        .badge-kv { background: #4a148c; color: #ce93d8; }
+        .badge-hw { background: #311b00; color: #ffe082; }
+        .section {
+            max-width: 1000px;
+            margin: 3rem auto;
+            padding: 0 2rem;
+        }
+        .section h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #fff;
+            border-bottom: 1px solid #222;
+            padding-bottom: 0.5rem;
+        }
+        .section h3 {
+            font-size: 1.1rem;
+            margin: 1.5rem 0 0.75rem;
+            color: #fff;
+        }
+        .section h4 {
+            font-size: 0.95rem;
+            margin: 1rem 0 0.5rem;
+            color: #ccc;
+        }
+        .section p, .section li {
+            font-size: 0.95rem;
+            color: #bbb;
+            margin-bottom: 0.5rem;
+        }
+        .section ul {
+            padding-left: 1.5rem;
+        }
+        .section code {
+            background: #1a1a1a;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.85rem;
+            color: #82b1ff;
+        }
+        .section pre {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem;
+            overflow-x: auto;
+            margin: 0.75rem 0 1.25rem;
+        }
+        .section pre code {
+            background: none;
+            padding: 0;
+            color: #c0c0c0;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            max-width: 1000px;
+            margin: 3rem auto;
+            padding: 0 2rem;
+        }
+        .card {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: border-color 0.2s;
+        }
+        .card:hover {
+            border-color: #4fc3f7;
+        }
+        .card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+        .card p {
+            font-size: 0.9rem;
+            color: #888;
+        }
+        .card a {
+            display: inline-block;
+            margin-top: 0.75rem;
+            color: #4fc3f7;
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0 2rem;
+        }
+        .feature-item {
+            background: #151515;
+            border: 1px solid #1a1a1a;
+            border-radius: 6px;
+            padding: 1rem;
+            text-align: center;
+        }
+        .feature-item .num {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: #4fc3f7;
+        }
+        .feature-item .label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+        .config-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin: 0.75rem 0 1.5rem;
+        }
+        .config-table thead th {
+            background: #151515;
+            color: #aaa;
+            font-weight: 600;
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #333;
+        }
+        .config-table tbody td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        .config-table tbody tr:hover {
+            background: #111;
+        }
+        .config-table code {
+            font-size: 0.8rem;
+        }
+        .layers {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .layer {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .layer .name {
+            font-weight: 600;
+            color: #fff;
+            min-width: 140px;
+        }
+        .layer .desc {
+            font-size: 0.85rem;
+            color: #888;
+        }
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin: 1rem 0 2rem;
+        }
+        .comparison-table thead th {
+            background: #151515;
+            color: #aaa;
+            font-weight: 600;
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #333;
+        }
+        .comparison-table tbody td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        .comparison-table tbody tr:hover {
+            background: #111;
+        }
+        .check-yes { color: #66bb6a; font-weight: 600; }
+        .check-no { color: #666; }
+        .check-partial { color: #ffa726; }
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #555;
+            font-size: 0.8rem;
+            border-top: 1px solid #222;
+            margin-top: 3rem;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Yunshu</span>
+        <span class="version-badge">v0.1.0-dev</span>
+        <a href="index.html" class="active">Docs</a>
+        <a href="api_reference.html">API Reference</a>
+        <a href="benchmark.html">Benchmarks</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="development.html">Development</a>
+    </nav>
+
+    <div class="hero">
+        <h1>Yunshu</h1>
+        <p class="tagline">Production-grade MLX-based LLM inference platform for Apple Silicon clusters. Drop-in replacement for oMLX with 5 modalities, 5 protocols, and 4-tier KV caching.</p>
+        <div class="badges">
+            <span class="badge-modality">5 Modalities</span>
+            <span class="badge-protocol">5 Protocols</span>
+            <span class="badge-kv">4-Tier KV Cache</span>
+            <span class="badge-hw">Apple Silicon Native</span>
+        </div>
+    </div>
+
+    <!-- Feature Overview -->
+    <div class="section" id="features">
+        <h2>Feature Overview</h2>
+        <div class="feature-grid">
+            <div class="feature-item">
+                <div class="num">5</div>
+                <div class="label">Modalities<br>(LLM, VLM, TTS, ASR, Image)</div>
+            </div>
+            <div class="feature-item">
+                <div class="num">5</div>
+                <div class="label">Protocols<br>(OpenAI, Anthropic, MCP, Realtime, Admin)</div>
+            </div>
+            <div class="feature-item">
+                <div class="num">4</div>
+                <div class="label">KV Tiers<br>(Hot / Warm / Cool / Cold)</div>
+            </div>
+            <div class="feature-item">
+                <div class="num">6</div>
+                <div class="label">Metal Kernels<br>(PagedAttn, FA3, MLA, NSA, SGMV, KIVI)</div>
+            </div>
+        </div>
+
+        <h3>Multi-Modal Inference</h3>
+        <ul>
+            <li><strong>LLM</strong> &mdash; Chat completions, text completions, continuous batching via mlx-lm BatchGenerator</li>
+            <li><strong>VLM</strong> &mdash; Vision-language models with self-contained MLX ViT + spatial merge pipeline</li>
+            <li><strong>TTS</strong> &mdash; Text-to-speech via mlx-audio backends (Kokoro-82M, etc.)</li>
+            <li><strong>ASR</strong> &mdash; Automatic speech recognition via Whisper MLX ports</li>
+            <li><strong>Image</strong> &mdash; Diffusion model image generation (Stable Diffusion XL, FLUX.1-schnell)</li>
+        </ul>
+
+        <h3>Protocol Support</h3>
+        <ul>
+            <li><strong>OpenAI</strong> &mdash; Full API compatibility (chat, completions, embeddings, audio, images)</li>
+            <li><strong>Anthropic</strong> &mdash; Messages API compatibility layer</li>
+            <li><strong>MCP</strong> &mdash; Model Context Protocol with tool registration</li>
+            <li><strong>Realtime</strong> &mdash; WebSocket bidirectional audio/text streaming with ASR + TTS</li>
+            <li><strong>Admin</strong> &mdash; Model management, health, metrics, tenant management, KV stats</li>
+        </ul>
+
+        <h3>4-Tier KV Cache Hierarchy</h3>
+        <ul>
+            <li><strong>Hot</strong> &mdash; GPU-resident paged attention (Metal kernels)</li>
+            <li><strong>Warm</strong> &mdash; CPU-resident quantized cache with KIVI compression</li>
+            <li><strong>Cool</strong> &mdash; Disk-backed SSD cache for prefix sharing</li>
+            <li><strong>Cold</strong> &mdash; Distributed cache across compute mesh nodes</li>
+        </ul>
+    </div>
+
+    <!-- Documentation Pages -->
+    <div class="cards">
+        <div class="card">
+            <h3>API Reference</h3>
+            <p>OpenAI-compatible endpoints for chat, completions, embeddings, realtime, images, and audio.</p>
+            <a href="api_reference.html">View API Reference</a>
+        </div>
+        <div class="card">
+            <h3>Benchmarks</h3>
+            <p>Performance comparisons across LLM, VLM, TTS, ASR, and image generation on Apple Silicon.</p>
+            <a href="benchmark.html">View Benchmarks</a>
+        </div>
+        <div class="card">
+            <h3>Architecture</h3>
+            <p>5-layer stack from gateway to Metal kernels. Single-language Python with FastAPI.</p>
+            <a href="architecture.html">View Architecture</a>
+        </div>
+        <div class="card">
+            <h3>Development Guide</h3>
+            <p>Setup, project structure, testing, and contribution guidelines.</p>
+            <a href="development.html">View Guide</a>
+        </div>
+    </div>
+
+    <!-- Installation -->
+    <div class="section" id="installation">
+        <h2>Installation</h2>
+
+        <h3>Prerequisites</h3>
+        <ul>
+            <li><strong>macOS</strong> with Apple Silicon (M1/M2/M3/M4)</li>
+            <li><strong>Python 3.12+</strong> (3.13+ recommended)</li>
+            <li><strong>uv</strong> &mdash; Python package manager (<code>curl -LsSf https://astral.sh/uv/install.sh | sh</code>)</li>
+            <li><strong>just</strong> &mdash; command runner (<code>brew install just</code>)</li>
+            <li><strong>pnpm</strong> &mdash; for WebUI development (optional)</li>
+        </ul>
+
+        <h3>Quick Setup</h3>
+        <pre><code># Clone the repository
+git clone https://github.com/YuhuanStudio/yunshu.git
+cd yunshu
+
+# Option A: Automated setup (checks all prerequisites)
+bash scripts/dev_setup.sh
+
+# Option B: Manual setup
+just setup              # install Python deps + WebUI deps
+
+# Verify installation
+just test-unit          # run unit tests</code></pre>
+
+        <h3>One-Line Install</h3>
+        <pre><code>git clone https://github.com/YuhuanStudio/yunshu.git && cd yunshu && bash scripts/dev_setup.sh</code></pre>
+    </div>
+
+    <!-- Quick Start -->
+    <div class="section" id="quickstart">
+        <h2>Quick Start</h2>
+
+        <h3>1. Start the server</h3>
+        <pre><code># Single-model mode (load a specific model)
+just dev
+
+# Or specify a model path
+YUNSHU_MODEL=./models/Qwen3.5-9B-MLX-4bit just dev
+
+# Multi-model mode (auto-discovers models in ./models/)
+just dev-multi</code></pre>
+
+        <h3>2. Make your first request (curl)</h3>
+        <pre><code>curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3.5-9B-MLX-4bit",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
+  }'</code></pre>
+
+        <h3>3. OpenAI Python SDK</h3>
+        <pre><code>from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="any")
+
+response = client.chat.completions.create(
+    model="Qwen3.5-9B-MLX-4bit",
+    messages=[{"role": "user", "content": "Explain quantum computing"}],
+    stream=True,
+)
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")</code></pre>
+
+        <h3>4. Anthropic Python SDK</h3>
+        <pre><code>import anthropic
+
+# Point to Yunshu's Anthropic-compatible endpoint
+client = anthropic.Anthropic(
+    base_url="http://localhost:8000/v1",
+    api_key="any",
+)
+
+message = client.messages.create(
+    model="Qwen3.5-9B-MLX-4bit",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(message.content[0].text)</code></pre>
+
+        <h3>5. Load / Unload Models via API</h3>
+        <pre><code># Load a model
+curl -X POST http://localhost:8000/api/v1/admin/models/load \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "my-model", "model_path": "./models/my-model"}'
+
+# Unload
+curl -X POST http://localhost:8000/api/v1/admin/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "my-model"}'</code></pre>
+
+        <h3>6. Python SDK</h3>
+        <pre><code>from yunshu_sdk import YunshuClient
+
+client = YunshuClient("http://localhost:8000")
+
+# List models
+models = client.models.list()
+
+# Chat completion
+response = client.chat.completions.create(
+    model=models[0].id,
+    messages=[{"role": "user", "content": "Hello!"}],
+    max_tokens=128,
+)
+print(response.choices[0].message.content)</code></pre>
+    </div>
+
+    <!-- Configuration Reference -->
+    <div class="section" id="configuration">
+        <h2>Configuration Reference</h2>
+        <p>All configuration is via environment variables.</p>
+
+        <table class="config-table">
+            <thead>
+                <tr>
+                    <th>Variable</th>
+                    <th>Default</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>YUNSHU_MODEL</code></td>
+                    <td>&mdash;</td>
+                    <td>Path to a single model to load on startup.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_MULTI_MODEL</code></td>
+                    <td>&mdash;</td>
+                    <td>Set to <code>1</code> to enable multi-model mode with auto-discovery.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_MODELS_DIR</code></td>
+                    <td><code>./models</code></td>
+                    <td>Directory to scan for models (multi-model mode).</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_PORT</code></td>
+                    <td><code>8000</code></td>
+                    <td>Server port.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_HOST</code></td>
+                    <td><code>0.0.0.0</code></td>
+                    <td>Server bind address.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_MAX_MEMORY_GB</code></td>
+                    <td>80% of UMA</td>
+                    <td>Max GPU memory (GB) for the ProcessMemoryEnforcer.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_AUTH_TOKEN</code></td>
+                    <td>&mdash;</td>
+                    <td>Bearer token for API authentication. If unset, no auth required.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_AUTH_DISABLED</code></td>
+                    <td>&mdash;</td>
+                    <td>Set to <code>true</code> to explicitly disable auth (shows warning).</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_CORS_ORIGINS</code></td>
+                    <td><code>*</code></td>
+                    <td>Comma-separated CORS origins. Restrict for production.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_MODEL_TTL_SECONDS</code></td>
+                    <td>&mdash;</td>
+                    <td>Time-to-live (seconds) for idle models before eviction.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_MEMORY_POLL_INTERVAL</code></td>
+                    <td><code>2.0</code></td>
+                    <td>Seconds between memory enforcer polls.</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_RATE_LIMIT_RPM</code></td>
+                    <td><code>0</code></td>
+                    <td>Requests per minute per client (0 = unlimited).</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_LOG_LEVEL</code></td>
+                    <td><code>INFO</code></td>
+                    <td>Logging level (DEBUG, INFO, WARNING, ERROR).</td>
+                </tr>
+                <tr>
+                    <td><code>YUNSHU_WEBUI_ENABLED</code></td>
+                    <td><code>0</code></td>
+                    <td>Enable Next.js dashboard at <code>/dashboard</code>.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Architecture Overview -->
+    <div class="section" id="architecture">
+        <h2>Architecture Overview</h2>
+        <p>Yunshu is a 5-layer stack designed for Apple Silicon clusters. See the <a href="architecture.html" style="color: #4fc3f7; text-decoration: none;">Architecture page</a> for detailed diagrams and explanations.</p>
+        <div class="layers">
+            <div class="layer">
+                <span class="name">L0 Client</span>
+                <span class="desc">Swift app / CLI / SDK</span>
+            </div>
+            <div class="layer">
+                <span class="name">L1 Gateway</span>
+                <span class="desc">FastAPI &mdash; OpenAI / Anthropic / MCP / Realtime / Admin</span>
+            </div>
+            <div class="layer">
+                <span class="name">L2 Control Plane</span>
+                <span class="desc">Scheduling, RBAC, management API</span>
+            </div>
+            <div class="layer">
+                <span class="name">L3 Compute Mesh</span>
+                <span class="desc">mx.distributed &mdash; JACCL / Ring / MPI</span>
+            </div>
+            <div class="layer">
+                <span class="name">L4 Engine</span>
+                <span class="desc">5-modality inference, continuous batching</span>
+            </div>
+            <div class="layer">
+                <span class="name">L5 KV Hierarchy</span>
+                <span class="desc">Hot / Warm / Cool / Cold 4-tier KV storage</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Performance -->
+    <div class="section" id="performance">
+        <h2>Performance</h2>
+        <p>Yunshu is optimized for Apple Silicon with Metal kernels for PagedAttention, Flash Attention 3, and KIVI quantization. See the <a href="benchmark.html" style="color: #4fc3f7; text-decoration: none;">Benchmarks page</a> for detailed results.</p>
+        <ul>
+            <li><strong>Continuous batching</strong> via mlx-lm BatchGenerator with per-request samplers</li>
+            <li><strong>Speculative decoding</strong> with EAGLE-3 draft models</li>
+            <li><strong>KV cache compression</strong> via KIVI 2-bit/4-bit quantization (Metal accelerated)</li>
+            <li><strong>Prefix caching</strong> with Aho-Corasick trie for stop/eos/reasoning state tracking</li>
+            <li><strong>Memory management</strong> with ProcessMemoryEnforcer and model eviction</li>
+        </ul>
+    </div>
+
+    <!-- Comparison Table -->
+    <div class="section" id="comparison">
+        <h2>Yunshu vs oMLX</h2>
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Yunshu</th>
+                    <th>oMLX</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Apple Silicon Native</td>
+                    <td><span class="check-yes">Yes (MLX)</span></td>
+                    <td><span class="check-yes">Yes (MLX)</span></td>
+                </tr>
+                <tr>
+                    <td>OpenAI API Compatible</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-yes">Yes</span></td>
+                </tr>
+                <tr>
+                    <td>Anthropic API Compatible</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>MCP Protocol</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Realtime WebSocket</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Vision-Language Models</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-partial">Limited</span></td>
+                </tr>
+                <tr>
+                    <td>Text-to-Speech</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Speech-to-Text (ASR)</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Image Generation</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Continuous Batching</td>
+                    <td><span class="check-yes">Yes (BatchGenerator)</span></td>
+                    <td><span class="check-partial">Basic</span></td>
+                </tr>
+                <tr>
+                    <td>Speculative Decoding</td>
+                    <td><span class="check-yes">Yes (EAGLE-3)</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Metal Kernels</td>
+                    <td><span class="check-yes">Yes (6 kernels)</span></td>
+                    <td><span class="check-partial">Basic</span></td>
+                </tr>
+                <tr>
+                    <td>KV Cache Hierarchy</td>
+                    <td><span class="check-yes">4-tier (Hot/Warm/Cool/Cold)</span></td>
+                    <td><span class="check-no">Single tier</span></td>
+                </tr>
+                <tr>
+                    <td>Distributed Inference</td>
+                    <td><span class="check-yes">Yes (Compute Mesh)</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Multi-Tenant RBAC</td>
+                    <td><span class="check-yes">Yes</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+                <tr>
+                    <td>Model Eviction</td>
+                    <td><span class="check-yes">Yes (TTL + Memory)</span></td>
+                    <td><span class="check-partial">Manual</span></td>
+                </tr>
+                <tr>
+                    <td>WebUI Dashboard</td>
+                    <td><span class="check-yes">Yes (Next.js 16)</span></td>
+                    <td><span class="check-no">No</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <footer>
+        Yunshu v0.1.0.dev0 &middot; Apache-2.0 &middot; Apple Silicon
+    </footer>
+</body>
+</html>

@@ -1,0 +1,207 @@
+"""Yunshu request management — adapted from oMLX/vLLM patterns.
+
+Self-written with deep MLX integration:
+- RequestStatus enum for lifecycle tracking
+- SamplingParams with all mlx-lm sampler options
+- Request with per-request state, token tracking, detokenizer
+- RequestOutput with incremental + cumulative output
+
+Studied from:
+- oMLX's request.py: RequestStatus, SamplingParams, Request, RequestOutput
+- vLLM's request management: waiting/running/finished queues
+- mlx-lm's SequenceStateMachine: stop/reasoning state tracking
+"""
+from __future__ import annotations
+
+import enum
+import time
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+
+class RequestStatus(enum.IntEnum):
+    """Request lifecycle states (oMLX/vLLM pattern).
+
+    WAITING → PREFILLING → RUNNING → FINISHED_*
+    PREFILLING is used during external prefill (chunked progress tracking).
+    """
+    WAITING = enum.auto()
+    PREFILLING = enum.auto()
+    RUNNING = enum.auto()
+    FINISHED_STOPPED = enum.auto()
+    FINISHED_LENGTH = enum.auto()
+    FINISHED_ABORTED = enum.auto()
+    FINISHED_ERROR = enum.auto()
+    FINISHED_TIMEOUT = enum.auto()
+
+    @staticmethod
+    def is_finished(status: RequestStatus) -> bool:
+        return status >= RequestStatus.FINISHED_STOPPED
+
+    @staticmethod
+    def finish_reason(status: RequestStatus) -> Optional[str]:
+        mapping = {
+            RequestStatus.FINISHED_STOPPED: "stop",
+            RequestStatus.FINISHED_LENGTH: "length",
+            RequestStatus.FINISHED_ABORTED: "abort",
+            RequestStatus.FINISHED_ERROR: "error",
+            RequestStatus.FINISHED_TIMEOUT: "timeout",
+        }
+        return mapping.get(status)
+
+
+@dataclass
+class SamplingParams:
+    """Generation parameters — maps to mlx-lm's make_sampler + oMLX's SamplingParams."""
+    max_tokens: int = 256
+    temperature: float = 0.7
+    top_p: float = 1.0
+    top_k: int = 0
+    min_p: float = 0.0
+    repetition_penalty: float = 1.0
+    presence_penalty: float = 0.0
+    frequency_penalty: float = 0.0
+    logit_bias: dict[int, float] | None = None
+    stop: list[str] = field(default_factory=list)
+    stop_token_ids: list[int] = field(default_factory=list)
+    logprobs: bool = False
+    top_logprobs: int | None = None
+    seed: int | None = None
+    priority: int = 0
+    thinking_budget: int | None = None
+    reasoning_effort: str | None = None
+    # Structured output (JSON schema constrained generation)
+    json_schema: dict | str | None = None
+    grammar: str | None = None
+
+
+@dataclass
+class RequestOutput:
+    """Per-step output from the engine (oMLX/vLLM pattern).
+
+    Supports both incremental (new_text) and cumulative (output_text) output.
+    """
+    request_id: str
+    new_token_ids: list[int] = field(default_factory=list)
+    new_text: str = ""
+    output_token_ids: list[int] = field(default_factory=list)
+    output_text: str = ""
+    finished: bool = False
+    finish_reason: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    logprobs: Any = None
+    current_state: str = "normal"
+    error: str | None = None
+
+    @property
+    def usage(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+        }
+
+
+@dataclass
+class Request:
+    """Per-request state (oMLX Request pattern).
+
+    Tracks the full lifecycle: prompt tokenization → generation → output.
+    Integrates with mlx-lm's BatchGenerator via batch_uid.
+    """
+    request_id: str
+    prompt: str | list[int] | list[dict]
+    sampling_params: SamplingParams = field(default_factory=SamplingParams)
+    arrival_time: float = field(default_factory=time.monotonic)
+    priority: int = 0
+
+    # Tokenization state
+    prompt_token_ids: list[int] = field(default_factory=list)
+    num_prompt_tokens: int = 0
+    num_computed_tokens: int = 0
+
+    # Generation state
+    status: RequestStatus = RequestStatus.WAITING
+    output_token_ids: list[int] = field(default_factory=list)
+    output_text: str = ""
+    finish_reason: str | None = None
+
+    # BatchGenerator integration
+    batch_uid: int | None = None
+
+    # Per-request detokenizer (never pool — reset() leaks byte buffers)
+    detokenizer: Any = None
+
+    # Streaming output queue (asyncio.Queue[RequestOutput | None])
+    output_queue: Any = None
+    done_event: Any = None
+
+    # Chat context
+    enable_thinking: bool | None = None
+
+    # VLM fields (oMLX pattern)
+    vlm_inputs_embeds: Any = None
+    vlm_extra_kwargs: dict[str, Any] | None = None
+    vlm_image_hash: str | None = None
+    rope_deltas: float = 0.0  # mRoPE position delta for multi-modal models (Qwen3 Omni, etc.)
+
+    # Prefix cache fields
+    prompt_cache: Any = None
+    cached_tokens: int = 0
+    remaining_tokens: list[int] | None = None
+
+    # Multimodal content
+    images: list[Any] | None = None
+    videos: list[Any] | None = None
+
+    # Timing (for ServerMetrics integration)
+    prefill_start: float = 0.0
+    prefill_end: float = 0.0
+    generation_start: float = 0.0
+    generation_end: float = 0.0
+
+    @property
+    def num_output_tokens(self) -> int:
+        return len(self.output_token_ids)
+
+    @property
+    def num_tokens(self) -> int:
+        return self.num_prompt_tokens + self.num_output_tokens
+
+    @property
+    def max_tokens(self) -> int:
+        return self.sampling_params.max_tokens
+
+    @property
+    def prefill_duration(self) -> float:
+        return max(0.0, self.prefill_end - self.prefill_start)
+
+    @property
+    def generation_duration(self) -> float:
+        return max(0.0, self.generation_end - self.generation_start)
+
+    def is_finished(self) -> bool:
+        return RequestStatus.is_finished(self.status)
+
+    def append_token(self, token_id: int) -> None:
+        self.output_token_ids.append(token_id)
+        self.num_computed_tokens += 1
+
+    def set_finished(self, status: RequestStatus, reason: str | None = None) -> None:
+        self.status = status
+        self.finish_reason = reason or RequestStatus.finish_reason(status)
+        self.generation_end = time.monotonic()
+
+    def __lt__(self, other: Request) -> bool:
+        if self.priority != other.priority:
+            return self.priority < other.priority
+        return self.arrival_time < other.arrival_time
+
+    def __hash__(self) -> int:
+        return hash(self.request_id)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Request):
+            return False
+        return self.request_id == other.request_id

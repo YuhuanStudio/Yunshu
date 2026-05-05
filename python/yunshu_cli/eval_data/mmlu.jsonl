@@ -1,0 +1,20 @@
+{"id": "mmlu_1", "question": "What is the capital of France?", "choices": ["London", "Paris", "Berlin", "Madrid"], "answer": "B", "subject": "geography"}
+{"id": "mmlu_2", "question": "Which planet is closest to the Sun?", "choices": ["Venus", "Mercury", "Mars", "Earth"], "answer": "B", "subject": "astronomy"}
+{"id": "mmlu_3", "question": "What is the chemical symbol for gold?", "choices": ["Go", "Gd", "Au", "Ag"], "answer": "C", "subject": "chemistry"}
+{"id": "mmlu_4", "question": "Who wrote 'Romeo and Juliet'?", "choices": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"], "answer": "B", "subject": "literature"}
+{"id": "mmlu_5", "question": "What is the largest organ in the human body?", "choices": ["Heart", "Liver", "Skin", "Brain"], "answer": "C", "subject": "biology"}
+{"id": "mmlu_6", "question": "In which year did World War II end?", "choices": ["1943", "1944", "1945", "1946"], "answer": "C", "subject": "history"}
+{"id": "mmlu_7", "question": "What is the square root of 144?", "choices": ["10", "11", "12", "14"], "answer": "C", "subject": "mathematics"}
+{"id": "mmlu_8", "question": "Which gas makes up most of Earth's atmosphere?", "choices": ["Oxygen", "Carbon Dioxide", "Nitrogen", "Hydrogen"], "answer": "C", "subject": "chemistry"}
+{"id": "mmlu_9", "question": "What is the speed of light approximately?", "choices": ["300,000 km/s", "150,000 km/s", "600,000 km/s", "1,000,000 km/s"], "answer": "A", "subject": "physics"}
+{"id": "mmlu_10", "question": "Which country has the largest population in the world?", "choices": ["United States", "India", "China", "Indonesia"], "answer": "B", "subject": "geography"}
+{"id": "mmlu_11", "question": "What does CPU stand for?", "choices": ["Central Processing Unit", "Computer Personal Unit", "Central Program Utility", "Core Processing Unit"], "answer": "A", "subject": "computer science"}
+{"id": "mmlu_12", "question": "Who painted the Mona Lisa?", "choices": ["Vincent van Gogh", "Pablo Picasso", "Leonardo da Vinci", "Michelangelo"], "answer": "C", "subject": "art"}
+{"id": "mmlu_13", "question": "What is the freezing point of water in Celsius?", "choices": ["-10°C", "0°C", "10°C", "100°C"], "answer": "B", "subject": "physics"}
+{"id": "mmlu_14", "question": "Which element has the atomic number 1?", "choices": ["Helium", "Hydrogen", "Oxygen", "Carbon"], "answer": "B", "subject": "chemistry"}
+{"id": "mmlu_15", "question": "What is the largest ocean on Earth?", "choices": ["Atlantic Ocean", "Indian Ocean", "Arctic Ocean", "Pacific Ocean"], "answer": "D", "subject": "geography"}
+{"id": "mmlu_16", "question": "What does DNA stand for?", "choices": ["Deoxyribonucleic Acid", "Dinitrogen Acid", "Dynamic Nuclear Acid", "Deoxyribose Nucleic Atom"], "answer": "A", "subject": "biology"}
+{"id": "mmlu_17", "question": "Which language has the most native speakers?", "choices": ["English", "Spanish", "Mandarin Chinese", "Hindi"], "answer": "C", "subject": "linguistics"}
+{"id": "mmlu_18", "question": "What is 2^10?", "choices": ["512", "1000", "1024", "2048"], "answer": "C", "subject": "mathematics"}
+{"id": "mmlu_19", "question": "Who developed the theory of relativity?", "choices": ["Isaac Newton", "Albert Einstein", "Niels Bohr", "Stephen Hawking"], "answer": "B", "subject": "physics"}
+{"id": "mmlu_20", "question": "What is the main function of red blood cells?", "choices": ["Fight infection", "Carry oxygen", "Clot blood", "Produce hormones"], "answer": "B", "subject": "biology"}

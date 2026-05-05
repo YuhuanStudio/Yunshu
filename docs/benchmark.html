@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Benchmarks — Yunshu</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        nav {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+        nav .brand { font-size: 1.25rem; font-weight: 700; color: #fff; }
+        nav a {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a:hover, nav a.active { color: #4fc3f7; }
+        .container {
+            max-width: 1000px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+        .subtitle { color: #888; margin-bottom: 2rem; }
+        .bench-section { margin-bottom: 3rem; }
+        .bench-section h2 {
+            font-size: 1.3rem;
+            color: #fff;
+            border-bottom: 1px solid #222;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .bench-section h3 {
+            font-size: 1rem;
+            color: #ccc;
+            margin: 1rem 0 0.5rem;
+        }
+        .bench-section .note {
+            font-size: 0.8rem;
+            color: #555;
+            margin-bottom: 0.5rem;
+        }
+        .bench-section p, .bench-section li {
+            font-size: 0.9rem;
+            color: #bbb;
+            margin-bottom: 0.5rem;
+        }
+        .bench-section ul { padding-left: 1.5rem; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        thead th {
+            background: #151515;
+            color: #aaa;
+            font-weight: 600;
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #333;
+        }
+        tbody td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        tbody tr:hover { background: #111; }
+        .placeholder { color: #444; font-style: italic; }
+        .metric-good { color: #66bb6a; }
+        .metric-mid { color: #ffa726; }
+        .metric-bad { color: #ef5350; }
+        .methodology-box {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1.25rem;
+            margin-bottom: 2rem;
+        }
+        .methodology-box h3 {
+            color: #fff;
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+        }
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #555;
+            font-size: 0.8rem;
+            border-top: 1px solid #222;
+            margin-top: 3rem;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Yunshu</span>
+        <a href="index.html">Docs</a>
+        <a href="api_reference.html">API Reference</a>
+        <a href="benchmark.html" class="active">Benchmarks</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="development.html">Development</a>
+    </nav>
+
+    <div class="container">
+        <h1>Benchmarks</h1>
+        <p class="subtitle">Performance on Apple Silicon &mdash; populated by <code>just bench-*</code> commands or <code>scripts/benchmark_paper.py</code>.</p>
+
+        <!-- Methodology -->
+        <div class="methodology-box">
+            <h3>Methodology</h3>
+            <p>All benchmarks follow a consistent methodology to ensure fair comparison:</p>
+            <ul>
+                <li><strong>Same quantization</strong>: All models use 4-bit quantization (MLX format) unless noted</li>
+                <li><strong>Same model weights</strong>: Identical checkpoints across framework runs</li>
+                <li><strong>Same hardware</strong>: Single Apple Silicon Mac (results are device-specific)</li>
+                <li><strong>Same software</strong>: Yunshu engine, MLX framework, same Python/MLX versions</li>
+                <li><strong>Warm cache</strong>: One warmup generation before measurement</li>
+                <li><strong>Single request</strong>: Batch size = 1 for all measurements</li>
+            </ul>
+            <p style="margin-top: 0.75rem;"><strong>Metrics:</strong></p>
+            <ul>
+                <li><strong>TTFT</strong> &mdash; Time To First Token (ms) from request to first output token</li>
+                <li><strong>Throughput</strong> &mdash; Decode tokens/second during generation phase</li>
+                <li><strong>E2E Latency</strong> &mdash; End-to-end latency (ms) for a fixed-length generation</li>
+                <li><strong>Peak Memory</strong> &mdash; Maximum GPU memory (GB) during generation</li>
+                <li><strong>Baseline Memory</strong> &mdash; GPU memory (GB) after model load (idle)</li>
+                <li><strong>Accuracy</strong> &mdash; Benchmark-specific accuracy where applicable (e.g., WER for ASR)</li>
+            </ul>
+        </div>
+
+        <!-- LLM -->
+        <div class="bench-section">
+            <h2>LLM Text Generation</h2>
+            <p class="note">Decode throughput (tokens/sec), TTFT (ms), and memory (GB) &mdash; batch=1, 4-bit quantization</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Params</th>
+                        <th>TTFT (ms)</th>
+                        <th>Decode tok/s</th>
+                        <th>E2E (ms)</th>
+                        <th>Peak Mem (GB)</th>
+                        <th>Idle Mem (GB)</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody id="llm-table">
+                    <tr>
+                        <td>Qwen2.5-0.5B-Instruct-4bit</td>
+                        <td>0.5B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Qwen2.5-1.5B-Instruct-4bit</td>
+                        <td>1.5B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Qwen2.5-3B-Instruct-4bit</td>
+                        <td>3B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Qwen2.5-7B-Instruct-4bit</td>
+                        <td>7B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Llama-3.1-8B-Instruct-4bit</td>
+                        <td>8B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Mistral-7B-Instruct-4bit</td>
+                        <td>7B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Phi-3.5-mini-instruct-4bit</td>
+                        <td>3.8B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- VLM -->
+        <div class="bench-section">
+            <h2>Vision-Language (VLM)</h2>
+            <p class="note">Image captioning and VQA throughput, 512x512 input image</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Params</th>
+                        <th>Accuracy</th>
+                        <th>TTFT (ms)</th>
+                        <th>Decode tok/s</th>
+                        <th>Peak Mem (GB)</th>
+                        <th>Idle Mem (GB)</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody id="vlm-table">
+                    <tr>
+                        <td>Qwen2.5-VL-3B-Instruct-4bit</td>
+                        <td>3B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Llava-1.6-7B-4bit</td>
+                        <td>7B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- TTS -->
+        <div class="bench-section">
+            <h2>Text-to-Speech (TTS)</h2>
+            <p class="note">Audio synthesis latency and quality</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Params</th>
+                        <th>Accuracy</th>
+                        <th>E2E Latency (ms)</th>
+                        <th>RTF</th>
+                        <th>Peak Mem (GB)</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody id="tts-table">
+                    <tr>
+                        <td>Kokoro-82M</td>
+                        <td>82M</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="note">RTF = Real-Time Factor (lower is better; 1.0 = real-time, &lt;1.0 = faster than real-time)</p>
+        </div>
+
+        <!-- ASR -->
+        <div class="bench-section">
+            <h2>Automatic Speech Recognition (ASR)</h2>
+            <p class="note">Transcription speed and accuracy (Word Error Rate)</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Params</th>
+                        <th>WER (%)</th>
+                        <th>E2E Latency (ms)</th>
+                        <th>RTF</th>
+                        <th>Peak Mem (GB)</th>
+                        <th>Language</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody id="asr-table">
+                    <tr>
+                        <td>Whisper-large-v3</td>
+                        <td>1.5B</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td>EN/ZH</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Whisper-base</td>
+                        <td>74M</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td>EN</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="note">WER = Word Error Rate (lower is better). RTF = Real-Time Factor (lower is better).</p>
+        </div>
+
+        <!-- Image Generation -->
+        <div class="bench-section">
+            <h2>Image Generation</h2>
+            <p class="note">Diffusion model throughput at 1024x1024 resolution</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Params</th>
+                        <th>Steps</th>
+                        <th>Resolution</th>
+                        <th>E2E Latency (s)</th>
+                        <th>Peak Mem (GB)</th>
+                        <th>Baseline Mem (GB)</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody id="image-table">
+                    <tr>
+                        <td>Stable Diffusion XL</td>
+                        <td>3.5B</td>
+                        <td>20</td>
+                        <td>1024x1024</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>FLUX.1-schnell</td>
+                        <td>12B</td>
+                        <td>4</td>
+                        <td>1024x1024</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Cross-Framework Comparison -->
+        <div class="bench-section">
+            <h2>Cross-Framework Comparison</h2>
+            <p class="note">Yunshu vs oMLX vs mlx-lm (standalone) vs llama.cpp &mdash; same model, same hardware</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Framework</th>
+                        <th>TTFT (ms)</th>
+                        <th>Decode tok/s</th>
+                        <th>Peak Mem (GB)</th>
+                        <th>Device</th>
+                    </tr>
+                </thead>
+                <tbody id="cross-framework-table">
+                    <tr>
+                        <td>Qwen2.5-7B-4bit</td>
+                        <td>Yunshu</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Qwen2.5-7B-4bit</td>
+                        <td>oMLX</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Qwen2.5-7B-4bit</td>
+                        <td>mlx-lm</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                    <tr>
+                        <td>Qwen2.5-7B-4bit</td>
+                        <td>llama.cpp</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                        <td class="placeholder">--</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Running Benchmarks -->
+        <div class="bench-section">
+            <h2>Running Benchmarks</h2>
+            <p>Populate these tables by running:</p>
+            <pre style="background: #111; border: 1px solid #222; border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0;"><code style="background: none; padding: 0; color: #c0c0c0;"># Generate benchmark paper (attempts real benchmarks if models available)
+cd yunshu
+PYTHONPATH=. uv run python scripts/benchmark_paper.py
+
+# Placeholder only (no model loading)
+PYTHONPATH=. uv run python scripts/benchmark_paper.py --placeholder-only
+
+# Specific benchmarks
+just bench-roofline       # Roofline model for decode throughput
+just bench-kivi-metal     # KIVI Metal kernel benchmark</code></pre>
+            <p>Detailed markdown results: <a href="benchmark_results.md" style="color: #4fc3f7; text-decoration: none;">benchmark_results.md</a></p>
+        </div>
+    </div>
+
+    <footer>
+        Yunshu v0.1.0.dev0 &middot; Apache-2.0 &middot; Apple Silicon
+    </footer>
+</body>
+</html>

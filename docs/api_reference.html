@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Reference — Yunshu</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        nav {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+        nav .brand { font-size: 1.25rem; font-weight: 700; color: #fff; }
+        nav a {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a:hover, nav a.active { color: #4fc3f7; }
+        .container {
+            max-width: 960px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+        .subtitle { color: #888; margin-bottom: 2rem; }
+        .endpoint-group { margin-bottom: 2.5rem; }
+        .endpoint-group h2 {
+            font-size: 1.3rem;
+            color: #fff;
+            border-bottom: 1px solid #222;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .endpoint {
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 0.75rem;
+        }
+        .method {
+            display: inline-block;
+            font-weight: 700;
+            font-size: 0.75rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 3px;
+            margin-right: 0.5rem;
+        }
+        .method.post { background: #1b5e20; color: #a5d6a7; }
+        .method.get { background: #0d47a1; color: #90caf9; }
+        .method.delete { background: #b71c1c; color: #ef9a9a; }
+        .method.put { background: #e65100; color: #ffcc80; }
+        .path {
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.9rem;
+            color: #fff;
+        }
+        .desc {
+            font-size: 0.85rem;
+            color: #888;
+            margin-top: 0.35rem;
+        }
+        .badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: 3px;
+            margin-left: 0.5rem;
+            vertical-align: middle;
+        }
+        .badge.openai { background: #1a237e; color: #82b1ff; }
+        .badge.anthropic { background: #311b00; color: #ffe082; }
+        .badge.realtime { background: #4a148c; color: #ce93d8; }
+        .badge.admin { background: #263238; color: #90a4ae; }
+        .badge.mcp { background: #004d40; color: #80cbc4; }
+        .schema-box {
+            background: #0d0d0d;
+            border: 1px solid #1a1a1a;
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            margin-top: 0.5rem;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.8rem;
+            color: #c0c0c0;
+            overflow-x: auto;
+        }
+        .schema-box .key { color: #82b1ff; }
+        .schema-box .type { color: #66bb6a; }
+        .schema-box .required { color: #ffa726; font-size: 0.75rem; }
+        .schema-box .optional { color: #666; font-size: 0.75rem; }
+        h3 {
+            font-size: 1.05rem;
+            color: #ccc;
+            margin: 2rem 0 0.75rem;
+        }
+        p, li {
+            font-size: 0.9rem;
+            color: #bbb;
+            margin-bottom: 0.5rem;
+        }
+        ul { padding-left: 1.5rem; }
+        code {
+            background: #1a1a1a;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.85rem;
+            color: #82b1ff;
+        }
+        pre {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem;
+            overflow-x: auto;
+            margin: 0.75rem 0 1.25rem;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+            color: #c0c0c0;
+        }
+        .error-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin: 0.75rem 0 1.5rem;
+        }
+        .error-table thead th {
+            background: #151515;
+            color: #aaa;
+            font-weight: 600;
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid #333;
+        }
+        .error-table tbody td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid #1a1a1a;
+        }
+        .error-table tbody tr:hover { background: #111; }
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #555;
+            font-size: 0.8rem;
+            border-top: 1px solid #222;
+            margin-top: 3rem;
+        }
+        .toc {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .toc a {
+            color: #4fc3f7;
+            text-decoration: none;
+            font-size: 0.85rem;
+            display: block;
+            padding: 0.2rem 0;
+        }
+        .toc a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Yunshu</span>
+        <a href="index.html">Docs</a>
+        <a href="api_reference.html" class="active">API Reference</a>
+        <a href="benchmark.html">Benchmarks</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="development.html">Development</a>
+    </nav>
+
+    <div class="container">
+        <h1>API Reference</h1>
+        <p class="subtitle">OpenAI-compatible endpoints served on <code>http://localhost:8000</code></p>
+
+        <!-- Table of Contents -->
+        <div class="toc">
+            <a href="#authentication">Authentication</a>
+            <a href="#chat">Chat Completions</a>
+            <a href="#completions">Text Completions</a>
+            <a href="#models">Models</a>
+            <a href="#embeddings">Embeddings</a>
+            <a href="#audio">Audio (TTS / ASR)</a>
+            <a href="#images">Images</a>
+            <a href="#realtime">Realtime (WebSocket)</a>
+            <a href="#anthropic">Anthropic Messages</a>
+            <a href="#mcp">MCP (Model Context Protocol)</a>
+            <a href="#batch">Batch API</a>
+            <a href="#admin">Admin &amp; Health</a>
+            <a href="#streaming">Streaming Format</a>
+            <a href="#errors">Error Codes</a>
+            <a href="#rate-limiting">Rate Limiting</a>
+        </div>
+
+        <!-- Authentication -->
+        <div class="endpoint-group" id="authentication">
+            <h2>Authentication</h2>
+            <p>Yunshu supports Bearer token authentication. When <code>YUNSHU_AUTH_TOKEN</code> is set, all API requests must include:</p>
+            <pre><code>Authorization: Bearer &lt;your-token&gt;</code></pre>
+            <p>If <code>YUNSHU_AUTH_TOKEN</code> is not set, authentication is disabled and any API key is accepted (including <code>"any"</code> in SDK calls).</p>
+            <p>To explicitly disable auth with a warning log, set <code>YUNSHU_AUTH_DISABLED=true</code>.</p>
+        </div>
+
+        <!-- Chat -->
+        <div class="endpoint-group" id="chat">
+            <h2>Chat Completions <span class="badge openai">OpenAI</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/chat/completions</span>
+                <p class="desc">Create a chat completion. Supports streaming (SSE), tools, JSON mode, reasoning/thinking output, and logprobs.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Model ID (e.g. "Qwen3.5-9B-MLX-4bit")<br>
+<span class="key">messages</span>: <span class="type">array</span> <span class="required">required</span> &mdash; Conversation messages [{role, content}]<br>
+<span class="key">max_tokens</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Max tokens to generate (default: 4096)<br>
+<span class="key">temperature</span>: <span class="type">float</span> <span class="optional">optional</span> &mdash; Sampling temperature (default: 1.0)<br>
+<span class="key">top_p</span>: <span class="type">float</span> <span class="optional">optional</span> &mdash; Top-p sampling (default: 1.0)<br>
+<span class="key">stream</span>: <span class="type">boolean</span> <span class="optional">optional</span> &mdash; Enable SSE streaming (default: false)<br>
+<span class="key">tools</span>: <span class="type">array</span> <span class="optional">optional</span> &mdash; Tool definitions for function calling<br>
+<span class="key">tool_choice</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; "auto", "none", or tool name<br>
+<span class="key">response_format</span>: <span class="type">object</span> <span class="optional">optional</span> &mdash; {"type": "json_object"} for JSON mode<br>
+<span class="key">stop</span>: <span class="type">array[string]</span> <span class="optional">optional</span> &mdash; Stop sequences<br>
+<span class="key">logprobs</span>: <span class="type">boolean</span> <span class="optional">optional</span> &mdash; Include log probabilities (default: false)<br>
+<span class="key">top_logprobs</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Number of top logprobs (1-20)<br>
+<span class="key">seed</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Deterministic sampling seed<br>
+<span class="key">thinking</span>: <span class="type">object</span> <span class="optional">optional</span> &mdash; {"type": "enabled", "budget_tokens": N} for reasoning<br>
+<span class="key">timeout</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Request timeout in seconds
+                </div>
+                <p class="desc"><strong>Response:</strong> <code>{"id", "object", "created", "model", "choices": [{"index", "message": {"role", "content", "tool_calls"}, "finish_reason"}], "usage": {"prompt_tokens", "completion_tokens", "total_tokens"}}</code></p>
+            </div>
+        </div>
+
+        <!-- Completions -->
+        <div class="endpoint-group" id="completions">
+            <h2>Text Completions <span class="badge openai">OpenAI</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/completions</span>
+                <p class="desc">Legacy text completions endpoint. Supports streaming, logprobs, and suffix.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span><br>
+<span class="key">prompt</span>: <span class="type">string | array</span> <span class="required">required</span> &mdash; Text prompt(s)<br>
+<span class="key">max_tokens</span>: <span class="type">integer</span> <span class="optional">optional</span> (default: 4096)<br>
+<span class="key">temperature</span>: <span class="type">float</span> <span class="optional">optional</span> (default: 1.0)<br>
+<span class="key">top_p</span>: <span class="type">float</span> <span class="optional">optional</span> (default: 1.0)<br>
+<span class="key">stream</span>: <span class="type">boolean</span> <span class="optional">optional</span> (default: false)<br>
+<span class="key">logprobs</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Include log probabilities<br>
+<span class="key">stop</span>: <span class="type">array[string]</span> <span class="optional">optional</span><br>
+<span class="key">suffix</span>: <span class="type">string</span> <span class="optional">optional</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Models -->
+        <div class="endpoint-group" id="models">
+            <h2>Models <span class="badge openai">OpenAI</span></h2>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/v1/models</span>
+                <p class="desc">List all loaded and available models.</p>
+                <p class="desc"><strong>Response:</strong> <code>{"object": "list", "data": [{"id", "object", "created", "owned_by", "metadata"}]}</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/v1/models/{model_id}</span>
+                <p class="desc">Get details for a specific model. Returns 404 if model is not loaded.</p>
+                <p class="desc"><strong>Response:</strong> <code>{"id", "object", "created", "owned_by", "metadata"}</code></p>
+            </div>
+        </div>
+
+        <!-- Embeddings -->
+        <div class="endpoint-group" id="embeddings">
+            <h2>Embeddings <span class="badge openai">OpenAI</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/embeddings</span>
+                <p class="desc">Generate text embeddings using MLX-accelerated embedding models.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Embedding model ID<br>
+<span class="key">input</span>: <span class="type">string | array</span> <span class="required">required</span> &mdash; Text or token array<br>
+<span class="key">encoding_format</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; "float" (default) or "base64"
+                </div>
+                <p class="desc"><strong>Response:</strong> <code>{"object": "list", "data": [{"object", "embedding", "index"}], "model", "usage": {"prompt_tokens", "total_tokens"}}</code></p>
+            </div>
+        </div>
+
+        <!-- Audio -->
+        <div class="endpoint-group" id="audio">
+            <h2>Audio <span class="badge openai">OpenAI</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/audio/speech</span>
+                <p class="desc">Text-to-speech synthesis using MLX-Audio backends (Kokoro, etc.).</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span> &mdash; TTS model ID<br>
+<span class="key">input</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Text to synthesize<br>
+<span class="key">voice</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; Voice name (default: "chelsie")<br>
+<span class="key">response_format</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; "wav" (default), "mp3", "opus"
+                </div>
+                <p class="desc"><strong>Response:</strong> Binary audio data with <code>Content-Type: audio/wav</code> (or requested format).</p>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/audio/transcriptions</span>
+                <p class="desc">Speech-to-text transcription (ASR) via Whisper. Accepts multipart form data.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span> &mdash; ASR model ID<br>
+<span class="key">file</span>: <span class="type">file</span> <span class="required">required</span> &mdash; Audio file (wav, mp3, etc.)<br>
+<span class="key">language</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; Language hint (e.g. "en", "zh")<br>
+<span class="key">response_format</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; "json" (default), "text", "srt"
+                </div>
+                <p class="desc"><strong>Response:</strong> <code>{"text": "transcribed text"}</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/audio/translations</span>
+                <p class="desc">Translate audio to English text.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span><br>
+<span class="key">file</span>: <span class="type">file</span> <span class="required">required</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Images -->
+        <div class="endpoint-group" id="images">
+            <h2>Images <span class="badge openai">OpenAI</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/images/generations</span>
+                <p class="desc">Generate images from text prompts using Diffusers/MLX pipelines.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Image model ID<br>
+<span class="key">prompt</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Text description<br>
+<span class="key">size</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; "256x256", "512x512", "1024x1024"<br>
+<span class="key">num_inference_steps</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Diffusion steps (default: varies by model)<br>
+<span class="key">seed</span>: <span class="type">integer</span> <span class="optional">optional</span> &mdash; Random seed<br>
+<span class="key">response_format</span>: <span class="type">string</span> <span class="optional">optional</span> &mdash; "url" or "b64_json" (default)
+                </div>
+                <p class="desc"><strong>Response:</strong> <code>{"data": [{"url"} or {"b64_json"}]}</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/images/edits</span>
+                <p class="desc">Edit an existing image with a text prompt.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span><br>
+<span class="key">image</span>: <span class="type">file</span> <span class="required">required</span> &mdash; Source image<br>
+<span class="key">prompt</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Edit instruction
+                </div>
+            </div>
+        </div>
+
+        <!-- Realtime -->
+        <div class="endpoint-group" id="realtime">
+            <h2>Realtime <span class="badge realtime">Realtime</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/realtime</span>
+                <p class="desc">WebSocket upgrade for realtime bidirectional audio/text streaming with ASR + TTS. After upgrade, send/receive JSON events.</p>
+                <p class="desc"><strong>Client events:</strong> <code>session.update</code>, <code>input_audio_buffer.append</code>, <code>input_audio_buffer.commit</code>, <code>conversation.item.create</code>, <code>response.create</code></p>
+                <p class="desc"><strong>Server events:</strong> <code>session.created</code>, <code>session.updated</code>, <code>response.created</code>, <code>response.output_item.added</code>, <code>response.text.delta</code>, <code>response.audio.delta</code>, <code>response.done</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/v1/realtime/sessions</span>
+                <p class="desc">List active realtime sessions.</p>
+                <p class="desc"><strong>Response:</strong> <code>{"sessions": [{"id", "created_at", "model"}]}</code></p>
+            </div>
+        </div>
+
+        <!-- Anthropic -->
+        <div class="endpoint-group" id="anthropic">
+            <h2>Anthropic Messages <span class="badge anthropic">Anthropic</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/messages</span>
+                <p class="desc">Anthropic Messages API compatibility layer. Forwards to engine with Anthropic protocol.</p>
+                <div class="schema-box">
+<span class="key">model</span>: <span class="type">string</span> <span class="required">required</span><br>
+<span class="key">messages</span>: <span class="type">array</span> <span class="required">required</span> &mdash; [{role, content}]<br>
+<span class="key">max_tokens</span>: <span class="type">integer</span> <span class="required">required</span><br>
+<span class="key">stream</span>: <span class="type">boolean</span> <span class="optional">optional</span> (default: false)<br>
+<span class="key">tools</span>: <span class="type">array</span> <span class="optional">optional</span><br>
+<span class="key">thinking</span>: <span class="type">object</span> <span class="optional">optional</span>
+                </div>
+                <p class="desc"><strong>Response:</strong> <code>{"id", "type", "role", "content": [{"type", "text"}], "model", "stop_reason", "usage"}</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/messages/count_tokens</span>
+                <p class="desc">Count tokens for a message without generating a response.</p>
+            </div>
+        </div>
+
+        <!-- MCP -->
+        <div class="endpoint-group" id="mcp">
+            <h2>MCP <span class="badge mcp">MCP</span></h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/mcp</span>
+                <p class="desc">JSON-RPC 2.0 endpoint for Model Context Protocol. Supports initialize, tools/list, and tools/call.</p>
+                <div class="schema-box">
+<span class="key">jsonrpc</span>: <span class="type">"2.0"</span> <span class="required">required</span><br>
+<span class="key">method</span>: <span class="type">string</span> <span class="required">required</span> &mdash; "initialize", "tools/list", "tools/call"<br>
+<span class="key">params</span>: <span class="type">object</span> <span class="optional">optional</span><br>
+<span class="key">id</span>: <span class="type">integer | string</span> <span class="required">required</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Batch -->
+        <div class="endpoint-group" id="batch">
+            <h2>Batch API</h2>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/v1/batch</span>
+                <p class="desc">Submit a batch of up to 100 requests for parallel processing.</p>
+                <div class="schema-box">
+<span class="key">requests</span>: <span class="type">array</span> <span class="required">required</span> &mdash; [{"custom_id", "method", "url", "body"}]<br>
+<span class="key">&nbsp;&nbsp;&nbsp;&nbsp;size limit:</span> 1-100 requests per batch
+                </div>
+            </div>
+        </div>
+
+        <!-- Admin -->
+        <div class="endpoint-group" id="admin">
+            <h2>Admin &amp; Health</h2>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/health</span>
+                <p class="desc">Health check with engine and GPU/memory stats.</p>
+                <p class="desc"><strong>Response:</strong> <code>{"status", "engine": {"loaded", "model"}, "gpu": {"peak_gb", "active_gb"}}</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/health/live</span>
+                <p class="desc">Liveness probe (always returns 200 if process is alive).</p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/health/ready</span>
+                <p class="desc">Readiness probe (returns 200 when engine has at least one model loaded).</p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/metrics</span>
+                <p class="desc">Prometheus-format metrics export.</p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/version</span>
+                <p class="desc">Returns version info.</p>
+                <p class="desc"><strong>Response:</strong> <code>{"version", "python", "mlx_version", "platform"}</code></p>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/api/v1/admin/models/load</span>
+                <p class="desc">Load a model into memory.</p>
+                <div class="schema-box">
+<span class="key">model_id</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Custom ID for the model<br>
+<span class="key">model_path</span>: <span class="type">string</span> <span class="required">required</span> &mdash; Path to model directory
+                </div>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/api/v1/admin/models/unload</span>
+                <p class="desc">Unload a model and release GPU memory.</p>
+                <div class="schema-box">
+<span class="key">model_id</span>: <span class="type">string</span> <span class="required">required</span>
+                </div>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/v1/admin/tenants</span>
+                <p class="desc">List all tenants (multi-tenant).</p>
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/api/v1/admin/tenants</span>
+                <p class="desc">Create a new tenant.</p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/v1/admin/mesh/status</span>
+                <p class="desc">Compute mesh node status and topology.</p>
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/v1/admin/kv/stats</span>
+                <p class="desc">KV hierarchy statistics (hot/warm/cool/cold tiers).</p>
+            </div>
+        </div>
+
+        <!-- Streaming Format -->
+        <div class="endpoint-group" id="streaming">
+            <h2>Streaming Format (SSE)</h2>
+            <p>When <code>"stream": true</code> is set, the server sends Server-Sent Events (SSE) in the following format:</p>
+            <pre><code>data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,
+  "model":"Qwen3.5-9B-MLX-4bit","choices":[{"index":0,"delta":{"content":"Hello"},
+  "finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,
+  "model":"Qwen3.5-9B-MLX-4bit","choices":[{"index":0,"delta":{"content":" world"},
+  "finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1694268190,
+  "model":"Qwen3.5-9B-MLX-4bit","choices":[{"index":0,"delta":{},
+  "finish_reason":"stop"}]}
+
+data: [DONE]</code></pre>
+
+            <h3>Stream Chunks</h3>
+            <ul>
+                <li>Each <code>data:</code> line contains a JSON object with a <code>delta</code> field</li>
+                <li>The <code>delta.content</code> field contains the new text fragment</li>
+                <li>The first chunk may contain <code>delta.role</code> with value <code>"assistant"</code></li>
+                <li>The final chunk has <code>finish_reason</code> set to <code>"stop"</code>, <code>"length"</code>, or <code>"tool_calls"</code></li>
+                <li>The stream terminates with <code>data: [DONE]</code></li>
+            </ul>
+
+            <h3>Finish Reasons</h3>
+            <ul>
+                <li><code>"stop"</code> &mdash; Natural stop or stop sequence hit</li>
+                <li><code>"length"</code> &mdash; Max tokens reached</li>
+                <li><code>"tool_calls"</code> &mdash; Model requested a tool call</li>
+                <li><code>"content_filter"</code> &mdash; Content was filtered (if configured)</li>
+            </ul>
+        </div>
+
+        <!-- Error Codes -->
+        <div class="endpoint-group" id="errors">
+            <h2>Error Codes</h2>
+            <p>All errors follow the OpenAI error format:</p>
+            <pre><code>{
+  "error": {
+    "message": "Model 'nonexistent' not found",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": "model_not_found"
+  }
+}</code></pre>
+
+            <table class="error-table">
+                <thead>
+                    <tr>
+                        <th>HTTP Status</th>
+                        <th>Error Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>400</code></td>
+                        <td><code>invalid_request_error</code></td>
+                        <td>Malformed request, missing required fields, or invalid parameters.</td>
+                    </tr>
+                    <tr>
+                        <td><code>401</code></td>
+                        <td><code>authentication_error</code></td>
+                        <td>Invalid or missing API key when auth is enabled.</td>
+                    </tr>
+                    <tr>
+                        <td><code>404</code></td>
+                        <td><code>model_not_found</code></td>
+                        <td>Requested model is not loaded or does not exist.</td>
+                    </tr>
+                    <tr>
+                        <td><code>429</code></td>
+                        <td><code>rate_limit_error</code></td>
+                        <td>Too many requests. Retry after the indicated time.</td>
+                    </tr>
+                    <tr>
+                        <td><code>500</code></td>
+                        <td><code>internal_server_error</code></td>
+                        <td>Unexpected server error during generation.</td>
+                    </tr>
+                    <tr>
+                        <td><code>503</code></td>
+                        <td><code>engine_error</code></td>
+                        <td>Engine is not initialized or model failed to load.</td>
+                    </tr>
+                    <tr>
+                        <td><code>504</code></td>
+                        <td><code>timeout_error</code></td>
+                        <td>Request timed out (controlled by <code>timeout</code> parameter).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Rate Limiting -->
+        <div class="endpoint-group" id="rate-limiting">
+            <h2>Rate Limiting</h2>
+            <p>Rate limiting is configured via <code>YUNSHU_RATE_LIMIT_RPM</code> (requests per minute per client, default: 0 = unlimited).</p>
+            <p>When rate limited, responses include:</p>
+            <ul>
+                <li><code>429 Too Many Requests</code> status code</li>
+                <li><code>X-RateLimit-Limit</code> header &mdash; Max requests per minute</li>
+                <li><code>X-RateLimit-Remaining</code> header &mdash; Remaining requests in window</li>
+                <li><code>X-RateLimit-Reset</code> header &mdash; Unix timestamp when window resets</li>
+                <li><code>Retry-After</code> header &mdash; Seconds until retry is allowed</li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        Yunshu v0.1.0.dev0 &middot; Apache-2.0 &middot; Apple Silicon
+    </footer>
+</body>
+</html>

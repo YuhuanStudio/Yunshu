@@ -1,0 +1,85 @@
+"""Yunshu KV Cache Block Table — per-request logical→physical block mapping.
+
+Each request maintains a BlockTable that maps logical token positions
+to physical KVBlock objects in the BlockPool.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from .block import KVBlock
+
+
+class BlockTable:
+    """Maps logical block indices to physical KVBlock objects for one request.
+
+    The block table grows as the request generates more tokens:
+    - During prefill: blocks are allocated to cover the full prompt.
+    - During decode: a new block is allocated when the current block fills up.
+    """
+
+    def __init__(self, block_size: int) -> None:
+        self.block_size = block_size
+        self._blocks: list[KVBlock] = []  # logical index → physical block
+        self.total_tokens: int = 0
+
+    @property
+    def num_blocks(self) -> int:
+        return len(self._blocks)
+
+    @property
+    def num_tokens_in_last_block(self) -> int:
+        """Number of tokens in the last (possibly partial) block."""
+        if not self._blocks or self.total_tokens == 0:
+            return 0
+        remainder = self.total_tokens % self.block_size
+        return remainder if remainder != 0 else self.block_size
+
+    def append_block(self, block: KVBlock) -> None:
+        """Add a new physical block at the end."""
+        self._blocks.append(block)
+
+    def append_blocks(self, blocks: list[KVBlock]) -> None:
+        self._blocks.extend(blocks)
+
+    def get_block(self, logical_idx: int) -> KVBlock:
+        if logical_idx < 0 or logical_idx >= len(self._blocks):
+            raise IndexError(f"Block index {logical_idx} out of range (0..{len(self._blocks)-1})")
+        return self._blocks[logical_idx]
+
+    def get_blocks(self) -> list[KVBlock]:
+        return list(self._blocks)
+
+    def get_full_blocks(self) -> list[KVBlock]:
+        """Return all fully-filled blocks (all but possibly the last)."""
+        if len(self._blocks) <= 1:
+            return []
+        return self._blocks[:-1]
+
+    def fork(self) -> BlockTable:
+        """Create a copy of this block table for prefix sharing.
+
+        The physical blocks are shared (not copied). The caller must
+        increment ref counts via BlockPool.touch().
+        """
+        new_table = BlockTable(self.block_size)
+        new_table._blocks = list(self._blocks)
+        return new_table
+
+    def clear(self) -> list[KVBlock]:
+        """Clear and return all blocks for the caller to free."""
+        blocks = self._blocks
+        self._blocks = []
+        return blocks
+
+    def block_id_for_token(self, token_position: int) -> int:
+        """Get the physical block ID for a given token position."""
+        logical_idx = token_position // self.block_size
+        return self._blocks[logical_idx].block_id
+
+    def slot_for_token(self, token_position: int) -> tuple[int, int]:
+        """Get (block_id, offset_within_block) for a token position."""
+        logical_idx = token_position // self.block_size
+        offset = token_position % self.block_size
+        return self._blocks[logical_idx].block_id, offset

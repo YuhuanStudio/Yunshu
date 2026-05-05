@@ -1,0 +1,349 @@
+"""Yunshu Gateway — Prometheus-compatible metrics exporter.
+
+Provides a richer Prometheus exposition format beyond what the basic
+MetricsMiddleware produces.  This module defines typed counters and
+histograms that can be incremented from anywhere in the gateway stack
+and serialised to the standard Prometheus text exposition format.
+
+Predefined metrics
+------------------
+- request_total           (counter)   — total HTTP requests
+- request_duration_seconds (histogram) — request latency
+- tokens_generated_total  (counter)   — completion tokens served
+- active_requests         (gauge)     — currently in-flight requests
+- inference_duration_seconds (histogram) — per-inference latency
+- kv_cache_blocks_used    (gauge)     — KV cache blocks in use
+- kv_cache_blocks_total   (gauge)     — KV cache blocks allocated
+"""
+
+from __future__ import annotations
+
+import time
+from collections import defaultdict
+from threading import Lock
+from typing import Any, Optional
+
+
+# ---------------------------------------------------------------------------
+# Internal data containers
+# ---------------------------------------------------------------------------
+
+class _Counter:
+    """Thread-safe labelled counter."""
+
+    __slots__ = ("_name", "_help", "_lock", "_values")
+
+    def __init__(self, name: str, help_text: str) -> None:
+        self._name = name
+        self._help = help_text
+        self._lock = Lock()
+        # key = frozenset of label pairs, value = int
+        self._values: dict[frozenset[tuple[str, str]], int] = defaultdict(int)
+
+    def inc(self, labels: Optional[dict[str, str]] = None, amount: int = 1) -> None:
+        if amount < 0:
+            raise ValueError("counter increment must be non-negative")
+        key = frozenset((labels or {}).items())
+        with self._lock:
+            self._values[key] += amount
+
+    def get(self, labels: Optional[dict[str, str]] = None) -> int:
+        key = frozenset((labels or {}).items())
+        with self._lock:
+            return self._values.get(key, 0)
+
+    def format(self) -> str:
+        lines: list[str] = []
+        lines.append(f"# HELP {self._name} {self._help}")
+        lines.append(f"# TYPE {self._name} counter")
+        with self._lock:
+            for key in sorted(self._values, key=_label_sort_key):
+                value = self._values[key]
+                label_str = _format_labels(key)
+                lines.append(f"{self._name}{label_str} {value}")
+        return "\n".join(lines)
+
+
+class _Gauge:
+    """Thread-safe labelled gauge."""
+
+    __slots__ = ("_name", "_help", "_lock", "_values")
+
+    def __init__(self, name: str, help_text: str) -> None:
+        self._name = name
+        self._help = help_text
+        self._lock = Lock()
+        self._values: dict[frozenset[tuple[str, str]], float] = defaultdict(float)
+
+    def set(self, value: float, labels: Optional[dict[str, str]] = None) -> None:
+        key = frozenset((labels or {}).items())
+        with self._lock:
+            self._values[key] = value
+
+    def inc(self, labels: Optional[dict[str, str]] = None, amount: float = 1.0) -> None:
+        key = frozenset((labels or {}).items())
+        with self._lock:
+            self._values[key] += amount
+
+    def dec(self, labels: Optional[dict[str, str]] = None, amount: float = 1.0) -> None:
+        self.inc(labels, -amount)
+
+    def get(self, labels: Optional[dict[str, str]] = None) -> float:
+        key = frozenset((labels or {}).items())
+        with self._lock:
+            return self._values.get(key, 0.0)
+
+    def format(self) -> str:
+        lines: list[str] = []
+        lines.append(f"# HELP {self._name} {self._help}")
+        lines.append(f"# TYPE {self._name} gauge")
+        with self._lock:
+            for key in sorted(self._values, key=_label_sort_key):
+                value = self._values[key]
+                label_str = _format_labels(key)
+                lines.append(f"{self._name}{label_str} {value}")
+        return "\n".join(lines)
+
+
+class _Histogram:
+    """Thread-safe labelled histogram.
+
+    Stores individual observations and computes Prometheus-style buckets
+    plus sum and count on serialisation.
+    """
+
+    __slots__ = ("_name", "_help", "_lock", "_observations", "_buckets")
+
+    # Default Prometheus-style exponential buckets (seconds).
+    DEFAULT_BUCKETS = (
+        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+        1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
+    )
+
+    def __init__(
+        self,
+        name: str,
+        help_text: str,
+        buckets: Optional[tuple[float, ...]] = None,
+    ) -> None:
+        self._name = name
+        self._help = help_text
+        self._lock = Lock()
+        # key = frozenset of label pairs, value = list of observed floats
+        self._observations: dict[frozenset[tuple[str, str]], list[float]] = defaultdict(list)
+        self._buckets = buckets or self.DEFAULT_BUCKETS
+
+    def observe(self, value: float, labels: Optional[dict[str, str]] = None) -> None:
+        key = frozenset((labels or {}).items())
+        with self._lock:
+            lst = self._observations[key]
+            lst.append(value)
+            # Cap per-label-series to prevent unbounded growth.
+            if len(lst) > 100_000:
+                self._observations[key] = lst[-50_000:]
+
+    def format(self) -> str:
+        lines: list[str] = []
+        lines.append(f"# HELP {self._name} {self._help}")
+        lines.append(f"# TYPE {self._name} histogram")
+        with self._lock:
+            for key in sorted(self._observations, key=_label_sort_key):
+                values = self._observations[key]
+                if not values:
+                    continue
+                label_str = _format_labels(key)
+                # Compute bucket counts.
+                count = len(values)
+                total = sum(values)
+                # Build the label portion for bucket lines.  Prometheus format
+                # requires the le= label mixed with other labels, e.g.
+                #   metric_bucket{le="0.1",method="POST"} 5
+                extra = label_str[1:-1] if label_str else ""
+                for upper in self._buckets:
+                    in_bucket = sum(1 for v in values if v <= upper)
+                    if extra:
+                        lines.append(
+                            f'{self._name}_bucket{{le="{upper}",{extra}}} {in_bucket}'
+                        )
+                    else:
+                        lines.append(
+                            f'{self._name}_bucket{{le="{upper}"}} {in_bucket}'
+                        )
+                # +Inf bucket.
+                if extra:
+                    lines.append(
+                        f'{self._name}_bucket{{le="+Inf",{extra}}} {count}'
+                    )
+                else:
+                    lines.append(
+                        f'{self._name}_bucket{{le="+Inf"}} {count}'
+                    )
+                lines.append(f"{self._name}_sum{label_str} {total}")
+                lines.append(f"{self._name}_count{label_str} {count}")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Label helpers
+# ---------------------------------------------------------------------------
+
+def _label_sort_key(key: frozenset[tuple[str, str]]) -> str:
+    """Stable sort key for label sets."""
+    return ",".join(f"{k}={v}" for k, v in sorted(key))
+
+
+def _format_labels(key: frozenset[tuple[str, str]]) -> str:
+    """Serialise label set to Prometheus label string, e.g. {a="b",c="d"}."""
+    if not key:
+        return ""
+    pairs = ",".join(f'{k}="{v}"' for k, v in sorted(key))
+    return f"{{{pairs}}}"
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+class PrometheusMetrics:
+    """Central Prometheus-compatible metrics registry.
+
+    Usage::
+
+        pm = get_prometheus_metrics()
+        pm.inc_counter("request_total", {"method": "POST", "status": "200"})
+        pm.observe_histogram("request_duration_seconds", 0.42, {"endpoint": "/v1/chat"})
+        text = pm.generate()  # Prometheus exposition format
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._counters: dict[str, _Counter] = {}
+        self._gauges: dict[str, _Gauge] = {}
+        self._histograms: dict[str, _Histogram] = {}
+
+        # --- Predefined metrics ---
+        self._counters["request_total"] = _Counter(
+            "yunshu_request_total",
+            "Total HTTP requests processed",
+        )
+        self._counters["tokens_generated_total"] = _Counter(
+            "yunshu_tokens_generated_total",
+            "Total completion tokens generated",
+        )
+
+        self._gauges["active_requests"] = _Gauge(
+            "yunshu_active_requests",
+            "Currently in-flight requests",
+        )
+        self._gauges["kv_cache_blocks_used"] = _Gauge(
+            "yunshu_kv_cache_blocks_used",
+            "KV cache blocks currently in use",
+        )
+        self._gauges["kv_cache_blocks_total"] = _Gauge(
+            "yunshu_kv_cache_blocks_total",
+            "KV cache blocks allocated",
+        )
+
+        self._histograms["request_duration_seconds"] = _Histogram(
+            "yunshu_request_duration_seconds",
+            "HTTP request duration in seconds",
+        )
+        self._histograms["inference_duration_seconds"] = _Histogram(
+            "yunshu_inference_duration_seconds",
+            "Inference step duration in seconds",
+        )
+
+    # --- Counter API ---
+
+    def inc_counter(self, name: str, labels: Optional[dict[str, str]] = None, amount: int = 1) -> None:
+        """Increment a named counter by *amount*."""
+        with self._lock:
+            if name not in self._counters:
+                raise KeyError(f"Unknown counter: {name!r}")
+            self._counters[name].inc(labels, amount)
+
+    def get_counter(self, name: str, labels: Optional[dict[str, str]] = None) -> int:
+        """Read current value of a counter."""
+        with self._lock:
+            if name not in self._counters:
+                raise KeyError(f"Unknown counter: {name!r}")
+            return self._counters[name].get(labels)
+
+    # --- Gauge API ---
+
+    def set_gauge(self, name: str, value: float, labels: Optional[dict[str, str]] = None) -> None:
+        """Set a named gauge to *value*."""
+        with self._lock:
+            if name not in self._gauges:
+                raise KeyError(f"Unknown gauge: {name!r}")
+            self._gauges[name].set(value, labels)
+
+    def inc_gauge(self, name: str, labels: Optional[dict[str, str]] = None, amount: float = 1.0) -> None:
+        with self._lock:
+            if name not in self._gauges:
+                raise KeyError(f"Unknown gauge: {name!r}")
+            self._gauges[name].inc(labels, amount)
+
+    def dec_gauge(self, name: str, labels: Optional[dict[str, str]] = None, amount: float = 1.0) -> None:
+        with self._lock:
+            if name not in self._gauges:
+                raise KeyError(f"Unknown gauge: {name!r}")
+            self._gauges[name].dec(labels, amount)
+
+    # --- Histogram API ---
+
+    def observe_histogram(self, name: str, value: float, labels: Optional[dict[str, str]] = None) -> None:
+        """Observe *value* in a named histogram."""
+        with self._lock:
+            if name not in self._histograms:
+                raise KeyError(f"Unknown histogram: {name!r}")
+            self._histograms[name].observe(value, labels)
+
+    # --- Serialisation ---
+
+    def generate(self) -> str:
+        """Generate Prometheus exposition format text."""
+        sections: list[str] = []
+
+        with self._lock:
+            # Counters first.
+            for name in sorted(self._counters):
+                sections.append(self._counters[name].format())
+            # Gauges.
+            for name in sorted(self._gauges):
+                sections.append(self._gauges[name].format())
+            # Histograms.
+            for name in sorted(self._histograms):
+                sections.append(self._histograms[name].format())
+
+        # Append an uptime gauge.
+        sections.append("# HELP yunshu_exporter_uptime_seconds Prometheus exporter uptime")
+        sections.append("# TYPE yunshu_exporter_uptime_seconds gauge")
+        sections.append(f"yunshu_exporter_uptime_seconds {time.time() - _BORN:.1f}")
+
+        return "\n".join(sections) + "\n"
+
+
+# Timestamp at module load for exporter uptime.
+_BORN = time.time()
+
+
+# ---------------------------------------------------------------------------
+# Singleton
+# ---------------------------------------------------------------------------
+
+_instance: PrometheusMetrics | None = None
+
+
+def get_prometheus_metrics() -> PrometheusMetrics:
+    """Return the global PrometheusMetrics singleton."""
+    global _instance
+    if _instance is None:
+        _instance = PrometheusMetrics()
+    return _instance
+
+
+def reset_prometheus_metrics() -> None:
+    """Reset the singleton (for tests only)."""
+    global _instance
+    _instance = None

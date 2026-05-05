@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Development Guide — Yunshu</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
+        }
+        nav {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+        nav .brand { font-size: 1.25rem; font-weight: 700; color: #fff; }
+        nav a {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav a:hover, nav a.active { color: #4fc3f7; }
+        .container {
+            max-width: 900px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+        h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #fff; }
+        .subtitle { color: #888; margin-bottom: 2rem; }
+        .section {
+            margin-bottom: 3rem;
+        }
+        .section h2 {
+            font-size: 1.4rem;
+            color: #fff;
+            border-bottom: 1px solid #222;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .section h3 {
+            font-size: 1.1rem;
+            color: #ccc;
+            margin: 1.25rem 0 0.75rem;
+        }
+        .section p, .section li {
+            font-size: 0.92rem;
+            color: #bbb;
+            margin-bottom: 0.5rem;
+        }
+        .section ul, .section ol { padding-left: 1.5rem; }
+        .section code {
+            background: #1a1a1a;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.85rem;
+            color: #82b1ff;
+        }
+        .section pre {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem;
+            overflow-x: auto;
+            margin: 0.75rem 0 1.25rem;
+        }
+        .section pre code {
+            background: none;
+            padding: 0;
+            color: #c0c0c0;
+        }
+        .callout {
+            background: #111;
+            border-left: 3px solid #4fc3f7;
+            padding: 0.75rem 1rem;
+            margin: 1rem 0;
+            border-radius: 0 4px 4px 0;
+        }
+        .callout p { font-size: 0.85rem; }
+        .callout-warning {
+            border-left-color: #ffa726;
+        }
+        .callout-danger {
+            border-left-color: #ef5350;
+        }
+        .file-tree {
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 0.8rem;
+            color: #999;
+            line-height: 1.6;
+        }
+        .file-tree .dir { color: #4fc3f7; }
+        .file-tree .file { color: #c0c0c0; }
+        .checklist {
+            list-style: none;
+            padding-left: 0;
+        }
+        .checklist li::before {
+            content: "\2610 ";
+            color: #4fc3f7;
+        }
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: #555;
+            font-size: 0.8rem;
+            border-top: 1px solid #222;
+            margin-top: 3rem;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Yunshu</span>
+        <a href="index.html">Docs</a>
+        <a href="api_reference.html">API Reference</a>
+        <a href="benchmark.html">Benchmarks</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="development.html" class="active">Development</a>
+    </nav>
+
+    <div class="container">
+        <h1>Development Guide</h1>
+        <p class="subtitle">Setup, project structure, testing, and contributing to Yunshu.</p>
+
+        <!-- Development Setup -->
+        <div class="section">
+            <h2>Development Setup</h2>
+
+            <h3>1. Prerequisites</h3>
+            <ul>
+                <li>macOS with Apple Silicon (M1/M2/M3/M4)</li>
+                <li>Xcode Command Line Tools (<code>xcode-select --install</code>)</li>
+                <li>Python 3.13+ (via <code>uv</code> or system)</li>
+                <li><a href="https://github.com/astral-sh/uv" style="color: #4fc3f7;">uv</a> &mdash; Python package manager</li>
+                <li><a href="https://github.com/casey/just" style="color: #4fc3f7;">just</a> &mdash; Command runner (<code>brew install just</code>)</li>
+            </ul>
+
+            <h3>2. Clone and Setup</h3>
+            <pre><code>git clone https://github.com/YuhuanStudio/yunshu.git
+cd yunshu
+
+# Install Python dependencies
+just setup
+
+# Or manually:
+uv sync</code></pre>
+
+            <h3>3. Build</h3>
+            <pre><code># Full build (Metal kernels + Python + WebUI)
+just build
+
+# Individual components
+just build-metal    # Compile Metal compute shaders
+# Python is ready after `uv sync` (no separate build needed)</code></pre>
+
+            <h3>4. Run Development Server</h3>
+            <pre><code># Start server with auto-reload
+just dev
+
+# With specific model
+YUNSHU_MODEL=./models/my-model just dev
+
+# Multi-model mode
+YUNSHU_MULTI_MODEL=1 just dev</code></pre>
+
+            <div class="callout">
+                <p><strong>Tip:</strong> Use <code>just dev</code> for development. It runs <code>uvicorn</code> with <code>--reload</code> enabled so code changes are picked up automatically.</p>
+            </div>
+        </div>
+
+        <!-- Project Structure -->
+        <div class="section">
+            <h2>Project Structure</h2>
+
+            <div class="file-tree"><span class="dir">yunshu/</span>
+<span class="file">  justfile               # Build orchestration (all commands)</span>
+<span class="file">  pyproject.toml         # Python package config, deps, pytest, ruff, mypy</span>
+<span class="dir">  python/                # All Python source code (the package)</span>
+<span class="dir">    yunshu_gateway/      # L1: FastAPI HTTP server + routers</span>
+<span class="dir">      main.py            #   App factory (create_app), lifespan, middleware</span>
+<span class="dir">      engine.py          #   Module-level engine singleton</span>
+<span class="dir">      routers/           #   Protocol routers (chat, models, admin...)</span>
+<span class="dir">    yunshu_control/      # L2: Scheduling, auth, model registry</span>
+<span class="dir">      auth.py            #   API key validation</span>
+<span class="dir">      scheduler.py       #   Request scheduling</span>
+<span class="dir">      model_registry.py  #   Model discovery and registration</span>
+<span class="dir">      hardware.py        #   Hardware detection (chip, UMA, cores)</span>
+<span class="dir">      metrics.py         #   Prometheus metrics</span>
+<span class="dir">    yunshu_api/          # L2: Management API routers</span>
+<span class="dir">    yunshu_mesh/         # L3: Compute mesh (mx.distributed)</span>
+<span class="dir">    yunshu_engine/       # L4: Inference engine</span>
+<span class="dir">      engine.py          #   Core Engine class (load, start, stop, generate)</span>
+<span class="dir">      config.py          #   EngineConfig dataclass</span>
+<span class="dir">      models/            #   Modality model handlers</span>
+<span class="dir">    yunshu_kv/           # L5: KV cache hierarchy</span>
+<span class="dir">    yunshu_sdk/          # Python SDK client library</span>
+<span class="dir">    yunshu_cli/          # CLI via Typer</span>
+<span class="dir">  metal/                 # Metal compute shaders (.metal files)</span>
+<span class="dir">  tests/</span>
+<span class="dir">    unit/                # Fast unit tests (no model loading)</span>
+<span class="dir">    integration/         # Integration tests (may need models)</span>
+<span class="dir">    e2e/                 # Full HTTP E2E tests</span>
+<span class="dir">  scripts/               # Utility scripts</span>
+<span class="dir">    dev_setup.sh         # Development environment setup</span>
+<span class="dir">    release_prep.py      # Release preparation checks</span>
+<span class="dir">    benchmark_paper.py   # Benchmark paper generator</span>
+<span class="dir">    test_e2e_http.py     # Live E2E HTTP test</span>
+<span class="dir">    test_real_model.py   # Real model inference test</span>
+<span class="dir">  docs/                  # Documentation site (HTML)</span>
+<span class="dir">  webui/                 # Next.js 16 dashboard (optional)</span></div>
+
+            <h3>Package Organization</h3>
+            <p>Each layer is a separate Python package under <code>python/</code>. Dependencies flow downward:</p>
+            <ul>
+                <li><code>yunshu_gateway</code> depends on <code>yunshu_engine</code> (via module-level singleton)</li>
+                <li><code>yunshu_engine</code> depends on <code>mlx</code>, <code>mlx_lm</code>, <code>mlx_audio</code> (engine primitives only)</li>
+                <li><code>yunshu_kv</code> depends on <code>mlx</code> (for Metal operations)</li>
+                <li><code>yunshu_mesh</code> depends on <code>mx.distributed</code></li>
+            </ul>
+
+            <div class="callout callout-warning">
+                <p><strong>Import Policy:</strong> The engine layer may use mlx/mlx-lm/mlx-audio engine primitives. It must NOT use application-level wrappers like mlx_vlm or mflux.</p>
+            </div>
+        </div>
+
+        <!-- Testing Guide -->
+        <div class="section">
+            <h2>Testing Guide</h2>
+
+            <h3>Running Tests</h3>
+            <pre><code># All tests
+just test
+
+# Unit tests only (fast, no models needed)
+just test-unit
+
+# Single test file
+just test-single tests/unit/test_foo.py
+
+# Direct pytest
+uv run pytest tests/ -v
+
+# With coverage
+uv run pytest tests/ --tb=short -q</code></pre>
+
+            <h3>Test Categories</h3>
+            <ul>
+                <li><strong>Unit tests</strong> (<code>tests/unit/</code>) &mdash; Fast tests with mocked dependencies. No model loading. Should pass on any machine.</li>
+                <li><strong>Integration tests</strong> (<code>tests/integration/</code>) &mdash; Tests that exercise multiple components together. May require models.</li>
+                <li><strong>E2E tests</strong> (<code>tests/e2e/</code>) &mdash; Full HTTP request/response tests with mocked engine.</li>
+            </ul>
+
+            <h3>Writing Tests</h3>
+            <p>Follow these conventions:</p>
+            <ul>
+                <li>Use <code>pytest</code> fixtures with <code>TestClient</code> from <code>fastapi.testclient</code></li>
+                <li>Mock the engine using <code>_FakeBatchGen</code> and <code>_FakeTokenizer</code> patterns (see <code>tests/unit/test_e2e_gateway.py</code>)</li>
+                <li>Test both success and error paths (wrong model, missing params, etc.)</li>
+                <li>Use <code>engine_mod._engine</code> to inject fake engine state</li>
+            </ul>
+
+            <h3>Test Example</h3>
+            <pre><code>import pytest
+from fastapi.testclient import TestClient
+from yunshu_gateway import engine as engine_mod
+from yunshu_gateway.main import create_app
+
+def test_my_endpoint():
+    """Test my new endpoint."""
+    engine_mod._engine = _make_engine()  # inject fake engine
+    app = create_app()
+    with TestClient(app) as client:
+        resp = client.get("/v1/models")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["data"]) >= 1</code></pre>
+
+            <h3>Real Model Testing</h3>
+            <pre><code># Download a small model and test real inference
+PYTHONPATH=. uv run python scripts/test_real_model.py
+# Uses Qwen2.5-0.5B-Instruct-4bit (~400MB download)</code></pre>
+        </div>
+
+        <!-- Linting and Formatting -->
+        <div class="section">
+            <h2>Linting &amp; Formatting</h2>
+            <pre><code># Lint (ruff)
+just lint
+
+# Auto-format
+just format
+
+# Type check (mypy)
+uv run mypy python/</code></pre>
+
+            <h3>Configuration</h3>
+            <ul>
+                <li><strong>Ruff</strong>: configured in <code>pyproject.toml</code> under <code>[tool.ruff]</code></li>
+                <li><strong>mypy</strong>: configured in <code>pyproject.toml</code> under <code>[tool.mypy]</code></li>
+                <li><strong>Line length</strong>: 88 characters (Black-compatible)</li>
+                <li><strong>Target</strong>: Python 3.13</li>
+            </ul>
+        </div>
+
+        <!-- Contributing -->
+        <div class="section">
+            <h2>Contributing Guidelines</h2>
+
+            <h3>Workflow</h3>
+            <ol>
+                <li>Fork the repository</li>
+                <li>Create a feature branch: <code>git checkout -b feature/my-feature</code></li>
+                <li>Make your changes</li>
+                <li>Run tests: <code>just test</code></li>
+                <li>Run lint: <code>just lint && just format</code></li>
+                <li>Commit with a descriptive message</li>
+                <li>Push and create a Pull Request</li>
+            </ol>
+
+            <h3>Code Style</h3>
+            <ul>
+                <li>Follow PEP 8 (enforced by ruff)</li>
+                <li>Use type hints on all public functions</li>
+                <li>Add docstrings to classes and public functions</li>
+                <li>Keep functions focused and small (&lt;50 lines preferred)</li>
+                <li>Use <code>structlog</code> for logging (not <code>print</code>)</li>
+            </ul>
+
+            <h3>PR Checklist</h3>
+            <ul class="checklist">
+                <li>All tests pass (<code>just test</code>)</li>
+                <li>No lint errors (<code>just lint</code>)</li>
+                <li>New code has tests</li>
+                <li>Public APIs have docstrings</li>
+                <li>Breaking changes are documented</li>
+                <li>No TODO/FIXME left in production code</li>
+            </ul>
+
+            <h3>Architecture Conventions</h3>
+            <ul>
+                <li>Routers go in <code>yunshu_gateway/routers/</code> and must be registered in <code>main.py</code></li>
+                <li>New endpoints should follow existing patterns (see <code>routers/chat.py</code>)</li>
+                <li>Engine changes must maintain thread safety (single Metal thread)</li>
+                <li>All GPU work goes through the <code>ThreadPoolExecutor(max_workers=1)</code></li>
+                <li>Never pool detokenizers &mdash; create one per request</li>
+                <li>Use <code>uv</code> for dependency management (never pip/poetry)</li>
+            </ul>
+        </div>
+
+        <!-- Debugging Tips -->
+        <div class="section">
+            <h2>Debugging Tips</h2>
+
+            <h3>Enable Debug Logging</h3>
+            <pre><code>YUNSHU_LOG_LEVEL=DEBUG just dev</code></pre>
+
+            <h3>Check Engine State</h3>
+            <pre><code># Health check with engine details
+curl http://localhost:8000/health | python -m json.tool
+
+# Model list
+curl http://localhost:8000/v1/models | python -m json.tool
+
+# Metrics
+curl http://localhost:8000/metrics</code></pre>
+
+            <h3>Common Issues</h3>
+            <ul>
+                <li><strong>Model not found (404)</strong>: Ensure the model is in <code>./models/</code> or loaded via the admin API</li>
+                <li><strong>Out of memory</strong>: Reduce <code>YUNSHU_MAX_MEMORY_GB</code> or unload unused models</li>
+                <li><strong>Import errors</strong>: Run <code>PYTHONPATH=. uv run python -c "import yunshu_gateway"</code></li>
+                <li><strong>Metal build fails</strong>: Ensure Xcode CLI tools are installed: <code>xcode-select --install</code></li>
+            </ul>
+        </div>
+
+        <!-- Release Process -->
+        <div class="section">
+            <h2>Release Process</h2>
+            <pre><code># Run release preparation checks
+PYTHONPATH=. uv run python scripts/release_prep.py
+
+# Skip tests (faster, for quick checks)
+PYTHONPATH=. uv run python scripts/release_prep.py --skip-tests
+
+# JSON output
+PYTHONPATH=. uv run python scripts/release_prep.py --json</code></pre>
+            <p>The release prep script validates:</p>
+            <ul>
+                <li>Test suite passes</li>
+                <li>All imports are valid</li>
+                <li>Router registration is complete</li>
+                <li>No circular imports</li>
+                <li>TODO/FIXME/HACK count</li>
+                <li>Symbol counts and coverage estimate</li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        Yunshu v0.1.0.dev0 &middot; Apache-2.0 &middot; Apple Silicon
+    </footer>
+</body>
+</html>
