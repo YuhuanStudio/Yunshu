@@ -71,6 +71,10 @@ class BatchedEngine:
         self._spec_decoder = None  # SpeculativeDecoder instance
         self._spec_enabled = False
 
+        # KV prefix cache for multi-turn speedup
+        from .kv_prefix_cache import KVPrefixCache
+        self._kv_prefix_cache = KVPrefixCache(max_entries=64, min_prefix_length=32)
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -319,16 +323,33 @@ class BatchedEngine:
 
         def _run():
             import mlx.core as mx
+            from mlx_lm.utils import make_prompt_cache
             ids = mx.array(input_ids)
             tokens = []
             token_logprobs = []
             ttft_s = 0.0
+            cached_tokens = 0
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
+
+            # Try KV prefix cache hit
+            prefix_cache = self._kv_prefix_cache
+            cached_kv, remaining, matched = prefix_cache.get(ids)
+            cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
+
+            if cached_kv is not None:
+                # Only prefill remaining tokens after cache hit
+                cached_tokens = matched
+                ids_to_prefill = ids[matched:]
+            else:
+                ids_to_prefill = ids
+
             gen_t0 = time.perf_counter()
             first = True
+
             for token, logits in generate_step(
-                ids, model, max_tokens=max_tokens, sampler=sampler,
+                ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
+                prompt_cache=cache,
             ):
                 if first:
                     ttft_s = time.perf_counter() - gen_t0
@@ -354,14 +375,18 @@ class BatchedEngine:
                     detokenizer.add_token(token)
                     if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                         break
+
+            # Cache the completed KV state for future prefix matching
+            prefix_cache.add(ids, cache)
+
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
-            return tokens, output_text, token_logprobs, ttft_s
+            return tokens, output_text, token_logprobs, ttft_s, cached_tokens
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-        tokens, output_text, token_logprobs, ttft_s = await loop.run_in_executor(executor, _run)
+        tokens, output_text, token_logprobs, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
 
         # Decode token strings for logprobs
         lp_result = None
@@ -394,6 +419,7 @@ class BatchedEngine:
             completion_tokens=len(tokens),
             finished=True,
             finish_reason=finish_reason,
+            cached_tokens=cached_tokens,
             logprobs=lp_result,
             ttft_ms=round(ttft_s * 1000, 1),
         )
@@ -539,11 +565,22 @@ class BatchedEngine:
 
         def _run():
             import mlx.core as mx
+            from mlx_lm.utils import make_prompt_cache
             ids = mx.array(input_ids)
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
             n_tok = 0
-            for token, _logits in generate_step(ids, model, max_tokens=max_tokens, sampler=sampler):
+
+            # KV prefix cache for streaming
+            prefix_cache = self._kv_prefix_cache
+            cached_kv, remaining, matched = prefix_cache.get(ids)
+            cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
+            ids_to_prefill = ids[matched:] if cached_kv is not None else ids
+
+            for token, _logits in generate_step(
+                ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
+                prompt_cache=cache,
+            ):
                 detokenizer.add_token(token)
                 n_tok += 1
                 new_text = detokenizer.last_segment
@@ -554,8 +591,10 @@ class BatchedEngine:
                         suffix_hit = True
                 _put((new_text, n_tok, stop_hit or suffix_hit))
                 if stop_hit or suffix_hit:
+                    prefix_cache.add(ids, cache)
                     mx.synchronize()
                     return
+            prefix_cache.add(ids, cache)
             _put(("", n_tok, True))
             mx.synchronize()
             _put(_sentinel)
