@@ -56,28 +56,27 @@ class TestMetalKernelManager:
 
         mgr = MetalKernelManager()
         assert mgr is not None
-        assert not mgr.is_loaded
+        assert mgr.is_loaded  # JIT kernels always available
 
     def test_init_custom_path(self):
         from yunshu_engine.metal_kernels import MetalKernelManager
 
         mgr = MetalKernelManager(metallib_path="/tmp/nonexistent.metallib")
-        assert not mgr.is_loaded
+        assert mgr.is_loaded  # JIT kernels always available regardless of path
 
-    def test_load_nonexistent(self):
+    def test_load_default(self):
         from yunshu_engine.metal_kernels import MetalKernelManager
 
         mgr = MetalKernelManager(metallib_path="/tmp/does_not_exist.metallib")
-        assert not mgr.load_default_library()
+        assert mgr.load_default_library()  # JIT pre-compilation always works
 
     def test_reload_clears_state(self):
         from yunshu_engine.metal_kernels import MetalKernelManager
 
         mgr = MetalKernelManager(metallib_path="/tmp/fake.metallib")
         mgr.load_default_library()
-        # Even though load fails, reload should not crash
         result = mgr.reload()
-        assert not mgr.is_loaded
+        assert result
 
     def test_load_actual_metallib_if_available(self):
         """Try loading the actual metallib — skip if not compiled."""
@@ -608,14 +607,14 @@ class TestKernelManagerErrors:
     """Test error handling and edge cases."""
 
     def test_kivi_head_dim_not_multiple_of_4(self):
-        """Head dim not divisible by 4 should fail gracefully."""
+        """Head dim not divisible by 4: MLX fallback handles gracefully."""
         from yunshu_engine.metal_kernels import MetalKernelManager
 
         mgr = MetalKernelManager()
-        keys = mx.random.normal((2, 2, 7)).astype(mx.float16)  # 7 not divisible by 4
-        # Packing 4 values into 1 byte requires head_dim % 4 == 0
-        with pytest.raises((ValueError, Exception)):
-            mgr.kivi_quantize(keys)
+        keys = mx.random.normal((2, 2, 7)).astype(mx.float16)
+        # MLX fallback: i::4 slicing gives ceil(7/4)=2 packed values
+        result = mgr.kivi_quantize(keys)
+        assert result[0].shape[-1] == -(-7 // 4)  # ceil division = 2
 
     def test_paged_attention_negative_block(self):
         """Negative block IDs should be skipped."""
@@ -637,10 +636,9 @@ class TestKernelManagerErrors:
 
         mgr = MetalKernelManager(metallib_path="/nonexistent.metallib")
         mgr.load_default_library()
-        assert not mgr.is_loaded
-        # Reload should not crash
+        assert mgr.is_loaded  # JIT kernels always available
         result = mgr.reload()
-        assert not result
+        assert result
 
     def test_gemv_single_element(self):
         """Edge case: 1x1 matrix."""

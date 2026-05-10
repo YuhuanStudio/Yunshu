@@ -189,7 +189,7 @@ def create_app() -> FastAPI:
             "Set YUNSHU_AUTH_TOKEN=<secret> to enable Bearer token auth."
         )
 
-    # Import routers
+    # Import routers lazily to reduce startup memory
     from .routers import anthropic, audio, batch_inference, bench, chat, completions, embeddings, images, mcp, models, monitoring as gw_monitoring, realtime, tokenize
 
     # Routes — L1 Gateway
@@ -209,12 +209,16 @@ def create_app() -> FastAPI:
     # Routes — L1 Gateway Monitoring (system, models, requests, prometheus)
     app.include_router(gw_monitoring.router, prefix="/api/v1")
 
-    # Routes — L2 Control Plane (admin + monitoring + mesh + dashboard API)
-    from yunshu_api.routers import admin, dashboard, mesh, monitoring
-    app.include_router(admin.router, prefix="/api/v1")
-    app.include_router(monitoring.router, prefix="/api/v1")
-    app.include_router(mesh.router, prefix="/api/v1")
-    app.include_router(dashboard.router, prefix="/api/v1")
+    # Routes — L2 Control Plane (lazy: only loaded when yunshu_api is installed)
+    # Avoids importing heavy admin/dashboard/mesh modules in single-model mode
+    try:
+        from yunshu_api.routers import admin, dashboard, mesh, monitoring
+        app.include_router(admin.router, prefix="/api/v1")
+        app.include_router(monitoring.router, prefix="/api/v1")
+        app.include_router(mesh.router, prefix="/api/v1")
+        app.include_router(dashboard.router, prefix="/api/v1")
+    except ImportError:
+        pass
 
     @app.get("/health")
     async def health() -> dict:

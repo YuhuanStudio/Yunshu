@@ -144,22 +144,19 @@ def _paged_attention_decode_kernel():
 # ── GEMV Kernels via mx.fast.metal_kernel ──
 
 def _gemv_fp16_kernel():
-    """FP16 GEMV: y = W @ x + bias. Each SIMD group handles one output row."""
+    """FP16 GEMV: y = W @ x + bias. Each threadgroup (32 threads) handles one output row."""
     source = r"""
-        uint tid = thread_position_in_grid.x;
-        uint row = tid / 32;
-        uint lane = tid % 32;
+        uint row = threadgroup_position_in_grid.x;
         if (row >= OUT_DIM) return;
 
-        uint base = row * IN_DIM;
         float sum = 0.0f;
-        for (uint d = lane; d < IN_DIM; d += 32) {
-            sum += (float)W_ptr[base + d] * (float)x_ptr[d];
+        for (uint d = thread_index_in_simdgroup; d < IN_DIM; d += 32) {
+            sum += (float)W_ptr[row * IN_DIM + d] * (float)x_ptr[d];
         }
         for (uint16_t offset = 16; offset > 0; offset >>= 1) {
             sum += simd_shuffle_down(sum, offset);
         }
-        if (lane == 0) {
+        if (thread_index_in_simdgroup == 0) {
             y_ptr[row] = (half)sum;
         }
     """
@@ -175,9 +172,7 @@ def _gemv_fp16_kernel():
 def _gemv_q4_kernel():
     """4-bit quantized GEMV: dequantize + dot product fused."""
     source = r"""
-        uint tid = thread_position_in_grid.x;
-        uint row = tid / 32;
-        uint lane = tid % 32;
+        uint row = threadgroup_position_in_grid.x;
         if (row >= OUT_DIM) return;
 
         float scale = (float)scales_ptr[row];
@@ -186,7 +181,7 @@ def _gemv_q4_kernel():
         uint base = row * packed_dim;
 
         float sum = 0.0f;
-        for (uint d = lane; d < packed_dim; d += 32) {
+        for (uint d = thread_index_in_simdgroup; d < packed_dim; d += 32) {
             uchar packed = W_q_ptr[base + d];
             float val_lo = (float)(packed & 0xF) - zp;
             float val_hi = (float)((packed >> 4) & 0xF) - zp;
@@ -196,7 +191,7 @@ def _gemv_q4_kernel():
         for (uint16_t offset = 16; offset > 0; offset >>= 1) {
             sum += simd_shuffle_down(sum, offset);
         }
-        if (lane == 0) {
+        if (thread_index_in_simdgroup == 0) {
             y_ptr[row] = (half)sum;
         }
     """
@@ -355,12 +350,11 @@ class MetalKernelManager:
             kernel = _get_kernel("gemv_fp16")
             if kernel is not None:
                 try:
-                    total_threads = out_dim * 32
                     outputs = kernel(
                         inputs=[W, x],
                         template=[("IN_DIM", in_dim), ("OUT_DIM", out_dim)],
-                        grid=(total_threads, 1, 1),
-                        threadgroup=(total_threads, 1, 1),
+                        grid=(out_dim * 32, 1, 1),  # total threads = rows * SIMD width
+                        threadgroup=(32, 1, 1),       # 1 SIMD group per row
                         output_shapes=[(out_dim,)],
                         output_dtypes=[mx.float16],
                     )
@@ -396,12 +390,11 @@ class MetalKernelManager:
         kernel = _get_kernel("gemv_q4")
         if kernel is not None:
             try:
-                total_threads = out_dim * 32
                 outputs = kernel(
                     inputs=[W_q, scales, zero_points, x],
                     template=[("IN_DIM", in_dim), ("OUT_DIM", out_dim)],
-                    grid=(total_threads, 1, 1),
-                    threadgroup=(total_threads, 1, 1),
+                    grid=(out_dim * 32, 1, 1),
+                    threadgroup=(32, 1, 1),
                     output_shapes=[(out_dim,)],
                     output_dtypes=[mx.float16],
                 )
@@ -587,21 +580,11 @@ class MetalKernelManager:
         scale: Optional[float] = None,
         causal: bool = True,
     ) -> mx.array:
-        """Scaled dot-product attention using MLX built-in or manual impl."""
+        """Scaled dot-product attention using MLX einsum."""
         head_dim = Q.shape[-1]
         if scale is None:
             scale = 1.0 / (head_dim ** 0.5)
 
-        # Try MLX built-in SDPA first (fastest path)
-        try:
-            return mx.fast.scaled_dot_product_attention(
-                Q[None], K[None], V[None],
-                scale=scale,
-            )[0]
-        except Exception:
-            pass
-
-        # Manual fallback
         seq_q = Q.shape[0]
         seq_k = K.shape[0]
         num_heads = Q.shape[1]
