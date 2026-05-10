@@ -1,7 +1,7 @@
 """Independent process memory benchmark v2 — with warmup for Yunshu."""
 import json, subprocess, sys, time
 
-MODEL = "/Users/yuhuan/Documents/Yunshu/models/Qwen3.5-9B-MLX-bf16"
+MODEL = "/Users/yuhuan/Documents/Yunshu/models/Qwen3.5-4B-MLX-bf16"
 
 SCRIPTS = {
     "mlx-lm": f"""

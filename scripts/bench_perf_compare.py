@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path("/Users/yuhuan/Documents/Yunshu")
 REF_DIR = ROOT.parent / "reference"
-MODEL_PATH = str(ROOT / "models" / "Qwen3.5-9B-MLX-bf16")
+MODEL_PATH = str(ROOT / "models" / "Qwen3.5-4B-MLX-bf16")
 LOG = ROOT / "bench" / "results" / "perf_compare.log"
 
 sys.path.insert(0, str(REF_DIR / "mlx-lm"))
