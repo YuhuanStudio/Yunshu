@@ -81,6 +81,11 @@ bench = [
     "datasets>=3.0.0",
     "matplotlib>=3.9.0",
 ]
+vision = [
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "Pillow>=10.0.0",
+]
 
 [project.scripts]
 yunshu = "yunshu_cli:app"

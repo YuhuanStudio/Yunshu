@@ -346,15 +346,33 @@ class VLMEngine:
         """Vision + text generation using mlx_vlm.generate()."""
         from mlx_vlm.generate import generate as vlm_generate
 
-        # Extract text prompt from messages
-        prompt_text = self._format_prompt(messages)
-        if not prompt_text.strip():
-            prompt_text = "Describe this image."
+        # Build messages with image references for processor's chat template
+        vlm_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image_url":
+                            parts.append({"type": "image"})
+                        elif part.get("type") == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                    elif isinstance(part, str):
+                        parts.append({"type": "text", "text": part})
+                vlm_messages.append({"role": msg.get("role", "user"), "content": parts})
+            else:
+                vlm_messages.append({"role": msg.get("role", "user"), "content": str(content)})
+
+        # Use processor's chat template to insert image tokens
+        prompt = self._processor.apply_chat_template(
+            vlm_messages, tokenize=False, add_generation_prompt=True,
+        )
 
         result = vlm_generate(
             self._model,
             self._processor,
-            prompt=prompt_text,
+            prompt=prompt,
             image=image_paths if len(image_paths) > 1 else image_paths[0],
             max_tokens=max_tokens,
             temp=temperature,
