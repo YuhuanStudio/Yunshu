@@ -78,6 +78,7 @@ class VLMEngine:
         self._model_path = model_path
         self._model = None
         self._tokenizer = None
+        self._processor = None
         self._config: dict = {}
         self._running = False
         self._num_requests_processed = 0
@@ -142,6 +143,14 @@ class VLMEngine:
         self._tokenizer = tokenizer
         self._is_vlm = _is_mlx_vlm_model(model)
 
+        # Load processor for VLM vision input
+        if self._has_vision and self._is_vlm:
+            try:
+                from mlx_vlm.utils import load_processor
+                self._processor = load_processor(model_path)
+            except Exception as e:
+                logger.warning(f"Could not load VLM processor: {e}")
+
         logger.info(
             f"VLM engine loaded: {self._model_path} "
             f"(vision={self._has_vision}, vlm_model={self._is_vlm})"
@@ -163,6 +172,7 @@ class VLMEngine:
         self._cleanup_temp_files()
         self._model = None
         self._tokenizer = None
+        self._processor = None
         self._running = False
         gc.collect()
         loop = asyncio.get_running_loop()
@@ -186,14 +196,18 @@ class VLMEngine:
         top_p: float = 1.0,
         **kwargs,
     ) -> dict[str, Any]:
-        """Non-streaming generation."""
+        """Non-streaming generation. Supports image input for VLM models."""
         messages = prompt or messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
 
         t0 = time.monotonic()
+        image_paths = await self._extract_images(messages)
 
         def _generate_sync():
+            if image_paths and self._has_vision and self._is_vlm:
+                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p)
+
             prompt_text = self._format_prompt(messages)
             input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
@@ -320,6 +334,33 @@ class VLMEngine:
         finally:
             if not stream_task.done():
                 stream_task.cancel()
+
+    def _generate_vlm_vision(
+        self,
+        messages: list[dict],
+        image_paths: list[str],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> str:
+        """Vision + text generation using mlx_vlm.generate()."""
+        from mlx_vlm.generate import generate as vlm_generate
+
+        # Extract text prompt from messages
+        prompt_text = self._format_prompt(messages)
+        if not prompt_text.strip():
+            prompt_text = "Describe this image."
+
+        result = vlm_generate(
+            self._model,
+            self._processor,
+            prompt=prompt_text,
+            image=image_paths if len(image_paths) > 1 else image_paths[0],
+            max_tokens=max_tokens,
+            temp=temperature,
+            verbose=False,
+        )
+        return result.text if hasattr(result, 'text') else str(result)
 
     # ── VLM text generation (for mlx-vlm models) ──
 
