@@ -187,6 +187,7 @@ def main():
             steps += 1
 
             if accepted < K:
+                # Rebuild draft cache (trim+refeed produces incorrect KV values)
                 all_ids = prompt_ids + generated
                 draft_cache = make_prompt_cache(draft_model)
                 draft_model(mx.array(all_ids).reshape(1, -1), cache=draft_cache)

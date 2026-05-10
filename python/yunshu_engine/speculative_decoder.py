@@ -506,11 +506,12 @@ class SpeculativeDecoder:
 
         Main generation loop:
         1. Prefill both models, get first token from prefill logits
-        2. Draft proposes K-1 more tokens
-        3. Target verifies draft tokens one-by-one (avoids cache rollback)
-        4. Accept matched tokens + bonus token
-        5. Rebuild draft cache on rejection
-        6. Repeat until max_tokens or EOS
+        2. Checkpoint draft cache offsets
+        3. Draft proposes K tokens
+        4. Target verifies draft tokens one-by-one
+        5. Accept matched tokens + bonus token
+        6. On rejection: rollback draft cache via trim + feed correction
+        7. Repeat until max_tokens or EOS
 
         Args:
             input_ids: Prompt token IDs [1, seq_len]
@@ -599,7 +600,11 @@ class SpeculativeDecoder:
             self._stats["total_accepted_tokens"] += accepted
             self._stats["total_steps"] += 1
 
-            # Rebuild draft cache on rejection (KV cache cannot rollback)
+            # Rebuild draft cache from scratch on rejection.
+            # trim+refeed and deep-copy checkpoint both produce incorrect KV
+            # values (tested: max logit diff ~7-14 even with clean restore).
+            # Only full rebuild from correct token sequence produces
+            # KV values matching continuous generation.
             if accepted < K:
                 all_ids = prompt_ids + generated_tokens
                 draft_cache = make_prompt_cache(self.draft)
