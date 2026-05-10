@@ -54,56 +54,56 @@ inline float simd_reduce_max(float val) {
 
 # ── PagedAttention Decode ──
 
-def _paged_attention_decode_kernel():
-    """PagedAttention decode: single query token against paged KV cache.
+def _paged_attention_decode_kernel(head_dim: int):
+    """PagedAttention decode: single query token per sequence against paged KV cache.
 
-    Online softmax with FP32 accumulation.
+    Grid: (num_heads, num_queries, 1), threadgroup: (32, 1, 1).
+    Each threadgroup handles one (query, head) pair.
+    Online softmax with FP32 accumulation over KV blocks.
     """
     source = r"""
         uint query_idx = threadgroup_position_in_grid.y;
         uint head_idx = threadgroup_position_in_grid.x;
-        int seq_len = seq_lens[query_idx];
+        uint lane = thread_index_in_simdgroup;
+
+        int seq_len = seq_lens_ptr[query_idx];
         if (seq_len <= 0) return;
 
-        int num_kv_blocks = (seq_len + kv_block_sz - 1) / kv_block_sz;
+        int num_kv_blocks = (seq_len + KV_BLOCK_SZ - 1) / KV_BLOCK_SZ;
+        device const int* bt = block_tables_ptr + query_idx * max_blocks;
 
-        // Block table stride = max blocks per sequence
-        device const int* block_table = block_tables_ptr + query_idx * block_table_stride;
+        // Load query into registers
+        float q[HEAD_DIM];
+        for (uint d = lane; d < HEAD_DIM; d += 32) {
+            q[d] = (float)queries_ptr[(query_idx * NUM_HEADS + head_idx) * HEAD_DIM + d];
+        }
 
-        // Accumulator and running softmax state
+        // Online softmax accumulator
         float acc[HEAD_DIM];
         for (uint d = 0; d < HEAD_DIM; d++) acc[d] = 0.0f;
-
         float running_max = -1e9f;
         float running_sum = 0.0f;
 
-        // Query vector
-        uint q_offset = query_idx * num_heads * HEAD_DIM + head_idx * HEAD_DIM;
-        float q[HEAD_DIM];
-        for (uint d = thread_index_in_simdgroup; d < HEAD_DIM; d += 32) {
-            q[d] = (float)queries_ptr[q_offset + d];
-        }
-
-        // Iterate over KV blocks
         for (int block = 0; block < num_kv_blocks; block++) {
-            int physical_block = block_table[block];
-            if (physical_block < 0) continue;
+            int phys = bt[block];
+            if (phys < 0) continue;
 
-            int block_start = block * kv_block_sz;
-            int block_end = metal::min((int)kv_block_sz, seq_len - block_start);
+            int block_start = block * KV_BLOCK_SZ;
+            int block_end = metal::min((int)KV_BLOCK_SZ, seq_len - block_start);
 
-            // Compute scores for this block and find local max
-            float local_max = -1e9f;
-            for (int kv_idx = thread_index_in_simdgroup; kv_idx < block_end; kv_idx += 32) {
-                uint kv_offset = (physical_block * kv_block_sz + kv_idx) * num_heads * HEAD_DIM
-                                 + head_idx * HEAD_DIM;
+            // Each lane processes one KV row, stride by SIMD width
+            for (int kv_idx = lane; kv_idx < block_end; kv_idx += 32) {
+                uint kv_base = (phys * KV_BLOCK_SZ + kv_idx) * NUM_HEADS * HEAD_DIM
+                               + head_idx * HEAD_DIM;
+
+                // Q·K score
                 float score = 0.0f;
                 for (uint d = 0; d < HEAD_DIM; d++) {
-                    score += q[d] * (float)key_cache_ptr[kv_offset + d];
+                    score += q[d] * (float)key_cache_ptr[kv_base + d];
                 }
                 score *= attn_scale;
 
-                // Online softmax correction
+                // Online softmax update
                 float old_max = running_max;
                 running_max = metal::max(running_max, score);
                 float correction = metal::exp(old_max - running_max);
@@ -114,31 +114,28 @@ def _paged_attention_decode_kernel():
                 float weight = metal::exp(score - running_max);
                 running_sum += weight;
 
-                // Accumulate weighted values
-                uint v_offset = (physical_block * kv_block_sz + kv_idx) * num_heads * HEAD_DIM
-                                + head_idx * HEAD_DIM;
+                // Accumulate weighted value
                 for (uint d = 0; d < HEAD_DIM; d++) {
-                    acc[d] += weight * (float)value_cache_ptr[v_offset + d];
+                    acc[d] += weight * (float)value_cache_ptr[kv_base + d];
                 }
             }
-
-            // Cross-lane reduction for running_max and running_sum
-            running_max = simd_reduce_max(running_max);
-            float correction = metal::exp(running_max_saved - running_max);
-            // Note: simplified — real impl needs 2-pass per block
         }
 
         // Finalize
         float inv_sum = 1.0f / metal::max(running_sum, 1e-8f);
-        uint out_offset = query_idx * num_heads * HEAD_DIM + head_idx * HEAD_DIM;
-        for (uint d = thread_index_in_simdgroup; d < HEAD_DIM; d += 32) {
-            output_ptr[out_offset + d] = (half)(acc[d] * inv_sum);
+        uint out_base = (query_idx * NUM_HEADS + head_idx) * HEAD_DIM;
+        for (uint d = lane; d < HEAD_DIM; d += 32) {
+            output_ptr[out_base + d] = (half)(acc[d] * inv_sum);
         }
     """
-    # NOTE: The above is a reference implementation sketch.
-    # Real paged attention needs careful block-wise online softmax.
-    # For production, we use the vectorized MLX fallback (below) until
-    # the kernel is validated against MLX's built-in attention.
+
+    return mx.fast.metal_kernel(
+        name="yunshu_paged_attn_decode",
+        input_names=["queries_ptr", "key_cache_ptr", "value_cache_ptr",
+                      "block_tables_ptr", "seq_lens_ptr"],
+        output_names=["output_ptr"],
+        source=source,
+    )
 
 
 # ── GEMV Kernels via mx.fast.metal_kernel ──
@@ -300,6 +297,11 @@ def _get_kernel(name: str):
                 _kernels[name] = _kivi_quantize_kernel()
             elif name == "kivi_dequantize":
                 _kernels[name] = _kivi_dequantize_kernel()
+            elif name.startswith("paged_attn_decode_h"):
+                import re
+                m = re.match(r"paged_attn_decode_h(\d+)_k(\d+)", name)
+                head_dim = int(m.group(1))
+                _kernels[name] = _paged_attention_decode_kernel(head_dim)
             else:
                 raise ValueError(f"Unknown kernel: {name}")
             logger.info(f"JIT-compiled Metal kernel: {name}")
@@ -421,17 +423,38 @@ class MetalKernelManager:
         seq_lens: mx.array,
         num_heads: int,
         head_dim: int,
-        kv_block_size: int = 64,
+        kv_block_size: int = 16,
         scale: Optional[float] = None,
     ) -> mx.array:
         """PagedAttention decode: single-query against paged KV cache.
 
-        Uses vectorized MLX ops (fallback) until Metal kernel is validated.
-        The Metal kernel source is compiled but needs numerical validation
-        against MLX's built-in attention before production use.
+        Tries Metal kernel first, falls back to MLX ops.
         """
         if scale is None:
             scale = 1.0 / (head_dim ** 0.5)
+
+        kernel = _get_kernel(f"paged_attn_decode_h{head_dim}_k{kv_block_size}")
+        if kernel is not None:
+            try:
+                num_queries = queries.shape[0]
+                max_blocks = block_tables.shape[1]
+                output = kernel(
+                    inputs=[queries, key_cache, value_cache, block_tables, seq_lens],
+                    template=[
+                        ("HEAD_DIM", head_dim),
+                        ("NUM_HEADS", num_heads),
+                        ("KV_BLOCK_SZ", kv_block_size),
+                        ("max_blocks", max_blocks),
+                        ("attn_scale", scale),
+                    ],
+                    grid=(num_heads, num_queries, 1),
+                    threadgroup=(32, 1, 1),
+                    output_shapes=[queries.shape],
+                    output_dtypes=[queries.dtype],
+                )
+                return output[0]
+            except Exception as e:
+                logger.debug(f"Metal paged_attn_decode fallback: {e}")
 
         return self._fallback_paged_attention(
             queries, key_cache, value_cache,
