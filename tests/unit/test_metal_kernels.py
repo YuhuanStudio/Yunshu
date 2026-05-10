@@ -11,12 +11,12 @@ class TestMetalKernelManager:
         from yunshu_engine.metal_kernels import MetalKernelManager
         mgr = MetalKernelManager()
         assert mgr is not None
-        assert not mgr.is_loaded  # No compiled metallib yet
+        assert mgr.is_loaded  # JIT kernels always available
 
-    def test_load_nonexistent(self):
+    def test_load_default(self):
         from yunshu_engine.metal_kernels import MetalKernelManager
-        mgr = MetalKernelManager(metallib_path="/nonexistent/path.metallib")
-        assert not mgr.load_default_library()
+        mgr = MetalKernelManager()
+        assert mgr.load_default_library()  # JIT pre-compilation always works
 
     def test_get_kernel_manager_singleton(self):
         from yunshu_engine.metal_kernels import get_kernel_manager
