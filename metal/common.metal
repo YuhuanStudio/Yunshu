@@ -16,30 +16,61 @@
 using namespace metal;
 
 // ── Compile-time configurable tile sizes ──
-// Specialized via MTLFunctionConstantValues at pipeline creation.
+// Metal 3.1: function_constant cannot be used for array sizes.
+// Use #define for threadgroup/register array dimensions, tunable via -D flags.
 
-// PagedAttention tile sizes
-constant uint PA_BLOCK_Q  [[function_constant(0)]]  = 64;   // queries per block
-constant uint PA_BLOCK_KV [[function_constant(1)]]  = 64;   // keys per block
-constant uint PA_HEAD_DIM [[function_constant(2)]]  = 128;  // head dimension
+#ifndef PA_BLOCK_Q
+#define PA_BLOCK_Q 64
+#endif
 
-// SDPA (Flash Attention) tile sizes
-constant uint SDPA_TILE_Q  [[function_constant(3)]] = 64;   // query tile
-constant uint SDPA_TILE_KV [[function_constant(4)]] = 64;   // KV tile
+#ifndef PA_BLOCK_KV
+#define PA_BLOCK_KV 128
+#endif
 
-// Maximum head dimension (for threadgroup array sizing)
-constant uint MAX_HEAD_DIM [[function_constant(5)]] = 128;
+#ifndef SDPA_TILE_Q
+#define SDPA_TILE_Q 64
+#endif
+
+#ifndef SDPA_TILE_KV
+#define SDPA_TILE_KV 64
+#endif
+
+// Maximum head dimension (for register array sizing)
+#ifndef MAX_HEAD_DIM
+#define MAX_HEAD_DIM 128
+#endif
+
+// Number of SIMD groups per threadgroup (Apple GPU SIMD width = 32)
+#ifndef NUM_SIMD_GROUPS
+#define NUM_SIMD_GROUPS 2
+#endif
 
 // KV block size for paged cache
-constant uint KV_BLOCK_SIZE [[function_constant(10)]] = 64;  // tokens per KV block
+#ifndef KV_BLOCK_SIZE
+#define KV_BLOCK_SIZE 16
+#endif
 
 // GEMV group size for quantized kernels
-constant uint GEMV_GROUP_SIZE [[function_constant(11)]] = 32;
+#ifndef GEMV_GROUP_SIZE
+#define GEMV_GROUP_SIZE 64
+#endif
 
-// SGMV max intermediate dimension (for threadgroup sizing)
-constant uint SGMV_MAX_RANK [[function_constant(12)]] = 256;
+// SGMV max intermediate dimension
+#ifndef SGMV_MAX_RANK
+#define SGMV_MAX_RANK 64
+#endif
 
-// ── Common helper functions ──
+// Function constants for runtime-configurable values (NOT array sizes)
+constant uint pa_block_q  [[function_constant(0)]];
+constant uint pa_block_kv [[function_constant(1)]];
+constant uint pa_head_dim [[function_constant(2)]];
+constant uint sdpa_tile_q  [[function_constant(3)]];
+constant uint sdpa_tile_kv [[function_constant(4)]];
+constant uint max_head_dim [[function_constant(5)]];
+constant uint kv_block_size [[function_constant(10)]];
+constant uint gemv_group_size [[function_constant(11)]];
+constant uint sgmv_max_rank [[function_constant(12)]];
+constant uint num_simd_groups [[function_constant(20)]];
 
 /// Fast half-precision dot product for attention scores
 template <typename T, int N>

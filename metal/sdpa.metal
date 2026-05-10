@@ -54,13 +54,13 @@ kernel void flash_sdpa(
     threadgroup float shared_scores[SDPA_TILE_Q * SDPA_TILE_KV];
 
     // Load Q tile into registers (each simdgroup handles a few rows)
-    uint rows_per_group = tile_q / simd_groups_per_threadgroup;
+    uint rows_per_group = tile_q / NUM_SIMD_GROUPS;
     uint local_q_start = simd_group_id * rows_per_group;
 
-    float q_local[SDPA_TILE_Q * MAX_HEAD_DIM / simd_groups_per_threadgroup];
-    float o_local[SDPA_TILE_Q * MAX_HEAD_DIM / simd_groups_per_threadgroup];
-    float m_local[SDPA_TILE_Q / simd_groups_per_threadgroup];
-    float l_local[SDPA_TILE_Q / simd_groups_per_threadgroup];
+    float q_local[SDPA_TILE_Q * MAX_HEAD_DIM / NUM_SIMD_GROUPS];
+    float o_local[SDPA_TILE_Q * MAX_HEAD_DIM / NUM_SIMD_GROUPS];
+    float m_local[SDPA_TILE_Q / NUM_SIMD_GROUPS];
+    float l_local[SDPA_TILE_Q / NUM_SIMD_GROUPS];
     for (uint i = 0; i < rows_per_group; i++) {
         m_local[i] = -INFINITY;
         l_local[i] = 0.0f;
@@ -101,7 +101,7 @@ kernel void flash_sdpa(
             uint q_idx = q_start + local_q_start + q;
             if (q_idx >= seq_len) break;
 
-            for (uint kv = simd_group_id; kv < kv_len; kv += simd_groups_per_threadgroup) {
+            for (uint kv = simd_group_id; kv < kv_len; kv += NUM_SIMD_GROUPS) {
                 uint kv_idx = kv_start + kv;
                 // Causal mask: query at q_idx can only attend to keys at positions <= q_idx
                 if (kv_idx <= q_idx) {

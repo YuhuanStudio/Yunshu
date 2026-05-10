@@ -28,7 +28,8 @@ kernel void gemv_fp16(
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]
 ) {
-    uint row = gid.x * simd_groups_per_threadgroup + simd_group_id;
+    // Each threadgroup has 1 simdgroup (32 lanes); row = group_idx + simd_group offset
+    uint row = gid.x * 1 + simd_group_id;  // 1 simdgroup per threadgroup
     if (row >= out_dim) return;
 
     device const half* w_row = W + row * in_dim;
@@ -66,7 +67,7 @@ kernel void gemv_fp16_batched(
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]
 ) {
-    uint row = gid.x * simd_groups_per_threadgroup + simd_group_id;
+    uint row = gid.x * 1 + simd_group_id;  // 1 simdgroup per threadgroup
     uint batch_idx = gid.y;
 
     if (row >= out_dim || batch_idx >= batch_size) return;
@@ -103,7 +104,7 @@ kernel void gemv_q4(
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]
 ) {
-    uint row = gid.x * simd_groups_per_threadgroup + simd_group_id;
+    uint row = gid.x * 1 + simd_group_id;  // 1 simdgroup per threadgroup
     if (row >= out_dim) return;
 
     float scale = (float)scales[row];

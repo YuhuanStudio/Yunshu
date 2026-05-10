@@ -51,7 +51,6 @@ kernel void paged_attention_decode(
 
     // Threadgroup shared memory for reduction
     threadgroup float shared_logits[PA_BLOCK_KV];
-    threadgroup float shared_vals[PA_BLOCK_KV];
 
     // Accumulate output in FP32
     float acc[MAX_HEAD_DIM];
@@ -177,11 +176,11 @@ kernel void paged_attention_prefill(
     device const int* block_table = block_tables;
 
     // Each simdgroup handles a slice of query rows
-    uint rows_per_group = block_q / simd_groups_per_threadgroup;
+    uint rows_per_group = block_q / NUM_SIMD_GROUPS;
     uint q_local_start = simd_group_id * rows_per_group;
 
     // Query tile in registers
-    float q_tile[PA_BLOCK_Q * MAX_HEAD_DIM / simd_groups_per_threadgroup];
+    float q_tile[PA_BLOCK_Q * MAX_HEAD_DIM / NUM_SIMD_GROUPS];
     // Initialize to zero
     for (uint i = 0; i < rows_per_group * MAX_HEAD_DIM; i++) {
         q_tile[i] = 0.0f;
@@ -198,9 +197,9 @@ kernel void paged_attention_prefill(
     }
 
     // Accumulator for output (rows_per_group rows × head_dim)
-    float out_acc[PA_BLOCK_Q * MAX_HEAD_DIM / simd_groups_per_threadgroup];
-    float max_scores[PA_BLOCK_Q / simd_groups_per_threadgroup];
-    float sum_weights[PA_BLOCK_Q / simd_groups_per_threadgroup];
+    float out_acc[PA_BLOCK_Q * MAX_HEAD_DIM / NUM_SIMD_GROUPS];
+    float max_scores[PA_BLOCK_Q / NUM_SIMD_GROUPS];
+    float sum_weights[PA_BLOCK_Q / NUM_SIMD_GROUPS];
     for (uint i = 0; i < rows_per_group; i++) {
         max_scores[i] = -INFINITY;
         sum_weights[i] = 0.0f;
