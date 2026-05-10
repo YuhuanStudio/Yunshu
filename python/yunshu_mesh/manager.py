@@ -45,7 +45,7 @@ class MeshManager:
 
     @property
     def is_distributed(self) -> bool:
-        return self._collective.is_initialized and self._topology.size > 1
+        return self._collective.is_initialized and self._collective.size > 1
 
     @property
     def rank(self) -> int:

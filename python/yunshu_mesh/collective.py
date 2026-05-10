@@ -179,6 +179,19 @@ class CollectiveOps:
             kwargs["stream"] = stream
         return mx.distributed.recv(shape, dtype, **kwargs)
 
+    def all_min(
+        self,
+        x: mx.array,
+        stream: Optional[mx.Stream] = None,
+    ) -> mx.array:
+        """All-reduce min across all nodes."""
+        if not self._initialized:
+            return x
+        kwargs = {"group": self._group}
+        if stream is not None:
+            kwargs["stream"] = stream
+        return mx.distributed.all_min(x, **kwargs)
+
     def sum_scatter(
         self,
         x: mx.array,
