@@ -496,6 +496,42 @@ class SpeculativeDecoder:
             target_logprobs=target_lps,
         )
 
+    @staticmethod
+    def _snapshot_cache(cache: list) -> list:
+        """Snapshot cache state by saving tensor references (no deep copy).
+
+        MLX is functional — operations create new tensors, not in-place
+        modifications. Saving references to the original tensors is sufficient
+        for rollback because they remain valid and unmodified after subsequent
+        forward passes overwrite the cache slots with new tensors.
+
+        ArraysCache (linear_attention / SSM layers): save cache.cache list
+        KVCache (full_attention layers): save offset
+        """
+        snapshot = []
+        for c in cache:
+            if hasattr(c, 'cache') and isinstance(getattr(c, 'cache', None), list):
+                snapshot.append(('arrays', list(c.cache)))
+            elif hasattr(c, 'offset'):
+                snapshot.append(('kv', c.offset))
+            else:
+                snapshot.append((None, None))
+        return snapshot
+
+    @staticmethod
+    def _restore_cache(cache: list, snapshot: list) -> None:
+        """Restore cache state from a snapshot.
+
+        For ArraysCache: restores the original tensor references (conv_state,
+        ssm_state) — these are the exact same tensor objects, not copies.
+        For KVCache: restores the offset (equivalent to trim).
+        """
+        for i, (kind, state) in enumerate(snapshot):
+            if kind == 'arrays':
+                cache[i].cache = state
+            elif kind == 'kv':
+                cache[i].offset = state
+
     def generate(
         self,
         input_ids: mx.array,
@@ -506,11 +542,11 @@ class SpeculativeDecoder:
 
         Main generation loop:
         1. Prefill both models, get first token from prefill logits
-        2. Checkpoint draft cache offsets
+        2. Snapshot draft cache state (tensor references, no copy)
         3. Draft proposes K tokens
         4. Target verifies draft tokens one-by-one
         5. Accept matched tokens + bonus token
-        6. On rejection: rollback draft cache via trim + feed correction
+        6. On rejection: restore draft cache snapshot, re-feed accepted+correction
         7. Repeat until max_tokens or EOS
 
         Args:
@@ -549,6 +585,9 @@ class SpeculativeDecoder:
         draft_sampler = make_sampler(temp=self.config.draft_temperature)
 
         while len(generated_tokens) < max_tokens:
+            # Snapshot draft cache before drafting (reference-based, no copy)
+            draft_snap = self._snapshot_cache(draft_cache)
+
             # Step 1: Draft generates K tokens from last generated token
             last_tok = generated_tokens[-1]
             draft_tokens = []
@@ -600,15 +639,18 @@ class SpeculativeDecoder:
             self._stats["total_accepted_tokens"] += accepted
             self._stats["total_steps"] += 1
 
-            # Rebuild draft cache from scratch on rejection.
-            # trim+refeed and deep-copy checkpoint both produce incorrect KV
-            # values (tested: max logit diff ~7-14 even with clean restore).
-            # Only full rebuild from correct token sequence produces
-            # KV values matching continuous generation.
+            # On rejection: restore draft cache from snapshot, then re-feed
+            # only the accepted + correction tokens (NOT the full sequence).
+            # This is O(accepted+1) instead of O(total_length) for full rebuild.
             if accepted < K:
-                all_ids = prompt_ids + generated_tokens
-                draft_cache = make_prompt_cache(self.draft)
-                self.draft(mx.array(all_ids).reshape(1, -1), cache=draft_cache)
+                self._restore_cache(draft_cache, draft_snap)
+                # Re-feed the tokens that target accepted / corrected.
+                # After restore, the draft cache is at the pre-draft state,
+                # so we need to feed: last_tok + accepted_tokens + correction
+                refeed = [generated_tokens[-(accepted + 1) - 1]]
+                refeed += generated_tokens[-(accepted + 1):]
+                for tok in refeed:
+                    self.draft(mx.array([[tok]]), cache=draft_cache)
 
             if any(t in eos_ids for t in generated_tokens):
                 return generated_tokens
