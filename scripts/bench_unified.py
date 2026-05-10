@@ -944,10 +944,233 @@ def print_summary(all_results: list[BenchResult]):
 
 
 # ══════════════════════════════════════════════════════════════════
+# MULTIMODAL BENCHMARK (VLM, TTS, ASR, Image)
+# ══════════════════════════════════════════════════════════════════
+
+async def bench_vlm() -> dict:
+    """VLM: text generation speed + throughput."""
+    from yunshu_engine.vlm_engine import VLMEngine
+    engine = VLMEngine(model_path("vlm"))
+    await engine.start()
+    rss = get_rss_mb()
+
+    # Text-only warmup
+    await engine.generate(messages=[{"role": "user", "content": "Hello"}], max_tokens=16, temperature=0.0)
+
+    # Text-only benchmark
+    prompts = [
+        [{"role": "user", "content": "Explain gravity in one sentence."}],
+        [{"role": "user", "content": "What is the capital of Japan?"}],
+        [{"role": "user", "content": "Write a haiku about programming."}],
+    ]
+    times = []
+    for msgs in prompts:
+        t0 = time.perf_counter()
+        r = await engine.generate(messages=msgs, max_tokens=64, temperature=0.0)
+        dt = time.perf_counter() - t0
+        # VLM returns dict with "text", not GenerationOutput
+        if isinstance(r, dict):
+            text = r.get("text", "")
+        else:
+            text = getattr(r, 'text', '')
+        # Estimate tokens from text (rough: ~4 chars per token)
+        n_tok = max(1, len(text) // 4)
+        times.append({"dt": dt, "tokens": n_tok, "text_len": len(text)})
+
+    avg_dt = sum(t["dt"] for t in times) / len(times)
+    avg_tok = sum(t["tokens"] for t in times) / len(times)
+    tok_s = avg_tok / avg_dt if avg_dt > 0 else 0
+
+    result = {
+        "modality": "VLM (text-only)", "rss_mb": round(rss, 0),
+        "avg_latency_ms": round(avg_dt * 1000, 0),
+        "avg_tokens": round(avg_tok, 1),
+        "tok_per_s": round(tok_s, 1),
+    }
+    await engine.stop()
+    return result
+
+
+async def bench_tts() -> dict:
+    """TTS: synthesis speed + RTF (Real-Time Factor)."""
+    from yunshu_engine.audio_engine import TTSEngine
+    engine = TTSEngine(model_path("tts"))
+    await engine.start()
+    rss = get_rss_mb()
+
+    # Warmup
+    await engine.synthesize("Hello world.", speed=1.0)
+
+    # Benchmark
+    texts = [
+        "The quick brown fox jumps over the lazy dog.",
+        "Artificial intelligence is transforming the world.",
+        "Today is a beautiful day for a walk in the park.",
+    ]
+    durations = []
+    for text in texts:
+        t0 = time.perf_counter()
+        wav_bytes = await engine.synthesize(text, speed=1.0)
+        dt = time.perf_counter() - t0
+        # Estimate audio duration (16kHz, 16-bit mono = 32000 bytes/s)
+        audio_duration = len(wav_bytes) / 32000
+        rtf = dt / audio_duration if audio_duration > 0 else 0
+        durations.append({"gen_s": dt, "audio_s": audio_duration, "rtf": rtf, "bytes": len(wav_bytes)})
+
+    avg_gen = sum(d["gen_s"] for d in durations) / len(durations)
+    avg_audio = sum(d["audio_s"] for d in durations) / len(durations)
+    avg_rtf = sum(d["rtf"] for d in durations) / len(durations)
+
+    result = {
+        "modality": "TTS", "rss_mb": round(rss, 0),
+        "avg_latency_ms": round(avg_gen * 1000, 0),
+        "avg_audio_s": round(avg_audio, 2),
+        "rtf": round(avg_rtf, 3),
+        "avg_output_bytes": round(sum(d["bytes"] for d in durations) / len(durations), 0),
+    }
+    await engine.stop()
+    return result
+
+
+async def bench_asr() -> dict:
+    """ASR: transcription speed."""
+    from yunshu_engine.audio_engine import ASREngine
+    engine = ASREngine(model_path("asr"))
+    await engine.start()
+    rss = get_rss_mb()
+
+    # Create a test WAV file (1s silence at 16kHz, 16-bit mono)
+    import tempfile, os, struct, wave
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    with wave.open(tmp.name, 'w') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b'\x00\x00' * 16000)  # 1s silence
+    tmp.close()
+
+    # Warmup
+    await engine.transcribe(tmp.name)
+
+    # Benchmark
+    t0 = time.perf_counter()
+    for _ in range(3):
+        result_text = await engine.transcribe(tmp.name)
+    dt = time.perf_counter() - t0
+
+    os.unlink(tmp.name)
+    avg_dt = dt / 3
+
+    result_data = {
+        "modality": "ASR", "rss_mb": round(rss, 0),
+        "avg_latency_ms": round(avg_dt * 1000, 0),
+        "transcription": str(result_text)[:100] if result_text else "",
+    }
+    await engine.stop()
+    return result_data
+
+
+async def bench_image() -> dict:
+    """Image: generation speed + step latency."""
+    from yunshu_engine.image_engine import ImageGenEngine
+    engine = ImageGenEngine(model_path("image"))
+    await engine.start()
+    rss = get_rss_mb()
+
+    # Benchmark
+    t0 = time.perf_counter()
+    img_bytes = await engine.generate_image("A cat sitting on a windowsill at sunset.", num_steps=4)
+    dt = time.perf_counter() - t0
+
+    result_data = {
+        "modality": "Image", "rss_mb": round(rss, 0),
+        "latency_ms": round(dt * 1000, 0),
+        "output_bytes": len(img_bytes) if img_bytes else 0,
+        "steps": 4,
+    }
+    await engine.stop()
+    return result_data
+
+
+async def run_multimodal_benchmarks() -> list[dict]:
+    results = []
+
+    if model_exists("vlm"):
+        P(f"\n  ── VLM (text-only) ──")
+        try:
+            r = await bench_vlm()
+            results.append(r)
+            P(f"    {r['tok_per_s']:.1f} tok/s, {r['avg_latency_ms']:.0f}ms avg, {r['rss_mb']:.0f}MB")
+        except Exception as e:
+            P(f"    VLM FAILED: {e}")
+            import traceback; traceback.print_exc()
+        cleanup()
+
+    if model_exists("tts"):
+        P(f"\n  ── TTS ──")
+        try:
+            r = await bench_tts()
+            results.append(r)
+            P(f"    RTF={r['rtf']:.3f}, {r['avg_latency_ms']:.0f}ms, {r['avg_audio_s']:.2f}s audio, {r['rss_mb']:.0f}MB")
+        except Exception as e:
+            P(f"    TTS FAILED: {e}")
+            import traceback; traceback.print_exc()
+        cleanup()
+
+    if model_exists("asr"):
+        P(f"\n  ── ASR ──")
+        try:
+            r = await bench_asr()
+            results.append(r)
+            P(f"    {r['avg_latency_ms']:.0f}ms, {r['rss_mb']:.0f}MB")
+        except Exception as e:
+            P(f"    ASR FAILED: {e}")
+            import traceback; traceback.print_exc()
+        cleanup()
+
+    if model_exists("image"):
+        P(f"\n  ── Image ──")
+        try:
+            r = await bench_image()
+            results.append(r)
+            P(f"    {r['latency_ms']:.0f}ms ({r['steps']} steps), {r['output_bytes']}B, {r['rss_mb']:.0f}MB")
+        except Exception as e:
+            P(f"    Image FAILED: {e}")
+            import traceback; traceback.print_exc()
+        cleanup()
+
+    if results:
+        P(f"\n  ── MULTIMODAL SUMMARY ──")
+        P(f"    {'Modality':<16} {'Latency':>10} {'Speed':>12} {'Output':>12} {'Memory':>10}")
+        P(f"    {'─' * 16} {'─' * 10} {'─' * 12} {'─' * 12} {'─' * 10}")
+        for r in results:
+            mod = r["modality"]
+            if "TTS" in mod:
+                latency = f"{r['avg_latency_ms']:.0f}ms"
+                speed = f"RTF={r['rtf']:.3f}"
+                output = f"{r['avg_audio_s']:.2f}s audio"
+            elif "Image" in mod:
+                latency = f"{r['latency_ms']:.0f}ms"
+                speed = f"{r['steps']} steps"
+                output = f"{r['output_bytes']/1024:.0f}KB"
+            elif "ASR" in mod:
+                latency = f"{r['avg_latency_ms']:.0f}ms"
+                speed = "—"
+                output = "—"
+            else:
+                latency = f"{r['avg_latency_ms']:.0f}ms"
+                speed = f"{r['tok_per_s']:.1f} tok/s"
+                output = f"{r['avg_tokens']:.0f} tok"
+            P(f"    {mod:<16} {latency:>10} {speed:>12} {output:>12} {r['rss_mb']:>8.0f}MB")
+
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 
-BENCHMARKS = ["mmlu_pro", "throughput", "perf"]
+BENCHMARKS = ["mmlu_pro", "throughput", "perf", "multimodal"]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1457,6 +1680,19 @@ async def main_async(args):
 
         if perf_data:
             print_perf_summary(perf_data)
+
+    # ── Multimodal benchmarks ──
+    if "multimodal" in benchmarks:
+        P(f"\n{'─' * 90}")
+        P(f"  Multimodal Benchmarks")
+        P(f"{'─' * 90}")
+        mm_results = await run_multimodal_benchmarks()
+        if mm_results:
+            # Save multimodal results
+            out_path = ROOT / "bench" / "results" / f"multimodal_{int(time.time())}.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(mm_results, indent=2, default=str))
+            P(f"\n  Results saved to {out_path}")
 
     # Summary
     if all_results:
