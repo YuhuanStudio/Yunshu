@@ -41,7 +41,7 @@ from typing import Any
 import mlx.core as mx
 
 ROOT = Path(__file__).resolve().parent.parent
-REF_DIR = ROOT.parent / "reference"
+REF_DIR = ROOT / "reference"
 MODELS_DIR = ROOT / "models"
 
 MODELS = {
@@ -56,6 +56,12 @@ VALID_ANSWERS = set("ABCDEFGHIJ")
 LETTERS = list("ABCDEFGHIJ")
 
 CACHE_DIR = ROOT / "bench" / "results" / "cache"
+
+
+def _ensure_ref_path(name: str):
+    p = str(REF_DIR / name)
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 
 def _cache_key(framework: str, benchmark: str, n_samples: int, max_tokens: int) -> Path:
@@ -533,7 +539,7 @@ async def run_mmlu_pro_vllm_mlx(
     n_samples: int,
     max_tokens: int = 4096,
 ) -> BenchResult:
-    sys.path.insert(0, str(REF_DIR / "vllm-mlx"))
+    _ensure_ref_path("vllm-mlx")
     from vllm_mlx.engine.simple import SimpleEngine
 
     P(f"    MMLU-Pro (vllm-mlx): loading model...")
@@ -643,7 +649,7 @@ async def run_mmlu_pro_omlx(
     n_samples: int,
     max_tokens: int = 4096,
 ) -> BenchResult:
-    sys.path.insert(0, str(REF_DIR / "omlx"))
+    _ensure_ref_path("omlx")
     from omlx.engine import BatchedEngine
 
     P(f"    MMLU-Pro (omlx): loading model...")
@@ -941,7 +947,251 @@ def print_summary(all_results: list[BenchResult]):
 # MAIN
 # ══════════════════════════════════════════════════════════════════
 
-BENCHMARKS = ["mmlu_pro", "throughput"]
+BENCHMARKS = ["mmlu_pro", "throughput", "perf"]
+
+
+# ══════════════════════════════════════════════════════════════════
+# PERFORMANCE BENCHMARK (TTFT, tok/s, Memory)
+# ══════════════════════════════════════════════════════════════════
+
+PERF_SCENARIOS = [
+    ("short_prompt_short_gen",   5, 128),
+    ("medium_prompt_medium_gen", 20, 256),
+    ("long_prompt_long_gen",     80, 512),
+]
+
+
+def _build_perf_prompt(n_repeats: int) -> str:
+    return "Write a detailed essay about the history of computing from the 1940s to present day. " * n_repeats
+
+
+def run_perf_mlxlm(model, tokenizer) -> list[dict]:
+    from mlx_lm.generate import generate_step
+    from mlx_lm.sample_utils import make_sampler
+
+    sampler = make_sampler(temp=0.0)
+    rss = get_rss_mb()
+    results = []
+
+    for name, n_rep, max_tok in PERF_SCENARIOS:
+        prompt = _build_perf_prompt(n_rep)
+        input_ids = tokenizer.encode(prompt)
+        prompt_toks = len(input_ids)
+
+        # Warmup
+        ids = mx.array(tokenizer.encode(_build_perf_prompt(1)))
+        for _ in generate_step(ids, model, max_tokens=16, sampler=sampler):
+            pass
+        mx.synchronize()
+        mx.clear_cache()
+
+        t0 = time.perf_counter()
+        ids = mx.array(input_ids)
+        first = True
+        ttft = None
+        tokens = []
+        for token, _ in generate_step(ids, model, max_tokens=max_tok, sampler=sampler):
+            if first:
+                ttft = time.perf_counter() - t0
+                first = False
+            tokens.append(int(token))
+            if hasattr(tokenizer, 'eos_token_id') and int(token) == tokenizer.eos_token_id:
+                break
+            if hasattr(tokenizer, 'eos_token_ids') and int(token) in tokenizer.eos_token_ids:
+                break
+        dt = time.perf_counter() - t0
+        mx.synchronize()
+        mx.clear_cache()
+
+        gen_time = dt - (ttft or 0)
+        tok_s = len(tokens) / gen_time if gen_time > 0 else 0
+        results.append({
+            "scenario": name, "ttft_ms": round((ttft or 0) * 1000, 1),
+            "tok_per_s": round(tok_s, 1), "tokens": len(tokens),
+            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
+            "rss_mb": round(rss, 0),
+        })
+    return results
+
+
+async def run_perf_yunshu() -> list[dict]:
+    from yunshu_engine.batched_engine import BatchedEngine
+
+    engine = BatchedEngine(model_name=model_path("llm"))
+    await engine.start()
+    tokenizer = engine._tokenizer
+    rss = get_rss_mb()
+    results = []
+
+    for name, n_rep, max_tok in PERF_SCENARIOS:
+        prompt = _build_perf_prompt(n_rep)
+        input_ids = tokenizer.encode(prompt)
+        prompt_toks = len(input_ids)
+
+        # Warmup
+        await engine.generate(prompt=_build_perf_prompt(1), max_tokens=16, temperature=0.0)
+
+        t0 = time.perf_counter()
+        r = await engine.generate(prompt=prompt, max_tokens=max_tok, temperature=0.0)
+        dt = time.perf_counter() - t0
+
+        ttft_ms = r.ttft_ms if hasattr(r, 'ttft_ms') else 0
+        gen_time = (dt - ttft_ms / 1000) if ttft_ms > 0 else dt
+        tok_s = r.completion_tokens / gen_time if gen_time > 0 else 0
+        results.append({
+            "scenario": name, "ttft_ms": ttft_ms,
+            "tok_per_s": round(tok_s, 1), "tokens": r.completion_tokens,
+            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
+            "rss_mb": round(rss, 0),
+        })
+
+    # Streaming TTFT measurement
+    stream_results = []
+    for name, n_rep, max_tok in PERF_SCENARIOS:
+        prompt = _build_perf_prompt(n_rep)
+        input_ids = tokenizer.encode(prompt)
+        prompt_toks = len(input_ids)
+
+        t0 = time.perf_counter()
+        ttft = None
+        total_tokens = 0
+        async for chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tok, temperature=0.0):
+            if ttft is None and chunk.new_text:
+                ttft = time.perf_counter() - t0
+            total_tokens = chunk.completion_tokens
+        dt = time.perf_counter() - t0
+        gen_time = dt - (ttft or 0)
+        tok_s = total_tokens / gen_time if gen_time > 0 else 0
+        stream_results.append({
+            "scenario": name + "_stream", "ttft_ms": round((ttft or 0) * 1000, 1),
+            "tok_per_s": round(tok_s, 1), "tokens": total_tokens,
+            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
+            "rss_mb": round(rss, 0),
+        })
+
+    await engine.stop()
+    return results + stream_results
+
+
+async def run_perf_vllm_mlx() -> list[dict]:
+    _ensure_ref_path("vllm-mlx")
+    from vllm_mlx.engine.simple import SimpleEngine
+
+    engine = SimpleEngine(model_name=model_path("llm"))
+    engine._is_mllm = False
+    await engine.start()
+    tokenizer = engine.tokenizer
+    rss = get_rss_mb()
+    results = []
+
+    for name, n_rep, max_tok in PERF_SCENARIOS:
+        prompt = _build_perf_prompt(n_rep)
+        input_ids = tokenizer.encode(prompt)
+        prompt_toks = len(input_ids)
+
+        await engine.generate(_build_perf_prompt(1), max_tokens=16, temperature=0.0)
+
+        t0 = time.perf_counter()
+        r = await engine.generate(prompt, max_tokens=max_tok, temperature=0.0)
+        dt = time.perf_counter() - t0
+
+        n_tok = getattr(r, 'completion_tokens', 0) or len(tokenizer.encode(getattr(r, 'text', '')))
+        tok_s = n_tok / dt if dt > 0 else 0
+        results.append({
+            "scenario": name, "ttft_ms": 0,
+            "tok_per_s": round(tok_s, 1), "tokens": n_tok,
+            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
+            "rss_mb": round(rss, 0),
+        })
+
+    await engine.stop()
+    cleanup()
+    return results
+
+
+async def run_perf_omlx() -> list[dict]:
+    _ensure_ref_path("omlx")
+    from omlx.engine import BatchedEngine
+
+    engine = BatchedEngine(model_name=model_path("llm"))
+    await engine.start()
+    tokenizer = engine.tokenizer
+    rss = get_rss_mb()
+    results = []
+
+    for name, n_rep, max_tok in PERF_SCENARIOS:
+        prompt = _build_perf_prompt(n_rep)
+        input_ids = tokenizer.encode(prompt)
+        prompt_toks = len(input_ids)
+
+        await engine.generate(_build_perf_prompt(1), max_tokens=16, temperature=0.0)
+
+        t0 = time.perf_counter()
+        r = await engine.generate(prompt, max_tokens=max_tok, temperature=0.0)
+        dt = time.perf_counter() - t0
+
+        n_tok = getattr(r, 'completion_tokens', 0) or len(tokenizer.encode(getattr(r, 'text', '')))
+        tok_s = n_tok / dt if dt > 0 else 0
+        results.append({
+            "scenario": name, "ttft_ms": 0,
+            "tok_per_s": round(tok_s, 1), "tokens": n_tok,
+            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
+            "rss_mb": round(rss, 0),
+        })
+
+    await engine.stop()
+    cleanup()
+    return results
+
+
+def print_perf_summary(perf_data: dict[str, list[dict]]):
+    P(f"\n{'═' * 90}")
+    P(f"  PERFORMANCE SUMMARY")
+    P(f"{'═' * 90}")
+
+    for scenario_name, _, _ in PERF_SCENARIOS:
+        P(f"\n  ── {scenario_name} ──")
+        P(f"  {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8} {'Memory':>10}")
+        P(f"  {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8} {'─' * 10}")
+
+        best_ttft = float('inf')
+        best_tps = 0
+        best_mem = float('inf')
+
+        rows = []
+        for fw, results in perf_data.items():
+            for r in results:
+                if r["scenario"] == scenario_name:
+                    rows.append((fw, r))
+                    if r["ttft_ms"] > 0:
+                        best_ttft = min(best_ttft, r["ttft_ms"])
+                    best_tps = max(best_tps, r["tok_per_s"])
+                    best_mem = min(best_mem, r["rss_mb"])
+
+        for fw, r in rows:
+            ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "N/A"
+            tps = r["tok_per_s"]
+            mem = r["rss_mb"]
+
+            ttft_mark = " ★" if r["ttft_ms"] > 0 and r["ttft_ms"] <= best_ttft * 1.01 else ""
+            tps_mark = " ★" if tps >= best_tps * 0.99 else ""
+            mem_mark = " ★" if mem <= best_mem * 1.01 else ""
+
+            P(f"  {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8} {mem:>8.0f}MB{mem_mark}")
+
+    # Streaming results for yunshu
+    yunshu_results = perf_data.get("yunshu", [])
+    stream_rows = [r for r in yunshu_results if "_stream" in r["scenario"]]
+    if stream_rows:
+        P(f"\n  ── yunshu streaming (separate TTFT measurement) ──")
+        P(f"  {'Scenario':<30} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8}")
+        P(f"  {'─' * 30} {'─' * 10} {'─' * 10} {'─' * 8}")
+        for r in stream_rows:
+            ttft_str = f"{r['ttft_ms']:.1f}ms"
+            P(f"  {r['scenario']:<30} {ttft_str:>10} {r['tok_per_s']:>10.1f} {r['tokens']:>8}")
+
+    P(f"\n{'═' * 90}")
+
 
 
 async def main_async(args):
@@ -1082,6 +1332,65 @@ async def main_async(args):
               f"({result.extra['correct']}/{result.extra['total']}) "
               f"[{result.extra['avg_time_per_q']}s/q, {result.extra['total_time']}s total]")
             cleanup()
+
+    # ── Performance (TTFT, tok/s, Memory) ──
+    if "perf" in benchmarks:
+        perf_data = {}
+
+        if "mlx-lm" in frameworks:
+            P(f"\n{'─' * 90}")
+            P(f"  Performance: MLX-LM")
+            P(f"{'─' * 90}")
+            from mlx_lm import load
+            P("  Loading model...")
+            model, tokenizer = load(model_path("llm"))
+            P(f"  Model loaded. RSS: {get_rss_mb():.0f} MB")
+            # Run directly — generate_step must run on main thread for mlx-lm
+            perf_data["mlx-lm"] = run_perf_mlxlm(model, tokenizer)
+            for r in perf_data["mlx-lm"]:
+                P(f"    {r['scenario']}: TTFT={r['ttft_ms']:.1f}ms, {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+            del model, tokenizer
+            cleanup()
+
+        if "yunshu" in frameworks:
+            P(f"\n{'─' * 90}")
+            P(f"  Performance: Yunshu")
+            P(f"{'─' * 90}")
+            P("  Loading model...")
+            rss0 = get_rss_mb()
+            perf_data["yunshu"] = await run_perf_yunshu()
+            for r in perf_data["yunshu"]:
+                P(f"    {r['scenario']}: TTFT={r['ttft_ms']:.1f}ms, {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+            cleanup()
+
+        if "vllm-mlx" in frameworks:
+            try:
+                P(f"\n{'─' * 90}")
+                P(f"  Performance: vllm-mlx")
+                P(f"{'─' * 90}")
+                P("  Loading model...")
+                perf_data["vllm-mlx"] = await run_perf_vllm_mlx()
+                for r in perf_data["vllm-mlx"]:
+                    P(f"    {r['scenario']}: {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+                cleanup()
+            except Exception as e:
+                P(f"  vllm-mlx SKIPPED: {e}")
+
+        if "omlx" in frameworks:
+            try:
+                P(f"\n{'─' * 90}")
+                P(f"  Performance: omlx")
+                P(f"{'─' * 90}")
+                P("  Loading model...")
+                perf_data["omlx"] = await run_perf_omlx()
+                for r in perf_data["omlx"]:
+                    P(f"    {r['scenario']}: {r['tok_per_s']:.1f} tok/s, {r['tokens']}tok, {r['rss_mb']:.0f}MB")
+                cleanup()
+            except Exception as e:
+                P(f"    omlx SKIPPED: {e}")
+
+        if perf_data:
+            print_perf_summary(perf_data)
 
     # Summary
     if all_results:

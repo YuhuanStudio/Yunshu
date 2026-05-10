@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Optional
 
@@ -36,6 +37,7 @@ class GenerationOutput:
     finish_reason: Optional[str] = None
     cached_tokens: int = 0
     logprobs: list[dict] | None = None
+    ttft_ms: float = 0.0
 
 
 class BatchedEngine:
@@ -87,6 +89,11 @@ class BatchedEngine:
         def _load():
             from mlx_lm.utils import load as load_model
             return load_model(self.model_name)
+
+        def _post_load():
+            import mlx.core as mx
+            mx.synchronize()
+            mx.clear_cache()
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
@@ -292,12 +299,17 @@ class BatchedEngine:
             ids = mx.array(input_ids)
             tokens = []
             token_logprobs = []
-            # Incremental decode for stop suffix matching only
+            ttft_s = 0.0
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
+            gen_t0 = time.perf_counter()
+            first = True
             for token, logits in generate_step(
                 ids, model, max_tokens=max_tokens, sampler=sampler,
             ):
+                if first:
+                    ttft_s = time.perf_counter() - gen_t0
+                    first = False
                 tokens.append(token)
                 if logprobs:
                     import numpy as np
@@ -320,12 +332,14 @@ class BatchedEngine:
                     if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                         break
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
-            return tokens, output_text, token_logprobs
+            mx.synchronize()
+            mx.clear_cache()
+            return tokens, output_text, token_logprobs, ttft_s
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-        tokens, output_text, token_logprobs = await loop.run_in_executor(executor, _run)
+        tokens, output_text, token_logprobs, ttft_s = await loop.run_in_executor(executor, _run)
 
         # Decode token strings for logprobs
         lp_result = None
@@ -359,6 +373,7 @@ class BatchedEngine:
             finished=True,
             finish_reason=finish_reason,
             logprobs=lp_result,
+            ttft_ms=round(ttft_s * 1000, 1),
         )
 
     async def stream_generate(
@@ -517,8 +532,12 @@ class BatchedEngine:
                         suffix_hit = True
                 _put((new_text, n_tok, stop_hit or suffix_hit))
                 if stop_hit or suffix_hit:
+                    mx.synchronize()
+                    mx.clear_cache()
                     return
             _put(("", n_tok, True))
+            mx.synchronize()
+            mx.clear_cache()
             _put(_sentinel)
 
         from .mlx_executor import get_mlx_executor
