@@ -968,23 +968,25 @@ def _build_perf_prompt(n_repeats: int) -> str:
 def run_perf_mlxlm(model, tokenizer) -> list[dict]:
     from mlx_lm.generate import generate_step
     from mlx_lm.sample_utils import make_sampler
+    from mlx_lm import stream_generate as mlx_stream_gen
 
     sampler = make_sampler(temp=0.0)
     rss = get_rss_mb()
     results = []
+
+    # Warmup
+    warmup_ids = mx.array(tokenizer.encode(_build_perf_prompt(1)))
+    for _ in generate_step(warmup_ids, model, max_tokens=16, sampler=sampler):
+        pass
+    mx.synchronize()
+    mx.clear_cache()
 
     for name, n_rep, max_tok in PERF_SCENARIOS:
         prompt = _build_perf_prompt(n_rep)
         input_ids = tokenizer.encode(prompt)
         prompt_toks = len(input_ids)
 
-        # Warmup
-        ids = mx.array(tokenizer.encode(_build_perf_prompt(1)))
-        for _ in generate_step(ids, model, max_tokens=16, sampler=sampler):
-            pass
-        mx.synchronize()
-        mx.clear_cache()
-
+        # Non-streaming (generate_step — GPU-level TTFT)
         t0 = time.perf_counter()
         ids = mx.array(input_ids)
         first = True
@@ -1011,6 +1013,29 @@ def run_perf_mlxlm(model, tokenizer) -> list[dict]:
             "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
             "rss_mb": round(rss, 0),
         })
+
+        # Streaming (stream_generate — end-to-end TTFT)
+        t0 = time.perf_counter()
+        ttft_s = None
+        n_tok = 0
+        text = ""
+        for resp in mlx_stream_gen(model, tokenizer, prompt, max_tokens=max_tok, sampler=sampler):
+            if ttft_s is None and resp.text:
+                ttft_s = time.perf_counter() - t0
+            text += resp.text
+            n_tok += 1
+        dt = time.perf_counter() - t0
+        mx.synchronize()
+        mx.clear_cache()
+        gen_time = dt - (ttft_s or 0)
+        tok_s = n_tok / gen_time if gen_time > 0 else 0
+        results.append({
+            "scenario": name + "_stream", "ttft_ms": round((ttft_s or 0) * 1000, 1),
+            "tok_per_s": round(tok_s, 1), "tokens": n_tok,
+            "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
+            "rss_mb": round(rss, 0),
+        })
+
     return results
 
 
@@ -1183,57 +1208,53 @@ def print_perf_summary(perf_data: dict[str, list[dict]]):
     P(f"  PERFORMANCE SUMMARY")
     P(f"{'═' * 100}")
 
-    for scenario_name, _, _ in PERF_SCENARIOS:
-        # ── Non-streaming ──
-        P(f"\n  ── {scenario_name} (non-streaming) ──")
-        P(f"  {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8} {'Memory':>10}")
-        P(f"  {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8} {'─' * 10}")
+    for mode, suffix in [("non-streaming", ""), ("streaming", "_stream")]:
+        P(f"\n  ── {mode.upper()} ──")
+        for scenario_name, _, _ in PERF_SCENARIOS:
+            key = scenario_name + suffix
+            rows = []
+            best_ttft = float('inf')
+            best_tps = 0
+            best_mem = float('inf')
+            for fw, results in perf_data.items():
+                for r in results:
+                    if r["scenario"] == key:
+                        rows.append((fw, r))
+                        if r["ttft_ms"] > 0:
+                            best_ttft = min(best_ttft, r["ttft_ms"])
+                        best_tps = max(best_tps, r["tok_per_s"])
+                        best_mem = min(best_mem, r["rss_mb"])
 
-        best_ttft = float('inf')
-        best_tps = 0
-        best_mem = float('inf')
-        rows = []
-        for fw, results in perf_data.items():
-            for r in results:
-                if r["scenario"] == scenario_name:
-                    rows.append((fw, r))
-                    if r["ttft_ms"] > 0:
-                        best_ttft = min(best_ttft, r["ttft_ms"])
-                    best_tps = max(best_tps, r["tok_per_s"])
-                    best_mem = min(best_mem, r["rss_mb"])
+            if not rows:
+                continue
 
-        for fw, r in sorted(rows, key=lambda x: -x[1]["tok_per_s"]):
-            ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "—"
-            tps = r["tok_per_s"]
-            mem = r["rss_mb"]
-            ttft_mark = " ★" if r["ttft_ms"] > 0 and r["ttft_ms"] <= best_ttft * 1.02 else ""
-            tps_mark = " ★" if tps >= best_tps * 0.98 else ""
-            mem_mark = " ★" if mem <= best_mem * 1.02 else ""
-            P(f"  {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8} {mem:>8.0f}MB{mem_mark}")
+            P(f"\n    {scenario_name}:")
+            P(f"    {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8} {'Memory':>10}")
+            P(f"    {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8} {'─' * 10}")
 
-        # ── Streaming ──
-        stream_name = scenario_name + "_stream"
-        stream_rows = []
-        best_ttft_s = float('inf')
-        best_tps_s = 0
-        for fw, results in perf_data.items():
-            for r in results:
-                if r["scenario"] == stream_name:
-                    stream_rows.append((fw, r))
-                    if r["ttft_ms"] > 0:
-                        best_ttft_s = min(best_ttft_s, r["ttft_ms"])
-                    best_tps_s = max(best_tps_s, r["tok_per_s"])
-
-        if stream_rows:
-            P(f"\n  ── {scenario_name} (streaming TTFT) ──")
-            P(f"  {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8}")
-            P(f"  {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8}")
-            for fw, r in sorted(stream_rows, key=lambda x: x[1]["ttft_ms"] if x[1]["ttft_ms"] > 0 else 9999):
+            for fw, r in sorted(rows, key=lambda x: -x[1]["tok_per_s"]):
                 ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "—"
                 tps = r["tok_per_s"]
-                ttft_mark = " ★" if r["ttft_ms"] > 0 and r["ttft_ms"] <= best_ttft_s * 1.02 else ""
-                tps_mark = " ★" if tps >= best_tps_s * 0.98 else ""
-                P(f"  {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8}")
+                mem = r["rss_mb"]
+                ttft_mark = " ★" if r["ttft_ms"] > 0 and best_ttft < float('inf') and r["ttft_ms"] <= best_ttft * 1.02 else ""
+                tps_mark = " ★" if tps >= best_tps * 0.98 else ""
+                mem_mark = " ★" if best_mem < float('inf') and mem <= best_mem * 1.02 else ""
+                P(f"    {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8} {mem:>8.0f}MB{mem_mark}")
+
+    # Grand summary: best per metric across all scenarios
+    P(f"\n  ── GRAND SUMMARY (best per framework across all scenarios) ──")
+    P(f"    {'Framework':<14} {'TTFT best':>12} {'tok/s best':>12} {'tok/s avg':>12} {'Memory':>10}")
+    P(f"    {'─' * 14} {'─' * 12} {'─' * 12} {'─' * 12} {'─' * 10}")
+
+    for fw in ["mlx-lm", "yunshu", "vllm-mlx", "omlx"]:
+        results = perf_data.get(fw, [])
+        if not results:
+            continue
+        all_ttft = [r["ttft_ms"] for r in results if r["ttft_ms"] > 0]
+        all_tps = [r["tok_per_s"] for r in results]
+        all_mem = [r["rss_mb"] for r in results]
+        best_ttft_str = f"{min(all_ttft):.0f}ms" if all_ttft else "—"
+        P(f"    {fw:<14} {best_ttft_str:>12} {max(all_tps):>10.1f}  {sum(all_tps)/len(all_tps):>10.1f}  {min(all_mem):>8.0f}MB")
 
     P(f"\n{'═' * 100}")
 
