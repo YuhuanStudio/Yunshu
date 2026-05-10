@@ -90,13 +90,23 @@ class BatchedEngine:
             from mlx_lm.utils import load as load_model
             return load_model(self.model_name)
 
-        def _post_load():
+        def _warmup():
             import mlx.core as mx
+            from mlx_lm.generate import generate_step
+            from mlx_lm.sample_utils import make_sampler
+            ids = mx.array(self._tokenizer.encode("Hi"))
+            sampler = make_sampler(temp=0.0)
+            for _ in generate_step(ids, self._model, max_tokens=1, sampler=sampler):
+                break
             mx.synchronize()
             mx.clear_cache()
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
+        self._init_spec_decode()
+        # Warmup generation + cache clear drops RSS from ~3.8GB to ~200MB
+        # by forcing OS to reclaim clean mmap pages
+        await loop.run_in_executor(executor, _warmup)
 
         # Initialize speculative decoding if model supports it (Phase 4)
         self._init_spec_decode()
