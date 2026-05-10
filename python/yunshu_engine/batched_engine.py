@@ -323,7 +323,7 @@ class BatchedEngine:
 
         def _run():
             import mlx.core as mx
-            from mlx_lm.utils import make_prompt_cache
+            from mlx_lm.models.cache import make_prompt_cache
             ids = mx.array(input_ids)
             tokens = []
             token_logprobs = []
@@ -565,7 +565,7 @@ class BatchedEngine:
 
         def _run():
             import mlx.core as mx
-            from mlx_lm.utils import make_prompt_cache
+            from mlx_lm.models.cache import make_prompt_cache
             ids = mx.array(input_ids)
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()

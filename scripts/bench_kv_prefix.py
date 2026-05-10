@@ -31,19 +31,19 @@ def main():
     parser.add_argument("--turns", type=int, default=5)
     args = parser.parse_args()
 
-    from mlx_lm.utils import load_model_and_tokenizer
+    from mlx_lm.utils import load_model, load_tokenizer
     from mlx_lm.generate import generate_step
     from mlx_lm.sample_utils import make_sampler
-    from mlx_lm.utils import make_prompt_cache
+    from mlx_lm.models.cache import make_prompt_cache
     from yunshu_engine.kv_prefix_cache import KVPrefixCache
 
     print(f"Loading {args.model}...")
-    model_path = str(ROOT / "models" / args.model)
-    if not Path(model_path).exists():
-        # Try HuggingFace hub
-        model_path = args.model
+    model_path = Path(ROOT / "models" / args.model)
+    if not model_path.exists():
+        model_path = Path(args.model)
 
-    model, tokenizer = load_model_and_tokenizer(model_path)
+    model, _config = load_model(model_path)
+    tokenizer = load_tokenizer(model_path)
     print(f"Model loaded: {args.model}")
 
     # Multi-turn conversation simulation
