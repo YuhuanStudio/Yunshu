@@ -45,7 +45,7 @@ REF_DIR = ROOT / "reference"
 MODELS_DIR = ROOT / "models"
 
 MODELS = {
-    "llm": "Qwen3.5-9B-MLX-bf16",
+    "llm": "Qwen3.5-4B-MLX-bf16",
     "vlm": "Qwen3-Omni-30B-A3B-Instruct-4bit",
     "tts": "Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
     "asr": "Qwen3-ASR-1.7B-bf16",
