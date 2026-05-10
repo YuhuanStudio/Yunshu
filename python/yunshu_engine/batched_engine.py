@@ -952,10 +952,12 @@ class BatchedEngine:
         return {"model": self.model_name, "loaded": self._loaded}
 
     def get_kv_cache_stats(self) -> dict:
-        """Return KV prefix cache statistics."""
+        """Return KV cache statistics (prefix cache + paged KV)."""
+        result = {"prefix_cache": self._kv_prefix_cache.get_stats()}
         if self._engine_core:
-            return self._engine_core.get_kv_cache_stats()
-        return {"enabled": False}
+            paged = self._engine_core.get_kv_cache_stats()
+            result["paged_kv"] = paged
+        return result
 
     @staticmethod
     def _extract_model_arch(model: Any) -> dict:
