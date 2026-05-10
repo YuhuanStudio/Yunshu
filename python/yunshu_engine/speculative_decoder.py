@@ -527,7 +527,7 @@ class SpeculativeDecoder:
             elif eid is not None:
                 eos_ids.add(eid)
 
-        from mlx_lm.utils import make_prompt_cache
+        from mlx_lm.models.cache import make_prompt_cache
         target_cache = make_prompt_cache(self.target)
         draft_cache = make_prompt_cache(self.draft)
 

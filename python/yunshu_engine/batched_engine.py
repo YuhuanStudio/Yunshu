@@ -823,7 +823,7 @@ class BatchedEngine:
                 eos_ids.add(eid)
 
         # Run speculative steps on executor thread, yielding after each step
-        from mlx_lm.utils import make_prompt_cache
+        from mlx_lm.models.cache import make_prompt_cache
         target_cache = make_prompt_cache(self._spec_decoder.target)
         draft_cache = make_prompt_cache(self._spec_decoder.draft)
 

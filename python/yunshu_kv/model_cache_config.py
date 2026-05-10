@@ -95,7 +95,7 @@ class ModelCacheConfig:
     def build_from_model(model: Any) -> ModelCacheConfig:
         """Build config by creating a temporary cache and inspecting types."""
         try:
-            from mlx_lm.utils import make_prompt_cache
+            from mlx_lm.models.cache import make_prompt_cache
             cache_list = make_prompt_cache(model)
             return ModelCacheConfig.build_from_cache_list(cache_list)
         except Exception as e:

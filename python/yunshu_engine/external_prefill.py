@@ -274,7 +274,7 @@ class ExternalPrefiller:
             return self._model.make_cache()
         # Try mlx-lm's create_kv_cache utility
         try:
-            from mlx_lm.utils import create_kv_cache
+            from mlx_lm.models.cache import make_prompt_cache as create_kv_cache
             return create_kv_cache(self._model)
         except (ImportError, AttributeError):
             pass
