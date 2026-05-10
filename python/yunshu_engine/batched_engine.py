@@ -89,14 +89,20 @@ class BatchedEngine:
             return load_model(self.model_name)
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
+        self._loaded = True
 
-        # Create EngineCore
+        # Initialize speculative decoding if model supports it (Phase 4)
+        self._init_spec_decode()
+
+    async def _ensure_engine_core(self):
+        """Lazy-create EngineCore only when continuous batching is needed."""
+        if self._engine_core is not None:
+            return
+        from .mlx_executor import get_mlx_executor
         from .engine_core import EngineCore, EngineCoreConfig
-        from .scheduler import SchedulerConfig
 
-        # Extract model architecture for KV cache memory budget
+        executor = get_mlx_executor()
         arch_kwargs = self._extract_model_arch(self._model)
-
         self._engine_core = EngineCore(
             model=self._model,
             tokenizer=self._tokenizer,
@@ -104,12 +110,7 @@ class BatchedEngine:
             executor=executor,
         )
         self._engine_core.scheduler.config.model_name = self.model_name
-
         await self._engine_core.start()
-        self._loaded = True
-
-        # Initialize speculative decoding if model supports it (Phase 4)
-        self._init_spec_decode()
 
         logger.info(f"BatchedEngine started: {self.model_name}")
 
@@ -265,15 +266,20 @@ class BatchedEngine:
         prompt_tokens = len(input_ids)
 
         stop_ids = set()
-        if stop:
-            for s in stop:
-                ids = tokenizer.encode(s)
-                if ids:
-                    stop_ids.update(ids)
         if hasattr(tokenizer, 'eos_token_id'):
             stop_ids.add(tokenizer.eos_token_id)
         if hasattr(tokenizer, 'eos_token_ids'):
             stop_ids.update(tokenizer.eos_token_ids)
+
+        # Pre-encode stop strings for suffix matching
+        stop_suffixes = []
+        if stop:
+            for s in stop:
+                ids = tokenizer.encode(s)
+                if len(ids) == 1:
+                    stop_ids.add(ids[0])
+                else:
+                    stop_suffixes.append(s)
 
         sampler = make_sampler(
             temp=temperature,
@@ -286,6 +292,9 @@ class BatchedEngine:
             ids = mx.array(input_ids)
             tokens = []
             token_logprobs = []
+            # Incremental decode for stop suffix matching only
+            detokenizer = tokenizer.detokenizer
+            detokenizer.reset()
             for token, logits in generate_step(
                 ids, model, max_tokens=max_tokens, sampler=sampler,
             ):
@@ -306,6 +315,10 @@ class BatchedEngine:
                     token_logprobs.append(entry)
                 if token in stop_ids:
                     break
+                if stop_suffixes:
+                    detokenizer.add_token(token)
+                    if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                        break
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             return tokens, output_text, token_logprobs
 
@@ -364,14 +377,12 @@ class BatchedEngine:
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
+        use_engine_loop: bool = False,
     ) -> AsyncIterator[GenerationOutput]:
-        """Streaming text generation (oMLX stream_generate pattern).
+        """Streaming text generation.
 
-        GeneratorExit-safe: sets finished_normally before yielding the final
-        chunk so cleanup runs correctly even if consumer stops early.
-
-        Args:
-            spec_decode: If True, use speculative decoding path when available.
+        Default uses fast path (direct generate_step on executor) for single
+        requests. Set use_engine_loop=True for continuous batching path.
         """
         if not self._loaded:
             await self.start()
@@ -382,37 +393,38 @@ class BatchedEngine:
             yield guard_rejection
             return
 
-        # Speculative decoding path (Phase 4: single-request streaming)
+        # Speculative decoding path (Phase 4)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
             async for output in self._stream_generate_speculative(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
             ):
                 yield output
             return
 
+        # Fast path: bypass EngineCore for single-request streaming
+        if not use_engine_loop:
+            async for output in self._stream_generate_fast(
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                top_p=top_p, top_k=top_k, repetition_penalty=repetition_penalty,
+                stop=stop, seed=seed,
+            ):
+                yield output
+            return
+
+        # Engine loop path: continuous batching with scheduler
+        await self._ensure_engine_core()
         request_id = await self._engine_core.add_request(
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            repetition_penalty=repetition_penalty,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            logit_bias=logit_bias,
-            stop=stop,
-            seed=seed,
-            json_schema=json_schema,
+            prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+            top_p=top_p, top_k=top_k, min_p=min_p,
+            repetition_penalty=repetition_penalty, frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty, logit_bias=logit_bias,
+            stop=stop, seed=seed, json_schema=json_schema,
         )
 
         finished_normally = False
         try:
             async for output in self._engine_core.stream_outputs(request_id):
                 cleaned = _clean_special_tokens(output.new_text)
-                # Map engine_core finish_reason to OpenAI-compatible
                 finish_reason = output.finish_reason
                 if finish_reason == "memory_exceeded":
                     finish_reason = "context_length_exceeded"
@@ -435,6 +447,111 @@ class BatchedEngine:
                     await self._engine_core.abort_request(request_id)
                 except Exception:
                     pass
+
+    async def _stream_generate_fast(
+        self,
+        prompt: str,
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        repetition_penalty: float = 1.0,
+        stop: list[str] | None = None,
+        seed: int | None = None,
+    ) -> AsyncIterator[GenerationOutput]:
+        """Fast streaming: runs generate_step on executor, yields via asyncio.Queue."""
+        from mlx_lm.generate import generate_step
+        from mlx_lm.sample_utils import make_sampler
+
+        tokenizer = self._tokenizer
+        model = self._model
+
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            prompt = tokenizer.apply_chat_template(
+                prompt, tokenize=False, add_generation_prompt=True,
+            )
+
+        input_ids = tokenizer.encode(prompt)
+        prompt_tokens = len(input_ids)
+
+        stop_ids = set()
+        if hasattr(tokenizer, 'eos_token_id'):
+            stop_ids.add(tokenizer.eos_token_id)
+        if hasattr(tokenizer, 'eos_token_ids'):
+            stop_ids.update(tokenizer.eos_token_ids)
+
+        stop_suffixes = []
+        if stop:
+            for s in stop:
+                ids = tokenizer.encode(s)
+                if len(ids) == 1:
+                    stop_ids.add(ids[0])
+                else:
+                    stop_suffixes.append(s)
+
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+
+        # Thread-safe bridge: executor puts via call_soon_threadsafe so the
+        # event loop's async consumer is woken for every token.
+        _sentinel = object()
+        _q: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _put(item):
+            loop.call_soon_threadsafe(_q.put_nowait, item)
+
+        def _run():
+            import mlx.core as mx
+            ids = mx.array(input_ids)
+            detokenizer = tokenizer.detokenizer
+            detokenizer.reset()
+            n_tok = 0
+            for token, _logits in generate_step(ids, model, max_tokens=max_tokens, sampler=sampler):
+                detokenizer.add_token(token)
+                n_tok += 1
+                new_text = detokenizer.last_segment
+                stop_hit = token in stop_ids
+                suffix_hit = False
+                if not stop_hit and stop_suffixes:
+                    if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                        suffix_hit = True
+                _put((new_text, n_tok, stop_hit or suffix_hit))
+                if stop_hit or suffix_hit:
+                    return
+            _put(("", n_tok, True))
+            _put(_sentinel)
+
+        from .mlx_executor import get_mlx_executor
+        executor = get_mlx_executor()
+        future = loop.run_in_executor(executor, _run)
+
+        accumulated = ""
+        n_tok = 0
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(_q.get(), timeout=300)
+                except asyncio.TimeoutError:
+                    break
+                if item is _sentinel:
+                    break
+                new_text, tok_count, done = item
+                accumulated += new_text
+                n_tok = tok_count
+                finish_reason = "stop" if done else None
+                yield GenerationOutput(
+                    text=_clean_special_tokens(accumulated),
+                    new_text=_clean_special_tokens(new_text),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=n_tok,
+                    finished=done,
+                    finish_reason=finish_reason,
+                )
+                if done:
+                    break
+        finally:
+            if not future.done():
+                future.cancel()
 
     async def chat(
         self,

@@ -2893,7 +2893,7 @@ wheels = [
 
 [[package]]
 name = "yunshu"
-version = "0.1.0.dev0"
+version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
