@@ -19,6 +19,8 @@ import logging
 import time
 from typing import Optional
 
+import mlx.core as mx
+
 from .node import MeshNode, MeshNodeState, NodeCapabilities
 from .topology import MeshTopology, TopologyType
 from .collective import CollectiveOps
@@ -62,6 +64,11 @@ class MeshManager:
     @property
     def collective(self) -> CollectiveOps:
         return self._collective
+
+    @property
+    def group(self) -> Optional[mx.distributed.Group]:
+        """Get the mx.distributed Group for engine sharding."""
+        return self._collective.group
 
     @property
     def pipeline(self) -> Optional[PipelineParallel]:

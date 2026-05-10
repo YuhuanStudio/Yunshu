@@ -28,9 +28,17 @@ from .topology import MeshTopology, TopologyType
 from .collective import CollectiveOps
 from .pipeline import PipelineStage, PipelineParallel
 from .manager import MeshManager
+from .sharding import (
+    load_sharded_model,
+    shard_tensor_parallel,
+    shard_pipeline_parallel,
+    mx_barrier,
+)
+from .data_parallel import DataParallelRouter
 
 __all__ = [
     "CollectiveOps",
+    "DataParallelRouter",
     "MeshManager",
     "MeshNode",
     "MeshNodeState",
@@ -38,4 +46,8 @@ __all__ = [
     "PipelineParallel",
     "PipelineStage",
     "TopologyType",
+    "load_sharded_model",
+    "shard_tensor_parallel",
+    "shard_pipeline_parallel",
+    "mx_barrier",
 ]
