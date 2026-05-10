@@ -517,20 +517,20 @@ class MetalKernelManager:
                 packed_dim = head_dim // 4
                 outputs = kernel(
                     inputs=[keys],
-                    template=[("T", mx.float16)],
+                    template=[
+                        ("T", mx.float16),
+                        ("num_tokens_val", num_tokens),
+                        ("num_heads_val", num_heads),
+                        ("head_dim_val", head_dim),
+                    ],
                     grid=(num_tokens, num_heads, 1),
                     threadgroup=(1, 1, 1),
                     output_shapes=[
-                        (num_tokens, num_heads, packed_dim),  # quant_keys
-                        (num_tokens, num_heads),               # scales
-                        (num_tokens, num_heads),               # zero_points
+                        (num_tokens, num_heads, packed_dim),
+                        (num_tokens, num_heads),
+                        (num_tokens, num_heads),
                     ],
                     output_dtypes=[mx.uint8, mx.float16, mx.float16],
-                    constants={
-                        "num_tokens_val": num_tokens,
-                        "num_heads_val": num_heads,
-                        "head_dim_val": head_dim,
-                    },
                 )
                 return outputs[0], outputs[1], outputs[2]
             except Exception as e:
@@ -570,16 +570,16 @@ class MetalKernelManager:
             try:
                 outputs = kernel(
                     inputs=[quant_keys, scales, zero_points],
-                    template=[("T", mx.float16)],
+                    template=[
+                        ("T", mx.float16),
+                        ("num_tokens_val", num_tokens),
+                        ("num_heads_val", num_heads),
+                        ("head_dim_val", head_dim),
+                    ],
                     grid=(num_tokens, num_heads, 1),
                     threadgroup=(1, 1, 1),
                     output_shapes=[(num_tokens, num_heads, head_dim)],
                     output_dtypes=[mx.float16],
-                    constants={
-                        "num_tokens_val": num_tokens,
-                        "num_heads_val": num_heads,
-                        "head_dim_val": head_dim,
-                    },
                 )
                 return outputs[0]
             except Exception as e:

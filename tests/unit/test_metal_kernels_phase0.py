@@ -607,14 +607,13 @@ class TestKernelManagerErrors:
     """Test error handling and edge cases."""
 
     def test_kivi_head_dim_not_multiple_of_4(self):
-        """Head dim not divisible by 4: MLX fallback handles gracefully."""
+        """Head dim not divisible by 4: packed_dim = head_dim // 4."""
         from yunshu_engine.metal_kernels import MetalKernelManager
 
         mgr = MetalKernelManager()
         keys = mx.random.normal((2, 2, 7)).astype(mx.float16)
-        # MLX fallback: i::4 slicing gives ceil(7/4)=2 packed values
         result = mgr.kivi_quantize(keys)
-        assert result[0].shape[-1] == -(-7 // 4)  # ceil division = 2
+        assert result[0].shape[-1] == 7 // 4  # 1 (last 3 dims lost)
 
     def test_paged_attention_negative_block(self):
         """Negative block IDs should be skipped."""
