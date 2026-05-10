@@ -1073,6 +1073,22 @@ async def run_perf_yunshu() -> list[dict]:
     return results + stream_results
 
 
+async def _perf_stream_any(engine, prompt: str, max_tokens: int, temperature: float = 0.0) -> tuple[float, float, int, float]:
+    """Run streaming generation and measure TTFT, tok/s, token count, total time."""
+    t0 = time.perf_counter()
+    ttft = None
+    total_tokens = 0
+    async for chunk in engine.stream_generate(prompt=prompt, max_tokens=max_tokens, temperature=temperature):
+        if ttft is None and getattr(chunk, 'new_text', getattr(chunk, 'text', '')):
+            ttft = time.perf_counter() - t0
+        total_tokens = max(total_tokens, getattr(chunk, 'completion_tokens', total_tokens + 1))
+    dt = time.perf_counter() - t0
+    gen_time = dt - (ttft or 0)
+    tok_s = total_tokens / gen_time if gen_time > 0 else 0
+    ttft_ms = (ttft or 0) * 1000
+    return ttft_ms, tok_s, total_tokens, dt
+
+
 async def run_perf_vllm_mlx() -> list[dict]:
     _ensure_ref_path("vllm-mlx")
     from vllm_mlx.engine.simple import SimpleEngine
@@ -1091,15 +1107,24 @@ async def run_perf_vllm_mlx() -> list[dict]:
 
         await engine.generate(_build_perf_prompt(1), max_tokens=16, temperature=0.0)
 
+        # Non-streaming (generate = stream_generate accumulator, no separate TTFT)
         t0 = time.perf_counter()
         r = await engine.generate(prompt, max_tokens=max_tok, temperature=0.0)
-        dt = time.perf_counter() - t0
-
+        dt_ns = time.perf_counter() - t0
         n_tok = getattr(r, 'completion_tokens', 0) or len(tokenizer.encode(getattr(r, 'text', '')))
-        tok_s = n_tok / dt if dt > 0 else 0
+        tok_s_ns = n_tok / dt_ns if dt_ns > 0 else 0
         results.append({
             "scenario": name, "ttft_ms": 0,
-            "tok_per_s": round(tok_s, 1), "tokens": n_tok,
+            "tok_per_s": round(tok_s_ns, 1), "tokens": n_tok,
+            "prompt_tokens": prompt_toks, "total_s": round(dt_ns, 2),
+            "rss_mb": round(rss, 0),
+        })
+
+        # Streaming (has TTFT)
+        ttft_ms, tok_s, tokens, dt = await _perf_stream_any(engine, prompt, max_tok)
+        results.append({
+            "scenario": name + "_stream", "ttft_ms": round(ttft_ms, 1),
+            "tok_per_s": round(tok_s, 1), "tokens": tokens,
             "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
             "rss_mb": round(rss, 0),
         })
@@ -1126,15 +1151,24 @@ async def run_perf_omlx() -> list[dict]:
 
         await engine.generate(_build_perf_prompt(1), max_tokens=16, temperature=0.0)
 
+        # Non-streaming
         t0 = time.perf_counter()
         r = await engine.generate(prompt, max_tokens=max_tok, temperature=0.0)
-        dt = time.perf_counter() - t0
-
+        dt_ns = time.perf_counter() - t0
         n_tok = getattr(r, 'completion_tokens', 0) or len(tokenizer.encode(getattr(r, 'text', '')))
-        tok_s = n_tok / dt if dt > 0 else 0
+        tok_s_ns = n_tok / dt_ns if dt_ns > 0 else 0
         results.append({
             "scenario": name, "ttft_ms": 0,
-            "tok_per_s": round(tok_s, 1), "tokens": n_tok,
+            "tok_per_s": round(tok_s_ns, 1), "tokens": n_tok,
+            "prompt_tokens": prompt_toks, "total_s": round(dt_ns, 2),
+            "rss_mb": round(rss, 0),
+        })
+
+        # Streaming
+        ttft_ms, tok_s, tokens, dt = await _perf_stream_any(engine, prompt, max_tok)
+        results.append({
+            "scenario": name + "_stream", "ttft_ms": round(ttft_ms, 1),
+            "tok_per_s": round(tok_s, 1), "tokens": tokens,
             "prompt_tokens": prompt_toks, "total_s": round(dt, 2),
             "rss_mb": round(rss, 0),
         })
@@ -1145,19 +1179,19 @@ async def run_perf_omlx() -> list[dict]:
 
 
 def print_perf_summary(perf_data: dict[str, list[dict]]):
-    P(f"\n{'═' * 90}")
+    P(f"\n{'═' * 100}")
     P(f"  PERFORMANCE SUMMARY")
-    P(f"{'═' * 90}")
+    P(f"{'═' * 100}")
 
     for scenario_name, _, _ in PERF_SCENARIOS:
-        P(f"\n  ── {scenario_name} ──")
+        # ── Non-streaming ──
+        P(f"\n  ── {scenario_name} (non-streaming) ──")
         P(f"  {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8} {'Memory':>10}")
         P(f"  {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8} {'─' * 10}")
 
         best_ttft = float('inf')
         best_tps = 0
         best_mem = float('inf')
-
         rows = []
         for fw, results in perf_data.items():
             for r in results:
@@ -1168,29 +1202,40 @@ def print_perf_summary(perf_data: dict[str, list[dict]]):
                     best_tps = max(best_tps, r["tok_per_s"])
                     best_mem = min(best_mem, r["rss_mb"])
 
-        for fw, r in rows:
-            ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "N/A"
+        for fw, r in sorted(rows, key=lambda x: -x[1]["tok_per_s"]):
+            ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "—"
             tps = r["tok_per_s"]
             mem = r["rss_mb"]
-
-            ttft_mark = " ★" if r["ttft_ms"] > 0 and r["ttft_ms"] <= best_ttft * 1.01 else ""
-            tps_mark = " ★" if tps >= best_tps * 0.99 else ""
-            mem_mark = " ★" if mem <= best_mem * 1.01 else ""
-
+            ttft_mark = " ★" if r["ttft_ms"] > 0 and r["ttft_ms"] <= best_ttft * 1.02 else ""
+            tps_mark = " ★" if tps >= best_tps * 0.98 else ""
+            mem_mark = " ★" if mem <= best_mem * 1.02 else ""
             P(f"  {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8} {mem:>8.0f}MB{mem_mark}")
 
-    # Streaming results for yunshu
-    yunshu_results = perf_data.get("yunshu", [])
-    stream_rows = [r for r in yunshu_results if "_stream" in r["scenario"]]
-    if stream_rows:
-        P(f"\n  ── yunshu streaming (separate TTFT measurement) ──")
-        P(f"  {'Scenario':<30} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8}")
-        P(f"  {'─' * 30} {'─' * 10} {'─' * 10} {'─' * 8}")
-        for r in stream_rows:
-            ttft_str = f"{r['ttft_ms']:.1f}ms"
-            P(f"  {r['scenario']:<30} {ttft_str:>10} {r['tok_per_s']:>10.1f} {r['tokens']:>8}")
+        # ── Streaming ──
+        stream_name = scenario_name + "_stream"
+        stream_rows = []
+        best_ttft_s = float('inf')
+        best_tps_s = 0
+        for fw, results in perf_data.items():
+            for r in results:
+                if r["scenario"] == stream_name:
+                    stream_rows.append((fw, r))
+                    if r["ttft_ms"] > 0:
+                        best_ttft_s = min(best_ttft_s, r["ttft_ms"])
+                    best_tps_s = max(best_tps_s, r["tok_per_s"])
 
-    P(f"\n{'═' * 90}")
+        if stream_rows:
+            P(f"\n  ── {scenario_name} (streaming TTFT) ──")
+            P(f"  {'Framework':<14} {'TTFT':>10} {'tok/s':>10} {'Tokens':>8}")
+            P(f"  {'─' * 14} {'─' * 10} {'─' * 10} {'─' * 8}")
+            for fw, r in sorted(stream_rows, key=lambda x: x[1]["ttft_ms"] if x[1]["ttft_ms"] > 0 else 9999):
+                ttft_str = f"{r['ttft_ms']:.1f}ms" if r['ttft_ms'] > 0 else "—"
+                tps = r["tok_per_s"]
+                ttft_mark = " ★" if r["ttft_ms"] > 0 and r["ttft_ms"] <= best_ttft_s * 1.02 else ""
+                tps_mark = " ★" if tps >= best_tps_s * 0.98 else ""
+                P(f"  {fw:<14} {ttft_str:>10}{ttft_mark} {tps:>10.1f}{tps_mark} {r['tokens']:>8}")
+
+    P(f"\n{'═' * 100}")
 
 
 
