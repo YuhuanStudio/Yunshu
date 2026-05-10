@@ -356,7 +356,6 @@ class BatchedEngine:
                         break
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
-            mx.clear_cache()
             return tokens, output_text, token_logprobs, ttft_s
 
         from .mlx_executor import get_mlx_executor
@@ -556,11 +555,9 @@ class BatchedEngine:
                 _put((new_text, n_tok, stop_hit or suffix_hit))
                 if stop_hit or suffix_hit:
                     mx.synchronize()
-                    mx.clear_cache()
                     return
             _put(("", n_tok, True))
             mx.synchronize()
-            mx.clear_cache()
             _put(_sentinel)
 
         from .mlx_executor import get_mlx_executor
