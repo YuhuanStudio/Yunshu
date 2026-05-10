@@ -139,6 +139,19 @@ class BatchedEngine:
         self._model = None
         self._tokenizer = None
         self._loaded = False
+
+        import gc
+        gc.collect()
+
+        from .mlx_executor import get_mlx_executor
+        loop = asyncio.get_running_loop()
+        import mlx.core as mx
+
+        def _cleanup():
+            mx.synchronize()
+            mx.clear_cache()
+
+        await loop.run_in_executor(get_mlx_executor(), _cleanup)
         logger.info(f"BatchedEngine stopped: {self.model_name}")
 
     async def generate(
