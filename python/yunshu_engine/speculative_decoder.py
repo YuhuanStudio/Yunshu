@@ -505,10 +505,12 @@ class SpeculativeDecoder:
         """Generate tokens using speculative decoding.
 
         Main generation loop:
-        1. Draft model proposes K tokens
-        2. Target model verifies all K in one pass
-        3. Accept matched tokens + bonus token
-        4. Repeat until max_tokens or EOS
+        1. Prefill both models, get first token from prefill logits
+        2. Draft proposes K-1 more tokens
+        3. Target verifies draft tokens one-by-one (avoids cache rollback)
+        4. Accept matched tokens + bonus token
+        5. Rebuild draft cache on rejection
+        6. Repeat until max_tokens or EOS
 
         Args:
             input_ids: Prompt token IDs [1, seq_len]
@@ -518,7 +520,6 @@ class SpeculativeDecoder:
         Returns:
             List of generated token IDs
         """
-        # Get EOS IDs
         eos_ids = set()
         if hasattr(self.tokenizer, 'eos_token_id'):
             eid = self.tokenizer.eos_token_id
@@ -528,42 +529,84 @@ class SpeculativeDecoder:
                 eos_ids.add(eid)
 
         from mlx_lm.models.cache import make_prompt_cache
+        from mlx_lm.sample_utils import make_sampler
+
         target_cache = make_prompt_cache(self.target)
         draft_cache = make_prompt_cache(self.draft)
 
-        generated_tokens = []
-        current_ids = input_ids
+        prompt_ids = input_ids.flatten().tolist()
 
         # Prefill both models
-        self.target(input_ids, cache=target_cache)
+        t_out = self.target(input_ids, cache=target_cache)
+        t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
+        first_token = int(t_logits.argmax(axis=-1).item())
+
         self.draft(input_ids, cache=draft_cache)
 
+        generated_tokens = [first_token]
+        K = self.config.draft_length
+        draft_sampler = make_sampler(temp=self.config.draft_temperature)
+
         while len(generated_tokens) < max_tokens:
-            # Step 1: Draft K tokens
-            draft_result = self.generate_draft(current_ids, draft_cache)
+            # Step 1: Draft generates K tokens from last generated token
+            last_tok = generated_tokens[-1]
+            draft_tokens = []
+            d_input = mx.array([[last_tok]])
+            for _ in range(K):
+                d_out = self.draft(d_input, cache=draft_cache)
+                d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
+                next_tok = draft_sampler(d_logits)
+                draft_tokens.append(int(next_tok.item()))
+                d_input = next_tok.reshape(1, 1)
 
-            # Step 2: Verify against target
-            verify_result = self.verify_draft(draft_result, current_ids, target_cache)
+            self._stats["total_draft_tokens"] += K
 
-            # Step 3: Collect accepted + bonus tokens
-            new_tokens = verify_result.accepted_ids + [verify_result.bonus_token_id]
+            # Step 2: Target verifies one-by-one
+            last_tok = generated_tokens[-1]
+            t_input = mx.array([[last_tok]])
+            t_out = self.target(t_input, cache=target_cache)
+            t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
 
-            self._stats["total_draft_tokens"] += self.config.draft_length
-            self._stats["total_accepted_tokens"] += verify_result.accepted_count
-            self._stats["total_bonus_tokens"] += 1
-            self._stats["total_steps"] += 1
+            accepted = 0
+            all_accepted = True
+            for j in range(K):
+                target_choice = int(t_logits.argmax(axis=-1).item())
 
-            for token_id in new_tokens:
-                generated_tokens.append(token_id)
-                if token_id in eos_ids:
+                if target_choice == draft_tokens[j]:
+                    accepted += 1
+                    generated_tokens.append(draft_tokens[j])
+                    if draft_tokens[j] in eos_ids:
+                        return generated_tokens
+                    # Feed to target for next position
+                    t_input = mx.array([[draft_tokens[j]]])
+                    t_out = self.target(t_input, cache=target_cache)
+                    t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
+                else:
+                    # Rejected: take target's choice
+                    generated_tokens.append(target_choice)
+                    all_accepted = False
+                    break
+
+            if all_accepted:
+                # Bonus token from target
+                bonus = int(t_logits.argmax(axis=-1).item())
+                generated_tokens.append(bonus)
+                self._stats["total_bonus_tokens"] += 1
+
+                if bonus in eos_ids:
                     return generated_tokens
 
-            # Feed accepted tokens back to both models
-            accepted_tensor = mx.array(new_tokens).reshape(1, -1)
-            self.target(accepted_tensor, cache=target_cache)
-            self.draft(accepted_tensor, cache=draft_cache)
+            self._stats["total_accepted_tokens"] += accepted
+            self._stats["total_steps"] += 1
 
-            current_ids = accepted_tensor[:, -1:]
+            # Rebuild draft cache on rejection (KV cache cannot rollback)
+            if accepted < K:
+                all_ids = prompt_ids + generated_tokens
+                draft_cache = make_prompt_cache(self.draft)
+                self.draft(mx.array(all_ids).reshape(1, -1), cache=draft_cache)
+
+            if any(t in eos_ids for t in generated_tokens):
+                return generated_tokens
 
         return generated_tokens
 

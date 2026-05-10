@@ -712,11 +712,13 @@ class TestBatchedEngineArchExtraction:
         assert result["head_dim"] == 128
 
     def test_batched_engine_kv_stats_no_engine(self):
-        """get_kv_cache_stats returns disabled when no engine is loaded."""
+        """get_kv_cache_stats returns prefix cache stats when no engine is loaded."""
         from yunshu_engine.batched_engine import BatchedEngine
 
         engine = BatchedEngine()
-        assert engine.get_kv_cache_stats() == {"enabled": False}
+        stats = engine.get_kv_cache_stats()
+        assert "prefix_cache" in stats
+        assert stats["prefix_cache"]["entries"] == 0
 
 
 # ── Admin KV Cache Endpoint ──
