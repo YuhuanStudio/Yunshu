@@ -298,10 +298,11 @@ async def _non_stream_batched(engine, messages, req, stop):
     """Non-streaming response via BatchedEngine."""
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
 
     result = await engine.chat(
         messages=messages,
-        max_tokens=req.max_tokens,
+        max_tokens=effective_max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
         stop=stop,
@@ -384,6 +385,8 @@ async def _stream_anthropic(
     input_tokens = 0
     output_tokens = 0
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
+    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
     has_tools = req.tools is not None and len(req.tools) > 0
     block_index = 0
     thinking_block_started = False
@@ -420,7 +423,7 @@ async def _stream_anthropic(
         if is_batched:
             async for output in engine.stream_chat(
                 messages=messages,
-                max_tokens=req.max_tokens,
+                max_tokens=effective_max_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
                 stop=stop,

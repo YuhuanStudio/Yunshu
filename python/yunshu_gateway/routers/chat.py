@@ -475,11 +475,22 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     try:
         tokenizer = getattr(engine, '_tokenizer', None)
         if tokenizer is not None:
-            test_text = " ".join(
-                m.get("content", "") if isinstance(m.get("content"), str) else ""
-                for m in messages
-            )
-            est_tokens = len(tokenizer.encode(test_text))
+            text_parts = []
+            image_count = 0
+            for m in messages:
+                content = m.get("content", "")
+                if isinstance(content, str):
+                    text_parts.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                            elif block.get("type") == "image_url":
+                                image_count += 1
+            est_tokens = len(tokenizer.encode(" ".join(text_parts)))
+            # Each image contributes ~256-576 tokens depending on model
+            est_tokens += image_count * 576
             validate_context_window(est_tokens, req.model, engine)
     except HTTPException:
         raise
