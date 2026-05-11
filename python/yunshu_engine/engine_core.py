@@ -467,19 +467,19 @@ class EngineCore:
                 continue
 
             # Distribute outputs to per-request collectors
-            collectors = dict(self._output_collectors)
-            states = dict(self._stream_states)
+            # Iterate live dict (abort may insert between steps, we need to see it)
+            active_ids = list(self._output_collectors.keys())
 
             for req_output in scheduler_output.outputs:
                 rid = req_output.request_id
-                collector = collectors.get(rid)
+                collector = self._output_collectors.get(rid)
                 if collector is None:
                     continue
 
                 if use_simple_streaming:
                     collector.put(req_output)
                 else:
-                    stream_state = states.get(rid)
+                    stream_state = self._stream_states.get(rid)
                     if stream_state and stream_state.should_send(
                         req_output.completion_tokens, req_output.finished
                     ):

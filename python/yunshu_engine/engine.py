@@ -399,8 +399,7 @@ class Engine:
         return detok
 
     def _make_sampler(self, temperature: float = 0.7, top_p: float = 1.0,
-                      top_k: int = 0, min_p: float = 0.0,
-                      repetition_penalty: float = 1.0):
+                      top_k: int = 0, min_p: float = 0.0):
         """Create a per-request sampler with the given parameters.
 
         Supports all mlx-lm sampler params (oMLX SamplingParams pattern).
@@ -682,7 +681,6 @@ class Engine:
                 sampler = self._make_sampler(
                     state.temperature, state.top_p,
                     state.top_k, state.min_p,
-                    state.repetition_penalty,
                 )
                 sm = self._make_state_machine(state.stop)
 

@@ -248,7 +248,7 @@ class RealtimeSession:
     async def _handle_conversation_item_create(self, event: dict) -> None:
         """Handle conversation.item.create — add a message to conversation."""
         item_data = event.get("item", {})
-        item_id = item_data.get("id", f"item_{uuid.uuid4().hex[:12]}")
+        item_id = item_data.get("id", f"item_{uuid.uuid4().hex[:24]}")
         item = ConversationItem(
             item_id=item_id,
             item_type=item_data.get("type", "message"),
@@ -312,7 +312,7 @@ class RealtimeSession:
             return
 
         response_id = f"resp_{uuid.uuid4().hex[:16]}"
-        item_id = f"item_{uuid.uuid4().hex[:12]}"
+        item_id = f"item_{uuid.uuid4().hex[:24]}"
 
         response_config = event.get("response", {})
         modalities = response_config.get("modalities", self.session.modalities)

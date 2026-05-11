@@ -23,7 +23,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator
-from typing import Optional
+from typing import Any, Optional
 
 # ── Sentinel for _safe_anext ──
 
@@ -156,41 +156,6 @@ async def run_with_disconnect_guard(
         except Exception:
             pass
     return task.result()
-
-
-# ── Legacy SSEKeepaliveWrapper (backward compatible) ──
-
-
-class SSEKeepaliveWrapper:
-    """Simplified SSE keepalive for backward compatibility.
-
-    Prefer with_sse_keepalive() for production use.
-    """
-
-    def __init__(
-        self,
-        source: AsyncIterator,
-        interval_s: float = 10.0,
-        disconnect_check=None,
-    ):
-        self._source = source
-        self._interval = interval_s
-        self._disconnect_check = disconnect_check
-
-    async def __aiter__(self):
-        while True:
-            try:
-                result = await asyncio.wait_for(
-                    self._source.__anext__(),
-                    timeout=self._interval,
-                )
-                yield result
-            except asyncio.TimeoutError:
-                if self._disconnect_check and self._disconnect_check():
-                    return
-                yield ": keep-alive\n\n"
-            except StopAsyncIteration:
-                return
 
 
 # ── Thinking Parser ──
@@ -332,11 +297,6 @@ def extract_thinking(text: str) -> tuple[str, str]:
 
 
 # ── Tool Call Extraction ──
-
-_TOOL_CALL_PATTERN = re.compile(
-    r'<tool_call\s*>.*?["\']name["\']\s*:\s*["\']([^"\']+)["\'].*?["\']arguments["\']\s*:\s*(\{.*?\})\s*.*?</tool_call\s*>',
-    re.DOTALL,
-)
 
 # Alternative pattern: function call in markdown code blocks
 _FUNC_CALL_PATTERN = re.compile(
@@ -697,85 +657,3 @@ async def with_json_keepalive(
         yield result
 
 
-# ── Token Rate Tracker ──
-
-
-class TokenRateTracker:
-    """Tracks generation speed (tokens/sec) during streaming."""
-
-    def __init__(self):
-        self._tokens: int = 0
-        self._start_time: Optional[float] = None
-
-    def record(self, token_count: int = 1) -> None:
-        if self._start_time is None:
-            self._start_time = time.time()
-        self._tokens += token_count
-
-    @property
-    def tokens_per_second(self) -> float:
-        elapsed = self.elapsed_seconds
-        if elapsed == 0:
-            return 0.0
-        return self._tokens / elapsed
-
-    @property
-    def total_tokens(self) -> int:
-        return self._tokens
-
-    @property
-    def elapsed_seconds(self) -> float:
-        if self._start_time is None:
-            return 0.0
-        return time.time() - self._start_time
-
-
-# ── Stop Sequence Detector ──
-
-
-class StopSequenceDetector:
-    """Detects stop sequences that may span across streaming chunks."""
-
-    def __init__(self, stop_sequences: list[str]):
-        self._sequences = stop_sequences
-        self._buffer = ""
-
-    def check(self, text: str) -> tuple[str, str | None]:
-        """Check text for stop sequences.
-
-        Returns (clean_text, matched_stop or None).
-        """
-        if not self._sequences:
-            return text, None
-
-        self._buffer += text
-        # Check if any stop sequence appears in the combined buffer
-        for seq in self._sequences:
-            idx = self._buffer.find(seq)
-            if idx != -1:
-                clean = self._buffer[:idx]
-                self._buffer = ""
-                return clean, seq
-
-        # Check if buffer tail could be a partial stop sequence
-        safe_end = len(self._buffer)
-        for seq in self._sequences:
-            for i in range(1, min(len(seq), len(self._buffer)) + 1):
-                if seq.startswith(self._buffer[-i:]):
-                    safe_end = min(safe_end, len(self._buffer) - i)
-                    break
-
-        if safe_end < len(self._buffer):
-            safe_text = self._buffer[:safe_end]
-            self._buffer = self._buffer[safe_end:]
-            return safe_text, None
-
-        safe_text = self._buffer
-        self._buffer = ""
-        return safe_text, None
-
-    def finalize(self) -> str | None:
-        """Flush remaining buffer. No stop detection on finalize."""
-        remaining = self._buffer
-        self._buffer = ""
-        return remaining if remaining else None

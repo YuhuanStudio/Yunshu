@@ -344,6 +344,8 @@ async def _non_stream_batched(engine, messages, req, stop):
         "usage": {
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
         },
     }
     if matched_stop:
@@ -372,6 +374,8 @@ async def _non_stream_legacy(engine, messages, req, stop):
         "usage": {
             "input_tokens": state.prompt_token_count,
             "output_tokens": state.completion_token_count,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
         },
     })
 

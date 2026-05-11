@@ -656,8 +656,9 @@ def compile_kernels(force: bool = False) -> bool:
         return False
 
     try:
-        shell_cmd = f"cd {_METAL_DIR} && make clean && make" if force else f"cd {_METAL_DIR} && make"
-        result = subprocess.run(shell_cmd, shell=True, capture_output=True, text=True, timeout=120)
+        if force:
+            subprocess.run(["make", "clean"], cwd=str(_METAL_DIR), capture_output=True, text=True, timeout=60)
+        result = subprocess.run(["make"], cwd=str(_METAL_DIR), capture_output=True, text=True, timeout=120)
 
         if result.returncode == 0 and _METALLIB_PATH.exists():
             _compilation_status.update(compiled=True, last_error=None)

@@ -71,7 +71,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     else:
         prompt = req.prompt
 
-    completion_id = f"cmpl-{uuid.uuid4().hex[:12]}"
+    completion_id = f"cmpl-{uuid.uuid4().hex[:24]}"
 
     if req.stream:
         return StreamingResponse(

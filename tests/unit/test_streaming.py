@@ -1,12 +1,8 @@
 """Tests for streaming module — ThinkingParser, SSE formatters, keepalive."""
 
-import asyncio
 import json
 
-import pytest
-
 from yunshu_gateway.streaming import (
-    SSEKeepaliveWrapper,
     ThinkingParser,
     extract_thinking,
     extract_tool_calls,
@@ -210,78 +206,6 @@ class TestAnthropicFormat:
         assert data["delta"]["stop_reason"] == "end_turn"
 
 
-# ── SSE Keepalive Wrapper ──
-
-
-class TestSSEKeepalive:
-    @pytest.mark.asyncio
-    async def test_passthrough_fast_events(self):
-        """When events arrive within interval, no keepalive injected."""
-
-        async def source():
-            for i in range(3):
-                yield f"data: {i}\n\n"
-
-        wrapper = SSEKeepaliveWrapper(source(), interval_s=10.0)
-        results = []
-        async for event in wrapper:
-            results.append(event)
-        assert len(results) == 3
-        assert results == ["data: 0\n\n", "data: 1\n\n", "data: 2\n\n"]
-
-    @pytest.mark.asyncio
-    async def test_keepalive_injected_on_slow_events(self):
-        """Keepalive injected when source takes longer than interval."""
-
-        async def source():
-            yield "data: first\n\n"
-            await asyncio.sleep(0.5)  # longer than keepalive interval
-            yield "data: second\n\n"
-
-        wrapper = SSEKeepaliveWrapper(source(), interval_s=0.1)
-        results = []
-        async for event in wrapper:
-            results.append(event)
-
-        # First event is always passed through
-        assert results[0] == "data: first\n\n"
-        # At least one keepalive was injected during the wait
-        keepalives = [r for r in results if "keep-alive" in r]
-        assert len(keepalives) >= 1
-        # The final result is either the second event or a keepalive
-        # (timing-dependent in CI), so just verify keepalives were injected
-        assert len(results) >= 2
-
-    @pytest.mark.asyncio
-    async def test_client_disconnect_detection(self):
-        """Stop iteration when disconnect check returns True."""
-        call_count = 0
-
-        async def source():
-            nonlocal call_count
-            while True:
-                call_count += 1
-                await asyncio.sleep(0.1)
-                yield "data: tick\n\n"
-
-        disconnect_calls = 0
-
-        def is_disconnected():
-            nonlocal disconnect_calls
-            disconnect_calls += 1
-            return disconnect_calls >= 2
-
-        wrapper = SSEKeepaliveWrapper(
-            source(), interval_s=0.05, disconnect_check=is_disconnected
-        )
-        results = []
-        async for event in wrapper:
-            results.append(event)
-
-        # Should have stopped after disconnect was detected
-        assert len(results) <= 5  # bounded, not infinite
-
-
 # ── extract_thinking ──
 
 
@@ -411,87 +335,6 @@ class TestSentinel:
         assert _KEEPALIVE_SENTINEL is not None
         assert _KEEPALIVE_SENTINEL != 0
         assert _KEEPALIVE_SENTINEL != ""
-
-
-class TestTokenRateTracker:
-    def test_initial_state(self):
-        from yunshu_gateway.streaming import TokenRateTracker
-        t = TokenRateTracker()
-        assert t.total_tokens == 0
-        assert t.tokens_per_second == 0.0
-        assert t.elapsed_seconds == 0.0
-
-    def test_record_and_tps(self):
-        import time
-        from yunshu_gateway.streaming import TokenRateTracker
-        t = TokenRateTracker()
-        t.record(100)
-        time.sleep(0.05)
-        t.record(100)
-        assert t.total_tokens == 200
-        assert t.tokens_per_second > 0
-        assert t.elapsed_seconds > 0
-
-
-class TestStopSequenceDetector:
-    def test_no_stop_sequences(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector([])
-        text, stop = d.check("hello world")
-        assert text == "hello world"
-        assert stop is None
-
-    def test_stop_in_middle(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector(["\n\n"])
-        text, stop = d.check("hello\n\nworld")
-        assert text == "hello"
-        assert stop == "\n\n"
-
-    def test_stop_split_across_chunks(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector(["STOP"])
-        text1, stop1 = d.check("hel")
-        assert stop1 is None
-        text2, stop2 = d.check("loSTO")
-        assert stop2 is None
-        text3, stop3 = d.check("Pmore")
-        assert stop3 == "STOP"
-
-    def test_finalize_partial_buffer(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-
-
-
-
-
-    def test_finalize_empty(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector(["END"])
-        assert d.finalize() is None
-
-    def test_multiple_stop_sequences(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector(["STOP", "END", "HALT"])
-        text, stop = d.check("helloENDworld")
-        assert stop == "END"
-        assert text == "hello"
-
-class TestStopSequenceDetectorFinalize:
-    def test_finalize_with_partial(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector(["END"])
-        # Feed partial that could be start of "END" (e.g. "E")
-        text, stop = d.check("some text E")
-        assert stop is None
-        remaining = d.finalize()
-        assert remaining is not None
-        assert len(remaining) > 0
-
-    def test_finalize_empty_buffer(self):
-        from yunshu_gateway.streaming import StopSequenceDetector
-        d = StopSequenceDetector(["END"])
-        assert d.finalize() is None
 
 
 class TestLogprobsFormatting:

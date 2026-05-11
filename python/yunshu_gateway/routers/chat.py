@@ -501,7 +501,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     from yunshu_engine.batched_engine import BatchedEngine
     is_batched = isinstance(engine, BatchedEngine)
 
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
     if req.stream:
         return StreamingResponse(
@@ -637,7 +637,7 @@ async def _handle_vlm_chat(
             detail="No VLM engine available for image input",
         )
 
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
     if req.stream:
         return StreamingResponse(

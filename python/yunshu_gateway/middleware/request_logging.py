@@ -26,7 +26,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         import yunshu_gateway.main as _main
 
-        request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:12]}"
+        request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:24]}"
         request.state.request_id = request_id
 
         _main._active_requests += 1

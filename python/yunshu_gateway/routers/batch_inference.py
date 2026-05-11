@@ -50,7 +50,7 @@ async def create_batch(req: BatchRequest):
             detail=f"Batch size {len(req.requests)} exceeds limit of 100",
         )
 
-    batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+    batch_id = f"batch_{uuid.uuid4().hex[:24]}"
     semaphore = asyncio.Semaphore(req.max_concurrent)
 
     async def _process_item(item: BatchItem) -> dict:
@@ -153,7 +153,7 @@ async def _execute_chat_completion(body: dict) -> dict:
 
     import time as _time
     return {
-        "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
         "created": int(_time.time()),
         "model": model,
@@ -211,7 +211,7 @@ async def _execute_completion(body: dict) -> dict:
 
     import time as _time
     return {
-        "id": f"cmpl-{uuid.uuid4().hex[:12]}",
+        "id": f"cmpl-{uuid.uuid4().hex[:24]}",
         "object": "text_completion",
         "created": int(_time.time()),
         "model": model,

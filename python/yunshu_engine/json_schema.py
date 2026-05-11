@@ -657,11 +657,20 @@ class JsonSchemaConstraint:
             if isinstance(vocab, dict):
                 return list(vocab.values())
             return list(range(len(vocab)))
-        # Fallback: try to determine vocab size
+        # Fallback: try to determine vocab size from tokenizer config
         vocab_size = getattr(tokenizer, 'vocab_size', None)
+        if not vocab_size:
+            # Try reading from the model config attached to tokenizer
+            config = getattr(tokenizer, 'config', None)
+            if config:
+                vocab_size = config.get('vocab_size') or config.get('model_type') and 32000
         if vocab_size:
             return list(range(vocab_size))
-        return list(range(151936))  # common default for Qwen-like models
+        # Last resort: use actual tokenizer length
+        try:
+            return list(range(len(tokenizer.get_vocab())))
+        except Exception:
+            return list(range(32000))
 
     def _find_tokens_for_chars(self, tokenizer: Any, chars: set[str]) -> list[int]:
         """Find all tokens whose decoded text starts with one of the expected chars.
@@ -695,7 +704,7 @@ class JsonSchemaConstraint:
         elif hasattr(tokenizer, 'vocab') and isinstance(tokenizer.vocab, dict):
             vocab = tokenizer.vocab
         else:
-            vocab_size = getattr(tokenizer, 'vocab_size', 151936)
+            vocab_size = getattr(tokenizer, 'vocab_size', 32000)
             vocab = {str(i): i for i in range(vocab_size)}
 
         for token_text, token_id in vocab.items():
