@@ -49,10 +49,8 @@ def cache_length(cache: list) -> int:
 
 def _detached_copy(a: mx.array) -> mx.array:
     """Create a detached copy of an mx.array (breaks graph references)."""
-    import numpy as np
-    if a.dtype == mx.bfloat16:
-        return mx.array(np.array(a.astype(mx.float32))).astype(mx.bfloat16)
-    return mx.array(np.array(a))
+    # Avoid numpy detour to preserve bf16 precision
+    return mx.array(mx.stop_gradient(a))
 
 
 def _token_hash(tokens: mx.array) -> str:

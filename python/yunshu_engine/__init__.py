@@ -1,8 +1,5 @@
 """Yunshu L4 Engine — continuous batching inference."""
 
-from .batched_engine import BatchedEngine, GenerationOutput
-from .engine import Engine, EngineConfig, RequestOutput, RequestState
-
 __all__ = [
     "BatchedEngine",
     "Engine",
@@ -16,6 +13,12 @@ __all__ = [
 def __getattr__(name):
     """Lazy imports for heavy modules — only loaded when accessed."""
     _lazy = {
+        "BatchedEngine": ".batched_engine",
+        "Engine": ".engine",
+        "EngineConfig": ".engine",
+        "GenerationOutput": ".batched_engine",
+        "RequestOutput": ".request",
+        "RequestState": ".engine",
         "AsyncEngineCore": ".engine_core",
         "EngineCore": ".engine_core",
         "EngineCoreConfig": ".engine_core",

@@ -27,8 +27,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
 
-import mlx.core as mx
-
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentConfig
 
@@ -378,6 +376,7 @@ class Scheduler:
         # Generation memory guard: defer scheduling under memory pressure
         if self.config.memory_guard_enabled and active_count > 0 and to_insert:
             try:
+                import mlx.core as mx
                 import mlx.core as mx
                 active_mem = mx.get_active_memory()
                 from .utils.hardware import get_hardware_info
@@ -878,6 +877,7 @@ class Scheduler:
 
         if should_clear and not self.running:
             try:
+                import mlx.core as mx
                 mx.synchronize()
                 mx.clear_cache()
             except Exception:

@@ -20,6 +20,9 @@ router = APIRouter(prefix="/api/v1/bench", tags=["benchmark"])
 
 # ── State ──
 
+import threading
+
+_lock = threading.Lock()
 _active_benchmark: Optional[str] = None
 _benchmark_results: dict = {}
 
@@ -253,12 +256,11 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
 @router.post("/roofline")
 async def bench_roofline(request: RooflineRequest, bg: BackgroundTasks):
     """Run GEMM roofline benchmark on Apple GPU."""
-    global _active_benchmark
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "roofline"
 
-    if _active_benchmark:
-        raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
-
-    _active_benchmark = "roofline"
     try:
         result = await asyncio.to_thread(_run_roofline, request)
         _benchmark_results["roofline"] = result
@@ -267,16 +269,17 @@ async def bench_roofline(request: RooflineRequest, bg: BackgroundTasks):
         logger.error(f"Roofline benchmark failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        _active_benchmark = None
+        with _lock:
+            _active_benchmark = None
 
 
 @router.post("/latency")
 async def bench_latency(request: LatencyRequest):
     """Run E2E latency benchmark."""
-    global _active_benchmark
-
-    if _active_benchmark:
-        raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "latency"
 
     _active_benchmark = "latency"
     try:
@@ -287,18 +290,17 @@ async def bench_latency(request: LatencyRequest):
         logger.error(f"Latency benchmark failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        _active_benchmark = None
+        with _lock:
+            _active_benchmark = None
 
 
 @router.post("/throughput")
 async def bench_throughput(request: ThroughputRequest):
     """Run concurrent throughput benchmark."""
-    global _active_benchmark
-
-    if _active_benchmark:
-        raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
-
-    _active_benchmark = "throughput"
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "throughput"
     try:
         result = await _run_throughput(request)
         _benchmark_results["throughput"] = result
@@ -307,7 +309,8 @@ async def bench_throughput(request: ThroughputRequest):
         logger.error(f"Throughput benchmark failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        _active_benchmark = None
+        with _lock:
+            _active_benchmark = None
 
 
 @router.get("/status")

@@ -196,7 +196,9 @@ def _format_labels(key: frozenset[tuple[str, str]]) -> str:
     """Serialise label set to Prometheus label string, e.g. {a="b",c="d"}."""
     if not key:
         return ""
-    pairs = ",".join(f'{k}="{v}"' for k, v in sorted(key))
+    def _esc(v: str) -> str:
+        return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    pairs = ",".join(f'{k}="{_esc(v)}"' for k, v in sorted(key))
     return f"{{{pairs}}}"
 
 

@@ -6,6 +6,7 @@ Supports:
 - Logprobs
 - Echo mode
 """
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Optional
@@ -135,7 +136,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     return JSONResponse({
         "id": completion_id,
         "object": "text_completion",
-        "created": int(__import__("time").time()),
+        "created": int(time.time()),
         "model": req.model,
         "choices": [{
             "index": 0,

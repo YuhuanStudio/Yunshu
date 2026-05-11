@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -100,7 +101,7 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
             })
 
     return JSONResponse({
-        "created": int(__import__("time").time()),
+        "created": int(time.time()),
         "data": images_data,
     })
 
