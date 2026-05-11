@@ -28,14 +28,13 @@ class RequestOutputCollector:
     Aggregation merges consecutive outputs when producer gets ahead.
     """
 
-    _waiting_consumers: int = 0
-
     def __init__(self, aggregate: bool = True):
         self.output: Optional[RequestOutput] = None
         self.ready = asyncio.Event()
         self.aggregate = aggregate
         self._is_waiting = False
         self._sentinel = False
+        self._waiting_consumers: int = 0
 
     def put(self, output: RequestOutput | None) -> None:
         if output is None:

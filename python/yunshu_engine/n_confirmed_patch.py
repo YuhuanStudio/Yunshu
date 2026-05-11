@@ -296,20 +296,18 @@ def restore_rollback(cache: list) -> bool:
     For KV layers: trim by 1.
     Returns False if any layer can't be rolled back.
     """
+    success = True
     for c in cache:
         if hasattr(c, "rollback_state") and c.rollback_state is not None:
             conv_snap, ssm_snap = c.rollback_state
             c[0] = conv_snap
             c[1] = ssm_snap
             c.rollback_state = None
-            # Need to undo cache.advance(S) — we advanced by 2, need to undo 1
-            # But advance modified lengths/left_padding, not the state arrays
-            # Since we restored the state arrays directly, we need to fix lengths
             if hasattr(c, "lengths") and c.lengths is not None:
-                c.lengths = c.lengths - 1  # Undo 1 of the 2 advance
+                c.lengths = c.lengths - 1
             continue
         if hasattr(c, "is_trimmable") and c.is_trimmable():
             c.trim(1)
             continue
-        return False
-    return True
+        success = False
+    return success

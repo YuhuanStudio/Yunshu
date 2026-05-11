@@ -664,6 +664,7 @@ async def _stream_vlm_response(
     """SSE streaming for VLM engine (oMLX with_sse_keepalive pattern)."""
 
     async def _token_source():
+        first_chunk = True
         async for output in vlm_engine.generate_stream(
             messages=messages,
             max_tokens=req.max_tokens,
@@ -674,7 +675,9 @@ async def _stream_vlm_response(
                 model=req.model,
                 delta_content=output.token_text,
                 finish_reason=output.finish_reason,
+                include_role=first_chunk,
             )
+            first_chunk = False
 
         yield format_openai_done()
 
@@ -745,6 +748,7 @@ async def _stream_response(
 
     async def _token_source():
         nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok
+        first_chunk = True
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -778,7 +782,9 @@ async def _stream_response(
                                 completion_id=completion_id,
                                 model=req.model,
                                 delta_content=out.text,
+                                include_role=first_chunk,
                             )
+                            first_chunk = False
                         elif out.tool_call:
                             yield _format_tool_call_chunk(out.tool_call, tool_call_index)
                             tool_call_index += 1
@@ -789,7 +795,9 @@ async def _stream_response(
                         model=req.model,
                         delta_content=token_text,
                         finish_reason=finish_reason,
+                        include_role=first_chunk,
                     )
+                    first_chunk = False
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
@@ -818,7 +826,9 @@ async def _stream_response(
                         delta_content="",
                         thinking_content=output.token_text,
                         finish_reason=output.finish_reason,
+                        include_role=first_chunk,
                     )
+                    first_chunk = False
                 else:
                     token_text = output.token_text
                     if use_tool_streamer and tool_streamer and token_text:
@@ -829,7 +839,9 @@ async def _stream_response(
                                     completion_id=completion_id,
                                     model=req.model,
                                     delta_content=out.text,
+                                    include_role=first_chunk,
                                 )
+                                first_chunk = False
                             elif out.tool_call:
                                 yield _format_tool_call_chunk(out.tool_call, tool_call_index)
                                 tool_call_index += 1
@@ -840,7 +852,9 @@ async def _stream_response(
                             model=req.model,
                             delta_content=token_text,
                             finish_reason=output.finish_reason,
+                            include_role=first_chunk,
                         )
+                        first_chunk = False
 
         # Flush any remaining content from tool streamer
         if use_tool_streamer and tool_streamer:

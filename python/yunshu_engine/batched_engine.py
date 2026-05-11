@@ -369,6 +369,7 @@ class BatchedEngine:
                         ]
                     token_logprobs.append(entry)
                 if token in stop_ids:
+                    tokens.pop()  # Exclude stop token from output
                     break
                 if stop_suffixes:
                     detokenizer.add_token(token)

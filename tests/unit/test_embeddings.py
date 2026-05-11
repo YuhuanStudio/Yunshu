@@ -181,27 +181,27 @@ class TestEmbeddingResponseFormat:
 class TestEmbeddingGeneration:
     """Test the _generate_embeddings function with mock engines."""
 
-    def test_engine_with_embed_method(self):
+    async def test_engine_with_embed_method(self):
         """Should use engine.embed() if available."""
         engine = MagicMock()
         expected = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
         engine.embed.return_value = expected
 
-        result = _generate_embeddings(engine, ["hello", "world"])
+        result = await _generate_embeddings(engine, ["hello", "world"])
         assert result == expected
         engine.embed.assert_called_once_with(["hello", "world"])
 
-    def test_engine_without_embed_no_model(self):
+    async def test_engine_without_embed_no_model(self):
         """Should raise RuntimeError if engine has no embed() and no model/tokenizer."""
         engine = MagicMock(spec=[])  # No embed method
         with pytest.raises(RuntimeError, match="does not support embedding"):
-            _generate_embeddings(engine, ["hello"])
+            await _generate_embeddings(engine, ["hello"])
 
-    def test_empty_text_list(self):
+    async def test_empty_text_list(self):
         """Should handle empty input gracefully."""
         engine = MagicMock()
         engine.embed.return_value = []
-        result = _generate_embeddings(engine, [])
+        result = await _generate_embeddings(engine, [])
         assert result == []
 
 

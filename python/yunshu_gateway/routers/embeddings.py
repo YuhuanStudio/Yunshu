@@ -48,7 +48,7 @@ async def create_embedding(req: EmbeddingRequest):
         )
 
     try:
-        embeddings = _generate_embeddings(engine, texts)
+        embeddings = await _generate_embeddings(engine, texts)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -114,7 +114,7 @@ async def _resolve_embedding_engine(model_id: str):
     return None
 
 
-def _generate_embeddings(engine, texts: list[str]) -> list[list[float]]:
+async def _generate_embeddings(engine, texts: list[str]) -> list[list[float]]:
     """Generate embeddings using the engine.
 
     Supports:
@@ -132,34 +132,44 @@ def _generate_embeddings(engine, texts: list[str]) -> list[list[float]]:
         raise RuntimeError("Engine does not support embedding generation")
 
     import mlx.core as mx
+    from ...yunshu_engine.mlx_executor import get_mlx_executor
+    import asyncio
 
-    embeddings = []
-    for text in texts:
-        tokens = tokenizer.encode(text)
-        if not tokens:
-            embeddings.append([])
-            continue
+    async def _generate_embeddings_async():
+        embeddings = []
+        for text in texts:
+            tokens = tokenizer.encode(text)
+            if not tokens:
+                embeddings.append([])
+                continue
 
-        input_ids = mx.array([tokens])
+            input_ids = mx.array([tokens])
 
-        if hasattr(model, '__call__'):
-            output = model(input_ids)
-        else:
-            output = model(input_ids)
+            # Run on MLX executor thread (not blocking event loop)
+            def _forward():
+                if hasattr(model, '__call__'):
+                    return model(input_ids)
+                else:
+                    return model(input_ids)
 
-        # Get last hidden state
-        if isinstance(output, mx.array):
-            hidden = output
-        elif isinstance(output, (tuple, list)):
-            hidden = output[0]
-        elif hasattr(output, 'last_hidden_state'):
-            hidden = output.last_hidden_state
-        else:
-            hidden = output[0] if isinstance(output, (tuple, list)) else output
+            loop = asyncio.get_running_loop()
+            output = await loop.run_in_executor(get_mlx_executor(), _forward)
 
-        # Mean pooling over sequence length
-        pooled = mx.mean(hidden, axis=1)
-        pooled_np = pooled.tolist()
-        embeddings.append(pooled_np[0] if isinstance(pooled_np, list) and len(pooled_np) == 1 else pooled_np)
+            # Get last hidden state
+            if isinstance(output, mx.array):
+                hidden = output
+            elif isinstance(output, (tuple, list)):
+                hidden = output[0]
+            elif hasattr(output, 'last_hidden_state'):
+                hidden = output.last_hidden_state
+            else:
+                hidden = output[0] if isinstance(output, (tuple, list)) else output
 
-    return embeddings
+            # Mean pooling over sequence length
+            pooled = mx.mean(hidden, axis=1)
+            pooled_np = pooled.tolist()
+            embeddings.append(pooled_np[0] if isinstance(pooled_np, list) and len(pooled_np) == 1 else pooled_np)
+
+        return embeddings
+
+    return await _generate_embeddings_async()
