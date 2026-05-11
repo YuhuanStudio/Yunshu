@@ -116,3 +116,8 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+markers = [
+    "gpu: requires Apple GPU / MLX runtime",
+    "integration: requires running services or real models",
+    "slow: tests that take >5 seconds",
+]

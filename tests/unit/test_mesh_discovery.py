@@ -85,9 +85,9 @@ class TestNodeDiscovery:
         d_a.stop()
         d_b.stop()
 
-        # node_a may or may not have discovered node_b depending on timing
-        # Just verify no crashes
-        assert True
+        # Verify no exceptions during discovery
+        assert d_a._running is False
+        assert d_b._running is False
 
 
 class TestHeartbeatMonitor:
