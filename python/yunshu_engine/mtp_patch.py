@@ -130,8 +130,9 @@ def _patch_text_model(q35: Any) -> None:
             self.mtp = q35.MTPModule(args)
 
     def __call__(self, inputs, cache=None, input_embeddings=None,
-                 return_hidden: bool = False):
-        hidden = self.model(inputs, cache, input_embeddings=input_embeddings)
+                 return_hidden: bool = False, n_confirmed: int = 0):
+        hidden = self.model(inputs, cache, input_embeddings=input_embeddings,
+                            n_confirmed=n_confirmed)
         if self.args.tie_word_embeddings:
             out = self.model.embed_tokens.as_linear(hidden)
         else:
@@ -141,6 +142,8 @@ def _patch_text_model(q35: Any) -> None:
         return out
 
     def mtp_forward(self, hidden_states, next_token_ids, mtp_cache):
+        if hidden_states.shape[1] > 1:
+            hidden_states = hidden_states[:, -1:, :]
         mtp_out = self.mtp(
             hidden_states, next_token_ids, self.model.embed_tokens, mtp_cache,
         )
@@ -197,10 +200,10 @@ def _patch_outer_model(q35: Any) -> None:
     original_call = cls.__call__
 
     def __call__(self, inputs, cache=None, input_embeddings=None,
-                 return_hidden: bool = False):
+                 return_hidden: bool = False, n_confirmed: int = 0):
         return self.language_model(
             inputs, cache=cache, input_embeddings=input_embeddings,
-            return_hidden=return_hidden,
+            return_hidden=return_hidden, n_confirmed=n_confirmed,
         )
 
     def mtp_forward(self, hidden_states, next_token_ids, mtp_cache):
