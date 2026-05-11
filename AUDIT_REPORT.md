@@ -14,12 +14,12 @@
 | HIGH | 12 | 12 | 0 | 0 |
 | MEDIUM | 20 | 17 | 3 | 0 |
 | LOW | 18 | 15 | 0 | 3 |
-| 架構問題 | 5 | 2 | 0 | 3 |
-| **合計** | **65** | **56** | **3** | **6** |
+| 架構問題 | 5 | 5 | 0 | 0 |
+| **合計** | **65** | **59** | **3** | **3** |
 
 > 所有 CRITICAL + HIGH + MEDIUM 問題已於 Wave 1–6 修復完成。
 > 1977 個單元測試全數通過，0 失敗。
-> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8`
+> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71`
 
 ---
 
@@ -421,9 +421,9 @@ engine = manager.get_engine(model_id)  # ← 缺少 await
 
 ---
 
-## 五、架構問題 — 待處理
+## 五、架構問題 — 全部處理完成
 
-### 5.1 雙引擎並行 — 最大的技術債 🔲
+### 5.1 雙引擎並行 — 最大的技術債 ✅ Wave 9 已標記 deprecated
 
 ```
 Engine (engine.py, 1060行)
@@ -446,7 +446,7 @@ BatchedEngine (batched_engine.py, 1033行)
 
 **建議**：棄用 Engine，BatchedEngine 為唯一入口。Engine 保留但標記 deprecated。
 
-### 5.2 Metal 雙源碼 🔲
+### 5.2 Metal 雙源碼 ✅ Wave 9 已標記 .metal 為 reference-only
 
 ```
 metal/*.metal                    ← Makefile 編譯成 .metallib
@@ -460,7 +460,7 @@ python/yunshu_engine/metal_kernels.py  ← Python 字串 inline Metal source
 
 **建議**：擇一。要么全部用 `.metal` + precompile，要么全部用 Python inline + JIT。
 
-### 5.3 Gateway → Engine 私有屬性耦合 🔲
+### 5.3 Gateway → Engine 私有屬性耦合 ✅ Wave 9 已修復
 
 17+ 處直接存取 `_entries`、`_model_manager`、`_engine` 等私有屬性：
 - `models.py:24` → `manager._entries.values()`
