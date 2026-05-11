@@ -644,12 +644,26 @@ async def _handle_vlm_chat(
         temperature=req.temperature,
     )
 
+    content = result.get("text", "")
+    tok = getattr(vlm_engine, '_tokenizer', None)
+    prompt_tok = 0
+    completion_tok = 0
+    if tok:
+        try:
+            prompt_text = vlm_engine._format_prompt(messages)
+            prompt_tok = len(tok.encode(prompt_text))
+        except Exception:
+            pass
+        completion_tok = len(tok.encode(content))
+    else:
+        completion_tok = max(1, len(content) // 4)
+
     return JSONResponse(format_openai_non_stream(
         completion_id=completion_id,
         model=req.model,
-        content=result.get("text", ""),
-        prompt_tokens=0,
-        completion_tokens=0,
+        content=content,
+        prompt_tokens=prompt_tok,
+        completion_tokens=completion_tok,
         finish_reason=result.get("finish_reason", "stop"),
     ))
 

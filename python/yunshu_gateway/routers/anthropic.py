@@ -163,7 +163,7 @@ def _extract_cache_control_hints(system: str | list[dict] | None) -> list[dict]:
 
 # Regex to detect tool-call JSON inside model output
 _TOOL_CALL_JSON_RE = re.compile(
-    r'\{[\s\n]*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})\s*\}',
+    r'\{[\s\n]*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*',
 )
 _TOOL_CALL_XML_RE = re.compile(
     r'<tool_call\s*/?\s*>\s*(.*?)\s*</tool_call\s*/?\s*>',
@@ -187,12 +187,28 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
         except json.JSONDecodeError:
             pass
 
-    # Try bare JSON
+    # Try bare JSON — find the opening brace after name and parse from there
     calls: list[dict] = []
     for m in _TOOL_CALL_JSON_RE.finditer(text):
         name = m.group(1)
-        args_str = m.group(2)
-        calls.append({"name": name, "arguments": args_str})
+        rest = text[m.end():]
+        brace_depth = 0
+        end = -1
+        for i, ch in enumerate(rest):
+            if ch == '{':
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+                if brace_depth == 0:
+                    end = i
+                    break
+        if end >= 0:
+            args_str = rest[:end + 1]
+            try:
+                json.loads(args_str)
+                calls.append({"name": name, "arguments": args_str})
+            except json.JSONDecodeError:
+                pass
     return calls or None
 
 
@@ -306,18 +322,32 @@ async def _non_stream_batched(engine, messages, req, stop):
 
     content.append({"type": "text", "text": visible_text})
 
-    return JSONResponse({
+    stop_reason = result.finish_reason or "end_turn"
+    if stop_reason == "stop":
+        stop_reason = "end_turn"
+    matched_stop = None
+    if stop and visible_text:
+        for seq in stop:
+            if visible_text.rstrip().endswith(seq.rstrip()):
+                stop_reason = "stop_sequence"
+                matched_stop = seq
+                break
+
+    resp = {
         "id": message_id,
         "type": "message",
         "role": "assistant",
         "content": content,
         "model": req.model,
-        "stop_reason": "end_turn" if result.finish_reason == "stop" else (result.finish_reason or "end_turn"),
+        "stop_reason": stop_reason,
         "usage": {
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
         },
-    })
+    }
+    if matched_stop:
+        resp["stop_sequence"] = matched_stop
+    return JSONResponse(resp)
 
 
 async def _non_stream_legacy(engine, messages, req, stop):

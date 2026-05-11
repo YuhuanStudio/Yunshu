@@ -468,7 +468,11 @@ class BatchedEngine:
         if not use_engine_loop:
             async for output in self._stream_generate_fast(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, repetition_penalty=repetition_penalty,
+                top_p=top_p, top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop, seed=seed,
             ):
                 yield output
@@ -518,7 +522,11 @@ class BatchedEngine:
         temperature: float = 0.7,
         top_p: float = 1.0,
         top_k: int = 0,
+        min_p: float = 0.0,
         repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
         seed: int | None = None,
     ) -> AsyncIterator[GenerationOutput]:
@@ -552,7 +560,29 @@ class BatchedEngine:
                 else:
                     stop_suffixes.append(s)
 
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+
+        # Build logits processors for penalty/bias params
+        logits_processors = []
+        if repetition_penalty != 1.0:
+            def _repetition_penalty(token, logits, rp=repetition_penalty):
+                tid = token.item()
+                logits[..., tid] = logits[..., tid] / rp if logits[..., tid] > 0 else logits[..., tid] * rp
+                return logits
+            logits_processors.append(_repetition_penalty)
+        if frequency_penalty != 0.0 or presence_penalty != 0.0:
+            def _freq_pres_penalty(token, logits, fp=frequency_penalty, pp=presence_penalty):
+                tid = token.item()
+                logits[..., tid] -= fp
+                logits[..., tid] -= pp
+                return logits
+            logits_processors.append(_freq_pres_penalty)
+        if logit_bias:
+            def _logit_bias_proc(token, logits, biases=logit_bias):
+                for tid, bias in biases.items():
+                    logits[..., tid] += bias
+                return logits
+            logits_processors.append(_logit_bias_proc)
 
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.
@@ -577,9 +607,10 @@ class BatchedEngine:
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
+            _lprocs = logits_processors if logits_processors else None
             for token, _logits in generate_step(
                 ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                prompt_cache=cache,
+                prompt_cache=cache, logits_processors=_lprocs,
             ):
                 detokenizer.add_token(token)
                 n_tok += 1

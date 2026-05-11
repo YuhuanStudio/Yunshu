@@ -449,17 +449,43 @@ class VLMEngine:
             detokenizer = self._tokenizer.detokenizer
             detokenizer.reset()
 
-        stream = mx.new_thread_local_stream(mx.default_device())
-        with mx.stream(stream):
-            # Prefill
-            output = lm(input_ids[None], cache=cache)
+        # Prefill
+        output = lm(input_ids[None], cache=cache)
+        logits = output.logits[:, -1, :]
+        current = sampler(logits)
+        mx.eval(current)
+        token_count = 1
+
+        token_id = current.item()
+        finish_reason = "stop" if token_id in eos_ids else None
+
+        if has_detokenizer:
+            detokenizer.add_token(token_id)
+            token_text = detokenizer.last_segment
+        else:
+            token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
+
+        queue.put_nowait(RequestOutput(
+            request_id=req_id,
+            token_text=token_text,
+            token_id=token_id,
+            finish_reason=finish_reason,
+            completion_tokens=token_count,
+        ))
+        if finish_reason:
+            return
+
+        for _ in range(max_tokens - 1):
+            output = lm(current[None], cache=cache)
             logits = output.logits[:, -1, :]
             current = sampler(logits)
             mx.eval(current)
-            token_count = 1
+            token_count += 1
 
             token_id = current.item()
-            finish_reason = "stop" if token_id in eos_ids else None
+            finish_reason = None
+            if token_id in eos_ids:
+                finish_reason = "stop"
 
             if has_detokenizer:
                 detokenizer.add_token(token_id)
@@ -474,37 +500,9 @@ class VLMEngine:
                 finish_reason=finish_reason,
                 completion_tokens=token_count,
             ))
+
             if finish_reason:
                 return
-
-            for _ in range(max_tokens - 1):
-                output = lm(current[None], cache=cache)
-                logits = output.logits[:, -1, :]
-                current = sampler(logits)
-                mx.eval(current)
-                token_count += 1
-
-                token_id = current.item()
-                finish_reason = None
-                if token_id in eos_ids:
-                    finish_reason = "stop"
-
-                if has_detokenizer:
-                    detokenizer.add_token(token_id)
-                    token_text = detokenizer.last_segment
-                else:
-                    token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
-
-                queue.put_nowait(RequestOutput(
-                    request_id=req_id,
-                    token_text=token_text,
-                    token_id=token_id,
-                    finish_reason=finish_reason,
-                    completion_tokens=token_count,
-                ))
-
-                if finish_reason:
-                    return
 
         queue.put_nowait(RequestOutput(
             request_id=req_id,

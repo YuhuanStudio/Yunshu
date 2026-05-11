@@ -535,7 +535,8 @@ async def transcribe(audio_path: str, language: str | None = None) -> dict[str, 
             }
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sync_transcribe)
+        from .mlx_executor import get_mlx_executor
+        return await loop.run_in_executor(get_mlx_executor(), _sync_transcribe)
     except ImportError:
         logger.debug("mlx-audio not available for transcription fallback")
     except Exception as exc:
@@ -611,7 +612,8 @@ async def synthesize(
             return _audio_to_wav_bytes(audio, int(sr))
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sync_synth)
+        from .mlx_executor import get_mlx_executor
+        return await loop.run_in_executor(get_mlx_executor(), _sync_synth)
     except ImportError:
         logger.debug("mlx-audio not available for synthesis fallback")
     except Exception as exc:
