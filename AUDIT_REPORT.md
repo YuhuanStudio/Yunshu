@@ -12,10 +12,10 @@
 |---------|------|----------|-------------|----------|
 | CRITICAL | 10 | 10 | 0 | 0 |
 | HIGH | 12 | 12 | 0 | 0 |
-| MEDIUM | 20 | 16 | 3 | 1 (M10) |
-| LOW | 18 | 0 | 0 | 18 |
+| MEDIUM | 20 | 17 | 3 | 0 |
+| LOW | 18 | 10 | 0 | 8 |
 | 架構問題 | 5 | 0 | 0 | 5 |
-| **合計** | **65** | **38** | **3** | **24** |
+| **合計** | **65** | **49** | **3** | **13** |
 
 > 所有 CRITICAL + HIGH + MEDIUM 問題已於 Wave 1–6 修復完成。
 > 1977 個單元測試全數通過，0 失敗。
@@ -339,10 +339,10 @@ engine = manager.get_engine(model_id)  # ← 缺少 await
 - **修復**: 加上 `_yunshu_shifted` flag 防止 double-shift
 - **影響**: 第二次 load 會 double-shift
 
-### M10. EngineCore TOCTOU on output_collectors 🔲 待修
+### M10. EngineCore TOCTOU on output_collectors ✅ Wave 7 已修復
 
 - **檔案**: `engine_core.py:470`
-- **問題**: `dict(self._output_collectors)` 快照後，scheduler step 可能清理 collector
+- **修復**: 改為迭代 live dict（`self._output_collectors.get(rid)`），abort 插入的新 collector 可被及時看見
 
 ### M11. Embedding 同步阻塞 event loop ✅ Wave 3 已修復
 
@@ -396,26 +396,26 @@ engine = manager.get_engine(model_id)  # ← 缺少 await
 
 ---
 
-## 四、低優先級問題（LOW）— 待修復
+## 四、低優先級問題（LOW）
 
 | # | 位置 | 問題 | 狀態 |
 |---|---|---|------|
 | L1 | `ane_embedding.py` | 大量 stub/placeholder（hash-based tokenization, random embeddings） | 🔲 |
 | L2 | `telemetry.py` | 整個模組是 stub，flush 直接清空 | 🔲 |
 | L3 | `deltanet_inversion.py` | 標記為「不適用 BF16」，monkey-patch 未完成 | 🔲 |
-| L4 | `metal_kernels.py:659` | `shell=True` subprocess | 🔲 |
-| L5 | `json_schema.py:664` | 硬編碼 `range(151936)` vocab fallback | 🔲 |
+| L4 | `metal_kernels.py:659` | `shell=True` subprocess | ✅ Wave 7 |
+| L5 | `json_schema.py:664` | 硬編碼 `range(151936)` vocab fallback | ✅ Wave 7 |
 | L6 | `model_registry.py:112` | module-level singleton 非 thread-safe | 🔲 |
-| L7 | `engine.py:423` | `_make_sampler` 傳了 mlx-lm 不接受的 penalty 參數 | 🔲 |
+| L7 | `engine.py:423` | `_make_sampler` 傳了 mlx-lm 不接受的 penalty 參數 | ✅ Wave 7 |
 | L8 | `kv_prefix_cache.py:50` | numpy detour 可能丟失 bf16 精度 | 🔲 |
-| L9 | 多處 | `uuid.uuid4().hex[:12]` 只有 48-bit entropy | 🔲 |
+| L9 | 多處 | `uuid.uuid4().hex[:12]` 只有 48-bit entropy | ✅ Wave 7 |
 | L10 | 多處 | `__import__("time")` 而非 module-level import | 🔲 |
-| L11 | `streaming.py:700` | `TokenRateTracker` 定義但從未使用 | 🔲 |
-| L12 | `streaming.py:733` | `StopSequenceDetector` 定義但從未使用 | 🔲 |
-| L13 | `streaming.py:164` | `SSEKeepaliveWrapper` 被 `with_sse_keepalive` 取代 | 🔲 |
-| L14 | `health.py` | 與 `main.py` 重複定義健康端點，health.py 未被 include | 🔲 |
+| L11 | `streaming.py:700` | `TokenRateTracker` 定義但從未使用 | ✅ Wave 7 |
+| L12 | `streaming.py:733` | `StopSequenceDetector` 定義但從未使用 | ✅ Wave 7 |
+| L13 | `streaming.py:164` | `SSEKeepaliveWrapper` 被 `with_sse_keepalive` 取代 | ✅ Wave 7 |
+| L14 | `health.py` | 與 `main.py` 重複定義健康端點，health.py 未被 include | ✅ Wave 7 |
 | L15 | `mcp.py:75` | `MCPSession` 類別定義但從未實例化 | 🔲 |
-| L16 | Anthropic | 缺少 `cache_creation_input_tokens` / `cache_read_input_tokens` | 🔲 |
+| L16 | Anthropic | 缺少 `cache_creation_input_tokens` / `cache_read_input_tokens` | ✅ Wave 7 |
 | L17 | `bench.py:23-24` | 全域 mutable state 無鎖 | 🔲 |
 | L18 | Prometheus | label 值未跳脫 | 🔲 |
 
