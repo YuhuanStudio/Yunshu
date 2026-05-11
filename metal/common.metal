@@ -24,7 +24,7 @@ using namespace metal;
 #endif
 
 #ifndef PA_BLOCK_KV
-#define PA_BLOCK_KV 128
+#define PA_BLOCK_KV 256
 #endif
 
 #ifndef SDPA_TILE_Q

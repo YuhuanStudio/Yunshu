@@ -683,9 +683,13 @@ async def mcp_sse_endpoint(request: Request):
         # Send initial connection event
         yield f"event: endpoint\ndata: /v1/mcp\n\n"
         while True:
-            if await request.is_disconnected():
+            # Poll disconnect every 5s, send keepalive ping every 15s
+            try:
+                if await request.is_disconnected():
+                    break
+            except Exception:
                 break
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
             yield f"event: ping\ndata: {{}}\n\n"
 
     return StreamingResponse(

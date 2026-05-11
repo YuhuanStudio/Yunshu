@@ -573,10 +573,15 @@ class SpeculativeDecoder:
 
         prompt_ids = input_ids.flatten().tolist()
 
+        target_sampler = make_sampler(temp=temperature) if temperature > 0 else None
+
         # Prefill both models
         t_out = self.target(input_ids, cache=target_cache)
         t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
-        first_token = int(t_logits.argmax(axis=-1).item())
+        if target_sampler:
+            first_token = int(target_sampler(t_logits).item())
+        else:
+            first_token = int(t_logits.argmax(axis=-1).item())
 
         self.draft(input_ids, cache=draft_cache)
 
@@ -610,7 +615,7 @@ class SpeculativeDecoder:
             accepted = 0
             all_accepted = True
             for j in range(K):
-                target_choice = int(t_logits.argmax(axis=-1).item())
+                target_choice = int(target_sampler(t_logits).item()) if target_sampler else int(t_logits.argmax(axis=-1).item())
 
                 if target_choice == draft_tokens[j]:
                     accepted += 1
@@ -629,7 +634,7 @@ class SpeculativeDecoder:
 
             if all_accepted:
                 # Bonus token from target
-                bonus = int(t_logits.argmax(axis=-1).item())
+                bonus = int(target_sampler(t_logits).item()) if target_sampler else int(t_logits.argmax(axis=-1).item())
                 generated_tokens.append(bonus)
                 self._stats["total_bonus_tokens"] += 1
 
