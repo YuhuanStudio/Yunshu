@@ -6,12 +6,13 @@ Authenticates requests via:
 3. YUNSHU_AUTH_TOKEN (static env token) — fallback
 
 Security:
-- Auth is ON by default in production (YUNSHU_AUTH_DISABLED=true to disable)
-- Admin endpoints (/admin/*) always require auth
+- Auth is enabled when YUNSHU_AUTH_TOKEN is set or RBACManager is initialized
+- Set YUNSHU_AUTH_DISABLED=true to disable auth (dev only)
 - Health/docs endpoints remain public
 """
 from __future__ import annotations
 
+import hmac
 import os
 import logging
 
@@ -43,9 +44,8 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
     def _is_auth_enabled(self) -> bool:
         if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
             return False
-        auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
-        # Auth is enabled if token is set, or by default in production
-        return True
+        # Auth enabled when token is set
+        return os.environ.get("YUNSHU_AUTH_TOKEN") is not None
 
     async def dispatch(self, request: Request, call_next):
         # Public paths never need auth
@@ -86,8 +86,8 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
                 request.state.slo_class = api_key.slo_class
                 return await call_next(request)
 
-        # ── Static token auth ──
-        if auth_token and token == auth_token:
+        # ── Static token auth (constant-time comparison) ──
+        if auth_token and hmac.compare_digest(token, auth_token):
             return await call_next(request)
 
         # ── Legacy TenantManager auth ──

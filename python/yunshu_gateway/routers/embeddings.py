@@ -40,7 +40,7 @@ async def create_embedding(req: EmbeddingRequest):
         )
 
     # Resolve embedding engine
-    engine = _resolve_embedding_engine(req.model)
+    engine = await _resolve_embedding_engine(req.model)
     if engine is None:
         raise HTTPException(
             status_code=404,
@@ -87,7 +87,7 @@ async def create_embedding(req: EmbeddingRequest):
     })
 
 
-def _resolve_embedding_engine(model_id: str):
+async def _resolve_embedding_engine(model_id: str):
     """Find an embedding engine for the given model."""
     from yunshu_engine.batched_engine import BatchedEngine
 
@@ -101,7 +101,7 @@ def _resolve_embedding_engine(model_id: str):
 
         # Try loading
         try:
-            engine = manager.get_engine(model_id)
+            engine = await manager.get_engine(model_id)
             return engine
         except (KeyError, Exception):
             pass

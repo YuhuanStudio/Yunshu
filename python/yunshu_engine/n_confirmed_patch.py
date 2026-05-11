@@ -306,7 +306,7 @@ def restore_rollback(cache: list) -> bool:
             # But advance modified lengths/left_padding, not the state arrays
             # Since we restored the state arrays directly, we need to fix lengths
             if hasattr(c, "lengths") and c.lengths is not None:
-                c.lengths = c.lengths + 1  # Undo 1 of the 2 advance
+                c.lengths = c.lengths - 1  # Undo 1 of the 2 advance
             continue
         if hasattr(c, "is_trimmable") and c.is_trimmable():
             c.trim(1)

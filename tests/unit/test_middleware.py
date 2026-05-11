@@ -48,14 +48,14 @@ class TestRateLimitMiddleware:
 class TestAuthMiddleware:
     """Test tenant authentication."""
 
-    def test_no_auth_by_default(self):
-        """Auth is on by default — requests require a token."""
+    def test_no_auth_without_token(self):
+        """Auth is off when YUNSHU_AUTH_TOKEN is not set — requests pass through."""
         import os
         os.environ.pop("YUNSHU_AUTH_TOKEN", None)
         app = create_app()
         client = TestClient(app)
         resp = client.get("/v1/models")
-        assert resp.status_code == 401
+        assert resp.status_code == 200
 
     def test_auth_disabled_via_env(self):
         """YUNSHU_AUTH_DISABLED=true allows all requests."""

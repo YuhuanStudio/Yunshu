@@ -299,9 +299,6 @@ class Engine:
         logger.info(f"Engine loaded model: {model_name} (engine_core={self._use_engine_core})")
         self._init_memory_monitor()
 
-        # Initialize memory monitor with model architecture info (oMLX pattern)
-        self._init_memory_monitor()
-
     def _setup_engine_backend(self, model_name: str) -> None:
         """Set up EngineCore or legacy BatchGenerator after model load."""
         from mlx_lm.sample_utils import make_sampler

@@ -107,7 +107,6 @@ class BatchedEngine:
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
-        self._init_spec_decode()
         # Warmup generation + cache clear drops RSS from ~3.8GB to ~200MB
         # by forcing OS to reclaim clean mmap pages
         await loop.run_in_executor(executor, _warmup)

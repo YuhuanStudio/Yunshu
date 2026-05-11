@@ -148,13 +148,14 @@ class ServerMetrics:
                     m["prefill_duration"] += prefill_duration
                     m["generation_duration"] += generation_duration
 
-            # Periodic save
-            if self._stats_path and time.time() - self._last_save_time >= _SAVE_INTERVAL:
-                self._lock.release()
-                try:
-                    self.save_alltime()
-                finally:
-                    self._lock.acquire()
+            # Periodic save (flag-based to avoid lock reentrance)
+            needs_save = (
+                self._stats_path
+                and time.time() - self._last_save_time >= _SAVE_INTERVAL
+            )
+
+        if needs_save:
+            self.save_alltime()
 
     def _build_snapshot(
         self,

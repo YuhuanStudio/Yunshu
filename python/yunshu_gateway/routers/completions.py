@@ -154,7 +154,8 @@ async def create_completion(req: CompletionRequest, request: Request):
 async def _stream_completion(
     engine, prompt, req, completion_id, request
 ) -> AsyncIterator[bytes]:
-    """SSE streaming for text completions."""
+    """SSE streaming for text completions with keepalive and disconnect detection."""
+    from ..streaming import with_sse_keepalive
     from yunshu_engine.batched_engine import BatchedEngine
     is_batched = isinstance(engine, BatchedEngine)
     include_usage = (
@@ -163,73 +164,80 @@ async def _stream_completion(
     prompt_tok = 0
     completion_tok = 0
 
-    if req.echo:
-        yield format_openai_chunk(
-            completion_id=completion_id,
-            model=req.model,
-            delta_content=prompt,
-        ).encode("utf-8")
-
-    if is_batched:
-        async for output in engine.stream_generate(
-            prompt=prompt,
-            max_tokens=req.max_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            top_k=req.top_k,
-            min_p=req.min_p,
-            repetition_penalty=req.repetition_penalty,
-            frequency_penalty=req.frequency_penalty,
-            presence_penalty=req.presence_penalty,
-            logit_bias=req.logit_bias,
-            stop=req.stop,
-            seed=req.seed,
-        ):
-            if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
-                prompt_tok = output.prompt_tokens
-            if output.new_text:
-                completion_tok += 1
+    async def _token_source():
+        if req.echo:
             yield format_openai_chunk(
                 completion_id=completion_id,
                 model=req.model,
-                delta_content=output.new_text,
-                finish_reason=output.finish_reason,
-            ).encode("utf-8")
-    else:
-        async for output in engine.generate_stream(
-            prompt=prompt,
-            max_tokens=req.max_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            top_k=req.top_k,
-            min_p=req.min_p,
-            repetition_penalty=req.repetition_penalty,
-            frequency_penalty=req.frequency_penalty,
-            presence_penalty=req.presence_penalty,
-            logit_bias=req.logit_bias,
-            stop=req.stop,
-            seed=req.seed,
-        ):
-            if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
-                prompt_tok = output.prompt_token_count
-            if hasattr(output, 'token_text') and output.token_text:
-                completion_tok += 1
-            yield format_openai_chunk(
+                delta_content=prompt,
+            )
+
+        if is_batched:
+            async for output in engine.stream_generate(
+                prompt=prompt,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                top_k=req.top_k,
+                min_p=req.min_p,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                stop=req.stop,
+                seed=req.seed,
+            ):
+                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                    prompt_tok = output.prompt_tokens
+                if output.new_text:
+                    completion_tok += 1
+                yield format_openai_chunk(
+                    completion_id=completion_id,
+                    model=req.model,
+                    delta_content=output.new_text,
+                    finish_reason=output.finish_reason,
+                )
+        else:
+            async for output in engine.generate_stream(
+                prompt=prompt,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                top_k=req.top_k,
+                min_p=req.min_p,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                stop=req.stop,
+                seed=req.seed,
+            ):
+                if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
+                    prompt_tok = output.prompt_token_count
+                if hasattr(output, 'token_text') and output.token_text:
+                    completion_tok += 1
+                yield format_openai_chunk(
+                    completion_id=completion_id,
+                    model=req.model,
+                    delta_content=output.token_text,
+                    finish_reason=output.finish_reason,
+                )
+
+        if include_usage:
+            yield format_openai_usage_chunk(
                 completion_id=completion_id,
                 model=req.model,
-                delta_content=output.token_text,
-                finish_reason=output.finish_reason,
-            ).encode("utf-8")
+                prompt_tokens=prompt_tok,
+                completion_tokens=completion_tok,
+            )
 
-    if include_usage:
-        yield format_openai_usage_chunk(
-            completion_id=completion_id,
-            model=req.model,
-            prompt_tokens=prompt_tok,
-            completion_tokens=completion_tok,
-        ).encode("utf-8")
+        yield format_openai_done()
 
-    yield format_openai_done().encode("utf-8")
+    async for event in with_sse_keepalive(
+        _token_source(),
+        http_request=request,
+    ):
+        yield event.encode("utf-8")
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:

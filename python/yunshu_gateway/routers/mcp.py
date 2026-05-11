@@ -630,9 +630,10 @@ async def _handle_prompts_get(params: dict | None, req_id: int | str | None) -> 
     arguments = params.get("arguments", {})
 
     try:
-        template = prompt_def["template"].format(**arguments)
-    except KeyError as e:
-        return _rpc_error(JSONRPCError.INVALID_PARAMS, f"Missing argument: {e}", req_id)
+        import re
+        template = re.sub(r'\{(\w+)\}', lambda m: str(arguments.get(m.group(1), m.group(0))), prompt_def["template"])
+    except (KeyError, ValueError):
+        return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing template argument", req_id)
 
     return _rpc_response({
         "description": f"Prompt template: {name}",

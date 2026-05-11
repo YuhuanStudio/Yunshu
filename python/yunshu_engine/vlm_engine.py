@@ -81,6 +81,7 @@ class VLMEngine:
         self._processor = None
         self._config: dict = {}
         self._running = False
+        self._active_count = 0
         self._num_requests_processed = 0
         self._start_time = 0.0
         self._has_vision = False
@@ -102,7 +103,7 @@ class VLMEngine:
         return self._running
 
     def has_active_requests(self) -> bool:
-        return False
+        return self._active_count > 0
 
     @property
     def has_vision(self) -> bool:
@@ -202,6 +203,7 @@ class VLMEngine:
             raise RuntimeError("Engine not started")
 
         t0 = time.monotonic()
+        self._active_count += 1
         image_paths = await self._extract_images(messages)
 
         def _generate_sync():
@@ -236,6 +238,7 @@ class VLMEngine:
         result = await loop.run_in_executor(self._executor, _generate_sync)
 
         elapsed = time.monotonic() - t0
+        self._active_count -= 1
         self._num_requests_processed += 1
         self._cleanup_temp_files()
 
@@ -322,6 +325,7 @@ class VLMEngine:
             finally:
                 queue.put_nowait(None)
 
+        self._active_count += 1
         loop = asyncio.get_running_loop()
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
@@ -332,6 +336,7 @@ class VLMEngine:
                     break
                 yield output
         finally:
+            self._active_count -= 1
             if not stream_task.done():
                 stream_task.cancel()
 

@@ -211,20 +211,20 @@ class TestEmbeddingGeneration:
 class TestEmbeddingEngineResolution:
     """Test the _resolve_embedding_engine function."""
 
-    def test_no_engine_returns_none(self):
+    async def test_no_engine_returns_none(self):
         """Should return None when no engine is available."""
         with patch("yunshu_gateway.routers.embeddings.get_model_manager", return_value=None):
             with patch("yunshu_gateway.routers.embeddings.get_engine", return_value=None):
-                result = _resolve_embedding_engine("nonexistent")
+                result = await _resolve_embedding_engine("nonexistent")
                 assert result is None
 
-    def test_single_engine_loaded(self):
+    async def test_single_engine_loaded(self):
         """Should return loaded single engine."""
         mock_engine = MagicMock()
         mock_engine.is_loaded = True
         with patch("yunshu_gateway.routers.embeddings.get_model_manager", return_value=None):
             with patch("yunshu_gateway.routers.embeddings.get_engine", return_value=mock_engine):
-                result = _resolve_embedding_engine("any-model")
+                result = await _resolve_embedding_engine("any-model")
                 assert result == mock_engine
 
 
