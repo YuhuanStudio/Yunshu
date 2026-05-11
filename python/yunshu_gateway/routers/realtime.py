@@ -641,8 +641,10 @@ class RealtimeSession:
 
             # Convert raw PCM to WAV for ASR engine
             import wave
-            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            with wave.open(tmp.name, 'wb') as wf:
+            fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            with os.fdopen(fd, "wb") as _f:
+                pass  # Just create the file; wave.open will write to it
+            with wave.open(tmp_path, 'wb') as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)  # 16-bit
                 wf.setframerate(24000)  # OpenAI realtime default
@@ -652,7 +654,7 @@ class RealtimeSession:
             if manager is not None:
                 for entry in manager.list_entries():
                     if entry.is_loaded and hasattr(entry.engine, 'transcribe'):
-                        transcript = await entry.engine.transcribe(tmp.name)
+                        transcript = await entry.engine.transcribe(tmp_path)
                         text = transcript.get("text", "") if isinstance(transcript, dict) else str(transcript)
                         if text:
                             item = ConversationItem(
@@ -671,7 +673,7 @@ class RealtimeSession:
             logger.error(f"ASR error in realtime session: {e}")
         finally:
             try:
-                os.unlink(tmp.name)
+                os.unlink(tmp_path)
             except OSError:
                 pass
 
@@ -734,6 +736,19 @@ _EVENT_HANDLERS = {
 @router.websocket("/realtime")
 async def realtime_endpoint(ws: WebSocket):
     """OpenAI-compatible Realtime API WebSocket endpoint."""
+    import os
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if auth_token:
+        # WebSocket doesn't go through HTTP middleware, so check auth manually.
+        # Accept the token via query param or first message.
+        token = ws.query_params.get("token")
+        if not token:
+            await ws.close(code=4001, reason="Authentication required")
+            return
+        import hmac
+        if not hmac.compare_digest(token, auth_token):
+            await ws.close(code=4001, reason="Invalid token")
+            return
     await ws.accept()
     session = RealtimeSession(ws)
     await session.run()

@@ -34,6 +34,7 @@ kernel void paged_attention_decode(
     constant uint& head_dim [[buffer(7)]],
     constant uint& kv_block_size [[buffer(8)]],
     constant float& scale [[buffer(9)]],
+    constant uint& max_blocks [[buffer(10)]],
     uint3 tid [[thread_position_in_threadgroup]],
     uint3 gid [[threadgroup_position_in_grid]],
     uint simd_lane_id [[thread_index_in_simdgroup]],
@@ -46,8 +47,8 @@ kernel void paged_attention_decode(
     if (seq_len <= 0) return;
 
     int num_kv_blocks = (seq_len + kv_block_size - 1) / kv_block_size;
-    int block_table_stride = (seq_len + kv_block_size - 1) / kv_block_size;
-    device const int* block_table = block_tables + query_idx * block_table_stride;
+    // Use max_blocks (allocation width) as stride, not runtime num_kv_blocks
+    device const int* block_table = block_tables + query_idx * max_blocks;
 
     // Threadgroup shared memory for reduction
     threadgroup float shared_logits[PA_BLOCK_KV];
@@ -77,14 +78,16 @@ kernel void paged_attention_decode(
         float local_max = -INFINITY;
         for (int kv_idx = simd_lane_id; kv_idx < block_end; kv_idx += 32) {
             device const half* k = key_cache +
-                (physical_block * kv_block_size + kv_idx) * num_heads * head_dim +
-                head_idx * head_dim;
+                (ulong)(physical_block) * kv_block_size * num_heads * head_dim +
+                (ulong)(kv_idx) * num_heads * head_dim +
+                (ulong)(head_idx) * head_dim;
 
-            // Dot product: q · k
+            // Dot product: q · k (SIMD-strided for head_dim)
             float score = 0.0f;
-            for (uint d = 0; d < head_dim; d++) {
+            for (uint d = simd_lane_id; d < head_dim; d += 32) {
                 score += (float)q[d] * (float)k[d];
             }
+            score = simd_reduce_sum(score, shared_logits);
             score *= scale;
 
             shared_logits[kv_idx] = score;
@@ -118,15 +121,16 @@ kernel void paged_attention_decode(
         float block_sum = simd_reduce_sum(block_exp_sum, shared_logits);
         running_sum += block_sum;
 
-        // Weighted accumulation: weight * v (unnormalized — divide by sum at end)
+        // Weighted accumulation: weight * v (SIMD-strided)
         for (int kv_idx = simd_lane_id; kv_idx < block_end; kv_idx += 32) {
             float weight = shared_logits[kv_idx];
 
             device const half* v = value_cache +
-                (physical_block * kv_block_size + kv_idx) * num_heads * head_dim +
-                head_idx * head_dim;
+                (ulong)(physical_block) * kv_block_size * num_heads * head_dim +
+                (ulong)(kv_idx) * num_heads * head_dim +
+                (ulong)(head_idx) * head_dim;
 
-            for (uint d = 0; d < head_dim; d++) {
+            for (uint d = simd_lane_id; d < head_dim; d += 32) {
                 acc[d] += weight * (float)v[d];
             }
         }

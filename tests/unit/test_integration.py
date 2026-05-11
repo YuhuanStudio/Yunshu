@@ -244,8 +244,8 @@ class TestRequestOutputUsage:
     def test_usage_format(self):
         output = RequestOutput(
             request_id="test",
-            token_text="hello",
-            token_id=1,
+            new_text="hello",
+            new_token_ids=[1],
             prompt_tokens=10,
             completion_tokens=5,
         )

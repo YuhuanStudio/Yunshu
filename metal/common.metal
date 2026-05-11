@@ -106,7 +106,7 @@ inline float simd_reduce_max(float val, threadgroup float* shared) {
 }
 
 /// Block index for paged KV: (block_table[block_idx] * KV_BLOCK_SIZE + offset_in_block)
-inline uint kv_block_offset(
+inline ulong kv_block_offset(
     device const int* block_table,
     uint seq_pos,
     uint head_idx,
@@ -117,8 +117,9 @@ inline uint kv_block_offset(
     uint block_idx = seq_pos / kv_block_size;
     uint offset_in_block = seq_pos % kv_block_size;
     uint physical_block = block_table[block_idx];
-    return (physical_block * kv_block_size + offset_in_block) * num_heads * head_dim
-           + head_idx * head_dim;
+    return (ulong)(physical_block) * kv_block_size * num_heads * head_dim
+           + (ulong)(offset_in_block) * num_heads * head_dim
+           + (ulong)(head_idx) * head_dim;
 }
 
 #endif // YUNSHU_COMMON_METAL

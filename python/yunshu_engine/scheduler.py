@@ -933,12 +933,13 @@ class Scheduler:
         if json_schema is not None:
             from .json_schema import make_constrained_sampler
             schema = json_schema if isinstance(json_schema, dict) else None
-            return make_constrained_sampler(
-                base_sampler=base_sampler,
+            constrained_sampler = make_constrained_sampler(
+                base_sampler=sampler if logits_processors else base_sampler,
                 schema=schema,
                 tokenizer=self.tokenizer,
                 mode="json_schema" if schema else "json_object",
             )
+            return constrained_sampler
 
         return sampler
 

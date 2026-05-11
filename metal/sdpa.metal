@@ -48,7 +48,9 @@ kernel void flash_sdpa(
     // GQA: map head_idx to kv_head_idx
     uint kv_head_idx = head_idx * num_kv_heads / num_heads;
 
-    // Threadgroup shared memory for KV tiles
+    // Threadgroup shared memory for KV tiles.
+    // Must stay under 32KB Apple GPU threadgroup limit.
+    // With SDPA_TILE_KV=32, MAX_HEAD_DIM=128: 2*32*128*2 = 16KB + scores 64*32*4 = 8KB = 24KB
     threadgroup half shared_k[SDPA_TILE_KV * MAX_HEAD_DIM];
     threadgroup half shared_v[SDPA_TILE_KV * MAX_HEAD_DIM];
     threadgroup float shared_scores[SDPA_TILE_Q * SDPA_TILE_KV];
@@ -85,13 +87,14 @@ kernel void flash_sdpa(
         uint kv_start = kv_tile * tile_kv;
         uint kv_len = min(tile_kv, seq_len - kv_start);
 
-        // Load K and V tiles into shared memory
-        for (uint kv = simd_lane_id / head_dim; kv < kv_len; kv += 32 / head_dim) {
-            uint d = simd_lane_id % head_dim;
+        // Load K and V tiles into shared memory (SIMD-strided)
+        for (uint kv = simd_group_id; kv < kv_len; kv += NUM_SIMD_GROUPS) {
             uint kv_idx = kv_start + kv;
             if (kv_idx < seq_len) {
-                shared_k[kv * head_dim + d] = K[kv_idx * num_kv_heads * head_dim + kv_head_idx * head_dim + d];
-                shared_v[kv * head_dim + d] = V[kv_idx * num_kv_heads * head_dim + kv_head_idx * head_dim + d];
+                for (uint d = simd_lane_id; d < head_dim; d += 32) {
+                    shared_k[kv * head_dim + d] = K[kv_idx * num_kv_heads * head_dim + kv_head_idx * head_dim + d];
+                    shared_v[kv * head_dim + d] = V[kv_idx * num_kv_heads * head_dim + kv_head_idx * head_dim + d];
+                }
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);

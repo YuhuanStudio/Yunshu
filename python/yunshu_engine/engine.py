@@ -47,31 +47,7 @@ class RequestPhase(Enum):
     FINISHED = auto()
 
 
-@dataclass
-class RequestOutput:
-    """One token of output from the engine.
-
-    Follows oMLX's RequestOutput pattern: incremental text + cumulative counts.
-    token_text comes from the per-request detokenizer (add_token → last_segment).
-    """
-
-    request_id: str
-    token_text: str
-    token_id: int
-    finish_reason: Optional[str] = None  # "stop" | "length" | "abort" | None
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    logprob: float = 0.0
-    current_state: str = "normal"  # "normal" | "reasoning" | "tool"
-
-    @property
-    def usage(self) -> dict[str, int]:
-        """OpenAI-compatible usage stats."""
-        return {
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "total_tokens": self.prompt_tokens + self.completion_tokens,
-        }
+from .request import RequestOutput  # noqa: F401 — re-export for backward compat
 
 
 @dataclass
@@ -291,10 +267,15 @@ class Engine:
     def load(self, model_name: str) -> None:
         """Load model and create BatchGenerator or EngineCore."""
         from mlx_lm.utils import load as load_model
+        from .mlx_executor import get_mlx_executor
 
         self._model_name = model_name
         self._model_display = model_name.rsplit("/", 1)[-1] if "/" in model_name else model_name
-        self._model, self._tokenizer = load_model(model_name)
+
+        # Load on MLX executor thread to ensure Metal buffers are on the right stream
+        executor = get_mlx_executor()
+        self._model, self._tokenizer = executor.submit(load_model, model_name).result()
+
         self._setup_engine_backend(model_name)
         logger.info(f"Engine loaded model: {model_name} (engine_core={self._use_engine_core})")
         self._init_memory_monitor()
@@ -602,15 +583,7 @@ class Engine:
         if self._engine_core is not None:
             req_id = await self._engine_core.add_request(**kwargs)
             async for output in self._engine_core.stream_outputs(req_id):
-                yield RequestOutput(
-                    request_id=output.request_id,
-                    token_text=output.new_text,
-                    token_id=output.new_token_ids[-1] if output.new_token_ids else 0,
-                    finish_reason=output.finish_reason,
-                    prompt_tokens=output.prompt_tokens,
-                    completion_tokens=output.completion_tokens,
-                    current_state=output.current_state,
-                )
+                yield output  # Already a RequestOutput from request.py
             self._active.pop(req_id, None)
             return
 
@@ -816,12 +789,12 @@ class Engine:
 
             output = RequestOutput(
                 request_id=req_id,
-                token_text=token_text,
-                token_id=resp.token,
+                new_text=token_text,
+                new_token_ids=[resp.token],
                 finish_reason=finish_reason,
                 prompt_tokens=state.prompt_token_count,
                 completion_tokens=state.completion_token_count,
-                logprob=logprob,
+                logprobs=logprob,
                 current_state=current_state,
             )
 
@@ -840,8 +813,8 @@ class Engine:
                             state.generated_text += final_text
                             final_output = RequestOutput(
                                 request_id=req_id,
-                                token_text=final_text,
-                                token_id=resp.token,
+                                new_text=final_text,
+                                new_token_ids=[resp.token],
                                 finish_reason=None,
                                 prompt_tokens=state.prompt_token_count,
                                 completion_tokens=state.completion_token_count,

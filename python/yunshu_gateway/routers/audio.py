@@ -222,14 +222,18 @@ async def create_transcription(
             detail=f"Audio file too large: {len(content)} bytes (max {MAX_AUDIO_UPLOAD_BYTES})",
         )
 
-    suffix = os.path.splitext(file.filename or "audio.wav")[1]
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    # Whitelist safe audio extensions
+    _SAFE_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".webm", ".aac"}
+    raw_suffix = os.path.splitext(file.filename or "audio.wav")[1].lower()
+    suffix = raw_suffix if raw_suffix in _SAFE_EXTENSIONS else ".wav"
+
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
     try:
-        tmp.write(content)
-        tmp.close()
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
 
         result = await asr_engine.transcribe(
-            audio_path=tmp.name,
+            audio_path=tmp_path,
             language=language,
         )
     except Exception as e:
@@ -237,7 +241,7 @@ async def create_transcription(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         try:
-            os.unlink(tmp.name)
+            os.unlink(tmp_path)
         except OSError:
             pass
 

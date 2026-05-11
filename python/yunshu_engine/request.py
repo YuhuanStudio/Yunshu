@@ -94,6 +94,19 @@ class RequestOutput:
     current_state: str = "normal"
     error: str | None = None
 
+    # Backward compat aliases for legacy Engine path
+    @property
+    def token_text(self) -> str:
+        return self.new_text
+
+    @property
+    def token_id(self) -> int:
+        return self.new_token_ids[-1] if self.new_token_ids else 0
+
+    @property
+    def logprob(self) -> Any:
+        return self.logprobs
+
     @property
     def usage(self) -> dict[str, int]:
         return {
