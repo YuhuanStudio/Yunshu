@@ -137,7 +137,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     manager = get_model_manager()
     if manager:
-        for entry in list(manager._entries.values()):
+        for entry in manager.list_entries():
             if entry.is_loaded and entry.engine:
                 await entry.engine.stop()
 
@@ -254,7 +254,7 @@ def create_app() -> FastAPI:
         # Check if at least one model is loaded
         has_loaded_model = False
         if manager is not None:
-            for entry in manager._entries.values():
+            for entry in manager.list_entries():
                 if entry.is_loaded:
                     has_loaded_model = True
                     break

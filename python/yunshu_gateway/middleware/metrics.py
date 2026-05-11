@@ -140,7 +140,7 @@ class _Metrics:
             total_running = 0
             total_registered = 0
             if manager is not None:
-                for entry in manager._entries.values():
+                for entry in manager.list_entries():
                     total_registered += 1
                     if entry.is_loaded:
                         total_running += 1

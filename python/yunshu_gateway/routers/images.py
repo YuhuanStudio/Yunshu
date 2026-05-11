@@ -40,7 +40,7 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
 
     # Find image gen engine
     img_engine = None
-    for entry in manager._entries.values():
+    for entry in manager.list_entries():
         if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
             if req.model in {entry.model_id, entry.model_id.lower()}:
                 img_engine = entry.engine
@@ -57,7 +57,7 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
 
     if img_engine is None:
         # Find any loaded ImageGenEngine
-        for entry in manager._entries.values():
+        for entry in manager.list_entries():
             if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
                 img_engine = entry.engine
                 break
@@ -116,7 +116,7 @@ async def stream_image_generation(req: ImageGenerateRequest):
     from yunshu_engine.image_engine import ImageGenEngine
 
     img_engine = None
-    for entry in manager._entries.values():
+    for entry in manager.list_entries():
         if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
             img_engine = entry.engine
             break

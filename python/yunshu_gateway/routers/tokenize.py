@@ -68,7 +68,7 @@ def _resolve_tokenizer(model_id: str):
 
     manager = get_model_manager()
     if manager is not None:
-        entry = manager._entries.get(model_id)
+        entry = manager.get_entry(model_id)
         if entry and entry.is_loaded and entry.engine:
             tok = getattr(entry.engine, '_tokenizer', None)
             if tok:

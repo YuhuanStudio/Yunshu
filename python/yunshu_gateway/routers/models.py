@@ -21,7 +21,7 @@ async def list_models() -> dict:
     # Multi-model mode
     manager = get_model_manager()
     if manager is not None:
-        for entry in manager._entries.values():
+        for entry in manager.list_entries():
             model_info = {
                 "id": entry.model_id,
                 "object": "model",
@@ -57,7 +57,7 @@ async def get_model(model_id: str) -> dict:
     """Get details for a specific model."""
     manager = get_model_manager()
     if manager is not None:
-        entry = manager._entries.get(model_id)
+        entry = manager.get_entry(model_id)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
         return {

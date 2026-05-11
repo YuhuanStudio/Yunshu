@@ -120,6 +120,11 @@ class EngineConfig:
 class Engine:
     """MLX-native continuous batching engine.
 
+    .. deprecated::
+        Use BatchedEngine instead. Engine is kept for backward compatibility
+        but is no longer actively maintained. All new features target
+        BatchedEngine.
+
     Threading model (from mlx-lm's server.py and oMLX):
     All MLX GPU work goes through the global MLX executor (single thread).
     This is REQUIRED because mlx-lm uses a module-level Metal stream
@@ -132,6 +137,12 @@ class Engine:
     """
 
     def __init__(self, config: EngineConfig | None = None, *, use_engine_core: bool = True) -> None:
+        import warnings
+        warnings.warn(
+            "Engine is deprecated. Use BatchedEngine for all new code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config or EngineConfig()
 
         # Model state

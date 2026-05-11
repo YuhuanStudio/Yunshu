@@ -105,7 +105,7 @@ async def get_engine_for_model(model_id: str) -> Engine:
     """
     if _model_manager is not None:
         # Try model manager resolution
-        entry = _model_manager._entries.get(model_id)
+        entry = _model_manager.get_entry(model_id)
         if entry is not None:
             engine = await _model_manager.get_engine(model_id)
             await _ensure_engine_started(engine)
@@ -113,9 +113,9 @@ async def get_engine_for_model(model_id: str) -> Engine:
 
         # Case-insensitive + prefix stripping fallback
         lower = model_id.lower()
-        for mid, entry in _model_manager._entries.items():
-            if mid.lower() == lower:
-                engine = await _model_manager.get_engine(mid)
+        for entry in _model_manager.list_entries():
+            if entry.model_id.lower() == lower:
+                engine = await _model_manager.get_engine(entry.model_id)
                 await _ensure_engine_started(engine)
                 return engine
             # Strip provider prefix

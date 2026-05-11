@@ -95,7 +95,7 @@ async def _resolve_embedding_engine(model_id: str):
     manager = get_model_manager()
     if manager is not None:
         # Direct lookup
-        entry = manager._entries.get(model_id)
+        entry = manager.get_entry(model_id)
         if entry is not None and entry.is_loaded and entry.engine is not None:
             return entry.engine
 

@@ -1,4 +1,17 @@
 /*
+ * ⚠️  DEPRECATED: These .metal files are NOT used at runtime.
+ *
+ * The actual Metal kernels live as inline strings in:
+ *   python/yunshu_engine/metal_kernels.py
+ *
+ * They are compiled via mx.fast.metal_kernel (JIT), not via
+ * xcrun/make precompilation. Changes here have NO effect.
+ *
+ * If you need to edit a kernel, edit the Python inline source.
+ * These files are kept for reference only.
+ */
+
+/*
  * Yunshu Metal Kernels — Common types and utilities.
  *
  * Shared definitions for all Yunshu Metal compute kernels.
