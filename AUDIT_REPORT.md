@@ -13,13 +13,13 @@
 | CRITICAL | 10 | 10 | 0 | 0 |
 | HIGH | 12 | 12 | 0 | 0 |
 | MEDIUM | 20 | 17 | 3 | 0 |
-| LOW | 18 | 10 | 0 | 8 |
-| 架構問題 | 5 | 0 | 0 | 5 |
-| **合計** | **65** | **49** | **3** | **13** |
+| LOW | 18 | 15 | 0 | 3 |
+| 架構問題 | 5 | 2 | 0 | 3 |
+| **合計** | **65** | **56** | **3** | **6** |
 
 > 所有 CRITICAL + HIGH + MEDIUM 問題已於 Wave 1–6 修復完成。
 > 1977 個單元測試全數通過，0 失敗。
-> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c`
+> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8`
 
 ---
 
@@ -405,19 +405,19 @@ engine = manager.get_engine(model_id)  # ← 缺少 await
 | L3 | `deltanet_inversion.py` | 標記為「不適用 BF16」，monkey-patch 未完成 | 🔲 |
 | L4 | `metal_kernels.py:659` | `shell=True` subprocess | ✅ Wave 7 |
 | L5 | `json_schema.py:664` | 硬編碼 `range(151936)` vocab fallback | ✅ Wave 7 |
-| L6 | `model_registry.py:112` | module-level singleton 非 thread-safe | 🔲 |
+| L6 | `model_registry.py:112` | module-level singleton 非 thread-safe | ✅ Wave 8 |
 | L7 | `engine.py:423` | `_make_sampler` 傳了 mlx-lm 不接受的 penalty 參數 | ✅ Wave 7 |
-| L8 | `kv_prefix_cache.py:50` | numpy detour 可能丟失 bf16 精度 | 🔲 |
+| L8 | `kv_prefix_cache.py:50` | numpy detour 可能丟失 bf16 精度 | ✅ Wave 8 |
 | L9 | 多處 | `uuid.uuid4().hex[:12]` 只有 48-bit entropy | ✅ Wave 7 |
-| L10 | 多處 | `__import__("time")` 而非 module-level import | 🔲 |
+| L10 | 多處 | `__import__("time")` 而非 module-level import | ✅ Wave 8 |
 | L11 | `streaming.py:700` | `TokenRateTracker` 定義但從未使用 | ✅ Wave 7 |
 | L12 | `streaming.py:733` | `StopSequenceDetector` 定義但從未使用 | ✅ Wave 7 |
 | L13 | `streaming.py:164` | `SSEKeepaliveWrapper` 被 `with_sse_keepalive` 取代 | ✅ Wave 7 |
 | L14 | `health.py` | 與 `main.py` 重複定義健康端點，health.py 未被 include | ✅ Wave 7 |
-| L15 | `mcp.py:75` | `MCPSession` 類別定義但從未實例化 | 🔲 |
+| L15 | `mcp.py:75` | `MCPSession` 類別定義但從未實例化 | 🔲（保留：有測試覆蓋，是 future API） |
 | L16 | Anthropic | 缺少 `cache_creation_input_tokens` / `cache_read_input_tokens` | ✅ Wave 7 |
-| L17 | `bench.py:23-24` | 全域 mutable state 無鎖 | 🔲 |
-| L18 | Prometheus | label 值未跳脫 | 🔲 |
+| L17 | `bench.py:23-24` | 全域 mutable state 無鎖 | ✅ Wave 8 |
+| L18 | Prometheus | label 值未跳脫 | ✅ Wave 8 |
 
 ---
 
@@ -473,19 +473,13 @@ python/yunshu_engine/metal_kernels.py  ← Python 字串 inline Metal source
 
 **建議**：添加 public accessor methods。
 
-### 5.4 Eager imports 繞過 lazy 機制 🔲
+### 5.4 Eager imports 繞過 lazy 機制 ✅ Wave 8 已修復
 
-`python/yunshu_engine/__init__.py:3-5`:
-```python
-from .batched_engine import BatchedEngine, GenerationOutput
-from .engine import Engine, EngineConfig, RequestOutput, RequestState
-```
+- **修復**: `__init__.py` 全部改為 `__getattr__` lazy import，import 時零副作用。
 
-這些 eager imports 立即拉入 `engine_core` → `scheduler` → 整個依賴鏈，使 `__getattr__` lazy import 機制無效。
+### 5.5 `import mlx.core` 在 module level ✅ Wave 8 已修復
 
-### 5.5 `import mlx.core` 在 module level 🔲
-
-`python/yunshu_engine/scheduler.py:30` 在 import 時就初始化 Metal device context，可能在非 GPU 環境 crash。
+- **修復**: `scheduler.py` 移除 module-level `import mlx.core`，改為 local import。
 
 ---
 
