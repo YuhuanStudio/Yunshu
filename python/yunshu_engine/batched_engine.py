@@ -120,6 +120,16 @@ class BatchedEngine:
         self._spec_decoder = None  # SpeculativeDecoder instance
         self._spec_enabled = False
 
+        # N-gram proposer for model-free speculative decoding
+        self._ngram_proposer = None  # NgramProposer, created on demand
+        self._ngram_stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
+
+        # SpecPrefill config (opt-in via YUNSHU_SPEC_PREFILL env var)
+        self._spec_prefill_enabled = False
+        self._spec_prefill_threshold = 8192
+        self._spec_prefill_keep_rate = 0.20
+        self._spec_prefill_draft_model = None
+
         # KV prefix cache for multi-turn speedup
         from .kv_prefix_cache import KVPrefixCache
         self._kv_prefix_cache = KVPrefixCache(max_entries=64, min_prefix_length=32)
@@ -273,6 +283,22 @@ class BatchedEngine:
                 temperature=temperature,
             )
 
+        # N-gram speculative decoding (model-free, CPU-based proposal)
+        if spec_decode and self._ngram_proposer is not None and not use_engine_loop:
+            return await self._generate_ngram_spec(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                stop=stop,
+                seed=seed,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+            )
+
         # Fast path: direct generate_step on executor thread for full GPU utilization
         if not use_engine_loop:
             return await self._generate_fast(
@@ -424,38 +450,91 @@ class BatchedEngine:
 
             gen_t0 = time.perf_counter()
             first = True
-
             _lprocs = logits_processors if logits_processors else None
-            with _wired_limit_ctx(model):
-                for token, logits in generate_step(
-                    ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                    prompt_cache=cache, logits_processors=_lprocs,
-                ):
-                    if first:
-                        ttft_s = time.perf_counter() - gen_t0
-                        first = False
-                    tokens.append(token)
+            spec_prefill_done = False
+
+            # SpecPrefill: sparse prefill for long prompts
+            if (self._spec_prefill_enabled
+                and self._spec_prefill_draft_model is not None
+                and len(ids_to_prefill) >= self._spec_prefill_threshold):
+                from .spec_prefill import (
+                    score_tokens, select_chunks, sparse_prefill, cleanup_rope,
+                )
+                try:
+                    importance = score_tokens(self._spec_prefill_draft_model, ids_to_prefill)
+                    selected = select_chunks(importance, keep_pct=self._spec_prefill_keep_rate)
+                    logits = sparse_prefill(model, ids_to_prefill, selected, cache)
+                    mx.eval(logits)
+                    ttft_s = time.perf_counter() - gen_t0
+                    first = False
+                    first_token = int(sampler(logits[:, -1:, :]))
+                    tokens.append(first_token)
                     if logprobs:
-                        import mlx.core as mx
-                        log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
-                        tok_lp = float(log_probs[token])
-                        entry = {"token_id": int(token), "logprob": tok_lp}
-                        if top_logprobs and top_logprobs > 0:
-                            k = min(top_logprobs, log_probs.shape[0])
-                            sorted_idx = mx.argsort(-log_probs)
-                            top_k_idx = sorted_idx[:k]
-                            entry["top_logprobs"] = [
-                                {"token_id": int(top_k_idx[j]), "logprob": float(log_probs[int(top_k_idx[j])])}
-                                for j in range(k)
-                            ]
-                        token_logprobs.append(entry)
-                    if token in stop_ids:
-                        tokens.pop()  # Exclude stop token from output
-                        break
-                    if stop_suffixes:
-                        detokenizer.add_token(token)
-                        if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                        log_probs = mx.log(mx.softmax(logits[:, -1, :].astype(mx.float32), axis=-1))
+                        tok_lp = float(log_probs[0, first_token])
+                        token_logprobs.append({"token_id": first_token, "logprob": tok_lp})
+                    if first_token in stop_ids:
+                        tokens.pop()
+                    else:
+                        detokenizer.add_token(first_token)
+                    remaining = max_tokens - 1
+                    if remaining > 0 and first_token not in stop_ids:
+                        for token, logits in generate_step(
+                            mx.array([first_token]).reshape(1, -1), model,
+                            max_tokens=remaining, sampler=sampler,
+                            prompt_cache=cache, logits_processors=_lprocs,
+                        ):
+                            tokens.append(token)
+                            if logprobs:
+                                log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
+                                tok_lp = float(log_probs[token])
+                                token_logprobs.append({"token_id": int(token), "logprob": tok_lp})
+                            if token in stop_ids:
+                                tokens.pop()
+                                break
+                            if stop_suffixes:
+                                detokenizer.add_token(token)
+                                if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    break
+                    cleanup_rope(model)
+                    spec_prefill_done = True
+                except Exception:
+                    logger.warning("SpecPrefill failed, falling back to standard prefill", exc_info=True)
+                    if not tokens:
+                        cache = make_prompt_cache(model)
+                        ids_to_prefill = ids
+
+            if not spec_prefill_done:
+                with _wired_limit_ctx(model):
+                    for token, logits in generate_step(
+                        ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
+                        prompt_cache=cache, logits_processors=_lprocs,
+                    ):
+                        if first:
+                            ttft_s = time.perf_counter() - gen_t0
+                            first = False
+                        tokens.append(token)
+                        if logprobs:
+                            import mlx.core as mx
+                            log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
+                            tok_lp = float(log_probs[token])
+                            entry = {"token_id": int(token), "logprob": tok_lp}
+                            if top_logprobs and top_logprobs > 0:
+                                k = min(top_logprobs, log_probs.shape[0])
+                                sorted_idx = mx.argsort(-log_probs)
+                                top_k_idx = sorted_idx[:k]
+                                entry["top_logprobs"] = [
+                                    {"token_id": int(top_k_idx[j]), "logprob": float(log_probs[int(top_k_idx[j])])}
+                                    for j in range(k)
+                                ]
+                            token_logprobs.append(entry)
+                        if token in stop_ids:
+                            tokens.pop()  # Exclude stop token from output
                             break
+                        if stop_suffixes:
+                            detokenizer.add_token(token)
+                            if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                break
 
             # Cache the completed KV state for future prefix matching
             # Quantize cache layers to save memory (mlx-lm pattern)
@@ -548,6 +627,16 @@ class BatchedEngine:
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
             async for output in self._stream_generate_speculative(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+            ):
+                yield output
+            return
+
+        # N-gram speculative decoding streaming (model-free)
+        if spec_decode and self._ngram_proposer is not None and not use_engine_loop:
+            async for output in self._stream_generate_ngram_spec(
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                top_p=top_p, top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty, stop=stop, seed=seed,
             ):
                 yield output
             return
@@ -826,7 +915,27 @@ class BatchedEngine:
 
         Called during start() after model loading. Checks for spec heads in the
         model config and creates a SpeculativeDecoder if detected.
+        Also initializes N-gram proposer as a model-free fallback.
         """
+        # Always initialize N-gram proposer (model-free, zero overhead when idle)
+        import os
+        if os.environ.get("YUNSHU_NGRAM_SPEC", "").strip() not in ("0", "false", "no"):
+            from .ngram_proposer import NgramProposer, NgramConfig
+            max_n = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
+            k = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
+            self._ngram_proposer = NgramProposer(NgramConfig(max_n=max_n, k=k))
+            logger.info(f"N-gram proposer initialized: max_n={max_n}, k={k}")
+
+        # SpecPrefill for long prompts (requires YUNSHU_SPEC_PREFILL=1)
+        if os.environ.get("YUNSHU_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
+            self._spec_prefill_enabled = True
+            self._spec_prefill_threshold = int(os.environ.get("YUNSHU_SPEC_PREFILL_THRESHOLD", "8192"))
+            self._spec_prefill_keep_rate = float(os.environ.get("YUNSHU_SPEC_PREFILL_KEEP_RATE", "0.20"))
+            logger.info(
+                f"SpecPrefill enabled: threshold={self._spec_prefill_threshold}, "
+                f"keep_rate={self._spec_prefill_keep_rate}"
+            )
+
         from .speculative_decoder import detect_spec_heads, auto_configure_speculative
 
         model_config = {}
@@ -1013,6 +1122,380 @@ class BatchedEngine:
                 return accepted_tensor[:, -1:]
 
             current_ids = await loop.run_in_executor(executor, _feedback)
+
+    async def _generate_ngram_spec(
+        self,
+        prompt: str,
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        stop: list[str] | None = None,
+        seed: int | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+    ) -> GenerationOutput:
+        """Generate using N-gram speculative decoding (model-free).
+
+        Uses the N-gram proposer to predict K draft tokens, then verifies
+        each by running the target model forward. Accepts matching tokens,
+        resamples on mismatch.
+        """
+        from mlx_lm.generate import generate_step
+        from mlx_lm.sample_utils import make_sampler
+        from .mlx_executor import get_mlx_executor
+        import mlx.core as mx
+        from mlx_lm.models.cache import make_prompt_cache
+
+        tokenizer = self._tokenizer
+        model = self._model
+        proposer = self._ngram_proposer
+
+        input_ids = tokenizer.encode(prompt if isinstance(prompt, str) else str(prompt))
+        prompt_tokens = len(input_ids)
+
+        # Build stop token sets
+        stop_ids = set()
+        stop_suffixes = []
+        if stop:
+            for s in stop:
+                try:
+                    ids = tokenizer.encode(s)
+                    if len(ids) == 1:
+                        stop_ids.add(ids[0])
+                except Exception:
+                    pass
+                if len(s) > 1:
+                    stop_suffixes.append(s)
+
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+
+        def _run():
+            if seed is not None:
+                mx.random.seed(seed)
+            ids = mx.array(input_ids)
+            tokens = []
+            ttft_s = 0.0
+
+            # Prefill with KV prefix cache
+            prefix_cache = self._kv_prefix_cache
+            cached_kv, _remaining, matched = prefix_cache.get(ids)
+            cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
+            ids_to_prefill = ids[matched:] if cached_kv is not None else ids
+
+            gen_t0 = time.perf_counter()
+            detokenizer = tokenizer.detokenizer
+            detokenizer.reset()
+            all_token_ids = list(input_ids)  # Track full history for N-gram matching
+
+            with _wired_limit_ctx(model):
+                # Step 1: Prefill
+                first_logits = None
+                for token, logits in generate_step(
+                    ids_to_prefill, model, max_tokens=1, sampler=sampler,
+                    prompt_cache=cache,
+                ):
+                    first_logits = logits
+                    break
+
+                if first_logits is None:
+                    return tokens, "", [], time.perf_counter() - gen_t0, 0
+
+                ttft_s = time.perf_counter() - gen_t0
+
+                # Get first token from the model
+                first_token = int(mx.argmax(first_logits, axis=-1).flatten()[0])
+                tokens.append(first_token)
+                all_token_ids.append(first_token)
+
+                # Step 2: Decode loop with N-gram lookahead
+                remaining = max_tokens - 1
+                while remaining > 0:
+                    # Propose K draft tokens via N-gram
+                    draft_ids = proposer.propose(all_token_ids)
+                    n_draft = min(len(draft_ids), remaining)
+
+                    if n_draft == 0:
+                        # No N-gram proposal — generate one token normally
+                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
+                        for token, logits in generate_step(
+                            step_input, model, max_tokens=1, sampler=sampler,
+                            prompt_cache=cache,
+                        ):
+                            token_id = int(token)
+                            tokens.append(token_id)
+                            all_token_ids.append(token_id)
+                            remaining -= 1
+                            if token_id in stop_ids:
+                                tokens.pop()
+                                break
+                            detokenizer.add_token(token_id)
+                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                break
+                        continue
+
+                    # Verify drafts one by one against the model
+                    self._ngram_stats["proposals"] += 1
+                    self._ngram_stats["total_draft"] += n_draft
+                    accepted = 0
+
+                    for draft_id in draft_ids[:n_draft]:
+                        # Run model forward on the previous token to get logits
+                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
+                        for _token, logits in generate_step(
+                            step_input, model, max_tokens=1, sampler=sampler,
+                            prompt_cache=cache,
+                        ):
+                            # Compare model's greedy output with proposal
+                            model_pick = int(mx.argmax(logits, axis=-1).flatten()[0])
+
+                            if model_pick == draft_id:
+                                # Accept: proposal matches model
+                                tokens.append(draft_id)
+                                all_token_ids.append(draft_id)
+                                accepted += 1
+                                remaining -= 1
+                                if draft_id in stop_ids:
+                                    tokens.pop()
+                                    break
+                                detokenizer.add_token(draft_id)
+                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    break
+                            else:
+                                # Reject: resample from model distribution
+                                resampled = int(_token)
+                                tokens.append(resampled)
+                                all_token_ids.append(resampled)
+                                remaining -= 1
+                                if resampled in stop_ids:
+                                    tokens.pop()
+                                    break
+                                detokenizer.add_token(resampled)
+                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    break
+                                break  # Stop verifying rest of drafts
+                        else:
+                            continue
+                        break
+                    else:
+                        # All drafts accepted and no stop hit — continue proposing
+                        self._ngram_stats["accepted"] += accepted
+                        continue
+                    self._ngram_stats["accepted"] += accepted
+                    break
+
+            # Cache KV state
+            if self._kv_quant_bits is not None:
+                _maybe_quantize_kv_cache(cache, self._kv_quant_start, self._kv_quant_group_size, self._kv_quant_bits)
+            prefix_cache.add(mx.array(input_ids), cache)
+
+            output_text = tokenizer.decode(tokens, skip_special_tokens=True)
+            mx.synchronize()
+            return tokens, output_text, [], ttft_s, matched
+
+        executor = get_mlx_executor()
+        loop = asyncio.get_running_loop()
+        tokens, output_text, _, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+
+        finish_reason = "stop" if tokens and tokens[-1] in stop_ids else "length"
+        output_text = _clean_special_tokens(output_text)
+        return GenerationOutput(
+            text=output_text,
+            new_text=output_text,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=len(tokens),
+            finished=True,
+            finish_reason=finish_reason,
+            cached_tokens=cached_tokens,
+            ttft_ms=round(ttft_s * 1000, 1),
+        )
+
+    async def _stream_generate_ngram_spec(
+        self,
+        prompt: str,
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        stop: list[str] | None = None,
+        seed: int | None = None,
+    ) -> AsyncIterator[GenerationOutput]:
+        """Stream generate using N-gram speculative decoding (queue-based)."""
+        from mlx_lm.generate import generate_step
+        from mlx_lm.sample_utils import make_sampler
+        from .mlx_executor import get_mlx_executor
+        import mlx.core as mx
+        from mlx_lm.models.cache import make_prompt_cache
+
+        tokenizer = self._tokenizer
+        model = self._model
+        proposer = self._ngram_proposer
+
+        input_ids = tokenizer.encode(prompt if isinstance(prompt, str) else str(prompt))
+        prompt_tokens = len(input_ids)
+
+        stop_ids = set()
+        stop_suffixes = []
+        if stop:
+            for s in stop:
+                try:
+                    ids = tokenizer.encode(s)
+                    if len(ids) == 1:
+                        stop_ids.add(ids[0])
+                except Exception:
+                    pass
+                if len(s) > 1:
+                    stop_suffixes.append(s)
+
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+
+        _sentinel = object()
+        _q: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _put(item):
+            loop.call_soon_threadsafe(_q.put_nowait, item)
+
+        def _run():
+            if seed is not None:
+                mx.random.seed(seed)
+            ids = mx.array(input_ids)
+            tokens = []
+            all_token_ids = list(input_ids)
+
+            prefix_cache = self._kv_prefix_cache
+            cached_kv, _rem, matched = prefix_cache.get(ids)
+            cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
+            ids_to_prefill = ids[matched:] if cached_kv is not None else ids
+
+            detokenizer = tokenizer.detokenizer
+            detokenizer.reset()
+            n_tok = 0
+
+            with _wired_limit_ctx(model):
+                # Prefill + first token
+                for token, logits in generate_step(
+                    ids_to_prefill, model, max_tokens=1, sampler=sampler,
+                    prompt_cache=cache,
+                ):
+                    first_token = int(token)
+                    tokens.append(first_token)
+                    all_token_ids.append(first_token)
+                    detokenizer.add_token(first_token)
+                    n_tok += 1
+                    _put((detokenizer.last_segment, n_tok, False))
+
+                # Decode with N-gram lookahead
+                remaining = max_tokens - 1
+                while remaining > 0:
+                    draft_ids = proposer.propose(all_token_ids)
+                    n_draft = min(len(draft_ids), remaining)
+
+                    if n_draft == 0:
+                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
+                        for token, logits in generate_step(
+                            step_input, model, max_tokens=1, sampler=sampler,
+                            prompt_cache=cache,
+                        ):
+                            token_id = int(token)
+                            tokens.append(token_id)
+                            all_token_ids.append(token_id)
+                            remaining -= 1
+                            n_tok += 1
+                            detokenizer.add_token(token_id)
+                            stop_hit = token_id in stop_ids
+                            suffix_hit = False
+                            if not stop_hit and stop_suffixes:
+                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            if stop_hit or suffix_hit:
+                                prefix_cache.add(ids, cache)
+                                mx.synchronize()
+                                _put(_sentinel)
+                                return
+                        continue
+
+                    self._ngram_stats["proposals"] += 1
+                    self._ngram_stats["total_draft"] += n_draft
+                    accepted = 0
+                    stopped = False
+
+                    for draft_id in draft_ids[:n_draft]:
+                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
+                        for _tok, logits in generate_step(
+                            step_input, model, max_tokens=1, sampler=sampler,
+                            prompt_cache=cache,
+                        ):
+                            model_pick = int(mx.argmax(logits, axis=-1).flatten()[0])
+
+                            accepted_id = draft_id if model_pick == draft_id else int(_tok)
+                            is_accept = (model_pick == draft_id)
+                            tokens.append(accepted_id)
+                            all_token_ids.append(accepted_id)
+                            if is_accept:
+                                accepted += 1
+                            remaining -= 1
+                            n_tok += 1
+                            detokenizer.add_token(accepted_id)
+                            stop_hit = accepted_id in stop_ids
+                            suffix_hit = False
+                            if not stop_hit and stop_suffixes:
+                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            if stop_hit or suffix_hit:
+                                stopped = True
+                            if not is_accept:
+                                stopped = True
+                            break
+                        if stopped:
+                            break
+
+                    self._ngram_stats["accepted"] += accepted
+                    if stopped:
+                        prefix_cache.add(ids, cache)
+                        mx.synchronize()
+                        _put(_sentinel)
+                        return
+
+            prefix_cache.add(ids, cache)
+            _put(("", n_tok, True))
+            mx.synchronize()
+            _put(_sentinel)
+
+        executor = get_mlx_executor()
+        future = loop.run_in_executor(executor, _run)
+
+        accumulated = ""
+        n_tok = 0
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(_q.get(), timeout=300)
+                except asyncio.TimeoutError:
+                    break
+                if item is _sentinel:
+                    break
+                new_text, tok_count, done = item
+                accumulated += new_text
+                n_tok = tok_count
+                finish_reason = "stop" if done else None
+                yield GenerationOutput(
+                    text=_clean_special_tokens(accumulated),
+                    new_text=_clean_special_tokens(new_text),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=n_tok,
+                    finished=done,
+                    finish_reason=finish_reason,
+                )
+                if done:
+                    break
+        finally:
+            if not future.done():
+                future.cancel()
 
     def _apply_chat_template(
         self,

@@ -5,7 +5,7 @@ Reduces TTFT on long prompts by using a small draft model to identify
 important tokens, then prefilling only those tokens on the target model.
 
 Pipeline:
-  1. score_tokens()  — draft model scores token importance via attention
+  1. score_tokens()  — draft model scores token importance via attention capture
   2. select_chunks() — chunk-based top-K% selection
   3. sparse_prefill() — target prefill with selected tokens at original positions
   4. cleanup_rope()  — restore original RoPE after generation
@@ -46,6 +46,127 @@ def _avg_pool1d(x: mx.array, kernel_size: int) -> mx.array:
     return (prefix[..., kernel_size:] - prefix[..., :-kernel_size]) / kernel_size
 
 
+# ---------------------------------------------------------------------------
+# Attention capture (oMLX pattern: wrap attention to capture query vectors)
+# ---------------------------------------------------------------------------
+
+
+class _AttentionCapture:
+    """Wraps attention to capture post-RoPE query vectors during lookahead.
+
+    Delegates to the original attention module while recording queries
+    for importance scoring.
+    """
+
+    def __init__(self, original, buf_idx, query_buffer, query_extractor):
+        self._original = original
+        self._buf_idx = buf_idx
+        self._query_buffer = query_buffer
+        self._query_extractor = query_extractor
+
+    def __call__(self, x, mask=None, cache=None, **kwargs):
+        queries = self._query_extractor(self._original, x, cache)
+        self._query_buffer[self._buf_idx].append(queries)
+        return self._original(x, mask=mask, cache=cache, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
+# ---------------------------------------------------------------------------
+# Architecture-specific query extractors
+# ---------------------------------------------------------------------------
+
+
+def _qwen35_extract_queries(attn, x, cache=None):
+    """Qwen3.5: gate split + q_norm + RoPE."""
+    B, L, D = x.shape
+    q_out = attn.q_proj(x)
+    queries, _gate = mx.split(
+        q_out.reshape(B, L, attn.num_attention_heads, -1), 2, axis=-1
+    )
+    queries = attn.q_norm(queries).transpose(0, 2, 1, 3)
+    if cache is not None:
+        queries = attn.rope(queries, offset=cache.offset)
+    else:
+        queries = attn.rope(queries)
+    return queries
+
+
+def _llama_extract_queries(attn, x, cache=None):
+    """Standard transformer: q_proj + reshape + RoPE."""
+    B, L, D = x.shape
+    n_heads = getattr(attn, 'num_attention_heads',
+                       getattr(attn, 'n_heads', getattr(attn, 'num_heads', None)))
+    queries = attn.q_proj(x)
+    queries = queries.reshape(B, L, n_heads, -1).transpose(0, 2, 1, 3)
+    if cache is not None:
+        queries = attn.rope(queries, offset=cache.offset)
+    else:
+        queries = attn.rope(queries)
+    return queries
+
+
+def _detect_query_extractor(attn):
+    """Auto-detect the right query extractor for an attention module."""
+    if hasattr(attn, 'q_norm') and hasattr(attn, 'num_attention_heads'):
+        # Qwen3.5 pattern: gated attention with q_norm
+        return _qwen35_extract_queries
+    if hasattr(attn, 'q_proj'):
+        # Standard LLaMA pattern
+        return _llama_extract_queries
+    return None
+
+
+def _find_attention_layers(model):
+    """Find all attention layers in the model."""
+    results = []
+    layers = getattr(model, 'layers', [])
+    if not layers:
+        inner = getattr(model, 'model', None)
+        if inner is not None:
+            layers = getattr(inner, 'layers', [])
+    for idx, layer in enumerate(layers):
+        if hasattr(layer, 'self_attn'):
+            results.append((idx, layer))
+    return results
+
+
+def _get_attn_module(layer):
+    """Get attention module from a layer."""
+    if hasattr(layer, 'self_attn'):
+        return layer.self_attn
+    return None
+
+
+def _patch_attention_capture(model, query_buffer):
+    """Patch attention layers with _AttentionCapture to capture queries.
+
+    Returns (originals_dict, attn_layers) for later unpatching.
+    """
+    attn_layers = _find_attention_layers(model)
+    originals = {}
+
+    for layer_idx, layer in attn_layers:
+        attn = _get_attn_module(layer)
+        if attn is None:
+            continue
+        extractor = _detect_query_extractor(attn)
+        if extractor is None:
+            continue
+        originals[layer_idx] = attn
+        layer.self_attn = _AttentionCapture(attn, layer_idx, query_buffer, extractor)
+
+    return originals, attn_layers
+
+
+def _unpatch_attention_capture(model, originals, attn_layers):
+    """Restore original attention modules."""
+    for layer_idx, layer in attn_layers:
+        if layer_idx in originals:
+            layer.self_attn = originals[layer_idx]
+
+
 def score_tokens(
     draft_model: Any,
     tokens: list[int] | mx.array,
@@ -54,10 +175,10 @@ def score_tokens(
     temp: float = 0.6,
     top_p: float = 0.95,
 ) -> mx.array:
-    """Score token importance using draft model attention.
+    """Score token importance using draft model attention capture.
 
-    Simplified from oMLX's score_tokens — runs prefill + lookahead decode,
-    captures query vectors, computes per-token importance.
+    Uses the oMLX pattern: wrap attention modules to capture query vectors
+    during lookahead decode, then compute real attention scores Q @ K^T / sqrt(d).
 
     Args:
         draft_model: Small draft model for scoring.
@@ -97,21 +218,25 @@ def score_tokens(
     logits = draft_model(prompt[processed:][None], cache=cache)
     mx.eval(logits)
 
-    # Lookahead decode
-    from mlx_lm.sample_utils import make_sampler
-    sampler = make_sampler(temp=temp, top_p=top_p)
-    y = sampler(logits[:, -1, :])
-    mx.eval(y)
+    # Patch attention to capture queries during lookahead
+    query_buffer: dict[int, list] = {}
+    originals, attn_layers = _patch_attention_capture(draft_model, query_buffer)
 
-    generated = [int(y.item())]
-    for _ in range(n_lookahead):
-        logits = draft_model(y.reshape(1, -1), cache=cache)
+    try:
+        # Lookahead decode to capture query vectors
+        from mlx_lm.sample_utils import make_sampler
+        sampler = make_sampler(temp=temp, top_p=top_p)
         y = sampler(logits[:, -1, :])
         mx.eval(y)
-        generated.append(int(y.item()))
 
-    # Compute importance from attention weights
-    # Simple approach: use the cache keys and the last query
+        for _ in range(n_lookahead):
+            logits = draft_model(y.reshape(1, -1), cache=cache)
+            y = sampler(logits[:, -1, :])
+            mx.eval(y)
+    finally:
+        _unpatch_attention_capture(draft_model, originals, attn_layers)
+
+    # Compute attention-based importance scores: Q @ K^T / sqrt(d_k)
     importance_scores = []
     for c in cache:
         if not hasattr(c, 'keys') or c.keys is None:
@@ -119,15 +244,35 @@ def score_tokens(
         keys = c.keys
         if keys.shape[-2] < n_prompt:
             continue
-        prompt_keys = keys[..., :n_prompt, :]
-        # Use mean key magnitude as proxy for importance
-        # (full attention scoring requires query capture which is model-specific)
-        scores = mx.mean(mx.abs(prompt_keys.astype(mx.float32)), axis=-1)
-        scores = mx.mean(scores, axis=1).squeeze(0)  # Average across heads
-        importance_scores.append(scores)
+        prompt_keys = keys[..., :n_prompt, :].astype(mx.float32)
+
+        # Collect captured queries for this cache entry's layer
+        layer_queries = []
+        for layer_idx in query_buffer:
+            layer_queries = query_buffer[layer_idx]
+            break
+
+        if not layer_queries:
+            scores = mx.mean(mx.abs(prompt_keys), axis=-1)
+            scores = mx.mean(scores, axis=1).squeeze(0)
+            importance_scores.append(scores)
+            continue
+
+        # Real attention scoring: average Q @ K^T / sqrt(d) across lookahead steps
+        d_k = prompt_keys.shape[-1]
+        all_attn = []
+        for q in layer_queries:
+            # q: (B, n_heads, 1, d_k), prompt_keys: (B, n_heads, M, d_k)
+            attn_weights = (q[..., -1:, :].astype(mx.float32) @ prompt_keys.transpose(0, 1, 3, 2)) / math.sqrt(d_k)
+            attn_weights = mx.softmax(attn_weights, axis=-1)
+            all_attn.append(attn_weights.squeeze(2).squeeze(0))  # (n_heads, M)
+
+        if all_attn:
+            combined_q = mx.stack(all_attn, axis=0)  # (n_steps, n_heads, M)
+            layer_score = mx.mean(combined_q, axis=(0, 1))  # (M,)
+            importance_scores.append(layer_score)
 
     if not importance_scores:
-        # Fallback: uniform importance
         return mx.ones(n_prompt) / n_prompt
 
     combined = mx.stack(importance_scores, axis=0)
@@ -338,24 +483,3 @@ def cleanup_rope(model: Any) -> None:
         if isinstance(rope, (_OffsetAdjustedRoPE, _PositionMappedRoPE)):
             attn.rope = rope._original
 
-
-def _find_attention_layers(model: Any) -> list[tuple[int, Any]]:
-    """Find all attention layers in the model."""
-    results = []
-    layers = getattr(model, 'layers', [])
-    if not layers:
-        # Try model.model.layers (VLM wrapper)
-        inner = getattr(model, 'model', None)
-        if inner is not None:
-            layers = getattr(inner, 'layers', [])
-    for idx, layer in enumerate(layers):
-        if hasattr(layer, 'self_attn'):
-            results.append((idx, layer))
-    return results
-
-
-def _get_attn_module(layer: Any) -> Any:
-    """Get attention module from a layer."""
-    if hasattr(layer, 'self_attn'):
-        return layer.self_attn
-    return None

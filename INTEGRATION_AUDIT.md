@@ -56,15 +56,15 @@
 | M8 | ASR segments/duration 暴露 — Gateway 返回時間戳和分段信息 | ✅ 已修復 | 全數通過 |
 | M9 | VLM top_p 參數透傳到 generate() 和 generate_stream() | ✅ 已修復 | 全數通過 |
 | M4 | ImageGenerateRequest 移除未實現的 guidance_scale/negative_prompt | ✅ 已修復 | 全數通過 |
+| P1-2 | N-gram Proposer 接入: BatchedEngine 管線調用，非串流+串流雙路徑，env var 控制 | ✅ 已修復 | 全數通過 |
+| P1-3 | SpecPrefill 修復評分方法: attention capture 替代 key magnitude，接入 _generate_fast | ✅ 已修復 | 全數通過 |
+| M6 | Vision Feature Cache 激活: VLMEngine 集成 VisionFeatureCache (YUNSHU_VISION_CACHE) | ✅ 已修復 | 全數通過 |
+| M7 | mRoPE 激活: VLMEngine 自動偵測 mRoPE config，capture/clear rope_deltas | ✅ 已修復 | 全數通過 |
 
 ### 待處理
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P1-2 | 接入 N-gram Proposer | P1 |
-| P1-3 | 接入 SpecPrefill (需修復評分方法) | P1 |
-| M6 | 激活 Vision Feature Cache | P1 |
-| M7 | 激活 mRoPE | P1 |
 | P2 | 代碼清理 (70 處 except:pass, 死模塊標記, 重複代碼) | P2 |
 | P3 | 前端整合 (硬編碼 URL, 功能暴露) | P3 |
 | P4 | 文檔修正 | P4 |

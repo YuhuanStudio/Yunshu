@@ -252,9 +252,16 @@ async def spec_decode_stats() -> dict[str, Any]:
         for entry in manager.list_entries():
             if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
                 decoder = getattr(entry.engine, '_spec_decoder', None)
-                info = {"model_id": entry.model_id, "enabled": entry.engine._spec_enabled}
+                ngram = getattr(entry.engine, '_ngram_proposer', None)
+                info = {
+                    "model_id": entry.model_id,
+                    "spec_enabled": entry.engine._spec_enabled,
+                    "ngram_enabled": ngram is not None,
+                }
                 if decoder is not None:
-                    info["stats"] = getattr(decoder, '_stats', {})
+                    info["spec_stats"] = getattr(decoder, '_stats', {})
+                if ngram is not None:
+                    info["ngram_stats"] = getattr(entry.engine, '_ngram_stats', {})
                 results.append(info)
     return {"models": results}
 

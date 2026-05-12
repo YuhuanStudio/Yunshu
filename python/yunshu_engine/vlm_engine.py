@@ -87,6 +87,19 @@ class VLMEngine:
         self._has_vision = False
         self._is_vlm = False
 
+        # mRoPE state (detected during load)
+        self._mrope_info = None
+        self._rope_delta_manager = None
+
+        # Vision feature cache (opt-in via YUNSHU_VISION_CACHE env var)
+        self._vision_cache = None
+        import os
+        if os.environ.get("YUNSHU_VISION_CACHE", "").strip() in ("1", "true", "yes"):
+            from .vision_feature_cache import VisionFeatureCache
+            cache_dir = os.environ.get("YUNSHU_VISION_CACHE_DIR", "~/.cache/yunshu/vision")
+            self._vision_cache = VisionFeatureCache(cache_dir=cache_dir)
+            logger.info("Vision feature cache enabled")
+
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
 
@@ -152,9 +165,20 @@ class VLMEngine:
             except Exception as e:
                 logger.warning(f"Could not load VLM processor: {e}")
 
+        # Detect mRoPE support
+        from .mrope import detect_mrope, BatchRopeDeltaManager
+        self._mrope_info = detect_mrope(self._config)
+        if self._mrope_info.enabled:
+            self._rope_delta_manager = BatchRopeDeltaManager()
+            logger.info(
+                f"mRoPE detected: sections={self._mrope_info.sections}, "
+                f"source={self._mrope_info.source_key}"
+            )
+
         logger.info(
             f"VLM engine loaded: {self._model_path} "
-            f"(vision={self._has_vision}, vlm_model={self._is_vlm})"
+            f"(vision={self._has_vision}, vlm_model={self._is_vlm}, "
+            f"mrope={self._mrope_info.enabled})"
         )
 
     async def start(self) -> None:
@@ -363,28 +387,21 @@ class VLMEngine:
         """Vision + text generation using mlx_vlm.generate()."""
         from mlx_vlm.generate import generate as vlm_generate
 
-        # Build messages with image references for processor's chat template
-        vlm_messages = []
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "image_url":
-                            parts.append({"type": "image"})
-                        elif part.get("type") == "text":
-                            parts.append({"type": "text", "text": part.get("text", "")})
-                    elif isinstance(part, str):
-                        parts.append({"type": "text", "text": part})
-                vlm_messages.append({"role": msg.get("role", "user"), "content": parts})
-            else:
-                vlm_messages.append({"role": msg.get("role", "user"), "content": str(content)})
-
-        # Use processor's chat template to insert image tokens
+        vlm_messages = self._build_vlm_messages(messages)
         prompt = self._processor.apply_chat_template(
             vlm_messages, tokenize=False, add_generation_prompt=True,
         )
+
+        # Check vision feature cache
+        cached_features = None
+        if self._vision_cache is not None and len(image_paths) == 1:
+            from .vision_feature_cache import compute_image_hash
+            try:
+                with open(image_paths[0], "rb") as f:
+                    img_hash = compute_image_hash(f.read())
+                cached_features = self._vision_cache.get(img_hash, self.model_name)
+            except Exception:
+                pass
 
         result = vlm_generate(
             self._model,
@@ -395,6 +412,26 @@ class VLMEngine:
             temp=temperature,
             verbose=False,
         )
+
+        # Capture mRoPE deltas after vision prefill
+        if self._mrope_info and self._mrope_info.enabled:
+            from .mrope import capture_rope_deltas
+            delta = capture_rope_deltas(self._model)
+            if delta is not None:
+                logger.debug(f"mRoPE delta captured: {delta:.4f}")
+
+        # Cache vision features after generation (future calls with same image)
+        if self._vision_cache is not None and cached_features is None and len(image_paths) == 1:
+            try:
+                # Extract features from model's vision tower for caching
+                if hasattr(self._model, 'vision_tower') and hasattr(self._model.vision_tower, 'features'):
+                    features = self._model.vision_tower.features
+                    if features is not None:
+                        mx.eval(features)
+                        self._vision_cache.put(img_hash, self.model_name, features)
+            except Exception:
+                pass
+
         return result.text if hasattr(result, 'text') else str(result)
 
     # ── VLM text generation (for mlx-vlm models) ──
@@ -410,6 +447,11 @@ class VLMEngine:
         from mlx_vlm.models.cache import make_prompt_cache
         from mlx_lm.sample_utils import make_sampler
         from mlx_lm.generate import generation_stream
+
+        # Clear mRoPE state to prevent contamination from prior VLM request
+        if self._mrope_info and self._mrope_info.enabled:
+            from .mrope import clear_rope_state
+            clear_rope_state(self._model)
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
@@ -452,23 +494,7 @@ class VLMEngine:
         from mlx_vlm.generate import stream_generate as vlm_stream_generate
         from mlx_lm.sample_utils import make_sampler
 
-        vlm_messages = []
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "image_url":
-                            parts.append({"type": "image"})
-                        elif part.get("type") == "text":
-                            parts.append({"type": "text", "text": part.get("text", "")})
-                    elif isinstance(part, str):
-                        parts.append({"type": "text", "text": part})
-                vlm_messages.append({"role": msg.get("role", "user"), "content": parts})
-            else:
-                vlm_messages.append({"role": msg.get("role", "user"), "content": str(content)})
-
+        vlm_messages = self._build_vlm_messages(messages)
         prompt = self._processor.apply_chat_template(
             vlm_messages, tokenize=False, add_generation_prompt=True,
         )
@@ -501,6 +527,20 @@ class VLMEngine:
                 ))
                 if finish_reason:
                     return
+
+            # Cache vision features after streaming
+            if self._vision_cache is not None and len(image_paths) == 1:
+                try:
+                    from .vision_feature_cache import compute_image_hash
+                    with open(image_paths[0], "rb") as f:
+                        img_hash = compute_image_hash(f.read())
+                    if hasattr(self._model, 'vision_tower') and hasattr(self._model.vision_tower, 'features'):
+                        features = self._model.vision_tower.features
+                        if features is not None:
+                            mx.eval(features)
+                            self._vision_cache.put(img_hash, self.model_name, features)
+                except Exception:
+                    pass
         except Exception as e:
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
@@ -523,6 +563,11 @@ class VLMEngine:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
         from mlx_lm.sample_utils import make_sampler
+
+        # Clear mRoPE state to prevent contamination from prior VLM request
+        if self._mrope_info and self._mrope_info.enabled:
+            from .mrope import clear_rope_state
+            clear_rope_state(self._model)
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
@@ -606,6 +651,26 @@ class VLMEngine:
         ))
 
     # ── Prompt Formatting ──
+
+    def _build_vlm_messages(self, messages: list[dict]) -> list[dict]:
+        """Build messages with image references for processor's chat template."""
+        vlm_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image_url":
+                            parts.append({"type": "image"})
+                        elif part.get("type") == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                    elif isinstance(part, str):
+                        parts.append({"type": "text", "text": part})
+                vlm_messages.append({"role": msg.get("role", "user"), "content": parts})
+            else:
+                vlm_messages.append({"role": msg.get("role", "user"), "content": str(content)})
+        return vlm_messages
 
     def _format_prompt(self, messages: list[dict]) -> str:
         if self._tokenizer is not None and hasattr(self._tokenizer, "apply_chat_template"):
