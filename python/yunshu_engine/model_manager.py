@@ -185,6 +185,7 @@ class ModelEntry:
     is_pinned: bool = False
     is_loaded: bool = False
     load_error: Optional[str] = None
+    settings: Any = None  # ModelSettings — loaded lazily
 
 
 class ModelManager:
@@ -232,12 +233,17 @@ class ModelManager:
         if model_type is None:
             model_type = _detect_model_type(model_path)
 
+        # Load per-model settings from model_settings.json + env vars
+        from .model_settings import load_model_settings
+        settings = load_model_settings(model_path, model_id)
+
         self._entries[model_id] = ModelEntry(
             model_id=model_id,
             model_path=model_path,
             estimated_bytes=estimated_bytes,
             is_pinned=pinned,
             model_type=model_type,
+            settings=settings,
         )
         logger.info(f"Registered model: {model_id} (type={model_type.name})")
 

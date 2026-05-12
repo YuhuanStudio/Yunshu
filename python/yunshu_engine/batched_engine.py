@@ -150,6 +150,11 @@ class BatchedEngine:
         self._kv_quant_group_size: int = 64
         self._kv_quant_start: int = 0
 
+        # Memory pressure eviction config (vllm-mlx pattern)
+        self._mem_pressure_threshold = float(
+            os.environ.get("YUNSHU_MEM_PRESSURE_THRESHOLD", "85.0")
+        )
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -445,6 +450,9 @@ class BatchedEngine:
 
             # Try KV prefix cache hit
             prefix_cache = self._kv_prefix_cache
+            # Proactive memory pressure eviction (vllm-mlx pattern)
+            if self._mem_pressure_threshold > 0:
+                prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             cached_kv, _remaining, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
 
@@ -802,6 +810,9 @@ class BatchedEngine:
 
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
+            # Proactive memory pressure eviction (vllm-mlx pattern)
+            if self._mem_pressure_threshold > 0:
+                prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             cached_kv, _remaining, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -968,6 +979,7 @@ class BatchedEngine:
                 from mlx_lm.sample_utils import make_sampler
                 ids = mx.array(self._tokenizer.encode(text))
                 prefix_cache = self._kv_prefix_cache
+                prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
                 cached_kv, _, matched = prefix_cache.get(ids)
                 if cached_kv is not None:
                     return 0  # Already cached
@@ -1265,6 +1277,7 @@ class BatchedEngine:
 
             # Prefill with KV prefix cache
             prefix_cache = self._kv_prefix_cache
+            prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             cached_kv, _remaining, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -1452,6 +1465,7 @@ class BatchedEngine:
             all_token_ids = list(input_ids)
 
             prefix_cache = self._kv_prefix_cache
+            prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             cached_kv, _rem, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids

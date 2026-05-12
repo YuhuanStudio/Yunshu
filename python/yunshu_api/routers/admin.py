@@ -254,6 +254,54 @@ async def update_engine_config(req: EngineConfigUpdate):
     return {"status": "updated", "fields": updated}
 
 
+# ── Per-Model Settings ──
+
+
+@router.get("/models/{model_id}/settings")
+async def get_model_settings(model_id: str, _=Depends(require_permission("can_view_admin"))):
+    """Get per-model runtime settings."""
+    from yunshu_engine.model_manager import get_model_manager
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Model manager not available")
+
+    entry = manager._entries.get(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Model not registered: {model_id}")
+
+    if entry.settings is None:
+        from yunshu_engine.model_settings import ModelSettings
+        return {"model_id": model_id, "settings": ModelSettings().to_dict()}
+
+    return {"model_id": model_id, "settings": entry.settings.to_dict()}
+
+
+@router.patch("/models/{model_id}/settings")
+async def update_model_settings(
+    model_id: str,
+    request: Request,
+    _=Depends(require_permission("can_load_models")),
+):
+    """Update per-model runtime settings (hot-reloadable)."""
+    from yunshu_engine.model_manager import get_model_manager
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Model manager not available")
+
+    entry = manager._entries.get(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Model not registered: {model_id}")
+
+    if entry.settings is None:
+        from yunshu_engine.model_settings import ModelSettings
+        entry.settings = ModelSettings()
+
+    overrides = await request.json()
+    changed = entry.settings.apply_overrides(overrides)
+
+    return {"status": "updated", "model_id": model_id, "changed_fields": changed}
+
+
 # ── Auth Tokens (RBAC-backed) ──
 
 

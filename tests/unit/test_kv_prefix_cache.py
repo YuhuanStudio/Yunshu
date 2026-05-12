@@ -799,3 +799,107 @@ def _fake_executor():
     """Create a fake executor that runs sync functions immediately."""
     from concurrent.futures import ThreadPoolExecutor
     return ThreadPoolExecutor(max_workers=1)
+
+
+# ── Memory Pressure Eviction ──
+
+
+class TestMemoryPressureEviction:
+    """Test C12: memory-pressure-driven KV cache eviction."""
+
+    def test_evict_under_pressure_no_entries(self):
+        """evict_under_pressure returns 0 when cache is empty."""
+        from yunshu_engine.kv_prefix_cache import KVPrefixCache
+        cache = KVPrefixCache(max_entries=64)
+        evicted = cache.evict_under_pressure(threshold_pct=50.0)
+        assert evicted == 0
+
+    def test_evict_under_pressure_no_mlx_metal(self, monkeypatch):
+        """evict_under_pressure returns 0 when device_info lacks working set size."""
+        import mlx.core as mx
+
+        monkeypatch.setattr(mx, "device_info", lambda: {})
+        monkeypatch.setattr(mx, "get_active_memory", lambda: 0)
+
+        from yunshu_engine.kv_prefix_cache import KVPrefixCache
+        cache = KVPrefixCache(max_entries=64)
+
+        # Add a dummy entry
+        tokens = mx.array([1, 2, 3, 4, 5] * 32)  # 160 tokens > min_prefix
+        cache.add(tokens, [])
+
+        evicted = cache.evict_under_pressure(threshold_pct=50.0)
+        assert evicted == 0
+
+    def test_evict_under_pressure_under_threshold(self, monkeypatch):
+        """evict_under_pressure does not evict when utilization is below threshold."""
+        import mlx.core as mx
+
+        monkeypatch.setattr(mx, "device_info", lambda: {
+            "max_recommended_working_set_size": 100_000_000,
+        })
+        monkeypatch.setattr(mx, "get_active_memory", lambda: 50_000_000)  # 50% util
+
+        from yunshu_engine.kv_prefix_cache import KVPrefixCache
+        cache = KVPrefixCache(max_entries=64)
+        tokens = mx.array([1, 2, 3, 4, 5] * 32)
+        cache.add(tokens, [])
+
+        evicted = cache.evict_under_pressure(threshold_pct=85.0)
+        assert evicted == 0
+        assert cache.size == 1
+
+    def test_evict_under_pressure_above_threshold(self, monkeypatch):
+        """evict_under_pressure evicts LRU entries when utilization exceeds threshold."""
+        import mlx.core as mx
+
+        call_count = [0]
+
+        def mock_get_active():
+            # First call returns high utilization, subsequent calls drop
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return 90_000_000  # 90% utilization
+            return 70_000_000  # 70% — below threshold-5
+
+        monkeypatch.setattr(mx, "device_info", lambda: {
+            "max_recommended_working_set_size": 100_000_000,
+        })
+        monkeypatch.setattr(mx, "get_active_memory", mock_get_active)
+        monkeypatch.setattr(mx, "clear_cache", lambda: None)
+
+        from yunshu_engine.kv_prefix_cache import KVPrefixCache
+        cache = KVPrefixCache(max_entries=64)
+
+        # Add multiple entries
+        for i in range(5):
+            tokens = mx.array([i + 1] * 64)
+            cache.add(tokens, [])
+
+        assert cache.size == 5
+        evicted = cache.evict_under_pressure(threshold_pct=85.0)
+        assert evicted >= 1
+        assert cache.size < 5
+
+    def test_evict_under_pressure_max_evict_cap(self, monkeypatch):
+        """evict_under_pressure caps eviction at 25% of entries per call."""
+        import mlx.core as mx
+
+        monkeypatch.setattr(mx, "device_info", lambda: {
+            "max_recommended_working_set_size": 100_000_000,
+        })
+        monkeypatch.setattr(mx, "get_active_memory", lambda: 90_000_000)
+        monkeypatch.setattr(mx, "clear_cache", lambda: None)
+
+        from yunshu_engine.kv_prefix_cache import KVPrefixCache
+        cache = KVPrefixCache(max_entries=64)
+
+        # Add 20 entries
+        for i in range(20):
+            tokens = mx.array([i + 1] * 64)
+            cache.add(tokens, [])
+
+        evicted = cache.evict_under_pressure(threshold_pct=85.0)
+        # Should evict at most 5 (25% of 20)
+        assert evicted <= 5
+        assert cache.size >= 15

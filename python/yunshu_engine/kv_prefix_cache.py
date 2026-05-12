@@ -394,6 +394,62 @@ class KVPrefixCache:
             self._remove_entry(lru_index)
             logger.info("KV prefix cache evicted LRU entry (capacity)")
 
+    def evict_under_pressure(self, threshold_pct: float = 85.0) -> int:
+        """Evict LRU entries when GPU memory is under pressure.
+
+        Checks MLX active memory against max recommended working set.
+        Evicts least-recently-used entries until utilization drops below
+        threshold or cache is empty.
+
+        Pattern from vllm-mlx: proactive eviction prevents OOM on Apple
+        Silicon UMA where GPU and CPU share the same memory pool.
+
+        Args:
+            threshold_pct: Memory utilization percentage to trigger eviction.
+
+        Returns:
+            Number of entries evicted.
+        """
+        if not self._prompts:
+            return 0
+
+        try:
+            info = mx.device_info()
+            max_ws = info.get("max_recommended_working_set_size") if isinstance(info, dict) else None
+            if max_ws is None:
+                return 0
+            active = mx.get_active_memory()
+            util_pct = (active / max_ws) * 100
+
+            if util_pct < threshold_pct:
+                return 0
+
+            evicted = 0
+            # Evict up to 25% of entries to amortize the check cost
+            max_evict = max(1, len(self._prompts) // 4)
+
+            while self._prompts and evicted < max_evict:
+                # Re-check pressure each iteration
+                active = mx.get_active_memory()
+                if (active / max_ws) * 100 < threshold_pct - 5.0:
+                    break
+
+                lru_index = self._last_used.index(min(self._last_used))
+                self._remove_entry(lru_index)
+                evicted += 1
+
+            if evicted > 0:
+                mx.clear_cache()
+                logger.info(
+                    f"KV prefix cache pressure eviction: {evicted} entries freed "
+                    f"(utilization was {util_pct:.1f}%)"
+                )
+            return evicted
+
+        except Exception:
+            logger.debug("memory pressure check failed", exc_info=True)
+            return 0
+
     def clear(self) -> None:
         """Clear all cached entries."""
         self._prompts.clear()
