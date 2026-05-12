@@ -44,6 +44,8 @@
 | P0-3 | `min_p` 參數正確傳遞到 `_generate_fast()` | ✅ 已修復 | 全數通過 |
 | P0-4 | `seed` 參數在 chat.py 所有 8 個引擎調用路徑中傳遞 | ✅ 已修復 | 全數通過 |
 | P0-5 | ChatCompletionRequest 添加輸入驗證 (temperature 0-2, top_p 0-1, max_tokens 1-131072, stop 最多 16 條) | ✅ 已修復 | 全數通過 |
+| P0-1 | WebUI 5 個 404 endpoint 已添加到 admin router (models/{id}/settings, logs, cache/status, cache/clear) | ✅ 已修復 | 全數通過 |
+| P0-2 | API key DELETE 方法不匹配已修復 — 添加 body-based DELETE /admin/keys 端點 | ✅ 已修復 | 全數通過 |
 | M2 | Audio `response_format` 不再假裝支持 mp3/opus/pcm — 只接受 wav | ✅ 已修復 | 全數通過 |
 | M3 | TTS streaming 端點現在正確傳遞 `instruct` 參數 (含 voice 默認值) | ✅ 已修復 | 全數通過 |
 | M5 | VLM 多模型路由優先匹配 `req.model`，不再盲目選取第一個 | ✅ 已修復 | 全數通過 |
@@ -53,8 +55,6 @@
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P0-1 | WebUI 5 個 404 endpoint | P0 |
-| P0-2 | API key DELETE 方法不匹配 | P0 |
 | P0-6 | SSRF (bench.py base_url) | P0 |
 | M4 | guidance_scale/negative_prompt 移除或實現 | P0 |
 | P1-1~5 | 核心功能接入 (SSD, N-gram, SpecPrefill, Gateway params, Monitoring) | P1 |

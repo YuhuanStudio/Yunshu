@@ -360,6 +360,25 @@ async def delete_rbac_key(key_name: str, request: Request, _=Depends(require_per
     return {"status": "deleted", "count": count}
 
 
+@router.delete("/keys")
+async def delete_rbac_key_by_body(request: Request, _=Depends(require_permission("can_manage_tokens"))):
+    """Delete an RBAC API key — body-based variant for WebUI compatibility.
+
+    WebUI sends DELETE /admin/keys with body {key: "..."} instead of
+    using the path param /admin/keys/{key_name}. This handler bridges
+    the gap.
+    """
+    body = await request.json()
+    key = body.get("key") or body.get("key_name")
+    if not key:
+        raise HTTPException(status_code=400, detail="Missing 'key' in request body")
+    manager = _get_rbac_manager(request)
+    count = manager.delete_key(key)
+    if count == 0:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"status": "deleted", "count": count}
+
+
 # ── System Monitoring (oMLX pattern) ──
 
 
@@ -522,3 +541,98 @@ async def get_memory_guard_stats(_=Depends(require_permission("can_view_admin"))
         "stats": stats,
         "recommendations": recommendations,
     }
+
+
+# ---------------------------------------------------------------------------
+# WebUI-required endpoints (frontend calls these)
+# ---------------------------------------------------------------------------
+
+@router.get("/models/{model_id}/settings")
+async def get_model_settings(model_id: str, _=Depends(require_permission("can_view_admin"))):
+    """Return per-model settings (WebUI Admin models tab)."""
+    from ..engine import get_model_manager
+
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(status_code=404, detail="Model manager not initialized")
+
+    for entry in manager.list_entries():
+        if entry.model_id == model_id:
+            return {
+                "model_id": model_id,
+                "model_type": getattr(entry, 'model_type', 'unknown'),
+                "loaded": entry.is_loaded,
+                "pinned": getattr(entry, 'is_pinned', False),
+                "settings": {},
+            }
+    raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+
+
+@router.put("/models/{model_id}/settings")
+async def update_model_settings(model_id: str, request: Request, _=Depends(require_permission("can_load_models"))):
+    """Update per-model settings (WebUI Admin models tab)."""
+    body = await request.json()
+    # Placeholder — per-model settings not yet implemented
+    return {"model_id": model_id, "updated": True, "settings": body}
+
+
+@router.get("/logs")
+async def get_admin_logs(
+    level: str = "info",
+    lines: int = 100,
+    _=Depends(require_permission("can_view_admin")),
+):
+    """Return recent log entries (WebUI Admin logs tab)."""
+    import logging
+
+    logger = logging.getLogger("yunshu")
+    if not hasattr(logger, 'recent_logs'):
+        return {"logs": [], "total": 0, "level": level}
+
+    logs = getattr(logger, 'recent_logs', [])
+    filtered = [l for l in logs if level == "all" or l.get("level", "").lower() == level]
+    return {"logs": filtered[-lines:], "total": len(filtered), "level": level}
+
+
+@router.get("/cache/status")
+async def get_cache_status(_=Depends(require_permission("can_view_admin"))):
+    """Return KV cache status (WebUI Admin cache tab)."""
+    from ..engine import get_engine, get_model_manager
+
+    caches = []
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and hasattr(entry.engine, 'get_kv_cache_stats'):
+                try:
+                    stats = entry.engine.get_kv_cache_stats()
+                    caches.append({"model_id": entry.model_id, "stats": stats})
+                except Exception:
+                    caches.append({"model_id": entry.model_id, "stats": {}})
+    else:
+        engine = get_engine()
+        if engine and hasattr(engine, 'get_kv_cache_stats'):
+            try:
+                caches.append({"model_id": getattr(engine, 'model_name', 'default'), "stats": engine.get_kv_cache_stats()})
+            except Exception:
+                pass
+
+    return {"caches": caches, "total": len(caches)}
+
+
+@router.post("/cache/clear")
+async def clear_cache(_=Depends(require_permission("can_load_models"))):
+    """Clear KV caches (WebUI Admin cache tab)."""
+    from ..engine import get_engine, get_model_manager
+
+    cleared = 0
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and hasattr(entry.engine, '_kv_prefix_cache'):
+                try:
+                    entry.engine._kv_prefix_cache.clear()
+                    cleared += 1
+                except Exception:
+                    pass
+    return {"cleared": cleared, "status": "ok"}
