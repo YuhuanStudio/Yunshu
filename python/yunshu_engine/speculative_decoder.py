@@ -708,7 +708,7 @@ class LookaheadReasoning:
             elif "</think" in text:
                 self._in_thinking = False
         except Exception:
-            pass
+            logger.debug("thinking state tracking failed", exc_info=True)
 
     def adjust_draft_length(self) -> int:
         """Dynamically adjust draft length based on acceptance rate."""

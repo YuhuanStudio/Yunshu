@@ -54,7 +54,7 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
             if isinstance(engine, ImageGenEngine):
                 img_engine = engine
         except (KeyError, Exception):
-            pass
+            logger.debug(f"failed to load image engine for {req.model}", exc_info=True)
 
     if img_engine is None:
         # Find any loaded ImageGenEngine

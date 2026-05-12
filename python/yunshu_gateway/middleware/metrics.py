@@ -12,6 +12,7 @@ Metrics follow the OpenAI/vLLM pattern:
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -21,6 +22,8 @@ from typing import Optional
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -129,7 +132,7 @@ class _Metrics:
             lines.append(f'yunshu_gpu_memory_bytes{{type="peak"}} {peak}')
             lines.append(f'yunshu_gpu_memory_bytes{{type="cache"}} {cache}')
         except Exception:
-            pass
+            logger.debug("GPU memory stats unavailable", exc_info=True)
 
         # Engine stats (if available)
         try:
@@ -165,7 +168,7 @@ class _Metrics:
             lines.append(f'yunshu_engine_models{{state="running"}} {total_running}')
             lines.append(f'yunshu_engine_models{{state="registered"}} {total_registered}')
         except Exception:
-            pass
+            logger.debug("engine stats unavailable", exc_info=True)
 
         return "\n".join(lines) + "\n"
 
@@ -211,7 +214,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 duration_ms=latency * 1000,
             )
         except Exception:
-            pass
+            logger.debug("metrics aggregator recording failed", exc_info=True)
 
         try:
             from .prometheus_exporter import get_prometheus_metrics
@@ -225,6 +228,6 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 "endpoint": request.url.path,
             })
         except Exception:
-            pass
+            logger.debug("prometheus recording failed", exc_info=True)
 
         return response

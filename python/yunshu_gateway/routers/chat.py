@@ -47,12 +47,12 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         get_metrics().record_tokens(prompt_tokens, completion_tokens)
         get_metrics().record_inference()
     except Exception:
-        pass
+        logger.debug("metrics recording failed", exc_info=True)
     try:
         from yunshu_engine.server_metrics import get_server_metrics
         get_server_metrics().record(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
     except Exception:
-        pass
+        logger.debug("server_metrics recording failed", exc_info=True)
 
 
 # ── Request / Response schemas (OpenAI-compatible) ──
@@ -516,7 +516,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     except HTTPException:
         raise
     except Exception:
-        pass
+        logger.debug("context window validation failed", exc_info=True)
 
     # Check if this is a BatchedEngine (oMLX pattern)
     from yunshu_engine.batched_engine import BatchedEngine
@@ -657,7 +657,7 @@ async def _handle_vlm_chat(
                             vlm_engine = await manager.get_engine(entry.model_id)
                             break
                         except Exception:
-                            pass
+                            logger.debug(f"VLM engine load failed for {entry.model_id}", exc_info=True)
 
         # Fallback: first available VLM engine
         if vlm_engine is None:
@@ -673,7 +673,7 @@ async def _handle_vlm_chat(
                             vlm_engine = await manager.get_engine(entry.model_id)
                             break
                         except Exception:
-                            pass
+                            logger.debug(f"VLM engine load failed for {entry.model_id}", exc_info=True)
 
     if vlm_engine is None:
         raise HTTPException(
@@ -709,7 +709,7 @@ async def _handle_vlm_chat(
             prompt_text = vlm_engine._format_prompt(messages)
             prompt_tok = len(tok.encode(prompt_text))
         except Exception:
-            pass
+            logger.debug("prompt token count failed", exc_info=True)
         completion_tok = len(tok.encode(content))
     else:
         completion_tok = max(1, len(content) // 4)

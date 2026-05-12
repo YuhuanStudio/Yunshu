@@ -11,6 +11,7 @@ Supports:
 - Both Engine (legacy) and BatchedEngine backends
 """
 import json
+import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
@@ -18,6 +19,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from ..engine import get_engine, get_model_manager
@@ -37,7 +40,7 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         get_metrics().record_tokens(prompt_tokens, completion_tokens)
         get_metrics().record_inference()
     except Exception:
-        pass
+        logger.debug("metrics recording failed", exc_info=True)
 
 
 # ── Request / Response schemas ──

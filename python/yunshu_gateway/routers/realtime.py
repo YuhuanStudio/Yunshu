@@ -457,7 +457,7 @@ class RealtimeSession:
                 from ..middleware.metrics import get_metrics
                 get_metrics().record_inference()
             except Exception:
-                pass
+                logger.debug("metrics recording failed", exc_info=True)
 
         except asyncio.CancelledError:
             await self.send_event(_event(

@@ -129,12 +129,12 @@ class EngineCore:
             from .server_metrics import get_server_metrics
             self.scheduler.set_server_metrics(get_server_metrics())
         except Exception:
-            pass
+            logger.debug("server_metrics unavailable", exc_info=True)
         try:
             from .prefill_progress import get_prefill_tracker
             self.scheduler.set_prefill_tracker(get_prefill_tracker())
         except Exception:
-            pass
+            logger.debug("prefill_progress tracker unavailable", exc_info=True)
 
         # Per-request output management
         self._output_collectors: dict[str, Any] = {}
@@ -527,7 +527,7 @@ class EngineCore:
                 if text:
                     return text
             except Exception:
-                pass
+                logger.debug("chat template failed, using fallback", exc_info=True)
 
         # Generic fallback
         parts = []

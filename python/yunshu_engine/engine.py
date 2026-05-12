@@ -860,7 +860,7 @@ class Engine:
                         model_id=self._model_display or self._model_name or "",
                     )
                 except Exception:
-                    pass
+                    logger.debug("server_metrics recording failed", exc_info=True)
 
     def _messages_to_text(
         self,
@@ -896,7 +896,7 @@ class Engine:
                 if text:
                     return text
             except Exception:
-                pass
+                logger.debug("chat template failed, using fallback", exc_info=True)
 
         # Generic fallback
         parts = []

@@ -1,6 +1,10 @@
 """OpenAI Models API compatible router."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from ..engine import get_engine, get_model_manager
@@ -36,7 +40,7 @@ async def list_models() -> dict:
                     stats = entry.engine.get_stats() if hasattr(entry.engine, 'get_stats') else {}
                     model_info["stats"] = stats
                 except Exception:
-                    pass
+                    logger.debug(f"failed to get stats for {entry.model_id}", exc_info=True)
             models.append(model_info)
         return {"object": "list", "data": models}
 

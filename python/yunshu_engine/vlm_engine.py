@@ -401,7 +401,7 @@ class VLMEngine:
                     img_hash = compute_image_hash(f.read())
                 cached_features = self._vision_cache.get(img_hash, self.model_name)
             except Exception:
-                pass
+                logger.debug("vision cache lookup failed", exc_info=True)
 
         result = vlm_generate(
             self._model,
@@ -540,7 +540,7 @@ class VLMEngine:
                             mx.eval(features)
                             self._vision_cache.put(img_hash, self.model_name, features)
                 except Exception:
-                    pass
+                    logger.debug("vision cache store failed", exc_info=True)
         except Exception as e:
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
@@ -687,7 +687,7 @@ class VLMEngine:
                 if text:
                     return text
             except Exception:
-                pass
+                logger.debug("chat template failed, using fallback", exc_info=True)
 
         parts = []
         for msg in messages:
@@ -723,6 +723,8 @@ class VLMEngine:
                         url = part.get("image_url", {}).get("url", "")
                         if url.startswith("data:image"):
                             paths.append(await self._save_base64_image(url))
+                        elif url.startswith(("http://", "https://")):
+                            paths.append(await self._download_image(url))
                         elif os.path.exists(url):
                             paths.append(url)
         return paths
@@ -736,6 +738,38 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
         tmp.write(base64.b64decode(data))
         tmp.close()
+        if self._temp_files is None:
+            self._temp_files = []
+        self._temp_files.append(tmp.name)
+        return tmp.name
+
+    async def _download_image(self, url: str) -> str:
+        """Download an image from HTTP/HTTPS URL to a temp file."""
+        import urllib.request
+        import ssl
+
+        ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
+        ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"
+
+        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        try:
+            ctx = ssl.create_default_context()
+            req = urllib.request.Request(url, headers={"User-Agent": "Yunshu/1.0"})
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: urllib.request.urlretrieve(url, tmp.name),
+            )
+        except Exception:
+            # Fallback: try with less strict SSL for some CDNs
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: urllib.request.urlretrieve(url, tmp.name, context=ctx),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to download image from {url}: {e}")
+                raise ValueError(f"Cannot download image: {e}")
         if self._temp_files is None:
             self._temp_files = []
         self._temp_files.append(tmp.name)

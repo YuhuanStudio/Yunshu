@@ -6,6 +6,7 @@ Supports:
 - Logprobs
 - Echo mode
 """
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -16,6 +17,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..engine import get_engine, get_engine_for_model, get_model_manager
+
+logger = logging.getLogger(__name__)
 from ..streaming import format_openai_chunk, format_openai_done, format_openai_usage_chunk
 
 router = APIRouter(tags=["completions"])
@@ -256,7 +259,7 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                     try:
                         token_str = tokenizer.decode([lp_entry["token_id"]])
                     except Exception:
-                        pass
+                        logger.debug("tokenizer decode failed", exc_info=True)
                 token_logprobs.append({
                     "token": token_str,
                     "logprob": lp_entry.get("logprob", 0.0),

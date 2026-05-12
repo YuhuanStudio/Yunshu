@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                             estimated_bytes=info.estimated_size,
                         )
                     except Exception:
-                        pass
+                        logger.debug(f"failed to register model {mid}", exc_info=True)
                 if discovered:
                     import logging as _logging
                     _logging.getLogger(__name__).info(
@@ -235,7 +235,7 @@ def create_app() -> FastAPI:
             from yunshu_engine.server_metrics import get_server_metrics
             result["metrics"] = get_server_metrics().get_snapshot()
         except Exception:
-            pass
+            logger.debug("server metrics unavailable", exc_info=True)
 
         return result
 

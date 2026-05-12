@@ -450,7 +450,7 @@ class ModelManager:
                     if v.engine.has_active_requests():
                         continue
                 except Exception:
-                    pass
+                    logger.debug(f"has_active_requests check failed for {v.model_id}", exc_info=True)
             safe_victims.append(v)
 
         if not safe_victims:

@@ -254,6 +254,32 @@ class PrometheusMetrics:
             "yunshu_inference_duration_seconds",
             "Inference step duration in seconds",
         )
+        self._histograms["ttft_seconds"] = _Histogram(
+            "yunshu_ttft_seconds",
+            "Time to first token in seconds",
+        )
+        self._histograms["itl_seconds"] = _Histogram(
+            "yunshu_itl_seconds",
+            "Inter-token latency in seconds",
+        )
+
+        # Spec decode gauges
+        self._gauges["spec_ngram_proposals"] = _Gauge(
+            "yunshu_spec_ngram_proposals_total",
+            "Total N-gram spec decode proposals made",
+        )
+        self._gauges["spec_ngram_accepted"] = _Gauge(
+            "yunshu_spec_ngram_accepted_total",
+            "Total N-gram spec decode tokens accepted",
+        )
+        self._gauges["spec_ngram_draft"] = _Gauge(
+            "yunshu_spec_ngram_draft_total",
+            "Total N-gram draft tokens generated",
+        )
+        self._gauges["spec_enabled"] = _Gauge(
+            "yunshu_spec_decode_enabled",
+            "Whether speculative decoding is enabled (1=yes, 0=no)",
+        )
 
     # --- Counter API ---
 

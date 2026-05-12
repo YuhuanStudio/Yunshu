@@ -792,7 +792,7 @@ class Scheduler:
                 try:
                     logprobs = resp.logprobs
                 except Exception:
-                    pass
+                    logger.debug("logprobs extraction failed", exc_info=True)
 
             current_state = getattr(resp, 'current_state', 'normal') or 'normal'
             finish_reason = resp.finish_reason
@@ -879,7 +879,7 @@ class Scheduler:
                             output.new_text += final
                             output.output_text = req.output_text
                     except Exception:
-                        pass
+                        logger.debug("detokenizer step failed", exc_info=True)
 
                 # Update request state
                 status_map = {
@@ -1199,7 +1199,7 @@ class Scheduler:
         try:
             stats["thinking_segment_store"] = self._thinking_store.get_stats()
         except Exception:
-            pass
+            logger.debug("thinking segment store stats unavailable", exc_info=True)
         return stats
 
 

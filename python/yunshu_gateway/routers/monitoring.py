@@ -8,6 +8,7 @@ observability by operators and Prometheus scraping.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import subprocess
@@ -16,6 +17,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query
 from fastapi.responses import PlainTextResponse
+
+logger = logging.getLogger(__name__)
 
 from ..middleware.metrics_aggregator import get_metrics_aggregator
 from ..middleware.prometheus_exporter import get_prometheus_metrics
@@ -115,7 +118,7 @@ def _get_model_status() -> list[dict[str, Any]]:
                 try:
                     info["stats"] = entry.engine.get_stats()
                 except Exception:
-                    pass
+                    logger.debug(f"failed to get stats for {entry.model_id}", exc_info=True)
             results.append(info)
         return results
 
@@ -210,8 +213,24 @@ async def requests_stats(
 
 @router.get("/prometheus", response_class=PlainTextResponse)
 async def prometheus_export() -> str:
-    """Full Prometheus exposition-format output."""
-    return get_prometheus_metrics().generate()
+    """Full Prometheus exposition-format output with live engine stats."""
+    pm = get_prometheus_metrics()
+
+    # Refresh spec decode stats into Prometheus gauges
+    from ..engine import get_model_manager
+    from ..engine.batched_engine import BatchedEngine
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+                ngram_stats = getattr(entry.engine, '_ngram_stats', {})
+                pm.set_gauge("spec_ngram_proposals", ngram_stats.get("proposals", 0))
+                pm.set_gauge("spec_ngram_accepted", ngram_stats.get("accepted", 0))
+                pm.set_gauge("spec_ngram_draft", ngram_stats.get("total_draft", 0))
+                pm.set_gauge("spec_enabled",
+                    1 if (entry.engine._spec_enabled or entry.engine._ngram_proposer is not None) else 0)
+
+    return pm.generate()
 
 
 @router.get("/kv-cache")
@@ -236,7 +255,7 @@ async def kv_cache_stats() -> dict[str, Any]:
             try:
                 caches.append({"model_id": engine.model_name, **engine.get_kv_cache_stats()})
             except Exception:
-                pass
+                logger.debug("kv cache stats unavailable", exc_info=True)
     return {"caches": caches}
 
 

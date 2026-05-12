@@ -431,7 +431,7 @@ class KVPrefixCache:
             try:
                 stats["ssd_cache"] = self._ssd_cache.get_stats()
             except Exception:
-                pass
+                logger.debug("SSD cache stats unavailable", exc_info=True)
         return stats
 
     def enable_ssd_cache(

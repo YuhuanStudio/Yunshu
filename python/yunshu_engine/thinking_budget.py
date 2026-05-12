@@ -260,14 +260,14 @@ def resolve_think_close_pattern(
             if ids:
                 leading_ids = list(ids)
         except Exception:
-            pass
+            logger.debug("tokenizer encode for leading tags failed", exc_info=True)
     if raw_trailing:
         try:
             ids = tokenizer.encode(raw_trailing, add_special_tokens=False)
             if ids:
                 trailing_ids = list(ids)
         except Exception:
-            pass
+            logger.debug("tokenizer encode for trailing tags failed", exc_info=True)
 
     return leading_ids, trailing_ids
 
@@ -288,7 +288,7 @@ def _get_think_token_id(tokenizer, attr_name: str) -> int | None:
             try:
                 return tokenizer.convert_tokens_to_ids(token)
             except Exception:
-                pass
+                logger.debug("convert_tokens_to_ids failed", exc_info=True)
 
     return None
 

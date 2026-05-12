@@ -5,6 +5,7 @@ Uses MLX-native model inference (BGE, E5, Nomic, etc.).
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Optional
@@ -14,6 +15,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..engine import get_engine, get_model_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["embeddings"])
 
@@ -104,7 +107,7 @@ async def _resolve_embedding_engine(model_id: str):
             engine = await manager.get_engine(model_id)
             return engine
         except (KeyError, Exception):
-            pass
+            logger.debug(f"failed to load engine for {model_id}", exc_info=True)
 
     # Single engine
     engine = get_engine()
