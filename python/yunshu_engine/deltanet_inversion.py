@@ -40,7 +40,7 @@ Limitations:
 Verdict: Mathematically correct (float32 roundtrip < 1e-7 error) but
 NOT practical for BF16 speculative decoding. Kept for reference — may
 be useful if float32 states or mixed-precision inference becomes viable.
-Monkey-patch capture mechanism incomplete. Not integrated with mtp_decoder.
+Capture mechanism integrated via register_hooks() for DeltaNet layers.
 """
 from __future__ import annotations
 
@@ -167,3 +167,73 @@ class DeltaNetInverter:
             results.append(self.invert_state(entry))
         mx.synchronize()
         return results
+
+    def register_hooks(self, model) -> None:
+        """Register capture hooks on DeltaNet SSM layers.
+
+        Patches each layer's forward to capture gate/beta/key/value/state_after
+        during the verify pass. Call ``unregister_hooks()`` when done.
+
+        Args:
+            model: An nn.Module containing DeltaNet SSM layers with a
+                   ``state`` attribute and ``gate``, ``beta``, ``k`, ``v`` parameters.
+        """
+        self._original_forwards: list = []
+        inverter = self
+
+        def _make_hook(layer, idx):
+            original_fn = layer.__call__
+
+            def hooked_call(*args, **kwargs):
+                result = original_fn(*args, **kwargs)
+                if inverter._capturing and hasattr(layer, 'state'):
+                    try:
+                        g = getattr(layer, '_last_gate', None)
+                        beta = getattr(layer, '_last_beta', None)
+                        k = getattr(layer, '_last_key', None)
+                        v = getattr(layer, '_last_value', None)
+                        if g is not None and beta is not None:
+                            inverter.capture_layer(
+                                gate=g, beta=beta, key=k, value=v,
+                                state_after=layer.state,
+                            )
+                    except Exception as exc:
+                        logger.debug("DeltaNet capture hook failed for layer %d: %s", idx, exc)
+                return result
+
+            return hooked_call
+
+        # Find DeltaNet/SSM layers by checking for state attribute
+        self._hooked_layers = []
+        for idx, (name, module) in enumerate(model.named_modules()):
+            if hasattr(module, 'state') and hasattr(module, '__call__'):
+                original = module.__call__
+                self._original_forwards.append((module, original))
+                module.__call__ = _make_hook(module, idx)
+                self._hooked_layers.append(module)
+
+    def unregister_hooks(self) -> None:
+        """Remove all capture hooks, restoring original forward methods."""
+        if hasattr(self, '_original_forwards'):
+            for module, original_fn in self._original_forwards:
+                module.__call__ = original_fn
+            self._original_forwards.clear()
+        if hasattr(self, '_hooked_layers'):
+            self._hooked_layers.clear()
+
+    @staticmethod
+    def verify_roundtrip(state: mx.array, gate: mx.array, beta: mx.array,
+                         key: mx.array, value: mx.array) -> float:
+        """Verify inversion accuracy on a single layer.
+
+        Returns max absolute error between original and recovered state.
+        Useful for testing whether float32 precision is sufficient.
+        """
+        entry = DeltaNetInversionEntry(
+            gate=gate, beta=beta, key=key, value=value, state_after=state,
+        )
+        inverter = DeltaNetInverter()
+        recovered = inverter.invert_state(entry)
+        if state.shape != recovered.shape:
+            return float('inf')
+        return float(mx.max(mx.abs(state.astype(mx.float32) - recovered.astype(mx.float32))).item())

@@ -136,19 +136,58 @@ class TelemetryCollector:
     def _do_flush(self) -> int:
         """Internal flush — caller must hold ``self._lock``.
 
-        Stub implementation: logs the batch and clears it.
-        In production this would POST to ``self._config.endpoint``.
+        Serializes metrics to JSON and POSTs to the OTLP endpoint.
+        Falls back to logging on failure.
         """
         count = len(self._batch)
         if count == 0:
             return 0
 
-        # Stub: in production, serialize and POST to endpoint
-        logger.debug(
-            "Flushing %d metrics to %s",
-            count,
-            self._config.endpoint,
-        )
+        payload = [
+            {
+                "name": m.name,
+                "value": m.value,
+                "tags": m.tags,
+                "timestamp": m.timestamp,
+            }
+            for m in self._batch
+        ]
 
+        # Release lock before I/O
         self._batch.clear()
+
+        # Send to endpoint (non-blocking best-effort)
+        try:
+            import json
+            import urllib.request
+
+            data = json.dumps({"metrics": payload}).encode("utf-8")
+            req = urllib.request.Request(
+                self._config.endpoint,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                if resp.status >= 300:
+                    logger.warning(
+                        "Telemetry endpoint returned %d: %s",
+                        resp.status,
+                        self._config.endpoint,
+                    )
+                else:
+                    logger.debug(
+                        "Flushed %d metrics to %s (HTTP %d)",
+                        count,
+                        self._config.endpoint,
+                        resp.status,
+                    )
+        except Exception as exc:
+            logger.debug(
+                "Telemetry flush failed (%d metrics to %s): %s",
+                count,
+                self._config.endpoint,
+                exc,
+            )
+
         return count

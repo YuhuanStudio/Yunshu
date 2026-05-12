@@ -470,18 +470,30 @@ class TestBenchmarkAneVsGpu:
     def test_returns_expected_keys(self):
         from yunshu_engine.ane_embedding import benchmark_ane_vs_gpu
 
-        result = benchmark_ane_vs_gpu(["hello world"])
+        with patch("yunshu_engine.ane_embedding.ANEEmbeddingProcessor") as mock_proc_cls:
+            mock_proc = MagicMock()
+            mock_proc.embed.return_value = [[0.1] * 384]
+            mock_proc_cls.return_value = mock_proc
+            result = benchmark_ane_vs_gpu(["hello world"])
         expected_keys = {"gpu_latency_ms", "ane_latency_ms", "speedup", "accuracy_diff"}
         assert set(result.keys()) == expected_keys
 
     def test_gpu_latency_positive(self):
         from yunshu_engine.ane_embedding import benchmark_ane_vs_gpu
 
-        result = benchmark_ane_vs_gpu(["test text"])
+        with patch("yunshu_engine.ane_embedding.ANEEmbeddingProcessor") as mock_proc_cls:
+            mock_proc = MagicMock()
+            mock_proc.embed.return_value = [[0.1] * 384]
+            mock_proc_cls.return_value = mock_proc
+            result = benchmark_ane_vs_gpu(["test text"])
         assert result["gpu_latency_ms"] > 0
 
     def test_returns_dict(self):
         from yunshu_engine.ane_embedding import benchmark_ane_vs_gpu
 
-        result = benchmark_ane_vs_gpu(["a", "b"])
+        with patch("yunshu_engine.ane_embedding.ANEEmbeddingProcessor") as mock_proc_cls:
+            mock_proc = MagicMock()
+            mock_proc.embed.return_value = [[0.1] * 384, [0.2] * 384]
+            mock_proc_cls.return_value = mock_proc
+            result = benchmark_ane_vs_gpu(["a", "b"])
         assert isinstance(result, dict)

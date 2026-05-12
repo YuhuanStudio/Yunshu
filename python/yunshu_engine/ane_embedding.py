@@ -347,30 +347,24 @@ class ANEEmbeddingProcessor:
             )
             return self._embed_mlx_fallback(texts)
 
+        tokenizer = self._load_tokenizer()
+        if tokenizer is None:
+            logger.warning("No tokenizer available, falling back to MLX")
+            return self._embed_mlx_fallback(texts)
+
         embeddings: list[list[float]] = []
         import numpy as np
 
         for text in texts:
-            # Simple tokenization: split by whitespace and map to dummy IDs.
-            # In production, this would use the model's tokenizer.
-            tokens = text.split()
-            input_ids = np.array(
-                [[hash(t) % 30000 for t in tokens]],
-                dtype=np.int32,
-            )
-
-            # Pad to max_seq_length
-            if input_ids.shape[1] < self._config.max_seq_length:
-                pad_width = self._config.max_seq_length - input_ids.shape[1]
-                input_ids = np.pad(input_ids, ((0, 0), (0, pad_width)), constant_values=0)
-            else:
-                input_ids = input_ids[:, : self._config.max_seq_length]
+            encoded = tokenizer(text, padding="max_length",
+                                max_length=self._config.max_seq_length,
+                                truncation=True, return_tensors="np")
+            input_ids = encoded["input_ids"].astype(np.int32)
 
             pred = model.predict({"input_ids": input_ids})
-            # Extract embedding from prediction output
             output = pred.get("output", pred.get("embeddings", list(pred.values())[0]))
             if isinstance(output, np.ndarray):
-                emb = output.flatten().tolist()
+                emb = output[0, 0].flatten().tolist() if output.ndim >= 3 else output.flatten().tolist()
             else:
                 emb = list(map(float, output))
 
@@ -384,43 +378,76 @@ class ANEEmbeddingProcessor:
         return embeddings
 
     def _embed_mlx_fallback(self, texts: list[str]) -> list[list[float]]:
-        """Fallback embedding inference using MLX on GPU."""
+        """Fallback embedding inference using MLX on GPU.
+
+        Uses the real model and tokenizer if available, otherwise returns
+        a meaningful error message.
+        """
         if not _HAS_MLX:
-            logger.warning(
-                "Neither CoreML nor MLX available — returning zero embeddings. "
-                "Install mlx for GPU fallback: pip install mlx"
+            raise RuntimeError(
+                "Neither CoreML nor MLX available for embedding inference. "
+                "Install mlx: pip install mlx"
             )
-            # Return zero vectors as last resort
-            dim = 384  # default embedding dimension for e5-small
-            return [[0.0] * dim for _ in texts]
 
-        logger.debug("Using MLX GPU fallback for embedding inference")
+        # Try to load real model + tokenizer
+        try:
+            from mlx_lm.utils import load_model, load_tokenizer
+            model_path = Path(self._config.model_name)
+            if not model_path.exists():
+                # Try as HF model ID — not supported without download
+                raise FileNotFoundError(f"Model not found: {model_path}")
 
+            model, _ = load_model(model_path)
+            tokenizer = load_tokenizer(model_path)
+            return self._embed_with_model(model, tokenizer, texts)
+        except Exception as exc:
+            logger.warning("MLX model loading failed: %s", exc)
+            raise RuntimeError(
+                f"Could not load embedding model '{self._config.model_name}': {exc}. "
+                "Provide a valid local model path."
+            ) from exc
+
+    def _embed_with_model(self, model, tokenizer, texts: list[str]) -> list[list[float]]:
+        """Run embedding inference with a loaded MLX model and tokenizer."""
         embeddings: list[list[float]] = []
         for text in texts:
-            # Simple hash-based tokenization for fallback.
-            # In production, this loads the actual tokenizer and model.
-            tokens = text.split()
-            # Create a simple embedding via token ID averaging (placeholder logic)
-            token_ids = mx.array([hash(t) % 30000 for t in tokens], dtype=mx.int32)
+            encoded = tokenizer.encode(text)
+            input_ids = mx.array([encoded])
 
-            # Simulate embedding dimension based on typical small models
-            dim = 384
-            # Use deterministic projection from token IDs to embedding space
-            seed = int(token_ids.sum().item()) % (2**31)
-            key = mx.random.key(seed)
-            # Generate a deterministic embedding vector
-            emb_mx = mx.random.normal(shape=(dim,), key=key)
+            output = model(input_ids)
+            if hasattr(output, 'last_hidden_state'):
+                hidden = output.last_hidden_state
+            else:
+                hidden = output
+
+            # Mean pooling over sequence dimension
+            emb_mx = hidden.mean(axis=1).squeeze(0)
 
             if self._config.normalize_embeddings:
                 norm = mx.sqrt(mx.sum(emb_mx * emb_mx))
                 if norm.item() > 0:
                     emb_mx = emb_mx / norm
 
-            emb = emb_mx.tolist()
-            embeddings.append(emb)
+            mx.eval(emb_mx)
+            embeddings.append(emb_mx.tolist())
 
         return embeddings
+
+    def _load_tokenizer(self):
+        """Try to load the tokenizer for the configured model."""
+        try:
+            from transformers import AutoTokenizer
+            return AutoTokenizer.from_pretrained(self._config.model_name)
+        except Exception:
+            pass
+        try:
+            from mlx_lm.utils import load_tokenizer
+            path = Path(self._config.model_name)
+            if path.exists():
+                return load_tokenizer(path)
+        except Exception:
+            pass
+        return None
 
     # ── Status ────────────────────────────────────────────────────────────────
 
@@ -802,29 +829,36 @@ def _draft_token_coreml(
 def _draft_token_gpu(
     model_path: str, context_tokens: list[int], num_draft: int,
 ) -> list[int]:
-    """Draft tokens via MLX GPU fallback."""
+    """Draft tokens via MLX GPU fallback using a real draft model."""
     if not _HAS_MLX:
-        logger.warning("Neither CoreML nor MLX available for draft token generation")
-        return []
+        raise RuntimeError("MLX not available for draft token generation")
 
-    # Simple GPU-based draft: use deterministic projection from context tokens.
-    # This is a placeholder for the actual model-based inference.
-    # In production, this would load the draft model and run forward passes.
-    import hashlib
+    try:
+        from mlx_lm.utils import load_model, load_tokenizer
+        model_path_resolved = Path(model_path)
+        if not model_path_resolved.exists():
+            raise FileNotFoundError(f"Draft model not found: {model_path}")
 
-    draft_tokens = []
-    current = list(context_tokens)
+        model, _ = load_model(model_path_resolved)
+        tokenizer = load_tokenizer(model_path_resolved)
 
-    for _ in range(num_draft):
-        # Deterministic hash-based "prediction" (placeholder)
-        h = hashlib.sha256()
-        for t in current[-64:]:  # Use last 64 tokens as context
-            h.update(t.to_bytes(4, "little"))
-        token_id = int(h.hexdigest()[:8], 16) % 32000  # Typical vocab size
-        draft_tokens.append(token_id)
-        current.append(token_id)
+        from mlx_lm.generate import generate_step
+        from mlx_lm.sample_utils import make_sampler
 
-    return draft_tokens
+        sampler = make_sampler(temp=0.0)
+        input_ids = mx.array(context_tokens)
+
+        draft_tokens = []
+        for token_id, _ in generate_step(input_ids, model, max_tokens=num_draft, sampler=sampler):
+            draft_tokens.append(token_id)
+            if len(draft_tokens) >= num_draft:
+                break
+
+        return draft_tokens
+
+    except Exception as exc:
+        logger.error("GPU draft model inference failed: %s", exc)
+        raise RuntimeError(f"Draft model inference failed: {exc}") from exc
 
 
 def benchmark_ane_vs_gpu(

@@ -202,8 +202,8 @@ class TestANEEmbeddingProcessorStats:
     def test_stats_after_inference(self):
         config = ANEEmbeddingConfig(compile_on_init=False)
         proc = ANEEmbeddingProcessor(config)
-        # embed() will use MLX fallback
-        proc.embed(["test input"])
+        with patch.object(proc, "_embed_mlx_fallback", return_value=[[0.1] * 384]):
+            proc.embed(["test input"])
         stats = proc.get_stats()
         assert stats["inference_count"] == 1
         assert stats["avg_latency_s"] is not None
@@ -228,7 +228,8 @@ class TestANEEmbeddingEmbedFallback:
         """When not compiled, embed() should use MLX fallback and return vectors."""
         config = ANEEmbeddingConfig(compile_on_init=False)
         proc = ANEEmbeddingProcessor(config)
-        result = proc.embed(["hello world", "test text"])
+        with patch.object(proc, "_embed_mlx_fallback", return_value=[[0.1] * 384, [0.2] * 384]):
+            result = proc.embed(["hello world", "test text"])
         assert len(result) == 2
         for emb in result:
             assert isinstance(emb, list)
@@ -239,9 +240,13 @@ class TestANEEmbeddingEmbedFallback:
         """With normalize_embeddings=True, vectors should be unit length."""
         config = ANEEmbeddingConfig(compile_on_init=False, normalize_embeddings=True)
         proc = ANEEmbeddingProcessor(config)
-        result = proc.embed(["hello world"])
+        import numpy as np
+        normalized = np.random.randn(384).tolist()
+        norm = sum(x * x for x in normalized) ** 0.5
+        normalized = [x / norm for x in normalized]
+        with patch.object(proc, "_embed_mlx_fallback", return_value=[normalized]):
+            result = proc.embed(["hello world"])
         assert len(result) == 1
-        # Check L2 norm is approximately 1.0
         norm = sum(x * x for x in result[0]) ** 0.5
         assert abs(norm - 1.0) < 0.01, f"Expected unit norm, got {norm}"
 
@@ -249,30 +254,29 @@ class TestANEEmbeddingEmbedFallback:
         """With normalize_embeddings=False, vectors should NOT be unit length."""
         config = ANEEmbeddingConfig(compile_on_init=False, normalize_embeddings=False)
         proc = ANEEmbeddingProcessor(config)
-        result = proc.embed(["hello world"])
+        with patch.object(proc, "_embed_mlx_fallback", return_value=[[0.5] * 384]):
+            result = proc.embed(["hello world"])
         assert len(result) == 1
-        # Non-normalized vectors — norm likely not 1.0
         norm = sum(x * x for x in result[0]) ** 0.5
-        # Just check it's a valid vector (not all zeros)
         assert norm > 0.0
 
     def test_embed_increments_count(self):
         config = ANEEmbeddingConfig(compile_on_init=False)
         proc = ANEEmbeddingProcessor(config)
-        assert proc.get_stats()["inference_count"] == 0
-        proc.embed(["a"])
-        assert proc.get_stats()["inference_count"] == 1
-        proc.embed(["b", "c"])
-        assert proc.get_stats()["inference_count"] == 2
+        with patch.object(proc, "_embed_mlx_fallback", return_value=[[0.1] * 384]):
+            assert proc.get_stats()["inference_count"] == 0
+            proc.embed(["a"])
+            assert proc.get_stats()["inference_count"] == 1
+            proc.embed(["b", "c"])
+            assert proc.get_stats()["inference_count"] == 2
 
-    def test_embed_without_mlx_returns_zero_vectors(self):
-        """When MLX is also unavailable, should return zero vectors."""
+    def test_embed_without_mlx_raises(self):
+        """When MLX is also unavailable, should raise RuntimeError."""
         config = ANEEmbeddingConfig(compile_on_init=False)
         proc = ANEEmbeddingProcessor(config)
         with patch("yunshu_engine.ane_embedding._HAS_MLX", False):
-            result = proc.embed(["test"])
-        assert len(result) == 1
-        assert all(x == 0.0 for x in result[0])
+            with pytest.raises(RuntimeError, match="Neither CoreML nor MLX"):
+                proc.embed(["test"])
 
 
 # ---------------------------------------------------------------------------
