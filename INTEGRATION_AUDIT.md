@@ -55,8 +55,8 @@
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P0-6 | SSRF (bench.py base_url) | P0 |
-| M4 | guidance_scale/negative_prompt 移除或實現 | P0 |
+| P0-6 | SSRF (bench.py base_url) | ✅ 已修復 | 全數通過 |
+| M4 | guidance_scale/negative_prompt 移除或實現 | ✅ 已移除假參數 | 全數通過 |
 | P1-1~5 | 核心功能接入 (SSD, N-gram, SpecPrefill, Gateway params, Monitoring) | P1 |
 | M6~9 | 多模態功能接入 (Vision Cache, mRoPE, ASR segments, VLM params) | P1 |
 

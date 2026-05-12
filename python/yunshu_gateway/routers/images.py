@@ -21,12 +21,13 @@ class ImageGenerateRequest(BaseModel):
     prompt: str
     model: str = "Z-Image-Turbo-MLX-4bit"
     n: int = 1
-    size: str = "1024x1024"  # WxH format
-    response_format: str = "b64_json"  # b64_json or url
-    negative_prompt: str = ""
+    size: str = "1024x1024"
+    response_format: str = "b64_json"
     num_inference_steps: int = 4
-    guidance_scale: float = 3.5
     seed: Optional[int] = None
+    # Note: guidance_scale and negative_prompt removed — Turbo models
+    # don't support classifier-free guidance. These params were accepted
+    # but silently ignored by the engine.
 
 
 @router.post("/images/generations")
@@ -79,11 +80,9 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
         try:
             png_bytes = await img_engine.generate_image(
                 prompt=req.prompt,
-                negative_prompt=req.negative_prompt,
                 width=width,
                 height=height,
                 num_inference_steps=req.num_inference_steps,
-                guidance_scale=req.guidance_scale,
                 seed=(req.seed + i) if req.seed is not None else None,
             )
         except Exception as e:
@@ -127,11 +126,9 @@ async def stream_image_generation(req: ImageGenerateRequest):
     async def _progress_stream():
         async for chunk in img_engine.generate_image_stream(
             prompt=req.prompt,
-            negative_prompt=req.negative_prompt,
             width=int(req.size.split("x")[0]) if "x" in req.size else 1024,
             height=int(req.size.split("x")[1]) if "x" in req.size else 1024,
             num_inference_steps=req.num_inference_steps,
-            guidance_scale=req.guidance_scale,
             seed=req.seed,
         ):
             if chunk.get("is_final") and chunk.get("image"):

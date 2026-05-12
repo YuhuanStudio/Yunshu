@@ -12,7 +12,7 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,22 @@ class RooflineRequest(BaseModel):
     dtype: str = Field(default="float16")
 
 
+def _validate_base_url(url: str) -> str:
+    """Prevent SSRF — only allow localhost and 127.0.0.1."""
+    import re
+    host = re.sub(r'^https?://', '', url).split(':')[0].split('/')[0]
+    if host not in ('localhost', '127.0.0.1', '::1'):
+        raise ValueError(f"base_url must target localhost, got '{host}'")
+    return url
+
+
 class LatencyRequest(BaseModel):
     base_url: str = "http://localhost:8000"
     prompt_lengths: list[int] = Field(default=[32, 128, 512])
     max_tokens_list: list[int] = Field(default=[32, 128])
     num_requests: int = Field(default=3, ge=1)
+
+    validate_url = field_validator("base_url")(_validate_base_url)
 
 
 class ThroughputRequest(BaseModel):
@@ -53,6 +64,8 @@ class ThroughputRequest(BaseModel):
     num_requests: int = Field(default=5, ge=1)
     prompt_tokens: int = Field(default=128, ge=1)
     max_tokens: int = Field(default=128, ge=1)
+
+    validate_url = field_validator("base_url")(_validate_base_url)
 
 
 # ── Roofline Benchmark ──

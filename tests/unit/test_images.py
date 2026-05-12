@@ -32,9 +32,7 @@ class TestImageGenerateRequest:
         assert req.n == 1
         assert req.size == "1024x1024"
         assert req.response_format == "b64_json"
-        assert req.negative_prompt == ""
         assert req.num_inference_steps == 4
-        assert req.guidance_scale == 3.5
         assert req.seed is None
 
     def test_custom_model(self):
@@ -63,26 +61,12 @@ class TestImageGenerateRequest:
         )
         assert req.response_format == "b64_json"
 
-    def test_negative_prompt(self):
-        req = ImageGenerateRequest(
-            prompt="a cat",
-            negative_prompt="blurry, low quality",
-        )
-        assert req.negative_prompt == "blurry, low quality"
-
     def test_inference_steps(self):
         req = ImageGenerateRequest(
             prompt="a cat",
             num_inference_steps=20,
         )
         assert req.num_inference_steps == 20
-
-    def test_guidance_scale(self):
-        req = ImageGenerateRequest(
-            prompt="a cat",
-            guidance_scale=7.5,
-        )
-        assert req.guidance_scale == 7.5
 
     def test_seed(self):
         req = ImageGenerateRequest(
@@ -310,9 +294,7 @@ class TestImagesEndpoint:
             "n": 2,
             "size": "512x512",
             "response_format": "b64_json",
-            "negative_prompt": "blurry",
             "num_inference_steps": 8,
-            "guidance_scale": 5.0,
             "seed": 42,
         })
         # May fail due to engine, but should NOT be 422
