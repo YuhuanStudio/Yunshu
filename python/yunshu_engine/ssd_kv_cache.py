@@ -204,6 +204,10 @@ class SSDKVCache:
         # On-disk index: block_hash_hex → _BlockMeta
         self._index: dict[str, _BlockMeta] = {}
 
+        # SQLite persistent index for crash-consistent metadata (C13 pattern)
+        self._sqlite_path = self._cache_dir / "index.db"
+        self._db = self._init_sqlite_index()
+
         # Background writer
         self._write_queue: list[tuple] = []
         self._writer_thread: threading.Thread | None = None
@@ -250,6 +254,7 @@ class SSDKVCache:
                     with self._lock:
                         if block_hash_hex in self._index:
                             self._index[block_hash_hex].file_size = file_size
+                            self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
                         self._writes_completed += 1
                 elif op == "delete":
                     _, file_path = item
@@ -286,7 +291,18 @@ class SSDKVCache:
         self._write_queue.clear()
 
     def _recover_index(self) -> None:
-        """Scan cache directory and rebuild the on-disk index."""
+        """Recover block index from SQLite or scan cache directory."""
+        # Try SQLite first (fast, crash-consistent)
+        if self._db is not None:
+            try:
+                count = self._recover_from_sqlite()
+                if count > 0:
+                    logger.info(f"SSD KV cache: recovered {count} blocks from SQLite index")
+                    return
+            except Exception:
+                logger.debug("SQLite index recovery failed, falling back to scan", exc_info=True)
+
+        # Fallback: scan safetensors headers
         count = 0
         for bucket in self._cache_dir.iterdir():
             if not bucket.is_dir() or len(bucket.name) != 1:
@@ -313,7 +329,87 @@ class SSDKVCache:
                 except Exception:
                     pass
         if count > 0:
-            logger.info(f"SSD KV cache: recovered {count} blocks from disk")
+            logger.info(f"SSD KV cache: recovered {count} blocks from disk scan")
+
+    def _init_sqlite_index(self):
+        """Initialize SQLite database for persistent block metadata."""
+        try:
+            import sqlite3
+            db = sqlite3.connect(str(self._sqlite_path), check_same_thread=False)
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=NORMAL")
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS kv_blocks (
+                    block_hash TEXT PRIMARY KEY,
+                    file_path TEXT NOT NULL,
+                    token_count INTEGER NOT NULL,
+                    model_name TEXT NOT NULL DEFAULT '',
+                    created_at REAL NOT NULL,
+                    file_size INTEGER NOT NULL DEFAULT 0,
+                    last_accessed REAL NOT NULL DEFAULT 0
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_model ON kv_blocks(model_name)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_accessed ON kv_blocks(last_accessed)")
+            db.commit()
+            return db
+        except Exception:
+            logger.debug("SQLite index not available, using in-memory only", exc_info=True)
+            return None
+
+    def _recover_from_sqlite(self) -> int:
+        """Recover block metadata from SQLite index."""
+        import sqlite3
+        rows = self._db.execute(
+            "SELECT block_hash, file_path, token_count, model_name, "
+            "created_at, file_size, last_accessed FROM kv_blocks"
+        ).fetchall()
+        count = 0
+        for row in rows:
+            bh_hex, fpath, tok_count, model, created, fsize, accessed = row
+            # Verify file still exists (orphan cleanup)
+            if not Path(fpath).exists():
+                self._db.execute("DELETE FROM kv_blocks WHERE block_hash = ?", (bh_hex,))
+                continue
+            self._index[bh_hex] = _BlockMeta(
+                block_hash=bytes.fromhex(bh_hex),
+                file_path=fpath,
+                token_count=tok_count,
+                model_name=model,
+                created_at=created,
+                file_size=fsize,
+                last_accessed=accessed,
+            )
+            count += 1
+        if count > 0:
+            self._db.commit()
+        return count
+
+    def _sqlite_upsert(self, hex_hash: str, meta: _BlockMeta) -> None:
+        """Insert or update a block entry in SQLite."""
+        if self._db is None:
+            return
+        try:
+            self._db.execute(
+                "INSERT OR REPLACE INTO kv_blocks "
+                "(block_hash, file_path, token_count, model_name, created_at, file_size, last_accessed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (hex_hash, meta.file_path, meta.token_count, meta.model_name,
+                 meta.created_at, meta.file_size, meta.last_accessed),
+            )
+            self._db.commit()
+        except Exception:
+            logger.debug("SQLite upsert failed", exc_info=True)
+
+    def _sqlite_delete(self, hex_hash: str) -> None:
+        """Delete a block entry from SQLite."""
+        if self._db is None:
+            return
+        try:
+            self._db.execute("DELETE FROM kv_blocks WHERE block_hash = ?", (hex_hash,))
+            self._db.commit()
+        except Exception:
+            logger.debug("SQLite delete failed", exc_info=True)
 
     def _block_path(self, block_hash: bytes) -> str:
         """Get file path for a block hash."""
@@ -379,6 +475,7 @@ class SSDKVCache:
                 model_name=model_name,
                 created_at=time.time(),
             )
+            self._sqlite_upsert(hex_hash, self._index[hex_hash])
 
         # Enqueue for background writing (no lock held here)
         with self._writer_lock:
@@ -408,6 +505,7 @@ class SSDKVCache:
                     with self._lock:
                         if block_hash_hex in self._index:
                             self._index[block_hash_hex].file_size = file_size
+                            self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
                         self._writes_completed += 1
                 elif op == "delete":
                     try:
@@ -490,6 +588,7 @@ class SSDKVCache:
         with self._lock:
             self._hot_cache.pop(hex_hash, None)
             meta = self._index.pop(hex_hash, None)
+            self._sqlite_delete(hex_hash)
 
         if meta is not None and meta.file_path:
             with self._writer_lock:
@@ -503,6 +602,13 @@ class SSDKVCache:
             self._hot_cache.clear()
             paths = [m.file_path for m in self._index.values()]
             self._index.clear()
+            # Clear SQLite index
+            if self._db is not None:
+                try:
+                    self._db.execute("DELETE FROM kv_blocks")
+                    self._db.commit()
+                except Exception:
+                    pass
 
         for p in paths:
             try:
@@ -527,6 +633,7 @@ class SSDKVCache:
                 total_size -= meta.file_size
                 self._index.pop(hex_hash, None)
                 self._hot_cache.pop(hex_hash, None)
+                self._sqlite_delete(hex_hash)
                 try:
                     os.unlink(meta.file_path)
                 except OSError:

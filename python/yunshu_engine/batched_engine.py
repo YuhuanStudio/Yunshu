@@ -67,6 +67,9 @@ class GenerationOutput:
     ttft_ms: float = 0.0
 
 
+_PROGRESSIVE_QUANT_INTERVAL = 256
+
+
 def _maybe_quantize_kv_cache(
     prompt_cache: list,
     quantized_kv_start: int,
@@ -87,6 +90,25 @@ def _maybe_quantize_kv_cache(
                 prompt_cache[i] = c.to_quantized(
                     group_size=kv_group_size, bits=kv_bits
                 )
+
+
+def _progressive_quantize_kv_cache(
+    prompt_cache: list,
+    quantized_kv_start: int,
+    kv_group_size: int,
+    kv_bits: int,
+    current_token_count: int,
+    interval: int = _PROGRESSIVE_QUANT_INTERVAL,
+) -> None:
+    """Progressively quantize KV cache during generation (C6 pattern).
+
+    Called every N tokens during the generate loop to keep memory
+    usage flat instead of peaking at full precision. Quantizes only
+    newly eligible layers since last quantization pass.
+    """
+    if kv_bits is None or current_token_count % interval != 0:
+        return
+    _maybe_quantize_kv_cache(prompt_cache, quantized_kv_start, kv_group_size, kv_bits)
 
 
 class BatchedEngine:
@@ -529,6 +551,13 @@ class BatchedEngine:
                             ttft_s = time.perf_counter() - gen_t0
                             first = False
                         tokens.append(token)
+                        # Progressive KV quantization (C6: keep memory flat during generation)
+                        if self._kv_quant_bits is not None:
+                            _progressive_quantize_kv_cache(
+                                cache, self._kv_quant_start,
+                                self._kv_quant_group_size, self._kv_quant_bits,
+                                len(tokens),
+                            )
                         if logprobs:
                             import mlx.core as mx
                             log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
