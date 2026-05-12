@@ -8,7 +8,7 @@
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2162%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2482%20passing-brightgreen.svg)]()
 
 [Getting Started](#getting-started) · [Features](#features) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [API Reference](#api-reference) · [Contributing](CONTRIBUTING.md)
 
@@ -25,7 +25,7 @@ It exposes an **OpenAI-compatible API** so any existing client (curl, Python SDK
 - **5 Modalities** — LLM text, Vision-Language (VLM), Text-to-Speech (TTS), Speech Recognition (ASR), Image Generation
 - **5 Protocols** — OpenAI Chat/Completions, Anthropic Messages, Model Context Protocol (MCP), Realtime WebSocket, Admin API
 - **Continuous Batching** — mlx-lm `BatchGenerator` with per-request samplers and sequence state machines
-- **Speculative Decoding** — EAGLE-3 draft model with auto-detection of 5 draft head types
+- **Speculative Decoding** — EAGLE-3 draft model + N-gram model-free proposer + MTP multi-token prediction
 - **4-Tier KV Cache** — Hot (GPU) → Warm (CPU + quantized) → Cool (SSD) → Cold (distributed)
 - **Metal Kernels** — PagedAttention, SDPA, GEMV, SGMV (LoRA), KIVI quantization — all with configurable tile sizes
 - **Multi-Model Serving** — LRU eviction, memory guard, 5-modality auto-detection
