@@ -377,7 +377,6 @@ class Scheduler:
         if self.config.memory_guard_enabled and active_count > 0 and to_insert:
             try:
                 import mlx.core as mx
-                import mlx.core as mx
                 active_mem = mx.get_active_memory()
                 from .utils.hardware import get_hardware_info
                 hw = get_hardware_info()

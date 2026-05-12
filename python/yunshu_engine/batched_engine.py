@@ -67,6 +67,28 @@ class GenerationOutput:
     ttft_ms: float = 0.0
 
 
+def _maybe_quantize_kv_cache(
+    prompt_cache: list,
+    quantized_kv_start: int,
+    kv_group_size: int,
+    kv_bits: int,
+) -> None:
+    """Quantize KV cache layers that have exceeded the start threshold.
+
+    Follows mlx-lm's maybe_quantize_kv_cache pattern from generate.py:299.
+    Uses MLX's native cache.to_quantized() for hardware-efficient 4/8-bit
+    KV storage, reducing memory footprint by 2-4x for long sequences.
+    """
+    if kv_bits is None:
+        return
+    for i, c in enumerate(prompt_cache):
+        if hasattr(c, "to_quantized") and hasattr(c, "offset"):
+            if c.offset >= quantized_kv_start:
+                prompt_cache[i] = c.to_quantized(
+                    group_size=kv_group_size, bits=kv_bits
+                )
+
+
 class BatchedEngine:
     """User-facing continuous batching engine (oMLX BatchedEngine pattern).
 
@@ -101,6 +123,11 @@ class BatchedEngine:
         # KV prefix cache for multi-turn speedup
         from .kv_prefix_cache import KVPrefixCache
         self._kv_prefix_cache = KVPrefixCache(max_entries=64, min_prefix_length=32)
+
+        # KV cache quantization config (mlx-lm pattern: to_quantized)
+        self._kv_quant_bits: int | None = None
+        self._kv_quant_group_size: int = 64
+        self._kv_quant_start: int = 0
 
     @property
     def is_loaded(self) -> bool:
@@ -416,6 +443,12 @@ class BatchedEngine:
                             break
 
             # Cache the completed KV state for future prefix matching
+            # Quantize cache layers to save memory (mlx-lm pattern)
+            if self._kv_quant_bits is not None:
+                _maybe_quantize_kv_cache(
+                    cache, self._kv_quant_start,
+                    self._kv_quant_group_size, self._kv_quant_bits,
+                )
             prefix_cache.add(ids, cache)
 
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
