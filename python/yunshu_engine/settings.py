@@ -1,5 +1,8 @@
 """Yunshu Settings — Hierarchical configuration system.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Follows oMLX's settings.py pattern:
 - Layering: CLI args > env vars > settings.json > defaults
 - System resource auto-detection (RAM, SSD)

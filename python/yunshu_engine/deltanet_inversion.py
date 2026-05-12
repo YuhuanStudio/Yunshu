@@ -1,5 +1,8 @@
 """DeltaNet state inversion — analytically invert the SSM recurrence on rejection.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 The GatedDeltaNet recurrence (ICLR 2025, Songlin Yang et al.):
 
     state'  = g * state_old           (decay)

@@ -1,5 +1,8 @@
 """Yunshu BFCL Evaluation Integration — Berkeley Function Calling Leaderboard.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Evaluates tool/function calling accuracy of the Yunshu engine against
 BFCL-format test cases. Supports the four standard BFCL categories:
   - simple:       single function, single call

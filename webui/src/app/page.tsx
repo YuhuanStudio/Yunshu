@@ -1,5 +1,6 @@
 "use client";
 
+import { fmtBytes, guessModelType } from "@/lib/utils";
 import { useEffect, useState, useRef, useCallback } from "react";
 import {
   Activity,
@@ -59,15 +60,6 @@ interface SystemStats {
 interface ModelInfo {
   id: string;
   loaded?: boolean;
-}
-
-function guessModelType(id: string): string {
-  const l = id.toLowerCase();
-  if (l.includes("tts") || l.includes("voice")) return "TTS";
-  if (l.includes("asr") || l.includes("whisper")) return "ASR";
-  if (l.includes("vlm") || l.includes("omni")) return "VLM";
-  if (l.includes("image") || l.includes("turbo")) return "IMAGE_GEN";
-  return "LLM";
 }
 
 const typeConfig: Record<string, { icon: typeof Brain; color: string; bg: string }> = {
@@ -520,13 +512,6 @@ function formatValue(v: number, f: "number" | "decimal" | "percent" | "duration"
     case "duration": return fmtDur(v);
     default: return v.toLocaleString();
   }
-}
-
-function fmtBytes(b: number): string {
-  if (b === 0) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  return `${(b / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
 }
 
 function fmtTok(n: number): string {

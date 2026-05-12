@@ -1,5 +1,8 @@
 """Lightweight telemetry — sampled metric collection with batch flushing.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Usage::
 
     from yunshu_engine.telemetry import TelemetryConfig, TelemetryCollector

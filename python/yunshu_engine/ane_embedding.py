@@ -1,5 +1,8 @@
 """Yunshu ANE Embedding Co-Processor — CoreML-based embedding inference on Apple Neural Engine.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Offloads embedding model inference to the ANE via CoreML for lower latency and
 freeing GPU resources for main LLM inference workloads. Falls back to MLX GPU
 inference when CoreML is unavailable or the model has not been compiled.

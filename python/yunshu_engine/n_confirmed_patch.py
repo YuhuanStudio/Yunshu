@@ -1,5 +1,8 @@
 """n_confirmed support for GatedDeltaNet — enables zero-cost reject in MTP.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 When the model forward processes S=2 tokens with n_confirmed=1, the SSM
 layers process tokens one-at-a-time via the ops-based implementation and
 save state after the first (confirmed) token as rollback_state. This makes

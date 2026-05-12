@@ -89,7 +89,7 @@
 | 指標 | 數值 |
 |------|------|
 | 引擎模塊總數 | 46 |
-| **完全死亡 (DEAD)** | **15 個** — 零管線調用者 |
+| **完全死亡 (DEAD)** | **11 個** — 零管線調用者 (原 15 個，4 個已接入) |
 | 部分接入 (PARTIAL) | 1 個 — SSD 子路徑未啟用 |
 | 已接入 (WIRED) | 30 個 |
 | Gateway 缺失的引擎參數 | 7 個 (spec_decode, use_engine_loop, stop_token_ids, priority, thinking_budget, reasoning_effort, grammar) |
@@ -141,7 +141,7 @@
 | 24 | mtp_decoder.py | 零管線調用者 (僅 scripts/) | **DEAD** |
 | 25 | mtp_patch.py | 僅 scripts/ (5 個 bench 腳本) | **DEAD** |
 | 26 | n_confirmed_patch.py | 僅 mtp_decoder (本身 DEAD) | **DEAD** |
-| 27 | ngram_proposer.py | 零調用者 | **DEAD** |
+| 27 | ngram_proposer.py | batched_engine (_generate_ngram_spec) | **WIRED** ✅ |
 | 28 | optimizations.py | api/admin | WIRED |
 | 29 | output_collector.py | engine_core | WIRED** |
 | 30 | paged_scheduler.py | engine_core | WIRED** |
@@ -152,14 +152,14 @@
 | 35 | scheduler.py | engine_core | WIRED** |
 | 36 | server_metrics.py | engine_core, engine, gateway/main, chat, api/admin | WIRED |
 | 37 | settings.py | 零管線調用者 | **DEAD** |
-| 38 | spec_prefill.py | 零調用者 | **DEAD** |
+| 38 | spec_prefill.py | batched_engine (_generate_fast) | **WIRED** ✅ |
 | 39 | speculative_decoder.py | batched_engine (detect_spec_heads), scheduler | WIRED** |
-| 40 | ssd_kv_cache.py | kv_prefix_cache (但 enable_ssd_cache 從未被調用) | **DEAD**** |
+| 40 | ssd_kv_cache.py | kv_prefix_cache (enable_ssd_cache via YUNSHU_SSD_CACHE) | **WIRED** ✅ |
 | 41 | telemetry.py | 零調用者 | **DEAD** |
 | 42 | text_utils.py | vlm_engine | WIRED |
 | 43 | thinking_budget.py | scheduler (2 import sites) | WIRED** |
 | 44 | tool_call_streamer.py | gateway/routers/chat | WIRED |
-| 45 | vision_feature_cache.py | 零調用者 | **DEAD** |
+| 45 | vision_feature_cache.py | vlm_engine (YUNSHU_VISION_CACHE) | **WIRED** ✅ |
 | 46 | vlm_engine.py | model_manager, gateway/routers/chat | WIRED |
 
 **標記說明:**

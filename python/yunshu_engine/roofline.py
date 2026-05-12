@@ -1,5 +1,8 @@
 """Apple Silicon Roofline Model — predict LLM inference throughput bounds.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Analyzes compute vs memory-boundedness of transformer operations
 (GEMM, attention, FFN) against Apple GPU bandwidth and FLOP ceilings.
 

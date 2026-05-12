@@ -216,10 +216,10 @@ class TestRequest:
         req = Request(
             request_id="vlm-test",
             prompt="describe this",
-            vlm_image_hash="abc123",
+            rope_deltas=1.5,
             cached_tokens=50,
         )
-        assert req.vlm_image_hash == "abc123"
+        assert req.rope_deltas == 1.5
         assert req.cached_tokens == 50
 
     def test_append_token_increments_computed(self):

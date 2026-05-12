@@ -1,5 +1,6 @@
 "use client";
 
+import { fmtBytes } from "@/lib/utils";
 import { useEffect, useState, useRef } from "react";
 import {
   Cpu,
@@ -401,11 +402,4 @@ function KV({ icon: Icon, label, value }: { icon: typeof Cpu; label: string; val
       </div>
     </div>
   );
-}
-
-function fmtBytes(b: number): string {
-  if (b === 0) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(b) / Math.log(1024));
-  return `${(b / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
 }

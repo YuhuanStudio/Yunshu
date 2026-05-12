@@ -1,5 +1,6 @@
 "use client";
 
+import { fmtBytes } from "@/lib/utils";
 import { useEffect, useState, useCallback } from "react";
 import {
   Settings2,
@@ -244,11 +245,4 @@ function Section({
       <div className="p-4">{children}</div>
     </div>
   );
-}
-
-function fmtBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
 }

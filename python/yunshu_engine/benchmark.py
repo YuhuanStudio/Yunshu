@@ -1,5 +1,8 @@
 """Yunshu Benchmark Engine — LLM inference performance measurement.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Provides BenchmarkRunner that works with any Engine or BatchedEngine instance.
 All engine interactions are async (generate / stream_generate) so the runner
 itself is fully async. For CLI usage the caller wraps in asyncio.run().

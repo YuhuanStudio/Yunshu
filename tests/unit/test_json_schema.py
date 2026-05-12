@@ -523,14 +523,6 @@ class TestSamplingParamsJsonSchema:
         sp = SamplingParams(json_schema="json_object")
         assert sp.json_schema == "json_object"
 
-    def test_grammar_field(self):
-        sp = SamplingParams(grammar="json")
-        assert sp.grammar == "json"
-
-    def test_grammar_default_is_none(self):
-        sp = SamplingParams()
-        assert sp.grammar is None
-
 
 # ── Response Format Parsing Tests ───────────────────────────────────────────
 

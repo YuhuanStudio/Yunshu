@@ -73,7 +73,6 @@ class SamplingParams:
     reasoning_effort: str | None = None
     # Structured output (JSON schema constrained generation)
     json_schema: dict | str | None = None
-    grammar: str | None = None
 
 
 @dataclass
@@ -156,9 +155,6 @@ class Request:
     enable_thinking: bool | None = None
 
     # VLM fields (oMLX pattern)
-    vlm_inputs_embeds: Any = None
-    vlm_extra_kwargs: dict[str, Any] | None = None
-    vlm_image_hash: str | None = None
     rope_deltas: float = 0.0  # mRoPE position delta for multi-modal models (Qwen3 Omni, etc.)
 
     # Prefix cache fields
@@ -168,7 +164,6 @@ class Request:
 
     # Multimodal content
     images: list[Any] | None = None
-    videos: list[Any] | None = None
 
     # Timing (for ServerMetrics integration)
     prefill_start: float = 0.0

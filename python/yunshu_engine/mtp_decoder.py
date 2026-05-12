@@ -1,5 +1,8 @@
 """MTP always-advance speculative decoder with n_confirmed skip state.
 
+.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
+
+
 Implements the always-advance MTP strategy with the key optimization from oMLX:
 
 **n_confirmed=1**: During verify (2-token forward), SSM layers save rollback state
