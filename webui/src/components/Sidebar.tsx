@@ -18,11 +18,13 @@ import {
   WifiOff,
   Sun,
   Moon,
+  VectorSquare,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/chat", label: "Chat", icon: MessageSquare },
+  { href: "/embeddings", label: "Embeddings", icon: VectorSquare },
   { href: "/audio", label: "Audio", icon: Mic },
   { href: "/images", label: "Images", icon: ImageIcon },
   { href: "/models", label: "Models", icon: Box },

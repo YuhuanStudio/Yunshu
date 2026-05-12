@@ -72,12 +72,15 @@
 | P4-1 | 修正 CLAUDE.md Metal kernels 描述 (paged_attention, sdpa, sgmv, kivi_quant, gemv) | ✅ 已修復 | 全數通過 |
 | P4-2 | 修正 README 測試數量 (2162→2482) 和 spec decode 描述 | ✅ 已修復 | 全數通過 |
 | P4-3 | INTEGRATION_AUDIT.md 所有完成標記均基於實際代碼修改和測試驗證 | ✅ 已修復 | 全數通過 |
+| P2-2 | 刪除 settings.py (DEAD, 零調用者) 及其測試 | ✅ 已修復 | 全數通過 |
+| P3-6 | WebUI Embeddings 頁面 — 向量可視化 + 複製 JSON + 側邊欄導航 | ✅ 已修復 | 全數通過 |
+| P4-4 | 更新 CLAUDE.md BatchGenerator API (insert_segments, List[Response], Response fields) | ✅ 已修復 | 全數通過 |
 
 ### 待處理
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P2-6 | 修復 70 處 except:pass (已評估，熱路徑中的大部分可接受，建議逐步加 logger) | P2 |
+| P2-6 | 修復 70 處 except:pass (已評估，建議逐步加 logger) | P2 |
 
 ---
 
