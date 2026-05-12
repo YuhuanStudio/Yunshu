@@ -1,7 +1,7 @@
 # Yunshu 全面審計報告
 
 > 審計日期：2026-05-11
-> 最後更新：2026-05-12（Wave 16–19 修復 + 測試品質改進 + 覆蓋率提升 + wired_limit）
+> 最後更新：2026-05-12（Wave 16–20 修復 + 測試品質改進 + hash-chain prefix cache + KV quantization）
 > 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,360 個測試、326 篇參考文獻
 
 ---
@@ -22,8 +22,10 @@
 > Wave 16 修復最後 3 個 LOW 問題（L1: 真實 tokenizer/embedding，L2: OTLP flush，L3: DeltaNet capture hooks）。
 > Wave 17 改善測試品質：替換 8 個同義反覆測試、收緊 HTTP status assertions。
 > Wave 18 新增 110 個測試：VLM engine、Image engine、SpeculativeDecoder、DeltaNet inversion。
+> Wave 19 DeltaNet hooks 修復（class-level __call__ patch）、wired_limit context manager、pytest config 完成。
+> Wave 20 Hash-chain prefix index（O(matched_blocks) lookup）、MLX-native KV cache quantization、scheduler duplicate import fix。
 > 2,360 個單元測試全數通過，0 失敗。
-> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d` `d14b27f` `461d561` `bf1e326`
+> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d` `d14b27f` `461d561` `bf1e326` `ed19406`
 
 ---
 
@@ -616,18 +618,18 @@ Wave 18 新增測試覆蓋：
 
 ### 8.2 落後於參考框架之處
 
-| 差距 | 來源 | 優先級 |
-|---|---|---|
-| 無 Radix tree prefix cache（O(n*entries) 線性掃描） | SGLang | 高 |
-| 無 hash-based block dedup + COW | vLLM | 高 |
-| 無 SSD-tier KV cache | oMLX | 中 |
-| 無 `wired_limit` context manager | mlx-lm | ✅ Wave 19 |
-| 無 KV cache quantization | mlx-lm | 中 |
-| 無 request preemption | vLLM | 中 |
-| 無 grammar constraint integration | oMLX | 低 |
-| Speculative decoder 逐 token 驗證（非 batched） | llama.cpp | 中 |
-| 無 SpecPrefill（speculative prefill） | oMLX | 低 |
-| 無 mRoPE batch support | oMLX | 低 |
+| 差距 | 來源 | 優先級 | 狀態 |
+|---|---|---|---|
+| 無 Radix tree prefix cache（O(n*entries) 線性掃描） | SGLang | 高 | ✅ Wave 20 (hash-chain prefix index) |
+| 無 hash-based block dedup + COW | vLLM | 高 | 🔲 |
+| 無 SSD-tier KV cache | oMLX | 中 | 🔲 |
+| 無 `wired_limit` context manager | mlx-lm | 中 | ✅ Wave 19 |
+| 無 KV cache quantization | mlx-lm | 中 | ✅ Wave 20 (native MLX to_quantized) |
+| 無 request preemption | vLLM | 中 | 🔲 |
+| 無 grammar constraint integration | oMLX | 低 | 🔲 |
+| Speculative decoder 逐 token 驗證（非 batched） | llama.cpp | 中 | 🔲 |
+| 無 SpecPrefill（speculative prefill） | oMLX | 低 | 🔲 |
+| 無 mRoPE batch support | oMLX | 低 | 🔲 |
 
 ### 8.3 代碼量比較（估算）
 
