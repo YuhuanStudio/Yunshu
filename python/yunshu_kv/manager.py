@@ -83,6 +83,7 @@ class KVCacheManager:
     This is the central coordinator for KV cache operations:
     - Allocating/freeing blocks for requests
     - Prefix caching (hash-based deduplication)
+    - RadixTree-based prefix sharing (C8: SGLang pattern)
     - Computing memory budget from model architecture
     - Integration with MLX KV cache tensors (Phase 2)
     """
@@ -102,6 +103,10 @@ class KVCacheManager:
         self._value_cache = None
         # Warm tier: 4-bit quantized block cache (default instance)
         self._warm_tier: KVWarmTier | None = KVWarmTier(KVTierConfig())
+        # RadixTree for prefix sharing (C8: SGLang RadixAttention pattern)
+        from .radix_attention import RadixTree
+        self._radix_tree = RadixTree()
+        self._request_nodes: dict[str, Any] = {}  # request_id → RadixNode
 
     @property
     def hit_rate(self) -> float:
@@ -143,9 +148,27 @@ class KVCacheManager:
     ) -> tuple[BlockTable, PrefixMatch]:
         """Allocate blocks for a new request, checking prefix cache first.
 
+        Uses RadixTree for O(k) prefix matching (C8), falls back to
+        hash-chain lookup for individual blocks.
+
         Returns:
             (BlockTable for the request, PrefixMatch describing cache hit)
         """
+        # 0. Try RadixTree prefix match (C8: O(k) tree traversal)
+        if self.config.enable_caching and len(token_ids) >= self.config.block_size:
+            matched_node, remaining = self._radix_tree.match(token_ids)
+            matched_blocks = matched_node.path_blocks()
+            num_matched_tokens = matched_node.total_tokens()
+            if num_matched_tokens >= self.config.block_size:
+                # RadixTree hit: reuse matched blocks
+                self._total_hits += num_matched_tokens // self.config.block_size
+                self._total_lookups += len(token_ids) // self.config.block_size
+                for block in matched_blocks:
+                    self.block_pool.touch(block)
+                return self._build_table_from_match(
+                    matched_blocks, num_matched_tokens, token_ids,
+                )
+
         # 1. Compute block hashes for the prompt
         block_hashes = compute_prompt_hashes(
             token_ids, self.config.block_size, extra_keys=(model_hash,)
@@ -212,6 +235,44 @@ class KVCacheManager:
 
         return table, prefix_match
 
+    def _build_table_from_match(
+        self,
+        matched_blocks: list[KVBlock],
+        num_matched_tokens: int,
+        token_ids: list[int],
+    ) -> tuple[BlockTable, PrefixMatch]:
+        """Build a BlockTable from RadixTree-matched blocks."""
+        remaining_tokens = token_ids[num_matched_tokens:]
+        num_new_blocks = (len(remaining_tokens) + self.config.block_size - 1) // self.config.block_size
+
+        new_blocks = []
+        if num_new_blocks > 0:
+            new_blocks = self.block_pool.allocate(num_new_blocks)
+
+        table = BlockTable(self.config.block_size)
+        for block in matched_blocks:
+            table.append_block(block)
+        for block in new_blocks:
+            table.append_block(block)
+
+        prefix_match = PrefixMatch(
+            matched_blocks=matched_blocks,
+            num_matched_tokens=num_matched_tokens,
+            unmatched_token_ids=remaining_tokens,
+        )
+        return table, prefix_match
+
+    def register_request_node(self, request_id: str, node: Any) -> None:
+        """Register a RadixNode for a request (for ref counting)."""
+        self._request_nodes[request_id] = node
+        self._radix_tree.inc_ref(node)
+
+    def release_request_node(self, request_id: str) -> None:
+        """Release a request's RadixNode reference."""
+        node = self._request_nodes.pop(request_id, None)
+        if node is not None:
+            self._radix_tree.dec_ref(node)
+
     def allocate_block_for_decode(self, table: BlockTable) -> KVBlock:
         """Allocate one more block when decode fills the current block."""
         block = self.block_pool.allocate(1)[0]
@@ -256,6 +317,38 @@ class KVCacheManager:
             cached += 1
 
         return cached
+
+    def cache_to_radix_tree(
+        self,
+        token_ids: list[int],
+        blocks: list[KVBlock],
+        block_hashes: list[int],
+    ) -> None:
+        """Insert completed blocks into the RadixTree (C8: SGLang pattern).
+
+        The tree enables O(k) prefix matching for future requests.
+        """
+        if not self.config.enable_caching:
+            return
+
+        # Find the longest existing prefix match
+        matched_node, remaining_tokens = self._radix_tree.match(token_ids)
+        matched_len = len(token_ids) - len(remaining_tokens)
+        matched_blocks = matched_node.path_blocks()
+
+        if remaining_tokens:
+            # Insert new nodes for the unmatched portion
+            bs = self.config.block_size
+            new_start_block = matched_len // bs
+            new_blocks = blocks[new_start_block:]
+            new_hashes = block_hashes[new_start_block:]
+
+            self._radix_tree.insert(
+                token_ids=remaining_tokens,
+                blocks=new_blocks,
+                block_hashes=new_hashes,
+                start_node=matched_node if not matched_node.is_root else None,
+            )
 
     def free_request(self, table: BlockTable) -> None:
         """Free all blocks held by a request."""

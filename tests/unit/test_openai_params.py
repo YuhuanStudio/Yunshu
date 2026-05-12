@@ -359,7 +359,7 @@ class TestPagedSchedulerIntegration:
 
         config = EngineCoreConfig()
         assert hasattr(config, 'enable_paged_kv')
-        assert config.enable_paged_kv is False
+        assert config.enable_paged_kv is True  # C11: enabled by default
 
         config_with_paged = EngineCoreConfig(enable_paged_kv=True)
         assert config_with_paged.enable_paged_kv is True

@@ -42,7 +42,7 @@ class EngineCoreConfig:
     deferred_clear_delay: int = 8
     cache_cleanup_interval: int = 512
     # Paged KV cache (oMLX PagedAttention pattern)
-    enable_paged_kv: bool = False
+    enable_paged_kv: bool = True  # C11: enabled by default for radix tree + memory efficiency
     kv_block_size: int = 64
     kv_cache_ratio: float = 0.25  # fraction of UMA for KV cache
     # Model architecture (for KV cache memory budget)
@@ -88,39 +88,58 @@ class EngineCore:
         )
 
         if self.config.enable_paged_kv:
-            from .paged_scheduler import PagedScheduler
-            from yunshu_kv.manager import KVCacheManager, KVCacheConfig, compute_num_blocks
-
-            kv_config = KVCacheConfig(
-                block_size=self.config.kv_block_size,
-                num_layers=self.config.num_layers,
-                num_kv_heads=self.config.num_kv_heads,
-                head_dim=self.config.head_dim,
+            # Paged KV requires model architecture info
+            has_arch = (
+                self.config.num_layers > 0
+                and self.config.num_kv_heads > 0
+                and self.config.head_dim > 0
             )
-
-            # Determine block count
-            num_blocks = self.config.kv_num_blocks
-            if num_blocks <= 0:
-                # Auto-compute from UMA budget
+            if not has_arch:
+                logger.info(
+                    "Paged KV requested but model arch info missing "
+                    f"(layers={self.config.num_layers}, kv_heads={self.config.num_kv_heads}, "
+                    f"head_dim={self.config.head_dim}). Falling back to non-paged scheduler."
+                )
+                self.config.enable_paged_kv = False
+            else:
                 try:
-                    from .memory_monitor import MemoryMonitor
-                    monitor = MemoryMonitor()
-                    uma_bytes = monitor.get_stats().get("total_memory_bytes", 0)
-                    if uma_bytes > 0:
-                        num_blocks = compute_num_blocks(kv_config, uma_bytes, 0)
-                    else:
-                        num_blocks = 1024  # safe default
-                except Exception:
-                    num_blocks = 1024  # safe default
+                    from .paged_scheduler import PagedScheduler
+                    from yunshu_kv.manager import KVCacheManager, KVCacheConfig, compute_num_blocks
 
-            kv_manager = KVCacheManager(kv_config, num_blocks=num_blocks)
-            self.scheduler = PagedScheduler(model, tokenizer, scheduler_config, kv_manager)
-            self._kv_manager = kv_manager
-            logger.info(
-                f"PagedScheduler enabled: block_size={self.config.kv_block_size}, "
-                f"num_blocks={num_blocks}"
-            )
-        else:
+                    kv_config = KVCacheConfig(
+                        block_size=self.config.kv_block_size,
+                        num_layers=self.config.num_layers,
+                        num_kv_heads=self.config.num_kv_heads,
+                        head_dim=self.config.head_dim,
+                    )
+
+                    # Determine block count
+                    num_blocks = self.config.kv_num_blocks
+                    if num_blocks <= 0:
+                        # Auto-compute from UMA budget
+                        try:
+                            from .memory_monitor import MemoryMonitor
+                            monitor = MemoryMonitor()
+                            uma_bytes = monitor.get_stats().get("total_memory_bytes", 0)
+                            if uma_bytes > 0:
+                                num_blocks = compute_num_blocks(kv_config, uma_bytes, 0)
+                            else:
+                                num_blocks = 1024  # safe default
+                        except Exception:
+                            num_blocks = 1024  # safe default
+
+                    kv_manager = KVCacheManager(kv_config, num_blocks=num_blocks)
+                    self.scheduler = PagedScheduler(model, tokenizer, scheduler_config, kv_manager)
+                    self._kv_manager = kv_manager
+                    logger.info(
+                        f"PagedScheduler enabled: block_size={self.config.kv_block_size}, "
+                        f"num_blocks={num_blocks}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Paged KV init failed ({e}), falling back to non-paged")
+                    self.config.enable_paged_kv = False
+
+        if not self.config.enable_paged_kv:
             self.scheduler = Scheduler(model, tokenizer, scheduler_config)
             self._kv_manager = None
 
