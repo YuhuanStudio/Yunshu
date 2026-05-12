@@ -1364,55 +1364,49 @@ class BatchedEngine:
                                 break
                         continue
 
-                    # Verify drafts one by one against the model
+                    # C10: Batch verify all K draft tokens in one forward pass
                     self._ngram_stats["proposals"] += 1
                     self._ngram_stats["total_draft"] += n_draft
                     accepted = 0
 
-                    for draft_id in draft_ids[:n_draft]:
-                        # Run model forward on the previous token to get logits
-                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
-                        for _token, logits in generate_step(
-                            step_input, model, max_tokens=1, sampler=sampler,
-                            prompt_cache=cache,
-                        ):
-                            # Compare model's greedy output with proposal
-                            model_pick = int(mx.argmax(logits, axis=-1).flatten()[0])
+                    # Feed all draft tokens to the model in one batch forward
+                    draft_arr = mx.array(draft_ids[:n_draft]).reshape(1, -1)
+                    # Use the model directly for batch forward (bypass generate_step)
+                    batch_logits = model(draft_arr, cache=cache)
+                    if hasattr(batch_logits, 'logits'):
+                        batch_logits = batch_logits.logits
 
-                            if model_pick == draft_id:
-                                # Accept: proposal matches model
-                                tokens.append(draft_id)
-                                all_token_ids.append(draft_id)
-                                accepted += 1
-                                remaining -= 1
-                                if draft_id in stop_ids:
-                                    tokens.pop()
-                                    break
-                                detokenizer.add_token(draft_id)
-                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                    break
-                            else:
-                                # Reject: resample from model distribution
-                                resampled = int(_token)
-                                tokens.append(resampled)
-                                all_token_ids.append(resampled)
-                                remaining -= 1
-                                if resampled in stop_ids:
-                                    tokens.pop()
-                                    break
-                                detokenizer.add_token(resampled)
-                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                    break
-                                break  # Stop verifying rest of drafts
+                    # Greedy verify: compare model's argmax at each position with draft
+                    for i in range(n_draft):
+                        model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
+                        draft_id = draft_ids[i]
+
+                        if model_pick == draft_id:
+                            tokens.append(draft_id)
+                            all_token_ids.append(draft_id)
+                            accepted += 1
+                            remaining -= 1
+                            if draft_id in stop_ids:
+                                tokens.pop()
+                                break
+                            detokenizer.add_token(draft_id)
+                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                break
                         else:
-                            continue
-                        break
-                    else:
-                        # All drafts accepted and no stop hit — continue proposing
-                        self._ngram_stats["accepted"] += accepted
-                        continue
+                            # Reject: resample from model's distribution at this position
+                            resampled = model_pick  # Use greedy pick (already computed)
+                            tokens.append(resampled)
+                            all_token_ids.append(resampled)
+                            remaining -= 1
+                            if resampled in stop_ids:
+                                tokens.pop()
+                                break
+                            detokenizer.add_token(resampled)
+                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                break
+                            break  # Stop verifying rest of drafts
+
                     self._ngram_stats["accepted"] += accepted
-                    break
 
             # Cache KV state
             if self._kv_quant_bits is not None:
@@ -1553,33 +1547,33 @@ class BatchedEngine:
                     accepted = 0
                     stopped = False
 
-                    for draft_id in draft_ids[:n_draft]:
-                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
-                        for _tok, logits in generate_step(
-                            step_input, model, max_tokens=1, sampler=sampler,
-                            prompt_cache=cache,
-                        ):
-                            model_pick = int(mx.argmax(logits, axis=-1).flatten()[0])
+                    # C10: Batch verify all K draft tokens in one forward pass
+                    draft_arr = mx.array(draft_ids[:n_draft]).reshape(1, -1)
+                    batch_logits = model(draft_arr, cache=cache)
+                    if hasattr(batch_logits, 'logits'):
+                        batch_logits = batch_logits.logits
 
-                            accepted_id = draft_id if model_pick == draft_id else int(_tok)
-                            is_accept = (model_pick == draft_id)
-                            tokens.append(accepted_id)
-                            all_token_ids.append(accepted_id)
-                            if is_accept:
-                                accepted += 1
-                            remaining -= 1
-                            n_tok += 1
-                            detokenizer.add_token(accepted_id)
-                            stop_hit = accepted_id in stop_ids
-                            suffix_hit = False
-                            if not stop_hit and stop_suffixes:
-                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
-                            if stop_hit or suffix_hit:
-                                stopped = True
-                            if not is_accept:
-                                stopped = True
-                            break
+                    for i in range(n_draft):
+                        model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
+                        draft_id = draft_ids[i]
+                        is_accept = (model_pick == draft_id)
+                        accepted_id = draft_id if is_accept else model_pick
+                        tokens.append(accepted_id)
+                        all_token_ids.append(accepted_id)
+                        if is_accept:
+                            accepted += 1
+                        remaining -= 1
+                        n_tok += 1
+                        detokenizer.add_token(accepted_id)
+                        stop_hit = accepted_id in stop_ids
+                        suffix_hit = False
+                        if not stop_hit and stop_suffixes:
+                            suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                        _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                        if stop_hit or suffix_hit:
+                            stopped = True
+                        if not is_accept:
+                            stopped = True
                         if stopped:
                             break
 

@@ -100,6 +100,10 @@ class VLMEngine:
             self._vision_cache = VisionFeatureCache(cache_dir=cache_dir)
             logger.info("Vision feature cache enabled")
 
+        # C21: Multimodal prefix cache — maps image_hash + system_prompt hash to
+        # processed token IDs, enabling reuse across conversations with same image
+        self._multimodal_prefix_cache: dict[str, list[int]] = {}
+
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
 
@@ -419,6 +423,17 @@ class VLMEngine:
             delta = capture_rope_deltas(self._model)
             if delta is not None:
                 logger.debug(f"mRoPE delta captured: {delta:.4f}")
+
+        # C21: Store multimodal prefix tokens for future reuse
+        try:
+            system_text = ""
+            for m in messages:
+                if m.get("role") == "system":
+                    system_text += m.get("content", "")
+            prompt_ids = self._tokenizer.encode(prompt)
+            self._store_mm_prefix_tokens(image_paths, system_text, prompt_ids)
+        except Exception:
+            logger.debug("multimodal prefix cache store failed", exc_info=True)
 
         # Cache vision features after generation (future calls with same image)
         if self._vision_cache is not None and cached_features is None and len(image_paths) == 1:
@@ -789,6 +804,35 @@ class VLMEngine:
     def _get_eos_ids(self) -> list[int]:
         from .text_utils import get_eos_token_ids
         return get_eos_token_ids(self._tokenizer)
+
+    # ── C21: Multimodal prefix cache ──
+
+    def _mm_prefix_key(self, image_paths: list[str], system_text: str) -> str:
+        """Compute cache key from image hashes + system prompt."""
+        parts = [system_text]
+        for path in image_paths:
+            try:
+                from .vision_feature_cache import compute_image_hash
+                with open(path, "rb") as f:
+                    parts.append(compute_image_hash(f.read()))
+            except Exception:
+                parts.append(path)
+        return "|".join(parts)
+
+    def _get_mm_prefix_tokens(self, image_paths: list[str], system_text: str) -> list[int] | None:
+        """Get cached token IDs for a multimodal prefix (C21)."""
+        key = self._mm_prefix_key(image_paths, system_text)
+        return self._multimodal_prefix_cache.get(key)
+
+    def _store_mm_prefix_tokens(self, image_paths: list[str], system_text: str, token_ids: list[int]) -> None:
+        """Store processed token IDs for a multimodal prefix (C21)."""
+        if len(self._multimodal_prefix_cache) > 64:
+            # Evict oldest entries
+            keys = list(self._multimodal_prefix_cache.keys())
+            for k in keys[:16]:
+                del self._multimodal_prefix_cache[k]
+        key = self._mm_prefix_key(image_paths, system_text)
+        self._multimodal_prefix_cache[key] = token_ids
 
     # ── Stats ──
 

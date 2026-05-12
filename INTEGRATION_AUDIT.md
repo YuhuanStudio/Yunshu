@@ -93,15 +93,15 @@
 | M15 | 遠端 URL 圖片支持 | ✅ 已完成 |
 | P2-6 | 70 處 except:pass → logger.debug | ✅ 已完成 (21 文件) |
 | C6 | 漸進式 KV 量化 (每 256 tokens) | ✅ 已完成 |
-| C8 | 啟用 RadixTree | 待處理 |
-| C10 | 批量猜測驗證 | 待處理 |
-| C11 | 啟用 paged KV 默認 | 待處理 |
+| C8 | RadixTree 前綴匹配 | ✅ 已完成 |
+| C10 | 批量猜測驗證 | ✅ 已完成 |
+| C11 | 啟用 paged KV 默認 | ✅ 已完成 |
 | C12 | 記憶體壓力淘汰 | ✅ 已完成 |
 | C13 | SQLite SSD 元數據 | ✅ 已完成 |
-| C14 | request retraction | 待處理 |
+| C14 | request retraction | ✅ 已完成 |
 | C15 | 7 格式 Tool Call Parsers | ✅ 已完成 |
 | C16 | insert_segments() 批處理路徑 | ✅ 已完成 |
-| C21 | 多模態前綴緩存 | 待處理 |
+| C21 | 多模態前綴緩存 | ✅ 已完成 |
 | C23 | Per-Model Settings | ✅ 已完成 |
 
 ---

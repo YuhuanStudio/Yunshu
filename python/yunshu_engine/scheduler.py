@@ -63,6 +63,10 @@ class SchedulerConfig:
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     hybrid_chunk_size: int = 512        # Tokens per prefill chunk when interleaving
     enable_hybrid_prefill: bool = False  # Enable chunked prefill+decode interleaving
+    # Request retraction (C14: SGLang pattern)
+    enable_retraction: bool = True     # Temporarily evict decode for prefill under pressure
+    retraction_memory_threshold: float = 0.90  # Retract when memory utilization exceeds this
+    retraction_max_count: int = 4       # Max decode requests to retract per step
     # Speculative decoding (Phase 4)
     enable_spec_decode: bool = False     # Enable speculative decoding
     draft_model: str = ""                # Draft model name or path (empty = auto-detect from target)
@@ -396,6 +400,25 @@ class Scheduler:
                 )
 
         if len(to_insert) > available_slots:
+            # C14: Memory-pressure retraction (SGLang pattern)
+            # Under pressure, temporarily retract decode requests to make room for prefill
+            if self.config.enable_retraction and self._memory_monitor is not None:
+                try:
+                    info = self._memory_monitor.get_memory_info()
+                    if info.utilization_pct >= self.config.retraction_memory_threshold * 100:
+                        retracted = self._retract_decode_requests(
+                            min(self.config.retraction_max_count, len(to_insert) - available_slots)
+                        )
+                        if retracted > 0:
+                            available_slots += retracted
+                            logger.info(
+                                f"Retracted {retracted} decode requests under memory pressure "
+                                f"(util={info.utilization_pct:.1f}%)"
+                            )
+                except Exception:
+                    logger.debug("retraction check failed", exc_info=True)
+
+        if len(to_insert) > available_slots:
             overflow = to_insert[available_slots:]
             to_insert = to_insert[:available_slots]
             # Put overflow back at front of waiting queue
@@ -712,6 +735,37 @@ class Scheduler:
             f"(preemptions={request.num_preemptions}, "
             f"output_tokens={request.num_output_tokens})"
         )
+
+    def _retract_decode_requests(self, count: int) -> int:
+        """Temporarily retract decode requests under memory pressure (C14).
+
+        SGLang pattern: swap out decode requests (which have lower per-token
+        memory cost than prefill) to make room for new prefill requests.
+        Retracted requests are placed at the front of the waiting queue and
+        will be re-inserted with their existing KV state (via prefix cache).
+
+        Args:
+            count: Maximum number of requests to retract.
+
+        Returns:
+            Number of requests retracted.
+        """
+        retracted = 0
+        # Sort running requests by output tokens (longest = most memory, evict first)
+        candidates = sorted(
+            [r for r in self.running.values() if r.batch_uid is not None],
+            key=lambda r: r.num_output_tokens,
+            reverse=True,
+        )
+
+        for victim in candidates:
+            if retracted >= count:
+                break
+            self.running.pop(victim.request_id, None)
+            self._preempt_request(victim)
+            retracted += 1
+
+        return retracted
 
     def _process_pending_prefill(self) -> None:
         """Process one chunk from each pending partial prefill (Sarathi pattern).
