@@ -1,8 +1,8 @@
 # Yunshu 全面審計報告
 
 > 審計日期：2026-05-11
-> 最後更新：2026-05-11（修復狀態同步）
-> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,222 個測試、326 篇參考文獻
+> 最後更新：2026-05-12（Wave 7–15 修復 + 五模態 GPU 實測驗證）
+> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,245 個測試、326 篇參考文獻
 
 ---
 
@@ -15,11 +15,13 @@
 | MEDIUM | 20 | 17 | 3 | 0 |
 | LOW | 18 | 15 | 0 | 3 |
 | 架構問題 | 5 | 5 | 0 | 0 |
-| **合計** | **65** | **59** | **3** | **3** |
+| Wave 7–15 新增 | 8 | 8 | 0 | 0 |
+| **合計** | **73** | **67** | **3** | **3** |
 
 > 所有 CRITICAL + HIGH + MEDIUM 問題已於 Wave 1–6 修復完成。
-> 1977 個單元測試全數通過，0 失敗。
-> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71`
+> Wave 7–15 完成五模態 GPU 實測驗證 + 8 項 runtime bug 修復。
+> 2,245 個單元測試全數通過，0 失敗。
+> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d`
 
 ---
 
@@ -676,5 +678,50 @@ assert True
 
 ---
 
+## 十、Wave 7–15 實測驗證（2026-05-12）
+
+> Wave 7–15 從「單元測試」進入「真實 GPU + 真實模型」階段。所有五模態引擎在 Apple Silicon GPU 上端到端驗證通過。
+
+### 10.1 五模態 GPU 實測結果
+
+| **模態** | **模型** | **引擎** | **實測環境** | **結果** | **延遲** |
+| --- | --- | --- | --- | --- | --- |
+| LLM | Qwen3.5-9B-MLX-4bit | BatchedEngine | Apple M4 Pro, MLX 0.31.2 | 50 tok/s; MMLU-Pro 78.6% | prefill ~2s |
+| VLM（文字） | Qwen3-Omni-30B-A3B-Instruct-4bit | VLMEngine | Apple M4 Pro | "2+3=5" 正確 | 2.7s |
+| VLM（視覺） | Qwen3-Omni-30B-A3B-Instruct-4bit | VLMEngine | Apple M4 Pro | 準確描述圖像內容 | 1.3s |
+| TTS | Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16 | TTSEngine | Apple M4 Pro | 有效 WAV 輸出 | 載入 2.4s, 合成 1.33s |
+| ASR | Qwen3-ASR-1.7B-bf16 | ASREngine | Apple M4 Pro | 正確轉錄 | 載入 2.4s |
+| Image | Z-Image-Turbo-MLX-4bit | ImageGenEngine | Apple M4 Pro | 有效 PNG, 256×256 | 載入 5.5s, 生成 ~5s |
+
+### 10.2 Wave 7–15 新增修復
+
+| # | 問題 | 修復方式 | Wave |
+|---|---| ---|---|
+| W7 | **logprobs bf16 崩潰**：`np.array()` 對 bf16 mx.array 觸發 PEP 3118 buffer 錯誤 | 改用純 MLX：`mx.log(mx.softmax(logits.astype(mx.float32)))` + `mx.argsort(-log_probs)[:k]` | Wave 11 |
+| W8 | **logits processor API 合約錯誤**：`generate_step` 傳入 `tokens: mx.array`（全序列）而非 scalar | 修正簽名為 `(tokens, logits)`，用 `int(tokens[-1])` 取最後 token | Wave 13 |
+| W9 | **mx.topk 回傳值不同預期**：`mx.topk` 只回傳 values，不回傳 indices | 改用 `mx.argsort(-log_probs)[:k]` | Wave 11 |
+| W10 | **enable_thinking 未貫穿 streaming**：streaming path 沒傳 `enable_thinking` 至 `apply_chat_template` | 兩條路徑皆加入 kwargs | Wave 14-15 |
+| W11 | **boundary_snapshot bool/int 序列化衝突**：`isinstance(True, int)` 先捕獲 bool | 調整檢查順序 + dtype string 消歧 | Wave 12 |
+| W12 | **VLM streaming RequestOutput 欄位名錯誤**：用 property 名（`token_text`）而非 dataclass 欄位（`new_text`） | 修正所有建構子呼叫 | Wave 15 |
+| W13 | **VLM EOS token 文字洩漏**：`<\|im_end\|>` 出現在 streaming 輸出 | EOS token 的 `new_text` 設為空字串 | Wave 15 |
+| W14 | **Anthropic endpoint BatchedEngine 不相容**：屬性名不同導致 500 | `getattr` 回退 + `isinstance` 檢查 | Wave 11 |
+
+### 10.3 關鍵發現
+
+1. **Apple Silicon 投機解碼受限**：MTP 和 cross-model spec decode 在 Apple Silicon 上均慢於 baseline（0.57x–0.74x），因為 memory bandwidth 已飽和。理想 MTP 僅 1.26x @ p=72%。這是硬體物理限制，非軟體 bug。
+2. **MLX bf16 限制**：MLX bf16 tensor 不支援 PEP 3118 buffer protocol，`np.array()` 會崩潰。所有涉及 bf16 tensor 的操作必須在 MLX 原生路徑。
+3. **Z-Image pipeline 自研成功**：1316 行自研 Z-Image diffusion pipeline（TextEncoder + ZImageTransformer + VAEDecoder），不依賴外部庫，4-bit 權重反量化 + flow-matching Euler scheduler，GPU 實測通過。
+
+### 10.4 白皮書更新
+
+已更新至 **v4.1**（2026-05-12）：
+- §4.6 新增「Phase 1 五模態引擎實測驗證」表格（表 4.6b）
+- §5.2 新增「Phase 1 實作狀態」子節（完成度 ~85%，含 Phase 3 多模態提前完成）
+- Changelog 新增 v4.1 條目
+
+---
+
 > 審計結論：Yunshu 是一個功能完整的單節點 Apple Silicon 推理伺服器，API 廣度超過所有競品。
-> 但安全漏洞、Metal kernel 錯誤、測試品質和架構債需要系統性修復，才能成為生產級平台。
+> Wave 1–6 修復了所有安全漏洞、Metal kernel 錯誤和正確性問題。
+> Wave 7–15 完成五模態 GPU 實測驗證（LLM/VLM/TTS/ASR/Image），2,245 測試全綠。
+> Phase 1 完成度 ~85%，含 Phase 3 多模態提前完成。剩餘工作：PagedAttention Metal 接入、WebUI v0 完善、Gate-1 正式基準測試。
