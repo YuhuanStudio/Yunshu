@@ -20,7 +20,7 @@ from typing import Any, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine, get_model_manager
 from ..streaming import (
@@ -110,15 +110,15 @@ class StreamOptions(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
-    temperature: float = 0.7
-    top_p: float = 1.0
-    top_k: int = 0
-    min_p: float = 0.0
-    repetition_penalty: float = 1.0
-    frequency_penalty: float = 0.0
-    presence_penalty: float = 0.0
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    top_k: int = Field(default=0, ge=0)
+    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
+    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: Optional[dict[int, float]] = None
-    max_tokens: int = 512
+    max_tokens: int = Field(default=512, ge=1, le=131072)
     stream: bool = False
     stream_options: Optional[StreamOptions] = None
     stop: Optional[list[str]] = None
@@ -129,9 +129,15 @@ class ChatCompletionRequest(BaseModel):
     response_format: Optional[dict] = None
     seed: Optional[int] = None
     logprobs: bool = False
-    top_logprobs: Optional[int] = None
-    n: int = 1
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
+    n: int = Field(default=1, ge=1, le=128)
     user: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if self.stop and len(self.stop) > 16:
+            raise ValueError("stop: maximum 16 stop sequences")
+        return self
 
 
 def _parse_response_format(response_format: dict | None) -> dict | str | None:
@@ -362,6 +368,7 @@ async def _build_multi_choice(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
             )
@@ -382,6 +389,7 @@ async def _build_multi_choice(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                seed=req.seed,
                 enable_thinking=req.enable_thinking,
             )
             text = state.generated_text
@@ -541,6 +549,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
                 logprobs=req.logprobs,
@@ -567,6 +576,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                seed=req.seed,
                 enable_thinking=req.enable_thinking,
             )
             raw_text = state.generated_text
@@ -622,19 +632,38 @@ async def _handle_vlm_chat(
 
     if manager is not None:
         from yunshu_engine.model_manager import ModelType
-        for entry in manager.list_entries():
-            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), VLMEngine):
-                vlm_engine = entry.engine
-                break
 
+        # Try to match req.model first
+        if req.model:
+            for entry in manager.list_entries():
+                if (entry.is_loaded and entry.model_id == req.model
+                        and isinstance(getattr(entry, 'engine', None), VLMEngine)):
+                    vlm_engine = entry.engine
+                    break
+            if vlm_engine is None:
+                for entry in manager.list_entries():
+                    if entry.model_id == req.model and entry.model_type == ModelType.VLM:
+                        try:
+                            vlm_engine = await manager.get_engine(entry.model_id)
+                            break
+                        except Exception:
+                            pass
+
+        # Fallback: first available VLM engine
         if vlm_engine is None:
             for entry in manager.list_entries():
-                if entry.model_type == ModelType.VLM:
-                    try:
-                        vlm_engine = await manager.get_engine(entry.model_id)
-                        break
-                    except Exception:
-                        pass
+                if entry.is_loaded and isinstance(getattr(entry, 'engine', None), VLMEngine):
+                    vlm_engine = entry.engine
+                    break
+
+            if vlm_engine is None:
+                for entry in manager.list_entries():
+                    if entry.model_type == ModelType.VLM:
+                        try:
+                            vlm_engine = await manager.get_engine(entry.model_id)
+                            break
+                        except Exception:
+                            pass
 
     if vlm_engine is None:
         raise HTTPException(
@@ -793,6 +822,7 @@ async def _stream_response(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
             ):
@@ -841,6 +871,7 @@ async def _stream_response(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                seed=req.seed,
                 enable_thinking=req.enable_thinking,
             ):
                 # Track token counts for usage reporting

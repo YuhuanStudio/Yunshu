@@ -269,6 +269,7 @@ class BatchedEngine:
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
+                min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 stop=stop,
                 seed=seed,
@@ -319,6 +320,7 @@ class BatchedEngine:
         temperature: float = 0.7,
         top_p: float = 1.0,
         top_k: int = 0,
+        min_p: float = 0.0,
         repetition_penalty: float = 1.0,
         stop: list[str] | None = None,
         seed: int | None = None,
@@ -372,6 +374,7 @@ class BatchedEngine:
             temp=temperature,
             top_p=top_p,
             top_k=top_k if top_k > 0 else 0,
+            min_p=min_p,
         )
 
         logits_processors = []

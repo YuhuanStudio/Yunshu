@@ -37,7 +37,7 @@ class TTSRequest(BaseModel):
     input: str
     voice: str = "alloy"
     speed: float = 1.0
-    response_format: str = "wav"  # wav, mp3, opus, pcm
+    response_format: str = "wav"  # Only "wav" currently supported
     temperature: Optional[float] = None
     instruct: Optional[str] = None  # Voice description for VoiceDesign models
 
@@ -109,18 +109,17 @@ async def create_speech(req: TTSRequest) -> Response:
         logger.error(f"TTS synthesis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    content_type = {
-        "wav": "audio/wav",
-        "mp3": "audio/mpeg",
-        "opus": "audio/opus",
-        "pcm": "audio/pcm",
-    }.get(req.response_format, "audio/wav")
+    if req.response_format not in ("wav",):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported response_format '{req.response_format}'. Only 'wav' is supported.",
+        )
 
     return Response(
         content=wav_bytes,
-        media_type=content_type,
+        media_type="audio/wav",
         headers={
-            "Content-Disposition": f"attachment; filename=speech.{req.response_format}",
+            "Content-Disposition": "attachment; filename=speech.wav",
         },
     )
 
@@ -152,11 +151,23 @@ async def stream_speech(req: TTSRequest, request: Request):
         ).decode("ascii")
         yield f"data: {json.dumps({'type': 'header', 'wav_header': wav_hdr_b64, 'sample_rate': DEFAULT_SAMPLE_RATE})}\n\n"
 
+        # Mirror non-streaming instruct logic
+        stream_instruct = req.instruct
+        if stream_instruct is None:
+            voice_defaults = {
+                "chelsie": "A cheerful young female voice with clear pronunciation",
+                "ethan": "A calm young male voice with warm tone",
+                "aiden": "A neutral young voice with moderate pace",
+            }
+            stream_instruct = voice_defaults.get(req.voice.lower(),
+                f"A clear {req.voice} voice with natural intonation")
+
         async for chunk in tts_engine.synthesize_stream(
             text=req.input,
             voice=req.voice,
             speed=req.speed,
             temperature=req.temperature,
+            instruct=stream_instruct,
         ):
             if chunk.get("is_final"):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"

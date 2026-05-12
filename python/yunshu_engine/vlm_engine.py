@@ -263,8 +263,16 @@ class VLMEngine:
 
         queue: asyncio.Queue[RequestOutput | None] = asyncio.Queue(maxsize=256)
 
+        # Extract images for VLM vision path (same as non-streaming)
+        image_paths = await self._extract_images(messages)
+        has_images = bool(image_paths) and self._has_vision and self._is_vlm
+
         def _stream_sync():
             try:
+                if has_images:
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue)
+                    return
+
                 prompt_text = self._format_prompt(messages)
                 input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
@@ -429,6 +437,79 @@ class VLMEngine:
                     break
 
         return self._tokenizer.decode(tokens, skip_special_tokens=True)
+
+    def _stream_vlm_vision(
+        self,
+        messages: list[dict],
+        image_paths: list[str],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        req_id: str,
+        queue: asyncio.Queue,
+    ) -> None:
+        """Streaming vision + text generation using mlx_vlm.stream_generate()."""
+        from mlx_vlm.generate import stream_generate as vlm_stream_generate
+        from mlx_lm.sample_utils import make_sampler
+
+        vlm_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image_url":
+                            parts.append({"type": "image"})
+                        elif part.get("type") == "text":
+                            parts.append({"type": "text", "text": part.get("text", "")})
+                    elif isinstance(part, str):
+                        parts.append({"type": "text", "text": part})
+                vlm_messages.append({"role": msg.get("role", "user"), "content": parts})
+            else:
+                vlm_messages.append({"role": msg.get("role", "user"), "content": str(content)})
+
+        prompt = self._processor.apply_chat_template(
+            vlm_messages, tokenize=False, add_generation_prompt=True,
+        )
+
+        sampler = make_sampler(temp=temperature, top_p=top_p)
+        token_count = 0
+        try:
+            for result in vlm_stream_generate(
+                self._model,
+                self._processor,
+                prompt=prompt,
+                image=image_paths if len(image_paths) > 1 else image_paths[0],
+                max_tokens=max_tokens,
+                sampler=sampler,
+            ):
+                token_count += 1
+                text = result.text if hasattr(result, 'text') else ""
+                finish_reason = None
+                if hasattr(result, 'finish_reason') and result.finish_reason:
+                    finish_reason = result.finish_reason
+                elif token_count >= max_tokens:
+                    finish_reason = "length"
+
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text=text,
+                    finish_reason=finish_reason,
+                    finished=finish_reason is not None,
+                    completion_tokens=token_count,
+                ))
+                if finish_reason:
+                    return
+        except Exception as e:
+            queue.put_nowait(RequestOutput(
+                request_id=req_id,
+                new_text="",
+                finish_reason="error",
+                finished=True,
+                completion_tokens=token_count,
+                error=str(e),
+            ))
 
     def _stream_vlm_text(
         self,
