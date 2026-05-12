@@ -320,9 +320,19 @@ class BatchedEngine:
             top_k=top_k if top_k > 0 else 0,
         )
 
+        logits_processors = []
+        if repetition_penalty != 1.0:
+            def _rep_penalty(tokens, logits, rp=repetition_penalty):
+                tid = int(tokens[-1])
+                logits[..., tid] = logits[..., tid] / rp if logits[..., tid] > 0 else logits[..., tid] * rp
+                return logits
+            logits_processors.append(_rep_penalty)
+
         def _run():
             import mlx.core as mx
             from mlx_lm.models.cache import make_prompt_cache
+            if seed is not None:
+                mx.random.seed(seed)
             ids = mx.array(input_ids)
             tokens = []
             token_logprobs = []
@@ -346,9 +356,10 @@ class BatchedEngine:
             gen_t0 = time.perf_counter()
             first = True
 
+            _lprocs = logits_processors if logits_processors else None
             for token, logits in generate_step(
                 ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                prompt_cache=cache,
+                prompt_cache=cache, logits_processors=_lprocs,
             ):
                 if first:
                     ttft_s = time.perf_counter() - gen_t0
@@ -565,20 +576,20 @@ class BatchedEngine:
         # Build logits processors for penalty/bias params
         logits_processors = []
         if repetition_penalty != 1.0:
-            def _repetition_penalty(token, logits, rp=repetition_penalty):
-                tid = token.item()
+            def _repetition_penalty(tokens, logits, rp=repetition_penalty):
+                tid = int(tokens[-1])
                 logits[..., tid] = logits[..., tid] / rp if logits[..., tid] > 0 else logits[..., tid] * rp
                 return logits
             logits_processors.append(_repetition_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            def _freq_pres_penalty(token, logits, fp=frequency_penalty, pp=presence_penalty):
-                tid = token.item()
+            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
+                tid = int(tokens[-1])
                 logits[..., tid] -= fp
                 logits[..., tid] -= pp
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
-            def _logit_bias_proc(token, logits, biases=logit_bias):
+            def _logit_bias_proc(tokens, logits, biases=logit_bias):
                 for tid, bias in biases.items():
                     logits[..., tid] += bias
                 return logits
@@ -877,7 +888,7 @@ class BatchedEngine:
                 )
                 return draft_result, verify_result
 
-            draft_result, verify_result = await loop.run_in_executor(executor, _spec_step)
+            _, verify_result = await loop.run_in_executor(executor, _spec_step)
 
             new_tokens = verify_result.accepted_ids + [verify_result.bonus_token_id]
 
