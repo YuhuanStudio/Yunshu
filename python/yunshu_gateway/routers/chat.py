@@ -41,11 +41,16 @@ router = APIRouter(tags=["chat"])
 
 
 def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
-    """Record token counts to the metrics middleware."""
+    """Record token counts to metrics middleware and server stats."""
     try:
         from ..middleware.metrics import get_metrics
         get_metrics().record_tokens(prompt_tokens, completion_tokens)
         get_metrics().record_inference()
+    except Exception:
+        pass
+    try:
+        from yunshu_engine.server_metrics import get_server_metrics
+        get_server_metrics().record(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
     except Exception:
         pass
 
