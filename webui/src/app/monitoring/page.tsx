@@ -52,6 +52,9 @@ const MAX_HISTORY = 60;
 export default function MonitoringPage() {
   const [system, setSystem] = useState<SystemStats | null>(null);
   const [engine, setEngine] = useState<Record<string, unknown> | null>(null);
+  const [specDecode, setSpecDecode] = useState<Record<string, unknown> | null>(null);
+  const [kvCache, setKvCache] = useState<Record<string, unknown> | null>(null);
+  const [requests, setRequests] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -69,9 +72,12 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes] = await Promise.all([
+        const [sysRes, engRes, specRes, kvRes, reqRes] = await Promise.all([
           fetch("/api/v1/monitoring/system"),
           fetch("/api/v1/monitoring/engine"),
+          fetch("/v1/gw/monitoring/spec-decode").catch(() => null),
+          fetch("/v1/gw/monitoring/kv-cache").catch(() => null),
+          fetch("/v1/gw/monitoring/requests").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
@@ -85,6 +91,18 @@ export default function MonitoringPage() {
         if (engRes.ok) {
           engData = await engRes.json();
           if (mounted.current) setEngine(engData);
+        }
+        if (specRes && specRes.ok) {
+          const specData = await specRes.json();
+          if (mounted.current) setSpecDecode(specData);
+        }
+        if (kvRes && kvRes.ok) {
+          const kvData = await kvRes.json();
+          if (mounted.current) setKvCache(kvData);
+        }
+        if (reqRes && reqRes.ok) {
+          const reqData = await reqRes.json();
+          if (mounted.current) setRequests(reqData);
         }
         if (mounted.current) {
           setLastUpdate(new Date());
@@ -337,6 +355,73 @@ export default function MonitoringPage() {
                           : value.toLocaleString()
                         : String(value)}
                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Speculative Decoding */}
+          {specDecode && specDecode.models && (specDecode.models as Record<string, unknown>[]).length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Gauge className="w-4 h-4 text-[var(--color-accent)]" />
+                Speculative Decoding
+              </h3>
+              {(specDecode.models as Record<string, unknown>[]).map((model: Record<string, unknown>, idx: number) => (
+                <div key={idx} className="mb-3 last:mb-0">
+                  <div className="text-xs text-[var(--color-text-secondary)] mb-1">
+                    {String(model.model_id)} {model.ngram_enabled ? "(N-gram)" : ""} {model.spec_enabled ? "(Model-based)" : ""}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                    {(model.ngram_stats as Record<string, number>) && Object.entries(model.ngram_stats as Record<string, number>).map(([k, v]) => (
+                      <div key={k}>
+                        <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                        <div className="font-medium tabular-nums">{v.toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* KV Cache */}
+          {kvCache && kvCache.caches && (kvCache.caches as Record<string, unknown>[]).length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <HardDrive className="w-4 h-4 text-[var(--color-accent)]" />
+                KV Prefix Cache
+              </h3>
+              {(kvCache.caches as Record<string, unknown>[]).map((cache: Record<string, unknown>, idx: number) => (
+                <div key={idx} className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                  {Object.entries(cache).map(([key, value]) => (
+                    <div key={key}>
+                      <div className="text-xs text-[var(--color-text-secondary)]">
+                        {key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                      </div>
+                      <div className="font-medium tabular-nums">
+                        {typeof value === "number" ? value.toLocaleString() : String(value)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Latency Percentiles */}
+          {requests && requests.latency_percentiles && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Activity className="w-4 h-4 text-[var(--color-accent)]" />
+                Latency Percentiles (Last 60s)
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                {Object.entries(requests.latency_percentiles as Record<string, number>).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k}</div>
+                    <div className="font-medium tabular-nums">{typeof v === "number" ? `${v.toFixed(1)}ms` : String(v)}</div>
                   </div>
                 ))}
               </div>

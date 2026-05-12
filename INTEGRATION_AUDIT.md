@@ -60,20 +60,21 @@
 | P1-3 | SpecPrefill 修復評分方法: attention capture 替代 key magnitude，接入 _generate_fast | ✅ 已修復 | 全數通過 |
 | M6 | Vision Feature Cache 激活: VLMEngine 集成 VisionFeatureCache (YUNSHU_VISION_CACHE) | ✅ 已修復 | 全數通過 |
 | M7 | mRoPE 激活: VLMEngine 自動偵測 mRoPE config，capture/clear rope_deltas | ✅ 已修復 | 全數通過 |
+| P2-1 | 11 個 DEAD 模塊標記 deprecated，4 個已接入管線 (ngram, spec_prefill, vision_cache, ssd_kv) | ✅ 已修復 | 全數通過 |
+| P2-3 | Legacy Engine → BatchedEngine alias，gateway 統一 | ✅ 已修復 | 全數通過 |
+| P2-4 | 移除 Request/SamplingParams 5 個未使用字段 (grammar, videos, vlm_*) | ✅ 已修復 | 全數通過 |
+| P2-5 | WebUI 重複代碼統一 — fmtBytes/guessModelType 提取到 lib/utils.ts | ✅ 已修復 | 全數通過 |
+| P3-1 | WebUI monitoring 頁面暴露猜測解碼統計 (spec-decode endpoint) | ✅ 已修復 | 全數通過 |
+| P3-2 | WebUI monitoring 頁面暴露 KV Cache 狀態 (kv-cache endpoint) | ✅ 已修復 | 全數通過 |
+| P3-3 | WebUI chat 頁面添加思考預算控制 (thinking_budget) | ✅ 已修復 | 全數通過 |
+| P3-4 | WebUI 後端 URL 可配置 (YUNSHU_BACKEND_URL env var) | ✅ 已修復 | 全數通過 |
+| P3-5 | WebUI monitoring 頁面添加延遲百分位數顯示 (requests endpoint) | ✅ 已修復 | 全數通過 |
 
 ### 待處理
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P2-1 | 刪除或標記 15 個 DEAD 模塊 | P2 |
-| P2-2 | 刪除 settings.py，統一到 CLI/Gateway 配置 | P2 |
-| P2-4 | 刪除 Request/SamplingParams 中未使用字段 | P2 |
-| P2-5 | 統一 WebUI 重複代碼 | P2 |
 | P2-6 | 修復 70 處 except:pass (已評估，熱路徑中的可接受) | P2 |
-| P3-1 | WebUI 暴露猜測解碼開關和統計 | P3 |
-| P3-2 | WebUI 暴露 SSD cache 管理 | P3 |
-| P3-3 | WebUI 暴露思考預算控制 | P3 |
-| P3-5 | WebUI 添加延遲百分位數顯示 | P3 |
 | P4 | 文檔修正 | P4 |
 
 ---

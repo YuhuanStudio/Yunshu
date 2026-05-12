@@ -87,6 +87,7 @@ export default function ChatPage() {
   const [model, setModel] = useState("");
   const [models, setModels] = useState<Model[]>([]);
   const [enableThinking, setEnableThinking] = useState(false);
+  const [thinkingBudget, setThinkingBudget] = useState(0);
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2048);
   const [showSettings, setShowSettings] = useState(false);
@@ -295,6 +296,7 @@ export default function ChatPage() {
         max_tokens: maxTokens,
         stream: true,
         enable_thinking: enableThinking || undefined,
+        thinking_budget: enableThinking && thinkingBudget > 0 ? thinkingBudget : undefined,
       };
       if (jsonMode) {
         payload.response_format = { type: "json_object" };
@@ -627,6 +629,14 @@ export default function ChatPage() {
             <label htmlFor="thinking" className="text-sm">
               Enable Thinking
             </label>
+            {enableThinking && (
+              <span className="ml-2 text-xs text-[var(--color-text-secondary)]">
+                Budget: <input type="number" min={0} max={32768} value={thinkingBudget}
+                  onChange={(e) => setThinkingBudget(parseInt(e.target.value) || 0)}
+                  className="w-16 px-1 py-0.5 text-xs bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded text-center"
+                /> tokens (0 = unlimited)
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
