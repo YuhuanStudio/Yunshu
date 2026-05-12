@@ -92,12 +92,12 @@
 | C7 | 統一 spec decode begin/draft/accept 接口 | ✅ 已完成 |
 | M15 | 遠端 URL 圖片支持 | ✅ 已完成 |
 | P2-6 | 70 處 except:pass → logger.debug | ✅ 已完成 (21 文件) |
-| C6 | 漸進式 KV 量化 | 待處理 |
+| C6 | 漸進式 KV 量化 (每 256 tokens) | ✅ 已完成 |
 | C8 | 啟用 RadixTree | 待處理 |
 | C10 | 批量猜測驗證 | 待處理 |
 | C11 | 啟用 paged KV 默認 | 待處理 |
-| C12 | 記憶體壓力淘汰 | 進行中 |
-| C13 | SQLite SSD 元數據 | 待處理 |
+| C12 | 記憶體壓力淘汰 | ✅ 已完成 |
+| C13 | SQLite SSD 元數據 | ✅ 已完成 |
 | C14 | request retraction | 待處理 |
 | C15 | 15+ Tool Call Parsers | 待處理 |
 | C16 | insert_segments() 批處理路徑 | 待處理 |

@@ -401,6 +401,105 @@ def extract_tool_calls(text: str) -> list[dict]:
     return tool_calls
 
 
+# ── Additional Tool Call Parsers (C15: vllm-mlx model format coverage) ──
+
+# Pattern 5: Mistral-style {"function": {"name": ..., "arguments": ...}}
+_MISTRAL_TOOL_RE = re.compile(
+    r'\{[\s\S]*?"function"[\s\S]*?"name"[\s\S]*?\}',
+)
+# Pattern 6: ChatML [TOOL_CALLS] [{...}]
+_CHATML_TOOL_RE = re.compile(
+    r'\[TOOL_CALLS\]\s*(\[.*?\])',
+    re.DOTALL,
+)
+# Pattern 7: DeepSeek-style ✿FUNCTION✿ markers
+_DEEPSEEK_TOOL_RE = re.compile(
+    r'✿FUNCTION✿\s*(\{.*?\})\s*✿',
+    re.DOTALL,
+)
+
+
+def extract_tool_calls_v2(text: str) -> list[dict]:
+    """Extended tool call parser with 7 format support.
+
+    Adds to the original extract_tool_calls:
+    5. Mistral function-call JSON format
+    6. ChatML [TOOL_CALLS] array format
+    7. DeepSeek ✿FUNCTION✿ markers
+
+    Falls back to extract_tool_calls for formats 1-4.
+    """
+    # Try the original parser first
+    calls = extract_tool_calls(text)
+    if calls:
+        return calls
+
+    # Pattern 5: Mistral-style {"function": {"name": ..., "arguments": ...}}
+    # Try to find and parse JSON objects containing "function" key
+    _brace_depth = 0
+    _json_start = -1
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if _brace_depth == 0:
+                _json_start = i
+            _brace_depth += 1
+        elif ch == '}':
+            _brace_depth -= 1
+            if _brace_depth == 0 and _json_start >= 0:
+                candidate = text[_json_start:i + 1]
+                try:
+                    data = json.loads(candidate)
+                    # Mistral format: {"function": {"name": ...}}
+                    func = data.get("function", {})
+                    name = func.get("name", "") if isinstance(func, dict) else ""
+                    # Also handle bare {"name": ..., "arguments": ...} format
+                    if not name and "name" in data and isinstance(data.get("name"), str):
+                        name = data["name"]
+                        func = data
+                    if name:
+                        args = func.get("arguments", {})
+                        if isinstance(args, str):
+                            args = json.loads(args)
+                        calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                _json_start = -1
+    if calls:
+        return calls
+
+    # Pattern 6: ChatML [TOOL_CALLS] [{...}]
+    for match in _CHATML_TOOL_RE.finditer(text):
+        try:
+            arr = json.loads(match.group(1))
+            for item in arr:
+                if isinstance(item, dict):
+                    name = item.get("name", item.get("function", {}).get("name", ""))
+                    args = item.get("arguments", item.get("function", {}).get("arguments", {}))
+                    if name:
+                        if isinstance(args, str):
+                            args = json.loads(args)
+                        calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else args})
+        except (json.JSONDecodeError, KeyError):
+            continue
+    if calls:
+        return calls
+
+    # Pattern 7: DeepSeek ✿FUNCTION✿ markers
+    for match in _DEEPSEEK_TOOL_RE.finditer(text):
+        try:
+            data = json.loads(match.group(1))
+            name = data.get("name", "")
+            if name:
+                args = data.get("arguments", data.get("parameters", {}))
+                if isinstance(args, str):
+                    args = json.loads(args)
+                calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else args})
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    return calls
+
+
 def clean_tool_call_markup(text: str) -> str:
     """Remove tool call markup from text, leaving clean content."""
     # Remove <tool_call/>...</tool_call/> blocks

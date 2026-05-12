@@ -381,3 +381,58 @@ class TestLogprobsFormatting:
         )
         chunk = json.loads(chunk_str.split("data: ")[1].strip())
         assert "logprobs" not in chunk["choices"][0]
+
+
+class TestExtractToolCallsV2:
+    """Tests for extended tool call parser (C15: Mistral, ChatML, DeepSeek formats)."""
+
+    def test_mistral_format(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        text = '{"function": {"name": "get_weather", "arguments": {"city": "Tokyo"}}}'
+        calls = extract_tool_calls_v2(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "get_weather"
+        assert "Tokyo" in calls[0]["arguments"]
+
+    def test_mistral_format_string_args(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        text = '{"function": {"name": "search", "arguments": "{\\"query\\": \\"test\\"}"}}'
+        calls = extract_tool_calls_v2(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "search"
+
+    def test_chatml_format(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        text = '[TOOL_CALLS] [{"name": "run_code", "arguments": {"lang": "python"}}]'
+        calls = extract_tool_calls_v2(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "run_code"
+
+    def test_chatml_multiple_calls(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        text = '[TOOL_CALLS] [{"name": "f1", "arguments": {}}, {"name": "f2", "arguments": {}}]'
+        calls = extract_tool_calls_v2(text)
+        assert len(calls) == 2
+        assert calls[0]["name"] == "f1"
+        assert calls[1]["name"] == "f2"
+
+    def test_deepseek_format(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        text = '✿FUNCTION✿ {"name": "calculate", "arguments": {"expr": "2+2"}} ✿'
+        calls = extract_tool_calls_v2(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "calculate"
+
+    def test_fallback_to_original_hermes(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        text = '<tool_call\n{"name": "test_fn", "arguments": {"x": 1}}\n</tool_call'
+        calls = extract_tool_calls_v2(text)
+        # Original hermes parser requires proper closing tag with >
+        # This falls through to Mistral parser which matches {"name": ...}
+        assert len(calls) >= 1
+        assert calls[0]["name"] == "test_fn"
+
+    def test_no_calls_returns_empty(self):
+        from yunshu_gateway.streaming import extract_tool_calls_v2
+        calls = extract_tool_calls_v2("just regular text with no tool calls")
+        assert calls == []
