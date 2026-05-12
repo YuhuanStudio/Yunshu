@@ -1,20 +1,22 @@
 /** @type {import('next').NextConfig} */
+
+const backendUrl = process.env.YUNSHU_BACKEND_URL || "http://localhost:8000";
+
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
     return [
-      // Proxy API calls to Yunshu backend
       {
         source: "/v1/:path*",
-        destination: "http://localhost:8000/v1/:path*",
+        destination: `${backendUrl}/v1/:path*`,
       },
       {
         source: "/api/:path*",
-        destination: "http://localhost:8000/api/:path*",
+        destination: `${backendUrl}/api/:path*`,
       },
       {
         source: "/health",
-        destination: "http://localhost:8000/health",
+        destination: `${backendUrl}/health`,
       },
     ];
   },
