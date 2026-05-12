@@ -549,12 +549,12 @@ Wave 18 新增測試覆蓋：
 - `DeltaNetInversionEntry` — missing attributes on hooked layers
 - `ANEEmbeddingProcessor.embed()` — RuntimeError when neither CoreML nor MLX available
 
-### 6.6 測試配置 — ✅ 部分已修復
+### 6.6 測試配置 — ✅ Wave 19 已完成
 
 - ✅ `@pytest.mark.integration` / `@pytest.mark.gpu` / `@pytest.mark.slow` markers 已定義在 `pyproject.toml`
-- 🔲 無 coverage reporting (`addopts`)
-- 🔲 無 `xfail_strict`
-- 🔲 conftest.py 只有 auth disable fixture，無 shared engine/client fixtures
+- ✅ `addopts = ["-ra", "--tb=short"]` 已加入 `pyproject.toml`
+- ✅ `xfail_strict = true` 已加入 `pyproject.toml`
+- ✅ conftest.py 新增 `mock_engine`、`mock_batched_engine`、`set_engine`、`client` fixtures
 
 ---
 

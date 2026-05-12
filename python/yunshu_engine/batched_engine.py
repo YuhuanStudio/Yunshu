@@ -20,10 +20,37 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _wired_limit_ctx(model):
+    """Raise wired memory limit during generation to prevent weight swapping.
+
+    Follows mlx-lm's generate.py pattern: set limit to recommended max before
+    generation, restore + synchronize after.
+    """
+    try:
+        import mlx.core as mx
+        max_rec = mx.metal.recommended_max_working_memory_size()
+        model_bytes = sum(p.nbytes for p in model.parameters())
+        old_limit = mx.set_wired_limit(max_rec) if model_bytes > max_rec * 0.5 else None
+    except Exception:
+        old_limit = None
+    try:
+        yield
+    finally:
+        if old_limit is not None:
+            try:
+                import mlx.core as mx
+                mx.synchronize()
+                mx.set_wired_limit(old_limit)
+            except Exception:
+                pass
 
 
 @dataclass
@@ -357,35 +384,36 @@ class BatchedEngine:
             first = True
 
             _lprocs = logits_processors if logits_processors else None
-            for token, logits in generate_step(
-                ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                prompt_cache=cache, logits_processors=_lprocs,
-            ):
-                if first:
-                    ttft_s = time.perf_counter() - gen_t0
-                    first = False
-                tokens.append(token)
-                if logprobs:
-                    import mlx.core as mx
-                    log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
-                    tok_lp = float(log_probs[token])
-                    entry = {"token_id": int(token), "logprob": tok_lp}
-                    if top_logprobs and top_logprobs > 0:
-                        k = min(top_logprobs, log_probs.shape[0])
-                        sorted_idx = mx.argsort(-log_probs)
-                        top_k_idx = sorted_idx[:k]
-                        entry["top_logprobs"] = [
-                            {"token_id": int(top_k_idx[j]), "logprob": float(log_probs[int(top_k_idx[j])])}
-                            for j in range(k)
-                        ]
-                    token_logprobs.append(entry)
-                if token in stop_ids:
-                    tokens.pop()  # Exclude stop token from output
-                    break
-                if stop_suffixes:
-                    detokenizer.add_token(token)
-                    if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+            with _wired_limit_ctx(model):
+                for token, logits in generate_step(
+                    ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
+                    prompt_cache=cache, logits_processors=_lprocs,
+                ):
+                    if first:
+                        ttft_s = time.perf_counter() - gen_t0
+                        first = False
+                    tokens.append(token)
+                    if logprobs:
+                        import mlx.core as mx
+                        log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
+                        tok_lp = float(log_probs[token])
+                        entry = {"token_id": int(token), "logprob": tok_lp}
+                        if top_logprobs and top_logprobs > 0:
+                            k = min(top_logprobs, log_probs.shape[0])
+                            sorted_idx = mx.argsort(-log_probs)
+                            top_k_idx = sorted_idx[:k]
+                            entry["top_logprobs"] = [
+                                {"token_id": int(top_k_idx[j]), "logprob": float(log_probs[int(top_k_idx[j])])}
+                                for j in range(k)
+                            ]
+                        token_logprobs.append(entry)
+                    if token in stop_ids:
+                        tokens.pop()  # Exclude stop token from output
                         break
+                    if stop_suffixes:
+                        detokenizer.add_token(token)
+                        if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            break
 
             # Cache the completed KV state for future prefix matching
             prefix_cache.add(ids, cache)
@@ -623,26 +651,27 @@ class BatchedEngine:
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
             _lprocs = logits_processors if logits_processors else None
-            for token, _ in generate_step(
-                ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
-                prompt_cache=cache, logits_processors=_lprocs,
-            ):
-                detokenizer.add_token(token)
-                n_tok += 1
-                new_text = detokenizer.last_segment
-                stop_hit = token in stop_ids
-                suffix_hit = False
-                if not stop_hit and stop_suffixes:
-                    if any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                        suffix_hit = True
-                _put((new_text, n_tok, stop_hit or suffix_hit))
-                if stop_hit or suffix_hit:
-                    prefix_cache.add(ids, cache)
-                    mx.synchronize()
-                    return
-            prefix_cache.add(ids, cache)
-            _put(("", n_tok, True))
-            mx.synchronize()
+            with _wired_limit_ctx(model):
+                for token, _ in generate_step(
+                    ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
+                    prompt_cache=cache, logits_processors=_lprocs,
+                ):
+                    detokenizer.add_token(token)
+                    n_tok += 1
+                    new_text = detokenizer.last_segment
+                    stop_hit = token in stop_ids
+                    suffix_hit = False
+                    if not stop_hit and stop_suffixes:
+                        if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            suffix_hit = True
+                    _put((new_text, n_tok, stop_hit or suffix_hit))
+                    if stop_hit or suffix_hit:
+                        prefix_cache.add(ids, cache)
+                        mx.synchronize()
+                        return
+                prefix_cache.add(ids, cache)
+                _put(("", n_tok, True))
+                mx.synchronize()
             _put(_sentinel)
 
         from .mlx_executor import get_mlx_executor
