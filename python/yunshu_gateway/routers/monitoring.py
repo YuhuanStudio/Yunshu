@@ -210,9 +210,60 @@ async def requests_stats(
 
 @router.get("/prometheus", response_class=PlainTextResponse)
 async def prometheus_export() -> str:
-    """Full Prometheus exposition-format output.
-
-    This is a superset of the /metrics endpoint that also includes
-    the richer PrometheusMetrics registry (histogram buckets, gauges).
-    """
+    """Full Prometheus exposition-format output."""
     return get_prometheus_metrics().generate()
+
+
+@router.get("/kv-cache")
+async def kv_cache_stats() -> dict[str, Any]:
+    """KV prefix cache statistics."""
+    from ..engine import get_engine, get_model_manager
+    from ..engine.batched_engine import BatchedEngine
+
+    caches = []
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+                try:
+                    stats = entry.engine.get_kv_cache_stats()
+                    caches.append({"model_id": entry.model_id, **stats})
+                except Exception:
+                    caches.append({"model_id": entry.model_id, "error": "unavailable"})
+    else:
+        engine = get_engine()
+        if engine and isinstance(engine, BatchedEngine):
+            try:
+                caches.append({"model_id": engine.model_name, **engine.get_kv_cache_stats()})
+            except Exception:
+                pass
+    return {"caches": caches}
+
+
+@router.get("/spec-decode")
+async def spec_decode_stats() -> dict[str, Any]:
+    """Speculative decoding statistics."""
+    from ..engine import get_engine, get_model_manager
+    from ..engine.batched_engine import BatchedEngine
+
+    results = []
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+                decoder = getattr(entry.engine, '_spec_decoder', None)
+                info = {"model_id": entry.model_id, "enabled": entry.engine._spec_enabled}
+                if decoder is not None:
+                    info["stats"] = getattr(decoder, '_stats', {})
+                results.append(info)
+    return {"models": results}
+
+
+@router.get("/prefill-progress")
+async def prefill_progress() -> dict[str, Any]:
+    """Prefill progress tracking."""
+    from ...yunshu_engine.prefill_progress import PrefillProgressTracker
+    tracker = PrefillProgressTracker.get_instance()
+    if tracker is None:
+        return {"active": False}
+    return {"active": True, "requests": tracker.get_all_progress()}

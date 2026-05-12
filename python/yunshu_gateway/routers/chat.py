@@ -132,6 +132,12 @@ class ChatCompletionRequest(BaseModel):
     top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
     n: int = Field(default=1, ge=1, le=128)
     user: Optional[str] = None
+    # Advanced engine parameters
+    spec_decode: bool = False
+    thinking_budget: Optional[int] = Field(default=None, ge=1, le=32768)
+    reasoning_effort: Optional[str] = None
+    stop_token_ids: Optional[list[int]] = None
+    priority: int = Field(default=0, ge=0, le=100)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -371,6 +377,8 @@ async def _build_multi_choice(
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
+                spec_decode=req.spec_decode,
+                thinking_budget=req.thinking_budget,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -553,6 +561,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
                 logprobs=req.logprobs,
+                spec_decode=req.spec_decode,
+                thinking_budget=req.thinking_budget,
             )
             raw_text = result.text
             prompt_tok = result.prompt_tokens
@@ -687,6 +697,7 @@ async def _handle_vlm_chat(
         messages=messages,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
+        top_p=req.top_p,
     )
 
     content = result.get("text", "")
@@ -728,6 +739,7 @@ async def _stream_vlm_response(
             messages=messages,
             max_tokens=req.max_tokens,
             temperature=req.temperature,
+            top_p=req.top_p,
         ):
             yield format_openai_chunk(
                 completion_id=completion_id,

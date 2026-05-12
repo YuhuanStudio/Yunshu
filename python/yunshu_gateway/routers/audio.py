@@ -256,10 +256,15 @@ async def create_transcription(
         except OSError:
             pass
 
-    return {
+    resp = {
         "text": result.get("text", ""),
         "language": result.get("language"),
     }
+    if result.get("segments"):
+        resp["segments"] = result["segments"]
+    if result.get("duration"):
+        resp["duration"] = result["duration"]
+    return resp
 
 
 @router.get("/audio/voices")

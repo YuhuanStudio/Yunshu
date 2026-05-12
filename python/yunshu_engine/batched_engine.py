@@ -124,6 +124,17 @@ class BatchedEngine:
         from .kv_prefix_cache import KVPrefixCache
         self._kv_prefix_cache = KVPrefixCache(max_entries=64, min_prefix_length=32)
 
+        # SSD KV cache persistence (opt-in via YUNSHU_SSD_CACHE=1)
+        import os
+        if os.environ.get("YUNSHU_SSD_CACHE", "").strip() in ("1", "true", "yes"):
+            ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR", "~/.cache/yunshu/kv-ssd")
+            ssd_max_gb = int(os.environ.get("YUNSHU_SSD_CACHE_MAX_GB", "10"))
+            self._kv_prefix_cache.enable_ssd_cache(
+                cache_dir=ssd_dir,
+                max_size_bytes=ssd_max_gb * 1024 ** 3,
+                model_name=model_name,
+            )
+
         # KV cache quantization config (mlx-lm pattern: to_quantized)
         self._kv_quant_bits: int | None = None
         self._kv_quant_group_size: int = 64
@@ -231,6 +242,7 @@ class BatchedEngine:
         enable_thinking: bool | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        thinking_budget: int | None = None,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 

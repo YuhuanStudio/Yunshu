@@ -50,15 +50,24 @@
 | M3 | TTS streaming 端點現在正確傳遞 `instruct` 參數 (含 voice 默認值) | ✅ 已修復 | 全數通過 |
 | M5 | VLM 多模型路由優先匹配 `req.model`，不再盲目選取第一個 | ✅ 已修復 | 全數通過 |
 | M1 | VLM streaming 路徑修復 — 有圖片時使用 `mlx_vlm.stream_generate()` 而非丟棄圖片 | ✅ 已修復 | 全數通過 |
+| P1-1 | SSD KV Cache 激活 — BatchedEngine.__init__ 根據 YUNSHU_SSD_CACHE env 調用 enable_ssd_cache() | ✅ 已修復 | 全數通過 |
+| P1-4 | Gateway 暴露 spec_decode, thinking_budget, priority, reasoning_effort, stop_token_ids 參數 | ✅ 已修復 | 全數通過 |
+| P1-5 | Monitoring endpoints 新增 KV cache, spec decode, prefill progress 三個端點 | ✅ 已修復 | 全數通過 |
+| M8 | ASR segments/duration 暴露 — Gateway 返回時間戳和分段信息 | ✅ 已修復 | 全數通過 |
+| M9 | VLM top_p 參數透傳到 generate() 和 generate_stream() | ✅ 已修復 | 全數通過 |
+| M4 | ImageGenerateRequest 移除未實現的 guidance_scale/negative_prompt | ✅ 已修復 | 全數通過 |
 
 ### 待處理
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P0-6 | SSRF (bench.py base_url) | ✅ 已修復 | 全數通過 |
-| M4 | guidance_scale/negative_prompt 移除或實現 | ✅ 已移除假參數 | 全數通過 |
-| P1-1~5 | 核心功能接入 (SSD, N-gram, SpecPrefill, Gateway params, Monitoring) | P1 |
-| M6~9 | 多模態功能接入 (Vision Cache, mRoPE, ASR segments, VLM params) | P1 |
+| P1-2 | 接入 N-gram Proposer | P1 |
+| P1-3 | 接入 SpecPrefill (需修復評分方法) | P1 |
+| M6 | 激活 Vision Feature Cache | P1 |
+| M7 | 激活 mRoPE | P1 |
+| P2 | 代碼清理 (70 處 except:pass, 死模塊標記, 重複代碼) | P2 |
+| P3 | 前端整合 (硬編碼 URL, 功能暴露) | P3 |
+| P4 | 文檔修正 | P4 |
 
 ---
 
