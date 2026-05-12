@@ -1,8 +1,8 @@
 # Yunshu 全面審計報告
 
 > 審計日期：2026-05-11
-> 最後更新：2026-05-12（Wave 16–17 修復 + 測試品質改進）
-> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,250 個測試、326 篇參考文獻
+> 最後更新：2026-05-12（Wave 16–18 修復 + 測試品質改進 + 覆蓋率提升）
+> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,360 個測試、326 篇參考文獻
 
 ---
 
@@ -21,8 +21,9 @@
 > 所有 CRITICAL + HIGH + MEDIUM + LOW 問題已於 Wave 1–16 全數修復。
 > Wave 16 修復最後 3 個 LOW 問題（L1: 真實 tokenizer/embedding，L2: OTLP flush，L3: DeltaNet capture hooks）。
 > Wave 17 改善測試品質：替換 8 個同義反覆測試、收緊 HTTP status assertions。
-> 2,250 個單元測試全數通過，0 失敗。
-> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d` `d14b27f` `461d561`
+> Wave 18 新增 110 個測試：VLM engine、Image engine、SpeculativeDecoder、DeltaNet inversion。
+> 2,360 個單元測試全數通過，0 失敗。
+> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d` `d14b27f` `461d561` `bf1e326`
 
 ---
 
@@ -515,25 +516,38 @@ python/yunshu_engine/metal_kernels.py  ← Python 字串 inline Metal source
 assert True
 ```
 
-### 6.3 零覆蓋的關鍵模組 — 部分已有測試
+### 6.3 零覆蓋的關鍵模組 — 大部分已補齊
 
 | 模組 | 說明 | 狀態 |
 |---|---|---|
-| `vlm_engine.py` | 整個 VLM 路徑無測試 | 🔲 |
-| `image_engine.py` | 圖像生成無測試 | 🔲 |
+| `vlm_engine.py` | VLM Engine init, extract_text, format_prompt, extract_images, stats | ✅ Wave 18 |
+| `image_engine.py` | ImageGenEngine init, resolve, sigmas, TimestepEmbedder, FinalLayer, RoPE, error paths | ✅ Wave 18 |
 | `mtp_decoder.py` | MTP 解碼器 | ✅ Wave 12 |
-| `mlx_executor.py` | GPU executor 併發關鍵無測試 | 🔲 |
-| `deltanet_inversion.py` | DeltaNet 狀態反演 | ✅ Wave 16（register_hooks + verify_roundtrip） |
+| `mlx_executor.py` | GPU executor 併發關鍵 | ✅ (16 tests) |
+| `deltanet_inversion.py` | DeltaNet 狀態反演 roundtrip, capture, hooks | ✅ Wave 18 |
 | `n_confirmed_patch.py` | n_confirmed MTP 支持 | ✅ Wave 12 |
 | `vision_feature_cache.py` | 視覺特徵快取 | ✅ Wave 12 |
 
-### 6.4 SpeculativeDecoder 核心方法零覆蓋
+### 6.4 SpeculativeDecoder 核心方法覆蓋 — ✅ Wave 18 已補齊
 
-`generate_draft()`、`verify_draft()`、`generate()` — 這三個核心方法從未被任何測試呼叫。35 個 MagicMock，只測初始化和預設值。
+Wave 18 新增測試覆蓋：
+- `detect_spec_heads()` — 20 個測試（MTP/EAGLE/Medusa/MLPSpeculator 優先級、edge cases）
+- `auto_configure_speculative()` — 5 個測試
+- `generate_draft()` — 2 個測試（mocked model，驗證 draft_length 和 return type）
+- `verify_draft()` — 2 個測試（mocked model，驗證 acceptance 和 bonus token）
+- `_snapshot_cache()` / `_restore_cache()` — 7 個測試（KV/Arrays/mixed cache types）
+- `LookaheadReasoning` — 3 個測試
+- Acceptance rate 計算 — 3 個測試
+- Error paths — 4 個測試（None input, zero stats, edge cases）
 
-### 6.5 錯誤路徑覆蓋極低
+### 6.5 錯誤路徑覆蓋 — Wave 18 已改善
 
-2,222 個測試中只有 **37 個 `pytest.raises`**（0.17%）。模型載入失敗、OOM、malformed input、timeout 處理幾乎未測。
+原本 2,222 個測試中只有 37 個 `pytest.raises`（0.17%）。Wave 18 新增 error path 測試：
+- `ImageGenEngine.generate_image()` / `generate_image_stream()` — RuntimeError when not loaded
+- `detect_spec_heads()` — None, int, empty dict inputs
+- `_draft_token_gpu()` — RuntimeError when MLX unavailable
+- `DeltaNetInversionEntry` — missing attributes on hooked layers
+- `ANEEmbeddingProcessor.embed()` — RuntimeError when neither CoreML nor MLX available
 
 ### 6.6 測試配置 — ✅ 部分已修復
 
