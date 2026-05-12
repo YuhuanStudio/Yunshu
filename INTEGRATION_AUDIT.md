@@ -65,8 +65,15 @@
 
 | 編號 | 修復 | 優先級 |
 |------|------|--------|
-| P2 | 代碼清理 (70 處 except:pass, 死模塊標記, 重複代碼) — 部分完成 (P2-3) | P2 |
-| P3 | 前端整合 (硬編碼 URL, 功能暴露) | P3 |
+| P2-1 | 刪除或標記 15 個 DEAD 模塊 | P2 |
+| P2-2 | 刪除 settings.py，統一到 CLI/Gateway 配置 | P2 |
+| P2-4 | 刪除 Request/SamplingParams 中未使用字段 | P2 |
+| P2-5 | 統一 WebUI 重複代碼 | P2 |
+| P2-6 | 修復 70 處 except:pass (已評估，熱路徑中的可接受) | P2 |
+| P3-1 | WebUI 暴露猜測解碼開關和統計 | P3 |
+| P3-2 | WebUI 暴露 SSD cache 管理 | P3 |
+| P3-3 | WebUI 暴露思考預算控制 | P3 |
+| P3-5 | WebUI 添加延遲百分位數顯示 | P3 |
 | P4 | 文檔修正 | P4 |
 
 ---
