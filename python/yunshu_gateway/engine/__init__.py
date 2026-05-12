@@ -121,8 +121,8 @@ async def get_engine_for_model(model_id: str) -> Engine:
             # Strip provider prefix
             if '/' in model_id:
                 stripped = model_id.rsplit('/', 1)[-1]
-                if mid.lower() == stripped.lower():
-                    engine = await _model_manager.get_engine(mid)
+                if entry.model_id.lower() == stripped.lower():
+                    engine = await _model_manager.get_engine(entry.model_id)
                     await _ensure_engine_started(engine)
                     return engine
 

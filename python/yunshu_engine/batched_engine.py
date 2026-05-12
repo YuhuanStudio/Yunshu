@@ -355,17 +355,17 @@ class BatchedEngine:
                     first = False
                 tokens.append(token)
                 if logprobs:
-                    import numpy as np
-                    log_probs_arr = np.array(logits, copy=False)
-                    tok_lp = float(log_probs_arr[token])
+                    import mlx.core as mx
+                    log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
+                    tok_lp = float(log_probs[token])
                     entry = {"token_id": int(token), "logprob": tok_lp}
                     if top_logprobs and top_logprobs > 0:
-                        k = min(top_logprobs, len(log_probs_arr))
-                        top_indices = np.argpartition(log_probs_arr, -k)[-k:]
-                        top_indices = top_indices[np.argsort(log_probs_arr[top_indices])[::-1]]
+                        k = min(top_logprobs, log_probs.shape[0])
+                        sorted_idx = mx.argsort(-log_probs)
+                        top_k_idx = sorted_idx[:k]
                         entry["top_logprobs"] = [
-                            {"token_id": int(idx), "logprob": float(log_probs_arr[idx])}
-                            for idx in top_indices
+                            {"token_id": int(top_k_idx[j]), "logprob": float(log_probs[int(top_k_idx[j])])}
+                            for j in range(k)
                         ]
                     token_logprobs.append(entry)
                 if token in stop_ids:

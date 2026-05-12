@@ -272,10 +272,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
 async def _resolve_engine(model_id: str):
     """Resolve engine, returning (engine, is_batched) tuple."""
+    from yunshu_engine.batched_engine import BatchedEngine
     engine = get_engine()
 
     if engine is not None and engine.is_loaded and engine.resolve_model_id(model_id):
-        return engine, False
+        return engine, isinstance(engine, BatchedEngine)
 
     # Multi-model mode
     from ..engine import get_engine_for_model
@@ -354,26 +355,31 @@ async def _non_stream_batched(engine, messages, req, stop):
 
 
 async def _non_stream_legacy(engine, messages, req, stop):
-    """Non-streaming response via legacy Engine."""
+    """Non-streaming response via Engine or BatchedEngine."""
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
-    state = await engine.generate(
+    result = await engine.generate(
         prompt=messages,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
         stop=stop,
     )
-    _record_metrics(state.prompt_token_count, state.completion_token_count)
+    # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
+    prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
+    completion_toks = getattr(result, 'completion_tokens', 0) or getattr(result, 'completion_token_count', 0)
+    text = getattr(result, 'text', '') or getattr(result, 'generated_text', '')
+    finish_reason = getattr(result, 'finish_reason', None) or getattr(result, 'finish_state', None)
+    _record_metrics(prompt_toks, completion_toks)
     return JSONResponse({
         "id": message_id,
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "text", "text": state.generated_text}],
+        "content": [{"type": "text", "text": text}],
         "model": req.model,
-        "stop_reason": "end_turn" if state.finish_reason == "stop" else (state.finish_reason or "end_turn"),
+        "stop_reason": "end_turn" if finish_reason == "stop" else (finish_reason or "end_turn"),
         "usage": {
-            "input_tokens": state.prompt_token_count,
-            "output_tokens": state.completion_token_count,
+            "input_tokens": prompt_toks,
+            "output_tokens": completion_toks,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
         },

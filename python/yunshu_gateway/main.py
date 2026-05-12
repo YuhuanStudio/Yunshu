@@ -60,14 +60,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _shutting_down = False
 
     if DEFAULT_MODEL:
-        # Single-model mode: load the default model directly
-        engine = get_engine()
-        if engine is None:
-            engine = init_engine()
+        # Single-model mode: use BatchedEngine directly
+        from yunshu_engine.batched_engine import BatchedEngine
+        from .engine import set_engine
 
-        from yunshu_engine.mlx_executor import get_mlx_executor
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(get_mlx_executor(), engine.load, DEFAULT_MODEL)
+        engine = BatchedEngine(model_name=DEFAULT_MODEL)
+        set_engine(engine)
         await engine.start()
     elif os.environ.get("YUNSHU_MULTI_MODEL"):
         # Multi-model mode: auto-discover and register models from models_dir
