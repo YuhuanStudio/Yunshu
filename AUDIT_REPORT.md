@@ -1,7 +1,7 @@
 # Yunshu 全面審計報告
 
 > 審計日期：2026-05-11
-> 最後更新：2026-05-12（Wave 16–18 修復 + 測試品質改進 + 覆蓋率提升）
+> 最後更新：2026-05-12（Wave 16–19 修復 + 測試品質改進 + 覆蓋率提升 + wired_limit）
 > 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,360 個測試、326 篇參考文獻
 
 ---
@@ -406,7 +406,7 @@ engine = manager.get_engine(model_id)  # ← 缺少 await
 |---|---|---|------|
 | L1 | `ane_embedding.py` | 大量 stub/placeholder（hash-based tokenization, random embeddings） | ✅ Wave 16 |
 | L2 | `telemetry.py` | 整個模組是 stub，flush 直接清空 | ✅ Wave 16 |
-| L3 | `deltanet_inversion.py` | 標記為「不適用 BF16」，monkey-patch 未完成 | ✅ Wave 16 |
+| L3 | `deltanet_inversion.py` | 標記為「不適用 BF16」，monkey-patch 未完成 | ✅ Wave 16 + Wave 19 修復 hooks |
 | L4 | `metal_kernels.py:659` | `shell=True` subprocess | ✅ Wave 7 |
 | L5 | `json_schema.py:664` | 硬編碼 `range(151936)` vocab fallback | ✅ Wave 7 |
 | L6 | `model_registry.py:112` | module-level singleton 非 thread-safe | ✅ Wave 8 |
@@ -621,7 +621,7 @@ Wave 18 新增測試覆蓋：
 | 無 Radix tree prefix cache（O(n*entries) 線性掃描） | SGLang | 高 |
 | 無 hash-based block dedup + COW | vLLM | 高 |
 | 無 SSD-tier KV cache | oMLX | 中 |
-| 無 `wired_limit` context manager | mlx-lm | 中 |
+| 無 `wired_limit` context manager | mlx-lm | ✅ Wave 19 |
 | 無 KV cache quantization | mlx-lm | 中 |
 | 無 request preemption | vLLM | 中 |
 | 無 grammar constraint integration | oMLX | 低 |
