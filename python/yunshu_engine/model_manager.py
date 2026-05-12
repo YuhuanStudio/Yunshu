@@ -28,7 +28,7 @@ from typing import Any, Optional
 
 import mlx.core as mx
 
-from .engine import Engine, EngineConfig
+from .engine import EngineConfig
 
 logger = logging.getLogger(__name__)
 
