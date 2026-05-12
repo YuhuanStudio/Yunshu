@@ -452,6 +452,7 @@ class BatchedEngine:
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
         use_engine_loop: bool = False,
+        enable_thinking: bool | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -485,6 +486,7 @@ class BatchedEngine:
                 presence_penalty=presence_penalty,
                 logit_bias=logit_bias,
                 stop=stop, seed=seed,
+                enable_thinking=enable_thinking,
             ):
                 yield output
             return
@@ -540,6 +542,7 @@ class BatchedEngine:
         logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
         seed: int | None = None,
+        enable_thinking: bool | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue."""
         from mlx_lm.generate import generate_step
@@ -549,9 +552,10 @@ class BatchedEngine:
         model = self._model
 
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            prompt = tokenizer.apply_chat_template(
-                prompt, tokenize=False, add_generation_prompt=True,
-            )
+            tpl_kwargs = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
+            prompt = tokenizer.apply_chat_template(prompt, **tpl_kwargs)
 
         input_ids = tokenizer.encode(prompt)
         prompt_tokens = len(input_ids)
