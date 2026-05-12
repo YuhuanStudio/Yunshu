@@ -1,8 +1,8 @@
 # Yunshu 全面審計報告
 
 > 審計日期：2026-05-11
-> 最後更新：2026-05-12（Wave 7–15 修復 + 五模態 GPU 實測驗證）
-> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,245 個測試、326 篇參考文獻
+> 最後更新：2026-05-12（Wave 16–17 修復 + 測試品質改進）
+> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,250 個測試、326 篇參考文獻
 
 ---
 
@@ -13,15 +13,16 @@
 | CRITICAL | 10 | 10 | 0 | 0 |
 | HIGH | 12 | 12 | 0 | 0 |
 | MEDIUM | 20 | 17 | 3 | 0 |
-| LOW | 18 | 15 | 0 | 3 |
+| LOW | 18 | 18 | 0 | 0 |
 | 架構問題 | 5 | 5 | 0 | 0 |
 | Wave 7–15 新增 | 8 | 8 | 0 | 0 |
-| **合計** | **73** | **67** | **3** | **3** |
+| **合計** | **73** | **70** | **3** | **0** |
 
-> 所有 CRITICAL + HIGH + MEDIUM 問題已於 Wave 1–6 修復完成。
-> Wave 7–15 完成五模態 GPU 實測驗證 + 8 項 runtime bug 修復。
-> 2,245 個單元測試全數通過，0 失敗。
-> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d`
+> 所有 CRITICAL + HIGH + MEDIUM + LOW 問題已於 Wave 1–16 全數修復。
+> Wave 16 修復最後 3 個 LOW 問題（L1: 真實 tokenizer/embedding，L2: OTLP flush，L3: DeltaNet capture hooks）。
+> Wave 17 改善測試品質：替換 8 個同義反覆測試、收緊 HTTP status assertions。
+> 2,250 個單元測試全數通過，0 失敗。
+> 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d` `d14b27f` `461d561`
 
 ---
 
@@ -402,9 +403,9 @@ engine = manager.get_engine(model_id)  # ← 缺少 await
 
 | # | 位置 | 問題 | 狀態 |
 |---|---|---|------|
-| L1 | `ane_embedding.py` | 大量 stub/placeholder（hash-based tokenization, random embeddings） | 🔲 |
-| L2 | `telemetry.py` | 整個模組是 stub，flush 直接清空 | 🔲 |
-| L3 | `deltanet_inversion.py` | 標記為「不適用 BF16」，monkey-patch 未完成 | 🔲 |
+| L1 | `ane_embedding.py` | 大量 stub/placeholder（hash-based tokenization, random embeddings） | ✅ Wave 16 |
+| L2 | `telemetry.py` | 整個模組是 stub，flush 直接清空 | ✅ Wave 16 |
+| L3 | `deltanet_inversion.py` | 標記為「不適用 BF16」，monkey-patch 未完成 | ✅ Wave 16 |
 | L4 | `metal_kernels.py:659` | `shell=True` subprocess | ✅ Wave 7 |
 | L5 | `json_schema.py:664` | 硬編碼 `range(151936)` vocab fallback | ✅ Wave 7 |
 | L6 | `model_registry.py:112` | module-level singleton 非 thread-safe | ✅ Wave 8 |
@@ -496,20 +497,17 @@ python/yunshu_engine/metal_kernels.py  ← Python 字串 inline Metal source
 | HTTP 整合（mock engine） | ~300 | 13% | 中 |
 | **真實模型推理** | ~16 | **<1%** | 唯一可信 |
 
-### 6.2 永遠通過的測試（false confidence）
+### 6.2 永遠通過的測試（false confidence）— ✅ Wave 17 已改善
 
-**30+ 個過度寬鬆的 HTTP status assertion**：
-```python
-# 出現在 test_anthropic.py, test_images.py, test_embeddings.py 等
-assert resp.status_code in (200, 404, 500, 503, 422)  # 接受所有可能狀態碼
-```
+**30+ 個過度寬鬆的 HTTP status assertion** → ✅ 已收緊：
+- 移除 `(200, 404, 500, 503, 422)` 全接受模式
+- nonexistent-model: `(404, 503)` 或 `(404, 500, 503)`
+- valid-payload: `(200, 404, 500, 503)` — 500 保留因 engine 可丟異常
+- 驗證測試: `assert resp.status_code == 422`（精確匹配）
 
-**8 個同義反覆 Anthropic streaming 測試**：
-```python
-# test_anthropic.py:345-494 — 在測試裡手動建 dict 再 assert 自己
-event = {"type": "message_start", ...}
-assert event["type"] == "message_start"  # 永遠 True
-```
+**8 個同義反覆 Anthropic streaming 測試** → ✅ 已替換：
+- 原本在測試裡手動建 dict 再 assert 自己（永遠 True）
+- 替換為 4 個 parameterized 測試：`test_event_has_required_fields`（5 event types）、`test_message_start_usage_has_tokens`、`test_content_block_types`（3 block types）、`test_valid_stop_reasons`（4 reasons）
 
 **1 個 literal `assert True`**：
 ```python
@@ -517,17 +515,17 @@ assert event["type"] == "message_start"  # 永遠 True
 assert True
 ```
 
-### 6.3 零覆蓋的關鍵模組
+### 6.3 零覆蓋的關鍵模組 — 部分已有測試
 
-| 模組 | 說明 |
-|---|---|
-| `vlm_engine.py` | 整個 VLM 路徑無測試 |
-| `image_engine.py` | 圖像生成無測試 |
-| `mtp_decoder.py` | MTP 解碼器無測試 |
-| `mlx_executor.py` | GPU executor 併發關鍵無測試 |
-| `deltanet_inversion.py` | 無整合測試 |
-| `n_confirmed_patch.py` | 無測試 |
-| `vision_feature_cache.py` | 無測試 |
+| 模組 | 說明 | 狀態 |
+|---|---|---|
+| `vlm_engine.py` | 整個 VLM 路徑無測試 | 🔲 |
+| `image_engine.py` | 圖像生成無測試 | 🔲 |
+| `mtp_decoder.py` | MTP 解碼器 | ✅ Wave 12 |
+| `mlx_executor.py` | GPU executor 併發關鍵無測試 | 🔲 |
+| `deltanet_inversion.py` | DeltaNet 狀態反演 | ✅ Wave 16（register_hooks + verify_roundtrip） |
+| `n_confirmed_patch.py` | n_confirmed MTP 支持 | ✅ Wave 12 |
+| `vision_feature_cache.py` | 視覺特徵快取 | ✅ Wave 12 |
 
 ### 6.4 SpeculativeDecoder 核心方法零覆蓋
 
@@ -537,12 +535,12 @@ assert True
 
 2,222 個測試中只有 **37 個 `pytest.raises`**（0.17%）。模型載入失敗、OOM、malformed input、timeout 處理幾乎未測。
 
-### 6.6 測試配置缺失
+### 6.6 測試配置 — ✅ 部分已修復
 
-- 無 `@pytest.mark.integration` / `@pytest.mark.gpu` markers
-- 無 coverage reporting (`addopts`)
-- 無 `xfail_strict`
-- conftest.py 只有 auth disable fixture，無 shared engine/client fixtures
+- ✅ `@pytest.mark.integration` / `@pytest.mark.gpu` / `@pytest.mark.slow` markers 已定義在 `pyproject.toml`
+- 🔲 無 coverage reporting (`addopts`)
+- 🔲 無 `xfail_strict`
+- 🔲 conftest.py 只有 auth disable fixture，無 shared engine/client fixtures
 
 ---
 
