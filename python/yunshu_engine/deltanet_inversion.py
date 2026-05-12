@@ -171,55 +171,84 @@ class DeltaNetInverter:
     def register_hooks(self, model) -> None:
         """Register capture hooks on DeltaNet SSM layers.
 
-        Patches each layer's forward to capture gate/beta/key/value/state_after
-        during the verify pass. Call ``unregister_hooks()`` when done.
+        Patches each layer's ``__call__`` on its **class** to capture
+        gate/beta/key/value/state_after during the verify pass.
+        Uses a per-instance ``_inverter_hook`` dict to route captures
+        to the correct inverter.
+
+        Call ``unregister_hooks()`` when done.
+
+        Note:
+            Python's ``obj()`` dispatch resolves ``__call__`` from the
+            **class**, not the instance.  Setting ``module.__call__ = fn``
+            only affects ``module.__call__(...)`` (attribute lookup), not
+            ``module(...)`` (call syntax).  We therefore patch the class
+            and use a per-instance hook dict to multiplex.
 
         Args:
             model: An nn.Module containing DeltaNet SSM layers with a
-                   ``state`` attribute and ``gate``, ``beta``, ``k`, ``v`` parameters.
+                   ``state`` attribute and ``gate``, ``beta``, ``k``, ``v`` parameters.
         """
         self._original_forwards: list = []
+        self._hooked_layers = []
+        self._hooked_classes: dict = {}  # {class: original __call__}
         inverter = self
 
-        def _make_hook(layer, idx):
-            original_fn = layer.__call__
-
-            def hooked_call(*args, **kwargs):
-                result = original_fn(*args, **kwargs)
-                if inverter._capturing and hasattr(layer, 'state'):
-                    try:
-                        g = getattr(layer, '_last_gate', None)
-                        beta = getattr(layer, '_last_beta', None)
-                        k = getattr(layer, '_last_key', None)
-                        v = getattr(layer, '_last_value', None)
-                        if g is not None and beta is not None:
-                            inverter.capture_layer(
-                                gate=g, beta=beta, key=k, value=v,
-                                state_after=layer.state,
-                            )
-                    except Exception as exc:
-                        logger.debug("DeltaNet capture hook failed for layer %d: %s", idx, exc)
-                return result
-
-            return hooked_call
-
-        # Find DeltaNet/SSM layers by checking for state attribute
-        self._hooked_layers = []
+        # Collect target modules
+        targets = []
         for idx, (name, module) in enumerate(model.named_modules()):
-            if hasattr(module, 'state') and hasattr(module, '__call__'):
-                original = module.__call__
-                self._original_forwards.append((module, original))
-                module.__call__ = _make_hook(module, idx)
-                self._hooked_layers.append(module)
+            if hasattr(module, 'state'):
+                targets.append((idx, module))
+
+        # Patch each unique class once
+        for idx, module in targets:
+            cls = type(module)
+
+            if cls not in self._hooked_classes:
+                original_fn = cls.__call__
+                self._hooked_classes[cls] = original_fn
+
+                def make_patched_call(orig):
+                    def patched_call(self_layer, *args, **kwargs):
+                        result = orig(self_layer, *args, **kwargs)
+                        hook_data = getattr(self_layer, '_inverter_hook', None)
+                        if hook_data is not None:
+                            inv, layer_idx = hook_data
+                            if inv._capturing and hasattr(self_layer, 'state'):
+                                try:
+                                    g = getattr(self_layer, '_last_gate', None)
+                                    beta = getattr(self_layer, '_last_beta', None)
+                                    k = getattr(self_layer, '_last_key', None)
+                                    v = getattr(self_layer, '_last_value', None)
+                                    if g is not None and beta is not None:
+                                        inv.capture_layer(
+                                            gate=g, beta=beta, key=k, value=v,
+                                            state_after=self_layer.state,
+                                        )
+                                except Exception as exc:
+                                    logger.debug("DeltaNet capture hook failed for layer %d: %s", layer_idx, exc)
+                        return result
+                    return patched_call
+
+                cls.__call__ = make_patched_call(original_fn)
+
+            # Attach hook data to this instance
+            module._inverter_hook = (inverter, idx)
+            self._hooked_layers.append(module)
 
     def unregister_hooks(self) -> None:
-        """Remove all capture hooks, restoring original forward methods."""
-        if hasattr(self, '_original_forwards'):
-            for module, original_fn in self._original_forwards:
-                module.__call__ = original_fn
-            self._original_forwards.clear()
+        """Remove all capture hooks, restoring original class __call__ methods."""
+        # Remove per-instance hook data
         if hasattr(self, '_hooked_layers'):
+            for module in self._hooked_layers:
+                if hasattr(module, '_inverter_hook'):
+                    del module._inverter_hook
             self._hooked_layers.clear()
+        # Restore original class __call__
+        if hasattr(self, '_hooked_classes'):
+            for cls, original_fn in self._hooked_classes.items():
+                cls.__call__ = original_fn
+            self._hooked_classes.clear()
 
     @staticmethod
     def verify_roundtrip(state: mx.array, gate: mx.array, beta: mx.array,

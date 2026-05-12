@@ -272,9 +272,8 @@ class TestRegisterHooks:
         model = FakeModel()
         inv.register_hooks(model)
 
-        # The hook patches module.__call__ as an instance attribute
-        # Calling layer.__call__() directly invokes the hooked version
-        result = layer.__call__()
+        # Now module() call syntax correctly routes through the hooked class __call__
+        result = layer()
         assert result == "output"
         assert len(inv._entries) == 1
 
