@@ -99,10 +99,10 @@
 | C12 | 記憶體壓力淘汰 | ✅ 已完成 |
 | C13 | SQLite SSD 元數據 | ✅ 已完成 |
 | C14 | request retraction | 待處理 |
-| C15 | 15+ Tool Call Parsers | 待處理 |
-| C16 | insert_segments() 批處理路徑 | 待處理 |
+| C15 | 7 格式 Tool Call Parsers | ✅ 已完成 |
+| C16 | insert_segments() 批處理路徑 | ✅ 已完成 |
 | C21 | 多模態前綴緩存 | 待處理 |
-| C23 | Per-Model Settings | 待處理 |
+| C23 | Per-Model Settings | ✅ 已完成 |
 
 ---
 

@@ -156,6 +156,10 @@ class EngineCore:
         # Stats
         self._num_requests_processed: int = 0
 
+    def set_prefix_cache(self, cache: Any) -> None:
+        """Set KV prefix cache for batch-path insert_segments (C16)."""
+        self.scheduler.set_prefix_cache(cache)
+
     @property
     def is_running(self) -> bool:
         return self._running

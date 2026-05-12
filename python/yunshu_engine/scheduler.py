@@ -152,6 +152,9 @@ class Scheduler:
         # Per-request thinking budget processors
         self._thinking_processors: dict[str, Any] = {}
 
+        # KV prefix cache for batch-path insert_segments (C16)
+        self._prefix_cache: Any = None
+
         # Deferred cache clearing (oMLX #435)
         self._step_counter: int = 0
         self._deferred_clear_at: int | None = None
@@ -217,6 +220,10 @@ class Scheduler:
     def set_memory_monitor(self, monitor: Any) -> None:
         """Set memory monitor for external preflight checks."""
         self._memory_monitor = monitor
+
+    def set_prefix_cache(self, cache: Any) -> None:
+        """Set KV prefix cache for batch-path cache hits (C16: insert_segments support)."""
+        self._prefix_cache = cache
 
     def _get_external_prefiller(self) -> Any:
         """Lazy-initialize the ExternalPrefiller."""
@@ -468,12 +475,41 @@ class Scheduler:
                     }
                     tokens_to_insert = chunk
 
-                uids = self._batch_gen.insert(
-                    prompts=[tokens_to_insert],
-                    max_tokens=[sp.max_tokens],
-                    samplers=[sampler],
-                    state_machines=[sm],
-                )
+                # C16: Try KV prefix cache hit for batch-path acceleration
+                cached_kv = None
+                remaining_tokens = tokens_to_insert
+                if self._prefix_cache is not None and not self._pending_prefill.get(req.request_id):
+                    try:
+                        import mlx.core as mx
+                        ids_arr = mx.array(tokens_to_insert)
+                        cached_kv, _rem, matched = self._prefix_cache.get(ids_arr)
+                        if cached_kv is not None and matched > 0:
+                            remaining_tokens = tokens_to_insert[matched:]
+                            if matched > 32:
+                                logger.info(
+                                    f"Batch prefix cache hit: {matched}/{len(tokens_to_insert)} tokens "
+                                    f"for {req.request_id}"
+                                )
+                    except Exception:
+                        logger.debug("prefix cache lookup failed in batch path", exc_info=True)
+
+                if cached_kv is not None and len(remaining_tokens) > 0:
+                    # Use insert_segments with cached KV state
+                    uids = self._batch_gen.insert_segments(
+                        segments=[[remaining_tokens]],
+                        max_tokens=[sp.max_tokens],
+                        caches=[cached_kv],
+                        all_tokens=[tokens_to_insert],
+                        samplers=[sampler],
+                        state_machines=[sm],
+                    )
+                else:
+                    uids = self._batch_gen.insert(
+                        prompts=[tokens_to_insert],
+                        max_tokens=[sp.max_tokens],
+                        samplers=[sampler],
+                        state_machines=[sm],
+                    )
 
                 req.batch_uid = uids[0]
                 req.status = RequestStatus.RUNNING

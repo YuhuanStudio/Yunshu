@@ -235,6 +235,8 @@ class BatchedEngine:
             executor=executor,
         )
         self._engine_core.scheduler.config.model_name = self.model_name
+        # Wire prefix cache into scheduler for batch-path insert_segments (C16)
+        self._engine_core.set_prefix_cache(self._kv_prefix_cache)
         await self._engine_core.start()
 
         logger.info(f"BatchedEngine started: {self.model_name}")
