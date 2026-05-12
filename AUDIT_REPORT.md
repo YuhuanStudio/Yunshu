@@ -1,8 +1,8 @@
 # Yunshu 全面審計報告
 
 > 審計日期：2026-05-11
-> 最後更新：2026-05-12（Wave 16–20 修復 + 測試品質改進 + hash-chain prefix cache + KV quantization）
-> 審計範圍：46 個 Engine Python 檔案（~15,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,360 個測試、326 篇參考文獻
+> 最後更新：2026-05-12（Wave 21: request preemption + block dedup COW + SSD tier + mRoPE + batched spec verify + N-gram proposer）
+> 審計範圍：49 個 Engine Python 檔案（~18,000 行）、28 個 Gateway 檔案（~8,500 行）、6 個 Metal kernel、2,426 個測試、326 篇參考文獻
 
 ---
 
@@ -24,7 +24,9 @@
 > Wave 18 新增 110 個測試：VLM engine、Image engine、SpeculativeDecoder、DeltaNet inversion。
 > Wave 19 DeltaNet hooks 修復（class-level __call__ patch）、wired_limit context manager、pytest config 完成。
 > Wave 20 Hash-chain prefix index（O(matched_blocks) lookup）、MLX-native KV cache quantization、scheduler duplicate import fix。
-> 2,360 個單元測試全數通過，0 失敗。
+> Wave 21 Request preemption（vLLM 優先級搶佔）、Block dedup + COW refcounting、SSD-tier KV cache persistence（oMLX safetensors pattern）、mRoPE batch position support、Batched spec decode verification（vectorized acceptance）、Grammar integration verified complete。
+> Wave 21b N-gram speculative decoding（vLLX NgramProposer 模式）、SSD reuse filter + tiered lookup、新增 66 個測試。
+> 2,426 個單元測試全數通過，0 失敗。
 > 修復 commits：`11ec3b9` `84f9ffd` `b04a432` `140bcf4` `2a95440` `32e456c` `d7d289a` `120d5d8` `9d03c71` `37b4ccc` `4196ee1` `f8ece76` `2cdd296` `fab0ebb` `5dc8b29` `f0d5731` `d4e4a5d` `d14b27f` `461d561` `bf1e326` `ed19406`
 
 ---
@@ -615,21 +617,22 @@ Wave 18 新增測試覆蓋：
 | MemoryGuard 預檢 | 請求准入前的 GPU 記憶體預檢查 | ✓ |
 | 5 協議統一 Gateway | OpenAI + Anthropic + MCP + Realtime + Batch | ✓ |
 | External prefill + abort | 記憶體預檢 + chunked progress + mid-prefill abort | ✓ |
+| N-gram speculative decoding | 無需 draft model 的投機解碼，純 CPU N-gram 匹配 | ✓ |
 
 ### 8.2 落後於參考框架之處
 
 | 差距 | 來源 | 優先級 | 狀態 |
 |---|---|---|---|
 | 無 Radix tree prefix cache（O(n*entries) 線性掃描） | SGLang | 高 | ✅ Wave 20 (hash-chain prefix index) |
-| 無 hash-based block dedup + COW | vLLM | 高 | 🔲 |
-| 無 SSD-tier KV cache | oMLX | 中 | 🔲 |
+| 無 hash-based block dedup + COW | vLLM | 高 | ✅ Wave 21 (block refcounting + COW snapshot) |
+| 無 SSD-tier KV cache | oMLX | 中 | ✅ Wave 21 (SSDKVCache + safetensors serialization + LRU) |
 | 無 `wired_limit` context manager | mlx-lm | 中 | ✅ Wave 19 |
 | 無 KV cache quantization | mlx-lm | 中 | ✅ Wave 20 (native MLX to_quantized) |
-| 無 request preemption | vLLM | 中 | 🔲 |
-| 無 grammar constraint integration | oMLX | 低 | 🔲 |
-| Speculative decoder 逐 token 驗證（非 batched） | llama.cpp | 中 | 🔲 |
+| 無 request preemption | vLLM | 中 | ✅ Wave 21 (priority-based preemption + PREEMPTED status) |
+| 無 grammar constraint integration | oMLX | 低 | ✅ Wave 21 (verified complete: json_schema.py → scheduler → gateway) |
+| Speculative decoder 逐 token 驗證（非 batched） | llama.cpp | 中 | ✅ Wave 21 (vectorized acceptance via mx.take_along_axis) |
 | 無 SpecPrefill（speculative prefill） | oMLX | 低 | 🔲 |
-| 無 mRoPE batch support | oMLX | 低 | 🔲 |
+| 無 mRoPE batch support | oMLX | 低 | ✅ Wave 21 (MRoPEInfo + BatchRopeDeltaManager + decode positions) |
 
 ### 8.3 代碼量比較（估算）
 
@@ -638,7 +641,7 @@ Wave 18 新增測試覆蓋：
 | oMLX | ~40,000 行 | 深（PagedCacheManager, BlockAwarePrefixCache, SSD tier） |
 | vllm-mlx | ~15,000 行 | 深（vLLM PagedAttention 全套） |
 | SGLang | ~60,000 行 | 最深（RadixAttention, HiCache） |
-| **Yunshu** | **~16,000 行** | **中等（但 API 廣度最大）** |
+| **Yunshu** | **~17,000 行** | **中高（API 廣度最大 + SSD tier + mRoPE + preemption）** |
 
 ---
 

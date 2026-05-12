@@ -183,6 +183,10 @@ class Scheduler:
         #   'was_in_thinking': bool — previous step's thinking state (for transition detection)
         self._thinking_state: dict[str, dict] = {}
 
+        # mRoPE batch delta manager (oMLX pattern)
+        from .mrope import BatchRopeDeltaManager
+        self._rope_delta_mgr = BatchRopeDeltaManager()
+
     def _init_batch_generator(self) -> None:
         """Create BatchGenerator on first use (lazy init)."""
         if self._batch_gen is not None:
@@ -325,6 +329,11 @@ class Scheduler:
         Supports FCFS (default) and PRIORITY scheduling policies.
         PRIORITY scheduling sorts by request priority (higher = first).
 
+        Request preemption (vLLM pattern): when max_num_seqs is reached
+        and policy is PRIORITY, preempts the lowest-priority running
+        request to make room for a higher-priority waiting request.
+        Under FCFS, no preemption occurs (new requests wait).
+
         When enable_hybrid_prefill is True and there are active decode
         requests, inserts only hybrid_chunk_size tokens per step
         (Sarathi-style chunked prefill), interleaving prefill chunks
@@ -363,9 +372,22 @@ class Scheduler:
                 reverse=True,
             )
 
-        # Respect max_num_seqs limit
+        # Respect max_num_seqs limit — with preemption under PRIORITY policy
         active_count = len(self.running)
         available_slots = max(0, self.config.max_num_seqs - active_count)
+
+        if len(to_insert) > available_slots and self.config.policy == SchedulingPolicy.PRIORITY:
+            # vLLM preemption pattern: evict lowest-priority running requests
+            # to make room for higher-priority waiting requests
+            to_preempt = len(to_insert) - available_slots
+            preempted = self._preempt_lowest_priority(to_preempt)
+            if preempted > 0:
+                available_slots += preempted
+                logger.info(
+                    f"Preempted {preempted} running requests for {len(to_insert)} waiting "
+                    f"(priority policy)"
+                )
+
         if len(to_insert) > available_slots:
             overflow = to_insert[available_slots:]
             to_insert = to_insert[:available_slots]
@@ -458,6 +480,10 @@ class Scheduler:
                 req.prefill_start = time.monotonic()
                 self.running[req.request_id] = req
                 self._uid_to_req[uids[0]] = req.request_id
+
+                # Register mRoPE delta for batch decode (oMLX pattern)
+                if getattr(req, 'rope_deltas', 0.0) != 0.0:
+                    self._rope_delta_mgr.register(uids[0], req.rope_deltas)
 
                 # Create fresh detokenizer (oMLX: never pool)
                 req.detokenizer = self._create_detokenizer()
@@ -573,6 +599,83 @@ class Scheduler:
             req.finish_reason = "error"
             self.finished_ids.add(req.request_id)
             return False
+
+    def _preempt_lowest_priority(self, count: int) -> int:
+        """Preempt the lowest-priority running requests (vLLM pattern).
+
+        Under PRIORITY policy, finds the running requests with the lowest
+        priority (ties broken by arrival_time, newest first) and preempts
+        them. Preempted requests are placed back at the front of the
+        waiting queue with their KV state freed.
+
+        Args:
+            count: Number of requests to preempt.
+
+        Returns:
+            Number of requests actually preempted.
+        """
+        preempted = 0
+        for _ in range(count):
+            if not self.running:
+                break
+
+            # Find lowest-priority running request (vLLM: max() with
+            # (priority, arrival_time) key — lowest priority = highest
+            # value when we sort descending by priority for scheduling)
+            # In Yunshu: higher priority number = higher priority, so
+            # we evict the minimum priority (least important).
+            # Ties broken by latest arrival_time (newest first).
+            victim_id = min(
+                self.running.keys(),
+                key=lambda rid: (
+                    self.running[rid].priority,
+                    -self.running[rid].arrival_time,
+                ),
+            )
+            victim = self.running.pop(victim_id)
+            self._preempt_request(victim)
+            preempted += 1
+
+        return preempted
+
+    def _preempt_request(self, request: Request) -> None:
+        """Preempt a running request and return it to the waiting queue.
+
+        Following vLLM's _preempt_request pattern:
+        1. Free KV resources (remove from BatchGenerator)
+        2. Reset computed tokens
+        3. Set status to PREEMPTED
+        4. Increment preemption counter
+        5. Put back at front of waiting queue for re-scheduling
+
+        The request will be re-inserted into BatchGenerator on the next
+        scheduler step, effectively re-prefilling from scratch.
+        """
+        uid = request.batch_uid
+        if uid is not None and self._batch_gen is not None:
+            try:
+                self._batch_gen.remove([uid])
+            except Exception as e:
+                logger.debug(f"Failed to remove preempted UID {uid}: {e}")
+
+        self._uid_to_req.pop(uid, None)
+        self._detokenizers.pop(request.request_id, None)
+        self._thinking_processors.pop(request.request_id, None)
+        self._thinking_state.pop(request.request_id, None)
+        self._pending_prefill.pop(request.request_id, None)
+
+        request.status = RequestStatus.PREEMPTED
+        request.num_computed_tokens = 0
+        request.batch_uid = None
+        request.num_preemptions += 1
+
+        self.waiting.appendleft(request)
+
+        logger.info(
+            f"Preempted request {request.request_id} "
+            f"(preemptions={request.num_preemptions}, "
+            f"output_tokens={request.num_output_tokens})"
+        )
 
     def _process_pending_prefill(self) -> None:
         """Process one chunk from each pending partial prefill (Sarathi pattern).
@@ -764,6 +867,9 @@ class Scheduler:
                 detok = self._detokenizers.pop(req_id, None)
                 self._thinking_processors.pop(req_id, None)
                 self._thinking_state.pop(req_id, None)
+                # Unregister mRoPE delta
+                if uid is not None:
+                    self._rope_delta_mgr.unregister(uid)
                 if detok is not None:
                     try:
                         detok.finalize()
@@ -851,7 +957,10 @@ class Scheduler:
             if req:
                 req.status = RequestStatus.FINISHED_ABORTED
                 req.finish_reason = "abort"
-                self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                uid = getattr(req, 'batch_uid', None)
+                self._uid_to_req.pop(uid, None)
+                if uid is not None:
+                    self._rope_delta_mgr.unregister(uid)
             self.running.pop(req_id, None)
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
@@ -1031,6 +1140,14 @@ class Scheduler:
         """Return detected speculative decoding head info."""
         return self._spec_head_info
 
+    def get_batch_rope_deltas(self, uids: list[int]) -> list[float]:
+        """Get per-request mRoPE deltas for batch decode.
+
+        Returns deltas aligned to the UID order, defaulting to 0.0
+        for text-only requests.
+        """
+        return self._rope_delta_mgr.get_batch_deltas(uids)
+
     def deep_reset(self) -> None:
         if self._batch_gen is not None:
             try:
@@ -1051,6 +1168,7 @@ class Scheduler:
         self._pending_prefill.clear()
         self._spec_decoder = None
         self._spec_head_info = None
+        self._rope_delta_mgr.clear()
 
     def shutdown(self) -> None:
         self.deep_reset()
@@ -1073,6 +1191,9 @@ class Scheduler:
             "total_prompt_tokens": self._total_prompt_tokens,
             "total_completion_tokens": self._total_completion_tokens,
             "num_requests_processed": self._num_requests,
+            "total_preemptions": sum(
+                r.num_preemptions for r in self.requests.values()
+            ),
         }
         # Append thinking-segment substore stats
         try:

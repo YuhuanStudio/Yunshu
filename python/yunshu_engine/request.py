@@ -28,6 +28,7 @@ class RequestStatus(enum.IntEnum):
     WAITING = enum.auto()
     PREFILLING = enum.auto()
     RUNNING = enum.auto()
+    PREEMPTED = enum.auto()
     FINISHED_STOPPED = enum.auto()
     FINISHED_LENGTH = enum.auto()
     FINISHED_ABORTED = enum.auto()
@@ -142,6 +143,7 @@ class Request:
 
     # BatchGenerator integration
     batch_uid: int | None = None
+    num_preemptions: int = 0
 
     # Per-request detokenizer (never pool — reset() leaks byte buffers)
     detokenizer: Any = None

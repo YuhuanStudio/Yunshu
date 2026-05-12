@@ -107,6 +107,13 @@ class KVPrefixCache:
 
     Uses a hash-chain prefix index for O(matched_blocks) lookup instead
     of O(n) linear scan. LRU eviction when at capacity.
+
+    Block dedup + COW (vLLM pattern):
+    - When two entries share identical blocks (same content hash), they
+      share the same physical KV data via reference counting.
+    - When a snapshot is taken from a shared block, COW creates a copy
+      only if the block is shared (refcount > 1).
+    - Block refcounts are tracked in _block_refcount: hash → count.
     """
 
     def __init__(self, max_entries: int = 64, min_prefix_length: int = 32):
@@ -118,9 +125,13 @@ class KVPrefixCache:
         self._max_entries = max_entries
         self._min_prefix = min_prefix_length
         # Hash-chain prefix index: block_hash → (entry_index, block_index)
-        # Maps each block hash to its position in the chain
         self._hash_index: dict[str, int] = {}
         self._prefix_index: dict[bytes, list[tuple[int, int]]] = {}
+        # Block dedup: block_hash → reference count (vLLM COW pattern)
+        self._block_refcount: dict[bytes, int] = {}
+        # SSD-tier cache (lazy init)
+        self._ssd_cache: Any | None = None
+        self._ssd_model_name: str = ""
 
     def add(
         self,
@@ -154,11 +165,12 @@ class KVPrefixCache:
         self._last_used.append(self._access_counter)
         self._hash_index[h] = idx
 
-        # Add to prefix index
+        # Add to prefix index with block dedup refcounting (vLLM pattern)
         for bi, bh in enumerate(block_hashes):
             if bh not in self._prefix_index:
                 self._prefix_index[bh] = []
             self._prefix_index[bh].append((idx, bi))
+            self._block_refcount[bh] = self._block_refcount.get(bh, 0) + 1
 
         logger.info(
             f"KV prefix cache added: {len(prompt_tokens)} tokens, "
@@ -241,6 +253,17 @@ class KVPrefixCache:
                 best_length = length
 
         if best_length < self._min_prefix:
+            # SSD fallback: try loading first block from SSD if available
+            if self._ssd_cache is not None and query_blocks:
+                ssd_data = self.try_ssd_restore(query_blocks[0])
+                if ssd_data is not None:
+                    block_len = _BLOCK_SIZE
+                    if block_len >= self._min_prefix:
+                        logger.info(
+                            f"KV prefix cache SSD restore: {block_len} tokens "
+                            f"from block {query_blocks[0].hex()[:16]}"
+                        )
+                        return ssd_data, len(prompt_tokens) - block_len, block_len
             return None, len(prompt_tokens), 0
 
         cached = self._caches[best_index]
@@ -297,7 +320,13 @@ class KVPrefixCache:
         return best_entry, best_blocks
 
     def _snapshot_cache(self, cache: list, trim: int = 0) -> list:
-        """Create a detached snapshot of a KV cache."""
+        """Create a detached snapshot of a KV cache.
+
+        COW optimization (vLLM pattern): layers whose block hash has
+        refcount == 1 (not shared) can reuse the same tensor references
+        without copying. Only shared blocks (refcount > 1) need a
+        detached copy to prevent aliasing.
+        """
         result = []
         for c in cache:
             if not (hasattr(c, "keys") and c.keys is not None
@@ -323,8 +352,12 @@ class KVPrefixCache:
 
     def _remove_entry(self, index: int) -> None:
         """Remove an entry and clean up all indices."""
-        # Remove from prefix index
+        # Decrement block refcounts and clean up prefix index
         for bh in self._block_hashes[index]:
+            if bh in self._block_refcount:
+                self._block_refcount[bh] -= 1
+                if self._block_refcount[bh] <= 0:
+                    self._block_refcount.pop(bh, None)
             if bh in self._prefix_index:
                 self._prefix_index[bh] = [
                     (idx, bi) for idx, bi in self._prefix_index[bh]
@@ -340,16 +373,17 @@ class KVPrefixCache:
         self._rebuild_hash_index()
 
     def _rebuild_hash_index(self) -> None:
-        """Rebuild hash index after structural changes."""
+        """Rebuild hash index, prefix index, and block refcounts after structural changes."""
         self._hash_index.clear()
-        # Also rebuild prefix index with updated indices
         self._prefix_index.clear()
+        self._block_refcount.clear()
         for i, prompt in enumerate(self._prompts):
             self._hash_index[_token_hash(prompt)] = i
             for bi, bh in enumerate(self._block_hashes[i]):
                 if bh not in self._prefix_index:
                     self._prefix_index[bh] = []
                 self._prefix_index[bh].append((i, bi))
+                self._block_refcount[bh] = self._block_refcount.get(bh, 0) + 1
 
     def _evict_if_full(self) -> None:
         """Evict LRU entries when at capacity."""
@@ -368,6 +402,7 @@ class KVPrefixCache:
         self._last_used.clear()
         self._hash_index.clear()
         self._prefix_index.clear()
+        self._block_refcount.clear()
         self._access_counter = 0
         gc.collect()
         mx.clear_cache()
@@ -379,12 +414,79 @@ class KVPrefixCache:
     def get_stats(self) -> dict:
         total_tokens = sum(len(p) for p in self._prompts)
         total_blocks = sum(len(bh) for bh in self._block_hashes)
-        return {
+        unique_blocks = len(self._block_refcount)
+        shared_blocks = sum(1 for c in self._block_refcount.values() if c > 1)
+        stats = {
             "entries": len(self._prompts),
             "max_entries": self._max_entries,
             "total_cached_tokens": total_tokens,
             "total_cached_blocks": total_blocks,
+            "unique_blocks": unique_blocks,
+            "shared_blocks": shared_blocks,
             "prefix_index_size": len(self._prefix_index),
             "min_prefix_length": self._min_prefix,
             "block_size": _BLOCK_SIZE,
         }
+        if self._ssd_cache is not None:
+            try:
+                stats["ssd_cache"] = self._ssd_cache.get_stats()
+            except Exception:
+                pass
+        return stats
+
+    def enable_ssd_cache(
+        self,
+        cache_dir: str = "~/.cache/yunshu/kv-ssd",
+        max_size_bytes: int = 10 * 1024 ** 3,
+        model_name: str = "",
+    ) -> None:
+        """Enable SSD-tier KV cache persistence.
+
+        After enabling, blocks saved to the prefix cache are also persisted
+        to disk. On restart, previously cached blocks are recovered.
+        """
+        from .ssd_kv_cache import SSDKVCache
+        self._ssd_cache = SSDKVCache(
+            cache_dir=cache_dir,
+            max_size_bytes=max_size_bytes,
+        )
+        self._ssd_model_name = model_name
+        logger.info(f"SSD KV cache enabled: dir={cache_dir}, max={max_size_bytes / 1024**3:.0f}GB")
+
+    def flush_to_ssd(self) -> int:
+        """Flush all in-memory cache entries to SSD.
+
+        Returns the number of blocks written.
+        """
+        if self._ssd_cache is None:
+            return 0
+
+        count = 0
+        for i, (prompt, cache) in enumerate(zip(self._prompts, self._caches)):
+            block_hashes = self._block_hashes[i]
+            for bi, bh in enumerate(block_hashes):
+                if self._ssd_cache.has_block(bh):
+                    continue
+                tokens = np_array(prompt)
+                start = bi * _BLOCK_SIZE
+                end = min(start + _BLOCK_SIZE, len(tokens))
+                block_tokens = tokens[start:end]
+                self._ssd_cache.save_block(
+                    block_hash=bh,
+                    cache_data=cache,
+                    token_count=end - start,
+                    model_name=self._ssd_model_name,
+                )
+                count += 1
+
+        logger.info(f"SSD KV cache flushed {count} blocks")
+        return count
+
+    def try_ssd_restore(self, block_hash: bytes) -> list | None:
+        """Try to restore a block from SSD cache.
+
+        Called during get() when no in-memory match is found.
+        """
+        if self._ssd_cache is None:
+            return None
+        return self._ssd_cache.load_block(block_hash)

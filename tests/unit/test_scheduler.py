@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 import mlx.core as mx
 
-from yunshu_engine.scheduler import Scheduler, SchedulerConfig, _LogitsProcessorSampler
+from yunshu_engine.scheduler import Scheduler, SchedulerConfig, SchedulingPolicy, _LogitsProcessorSampler
 from yunshu_engine.request import SamplingParams
 
 
@@ -287,3 +287,157 @@ class TestSarathiChunkedPrefill:
         # req-1 is not in running dict, so it should be cleaned up
         sched._process_pending_prefill()
         assert "req-1" not in sched._pending_prefill
+
+
+class TestRequestPreemption:
+    """Test request preemption (vLLM pattern)."""
+
+    def test_preempted_status_exists(self):
+        from yunshu_engine.request import RequestStatus
+        assert hasattr(RequestStatus, "PREEMPTED")
+
+    def test_preempted_is_not_finished(self):
+        from yunshu_engine.request import RequestStatus
+        assert not RequestStatus.is_finished(RequestStatus.PREEMPTED)
+
+    def test_preempted_between_running_and_finished(self):
+        from yunshu_engine.request import RequestStatus
+        assert RequestStatus.PREEMPTED > RequestStatus.RUNNING
+        assert RequestStatus.PREEMPTED < RequestStatus.FINISHED_STOPPED
+
+    def test_request_has_preemptions_field(self):
+        from yunshu_engine.request import Request
+        req = Request(request_id="test", prompt="hello")
+        assert req.num_preemptions == 0
+
+    def test_preempt_request_moves_to_waiting(self):
+        """_preempt_request should set status to PREEMPTED and queue for re-scheduling."""
+        from yunshu_engine.request import Request, RequestStatus
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        req = Request(request_id="preempt-me", prompt="test")
+        req.status = RequestStatus.RUNNING
+        req.batch_uid = 42
+        sched.running["preempt-me"] = req
+        sched._uid_to_req[42] = "preempt-me"
+
+        # Caller (e.g. _preempt_lowest_priority) pops from running first
+        sched.running.pop("preempt-me")
+        sched._preempt_request(req)
+
+        assert req.status == RequestStatus.PREEMPTED
+        assert req.num_preemptions == 1
+        assert req.batch_uid is None
+        assert "preempt-me" not in sched._uid_to_req
+        assert len(sched.waiting) == 1
+        assert sched.waiting[0] is req
+
+    def test_preempt_lowest_priority_selects_correct_victim(self):
+        """_preempt_lowest_priority should evict the minimum-priority request."""
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        req_high = Request(request_id="high", prompt="test", priority=10)
+        req_low = Request(request_id="low", prompt="test", priority=1)
+        req_med = Request(request_id="med", prompt="test", priority=5)
+
+        req_high.status = RequestStatus.RUNNING
+        req_low.status = RequestStatus.RUNNING
+        req_med.status = RequestStatus.RUNNING
+
+        sched.running["high"] = req_high
+        sched.running["low"] = req_low
+        sched.running["med"] = req_med
+
+        preempted = sched._preempt_lowest_priority(1)
+
+        assert preempted == 1
+        assert "low" not in sched.running
+        assert "high" in sched.running
+        assert "med" in sched.running
+        assert req_low.num_preemptions == 1
+
+    def test_preempt_multiple(self):
+        """Should be able to preempt multiple requests at once."""
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        for i in range(5):
+            req = Request(request_id=f"req-{i}", prompt="test", priority=i)
+            req.status = RequestStatus.RUNNING
+            sched.running[f"req-{i}"] = req
+
+        preempted = sched._preempt_lowest_priority(3)
+
+        assert preempted == 3
+        assert len(sched.running) == 2
+        # req-0, req-1, req-2 should be preempted (lowest priority)
+        assert "req-3" in sched.running
+        assert "req-4" in sched.running
+
+    def test_preempt_limited_by_running_count(self):
+        """Can't preempt more than available running requests."""
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        req = Request(request_id="only", prompt="test", priority=1)
+        req.status = RequestStatus.RUNNING
+        sched.running["only"] = req
+
+        preempted = sched._preempt_lowest_priority(5)
+        assert preempted == 1
+        assert len(sched.running) == 0
+
+    def test_stats_includes_total_preemptions(self):
+        """get_stats should include total_preemptions."""
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig()
+        sched = Scheduler(model, tokenizer, config)
+        stats = sched.get_stats()
+        assert "total_preemptions" in stats
+        assert stats["total_preemptions"] == 0
+
+    def test_preemption_increment_tracked_per_request(self):
+        """Multiple preemptions of the same request are tracked."""
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        req = Request(request_id="repeat", prompt="test")
+        req.status = RequestStatus.RUNNING
+        sched.running["repeat"] = req
+
+        sched.running.pop("repeat")
+        sched._preempt_request(req)
+        assert req.num_preemptions == 1
+
+        # Simulate re-scheduling and preempting again
+        req.status = RequestStatus.RUNNING
+        sched.running["repeat"] = req
+        sched.running.pop("repeat")
+        sched._preempt_request(req)
+        assert req.num_preemptions == 2

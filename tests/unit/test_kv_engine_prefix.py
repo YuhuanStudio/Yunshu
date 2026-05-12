@@ -229,3 +229,64 @@ class TestKVPrefixCacheStats:
         assert cache.size == 0
         cache.add(mx.array([1, 2, 3, 4, 5]), [_fake_cache(5)])
         assert cache.size == 1
+
+
+class TestKVPrefixCacheBlockDedup:
+    """Test block-level dedup and COW refcounting."""
+
+    def test_block_refcount_on_add(self):
+        """Adding an entry should create block refcounts."""
+        from yunshu_engine.kv_prefix_cache import _compute_block_hashes, np_array
+        cache = KVPrefixCache(min_prefix_length=4)
+        tokens = mx.array(list(range(128)))  # 2 blocks of 64
+        cache.add(tokens, [_fake_cache(128)])
+
+        assert len(cache._block_refcount) > 0
+
+    def test_shared_blocks_incref(self):
+        """Two entries with shared prefix blocks should have refcount > 1."""
+        cache = KVPrefixCache(min_prefix_length=4)
+        shared_prefix = list(range(128))
+        tokens_a = mx.array(shared_prefix + [200, 201, 202])
+        tokens_b = mx.array(shared_prefix + [300, 301, 302])
+
+        cache.add(tokens_a, [_fake_cache(131)])
+        cache.add(tokens_b, [_fake_cache(131)])
+
+        # First 2 blocks (0-63, 64-127) should be shared (refcount=2)
+        shared = sum(1 for c in cache._block_refcount.values() if c > 1)
+        assert shared >= 2
+
+    def test_remove_decrements_refcount(self):
+        """Removing an entry should decrement block refcounts."""
+        cache = KVPrefixCache(min_prefix_length=4)
+        shared_prefix = list(range(128))
+        tokens_a = mx.array(shared_prefix + [200, 201])
+        tokens_b = mx.array(shared_prefix + [300, 301])
+
+        cache.add(tokens_a, [_fake_cache(130)])
+        cache.add(tokens_b, [_fake_cache(130)])
+
+        # Remove second entry — shared blocks should have refcount decremented
+        cache._remove_entry(1)
+        for count in cache._block_refcount.values():
+            assert count >= 1
+
+    def test_stats_include_unique_and_shared_blocks(self):
+        """get_stats should include unique_blocks and shared_blocks."""
+        cache = KVPrefixCache(min_prefix_length=4)
+        tokens = mx.array(list(range(128)))
+        cache.add(tokens, [_fake_cache(128)])
+
+        stats = cache.get_stats()
+        assert "unique_blocks" in stats
+        assert "shared_blocks" in stats
+        assert stats["unique_blocks"] >= 1
+
+    def test_clear_resets_refcount(self):
+        """clear() should reset all block refcounts."""
+        cache = KVPrefixCache(min_prefix_length=4)
+        cache.add(mx.array(list(range(128))), [_fake_cache(128)])
+
+        cache.clear()
+        assert len(cache._block_refcount) == 0

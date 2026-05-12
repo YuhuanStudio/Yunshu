@@ -423,69 +423,68 @@ class SpeculativeDecoder:
         producing logits at each position. We compare the target's
         distribution against the draft's to determine acceptance.
 
+        Vectorized acceptance check (llama.cpp batched verification pattern):
+          1. Batched forward pass: all K tokens in one call
+          2. Vectorized gather: extract target logprobs at draft positions
+          3. Vectorized ratio computation: min(1, P_target/P_draft) for all K
+          4. Sequential scan for first rejection (unavoidable — sequential
+             dependency)
+
         EAGLE-3 acceptance criterion:
           Accept token i if: U < min(1, P_target(x_i) / P_draft(x_i))
           where U ~ Uniform(0, 1)
-
-        Args:
-            draft_result: The draft model's proposed tokens
-            input_ids: Original sequence before draft tokens
-            cache: Target model's KV cache
-
-        Returns:
-            VerifyResult with acceptance details
         """
         K = len(draft_result.token_ids)
         draft_tokens = mx.array(draft_result.token_ids).reshape(1, K)
 
-        # Feed all K tokens to target model at once
+        # Batched forward pass: all K tokens in one call
         output = self.target(draft_tokens, cache=cache)
         logits = output.logits if hasattr(output, 'logits') else output
 
         # Get target log probabilities at each position
         target_logprobs = mx.log(mx.softmax(logits, axis=-1))
 
-        # Acceptance check
+        # Vectorized gather: extract target logprob for each draft token
+        # target_lp[i] = target_logprobs[0, i, draft_result.token_ids[i]]
+        draft_ids_arr = mx.array(draft_result.token_ids).reshape(K, 1)
+        target_lps_arr = mx.take_along_axis(
+            target_logprobs[0, :K], draft_ids_arr, axis=-1
+        ).squeeze(-1)
+        draft_lps_arr = mx.array(draft_result.logprobs)
+
+        # Vectorized acceptance ratio: min(1, exp(target_lp - draft_lp))
+        ratios = mx.minimum(
+            mx.ones(K),
+            mx.exp(target_lps_arr - draft_lps_arr),
+        )
+
+        # Generate uniform random numbers for all positions at once
+        uniforms = mx.array([self.rng.random() for _ in range(K)])
+        accepted_mask = uniforms < ratios
+
+        # Sequential scan: find first rejection (sequential dependency)
         accepted_ids = []
         target_lps = []
         rejected_at = -1
 
         for i in range(K):
-            token_id = draft_result.token_ids[i]
-            target_lp = target_logprobs[0, i, token_id].item()
-            draft_lp = draft_result.logprobs[i]
-
-            target_lps.append(target_lp)
-
-            # Acceptance ratio: P_target / P_draft (in probability space)
-            # log_ratio = target_lp - draft_lp
-            # Accept if U < exp(log_ratio) (capped at 1.0)
-            log_ratio = target_lp - draft_lp
-            ratio = min(1.0, mx.exp(mx.array(log_ratio)).item())
-
-            if self.rng.random() < ratio:
-                accepted_ids.append(token_id)
+            if bool(accepted_mask[i].item()):
+                accepted_ids.append(draft_result.token_ids[i])
+                target_lps.append(float(target_lps_arr[i].item()))
             else:
                 rejected_at = i
                 break
 
         # Bonus token: sample from target's distribution at rejection point
         bonus_pos = len(accepted_ids)
+        from mlx_lm.sample_utils import make_sampler
+        sampler = make_sampler(temp=0.0)
+
         if bonus_pos < K:
-            # Resample from target's adjusted distribution
-            bonus_logits = target_logprobs[0, bonus_pos]
-            # Residual distribution: (P_target - P_draft)_+ normalized
-            # Simplified: just sample from target distribution
-            from mlx_lm.sample_utils import make_sampler
-            sampler = make_sampler(temp=0.0)
-            bonus_token = sampler(logits[0, bonus_pos:bonus_pos+1, :])
+            bonus_token = sampler(logits[0, bonus_pos:bonus_pos + 1, :])
             bonus_id = bonus_token.item()
         else:
-            # All accepted — sample bonus from last position
-            bonus_logits = logits[0, -1, :]
-            from mlx_lm.sample_utils import make_sampler
-            sampler = make_sampler(temp=0.0)
-            bonus_token = sampler(bonus_logits.reshape(1, 1, -1))
+            bonus_token = sampler(logits[0, -1:, :])
             bonus_id = bonus_token.item()
 
         return VerifyResult(
