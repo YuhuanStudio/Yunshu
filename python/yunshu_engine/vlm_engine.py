@@ -290,21 +290,24 @@ class VLMEngine:
                     sampler=sampler,
                 ):
                     token_count += 1
-                    finish_reason = None
-                    if token_id in eos_ids:
-                        finish_reason = "stop"
+                    is_eos = token_id in eos_ids
+                    finish_reason = "stop" if is_eos else None
 
-                    if has_detokenizer:
-                        detokenizer.add_token(token_id)
-                        token_text = detokenizer.last_segment
+                    if not is_eos:
+                        if has_detokenizer:
+                            detokenizer.add_token(token_id)
+                            token_text = detokenizer.last_segment
+                        else:
+                            token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
                     else:
-                        token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
+                        token_text = ""
 
                     output = RequestOutput(
                         request_id=req_id,
-                        token_text=token_text,
-                        token_id=token_id,
+                        new_text=token_text,
+                        new_token_ids=[token_id],
                         finish_reason=finish_reason,
+                        finished=finish_reason is not None,
                         completion_tokens=token_count,
                     )
                     queue.put_nowait(output)
@@ -314,8 +317,9 @@ class VLMEngine:
 
                 output = RequestOutput(
                     request_id=req_id,
-                    token_text="",
+                    new_text="",
                     finish_reason="length",
+                    finished=True,
                     completion_tokens=token_count,
                 )
                 queue.put_nowait(output)
@@ -457,19 +461,24 @@ class VLMEngine:
         token_count = 1
 
         token_id = current.item()
-        finish_reason = "stop" if token_id in eos_ids else None
+        is_eos = token_id in eos_ids
+        finish_reason = "stop" if is_eos else None
 
-        if has_detokenizer:
-            detokenizer.add_token(token_id)
-            token_text = detokenizer.last_segment
+        if not is_eos:
+            if has_detokenizer:
+                detokenizer.add_token(token_id)
+                token_text = detokenizer.last_segment
+            else:
+                token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
         else:
-            token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
+            token_text = ""
 
         queue.put_nowait(RequestOutput(
             request_id=req_id,
-            token_text=token_text,
-            token_id=token_id,
+            new_text=token_text,
+            new_token_ids=[token_id],
             finish_reason=finish_reason,
+            finished=finish_reason is not None,
             completion_tokens=token_count,
         ))
         if finish_reason:
@@ -483,21 +492,24 @@ class VLMEngine:
             token_count += 1
 
             token_id = current.item()
-            finish_reason = None
-            if token_id in eos_ids:
-                finish_reason = "stop"
+            is_eos = token_id in eos_ids
+            finish_reason = "stop" if is_eos else None
 
-            if has_detokenizer:
-                detokenizer.add_token(token_id)
-                token_text = detokenizer.last_segment
+            if not is_eos:
+                if has_detokenizer:
+                    detokenizer.add_token(token_id)
+                    token_text = detokenizer.last_segment
+                else:
+                    token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
             else:
-                token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
+                token_text = ""
 
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
-                token_text=token_text,
-                token_id=token_id,
+                new_text=token_text,
+                new_token_ids=[token_id],
                 finish_reason=finish_reason,
+                finished=finish_reason is not None,
                 completion_tokens=token_count,
             ))
 
@@ -506,8 +518,9 @@ class VLMEngine:
 
         queue.put_nowait(RequestOutput(
             request_id=req_id,
-            token_text="",
+            new_text="",
             finish_reason="length",
+            finished=True,
             completion_tokens=token_count,
         ))
 
