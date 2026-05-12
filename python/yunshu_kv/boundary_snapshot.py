@@ -184,13 +184,14 @@ class BoundarySnapshotSSDStore:
                 # MLX array
                 arr = np.array(value, copy=False)
                 entries.append((key, str(arr.dtype), list(arr.shape), arr.tobytes()))
-            elif isinstance(value, (int, float)):
-                data = struct.pack("<d" if isinstance(value, float) else "<q", value)
-                entries.append((key, "number", [], data))
-            elif isinstance(value, str):
-                entries.append((key, "string", [], value.encode("utf-8")))
             elif isinstance(value, bool):
                 entries.append((key, "bool", [], struct.pack("<?", value)))
+            elif isinstance(value, float):
+                entries.append((key, "float64", [], struct.pack("<d", value)))
+            elif isinstance(value, int):
+                entries.append((key, "int64", [], struct.pack("<q", value)))
+            elif isinstance(value, str):
+                entries.append((key, "string", [], value.encode("utf-8")))
 
         parts.append(struct.pack("<II", _HEADER_VERSION, len(entries)))
 
@@ -246,8 +247,13 @@ class BoundarySnapshotSSDStore:
             if dtype == "string":
                 result[key] = raw.decode("utf-8")
             elif dtype == "bool":
-                result[key] = struct.unpack("<?", raw)[0]
+                result[key] = bool(struct.unpack("<?", raw)[0])
+            elif dtype == "int64":
+                result[key] = struct.unpack("<q", raw)[0]
+            elif dtype == "float64":
+                result[key] = struct.unpack("<d", raw)[0]
             elif dtype == "number":
+                # Legacy format: disambiguate by data length
                 if data_len == 8:
                     result[key] = struct.unpack("<q", raw)[0]
                 else:

@@ -3,7 +3,6 @@
 import os
 import asyncio
 import logging
-import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .engine import get_engine, get_model_manager, init_engine, init_model_manager
+from .engine import get_engine, get_model_manager, init_model_manager
 
 # Default model from environment or None (requires explicit load via API)
 DEFAULT_MODEL = os.environ.get("YUNSHU_MODEL")

@@ -333,7 +333,7 @@ class BatchedEngine:
 
             # Try KV prefix cache hit
             prefix_cache = self._kv_prefix_cache
-            cached_kv, remaining, matched = prefix_cache.get(ids)
+            cached_kv, _remaining, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
 
             if cached_kv is not None:
@@ -603,12 +603,12 @@ class BatchedEngine:
 
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
-            cached_kv, remaining, matched = prefix_cache.get(ids)
+            cached_kv, _remaining, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
             _lprocs = logits_processors if logits_processors else None
-            for token, _logits in generate_step(
+            for token, _ in generate_step(
                 ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
                 prompt_cache=cache, logits_processors=_lprocs,
             ):
@@ -1040,7 +1040,7 @@ class BatchedEngine:
         else:
             num_prompt_tokens = len(prompt.split()) * 2
 
-        ok, reason = guard.preflight_check(
+        ok, _reason = guard.preflight_check(
             num_prompt_tokens=num_prompt_tokens,
             max_tokens=max_tokens,
         )
