@@ -227,6 +227,12 @@ class BatchedEngine:
             "YUNSHU_MX_COMPILE", ""
         ).strip() in ("1", "true", "yes")
 
+        # Engine loop default (continuous batching mode)
+        # Enable via YUNSHU_ENGINE_LOOP=1 for multi-user concurrent serving
+        self._engine_loop_default = os.environ.get(
+            "YUNSHU_ENGINE_LOOP", ""
+        ).strip() in ("1", "true", "yes")
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -478,7 +484,7 @@ class BatchedEngine:
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
-        use_engine_loop: bool = False,
+        use_engine_loop: bool | None = None,
         enable_thinking: bool | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
@@ -494,14 +500,16 @@ class BatchedEngine:
                          Falls back to standard generation if spec decode is
                          not configured or the model lacks spec heads.
             use_engine_loop: If True, route through EngineCore's continuous
-                             batching loop. If False (default), use fast path
-                             (direct generate_step on executor) for single
-                             requests with full GPU utilization.
+                             batching loop. If False, use fast path.
+                             If None (default), uses YUNSHU_ENGINE_LOOP env var
+                             (defaults to False if not set).
             logprobs: If True, return log probabilities for each generated token.
             top_logprobs: Number of top logprobs to return per token (max 20).
         """
         if not self._loaded:
             await self.start()
+
+        _use_engine_loop = getattr(self, '_engine_loop_default', False) if use_engine_loop is None else use_engine_loop
 
         # Memory guard preflight check
         guard_rejection = self._check_memory_guard(prompt, max_tokens)
@@ -524,7 +532,7 @@ class BatchedEngine:
             )
 
         # N-gram speculative decoding (model-free, CPU-based proposal)
-        if spec_decode and self._ngram_proposer is not None and not use_engine_loop:
+        if spec_decode and self._ngram_proposer is not None and not _use_engine_loop:
             return await self._generate_ngram_spec(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -540,7 +548,7 @@ class BatchedEngine:
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
-        if not use_engine_loop:
+        if not _use_engine_loop:
             return await self._generate_fast(
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -1046,7 +1054,7 @@ class BatchedEngine:
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
-        use_engine_loop: bool = False,
+        use_engine_loop: bool | None = None,
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         reasoning_effort: str | None = None,
@@ -1057,10 +1065,12 @@ class BatchedEngine:
 
         Default uses fast path (direct generate_step on executor) for single
         requests. Set use_engine_loop=True for continuous batching path.
+        If use_engine_loop is None, uses YUNSHU_ENGINE_LOOP env var.
         """
         if not self._loaded:
             await self.start()
 
+        _use_engine_loop = getattr(self, '_engine_loop_default', False) if use_engine_loop is None else use_engine_loop
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
             effort_map = {"low": 2048, "medium": 8192, "high": 32768}
@@ -1083,7 +1093,7 @@ class BatchedEngine:
             return
 
         # N-gram speculative decoding streaming (model-free)
-        if spec_decode and self._ngram_proposer is not None and not use_engine_loop:
+        if spec_decode and self._ngram_proposer is not None and not _use_engine_loop:
             async for output in self._stream_generate_ngram_spec(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
                 top_p=top_p, top_k=top_k, min_p=min_p,
@@ -1093,7 +1103,7 @@ class BatchedEngine:
             return
 
         # Fast path: bypass EngineCore for single-request streaming
-        if not use_engine_loop:
+        if not _use_engine_loop:
             async for output in self._stream_generate_fast(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
                 top_p=top_p, top_k=top_k, min_p=min_p,
