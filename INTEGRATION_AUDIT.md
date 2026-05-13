@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3289 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3301 passed, 13 skipped**。
 
 ### 已完成修復 (2026-05-14 Wave 24)
 
@@ -1387,7 +1387,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3289 passed, 13 skipped。
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3301 passed, 13 skipped。
 
 ### 18.1 致命 Bug: Streaming VLM 丟失圖片
 
@@ -1650,4 +1650,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復 + 連續批處理已實現 (VLMAsyncEngineCore)，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，視頻理解已實現 (VLM frame extraction)，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現，LoRA gateway 透傳已實現，圖像預覽串流已實現 (preview_interval)。剩餘缺口：STS 引擎（需指定模型）、視頻生成、img2img/inpainting、圖像 LoRA。測試套件 3289 passed, 13 skipped。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復 + 連續批處理已實現 (VLMAsyncEngineCore)，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，視頻理解已實現 (VLM frame extraction)，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現，LoRA gateway 透傳已實現，圖像預覽串流已實現 (preview_interval)。剩餘缺口：STS 引擎（需指定模型）、視頻生成、img2img/inpainting、圖像 LoRA。測試套件 3301 passed, 13 skipped。
