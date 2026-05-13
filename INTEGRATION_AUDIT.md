@@ -1186,15 +1186,15 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 ### 19.2 Bug: response_format 是假的
 
-Gateway 接受 `wav`、`mp3`、`opus`、`pcm` 格式參數並設置正確的 Content-Type header，但**永遠返回 WAV 字節**。沒有 MP3/Opus 編碼器。用戶請求 MP3 會收到 WAV 數據配 MP3 content-type。
+✅ **已修復 (M2)** — Gateway 現在只接受 `wav` 格式，移除了假的 mp3/opus/pcm 支持。
 
 ### 19.3 Bug: Streaming TTS 丟棄 `instruct` 參數
 
-`/v1/audio/speech/stream` 端點調用 `synthesize_stream()` 時不傳遞 `instruct` 參數。語音描述在 streaming 模式下無效。
+✅ **已修復** — streaming 端點現在傳遞 `instruct` 參數。
 
 ### 19.4 ASR Segments 被計算但被丟棄
 
-引擎計算 `segments` (包含時間戳等)，但 Gateway 只返回 `{text, language}`。Word-level timestamps、SRT、VTT 格式都不暴露。
+✅ **已修復 (M8)** — Gateway 現在返回 `segments` 和 `duration`。
 
 ### 19.5 完全缺失: STS (Speech-to-Speech)
 
@@ -1241,7 +1241,7 @@ vllm-omni 支持: **25+ 擴散架構**
 
 ### 20.2 Bug: `negative_prompt` 和 `guidance_scale` 被接受但完全忽略
 
-Gateway 暴露這兩個參數，引擎接受但不使用。用戶設置 `negative_prompt="bad quality"` 或 `guidance_scale=7.5` 會有零效果。
+✅ **已修復 (M4)** — 這些參數已從 `ImageGenerateRequest` 移除。Turbo 模型不支持 classifier-free guidance。
 
 ### 20.3 缺失功能
 

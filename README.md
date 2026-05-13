@@ -145,7 +145,7 @@ Yunshu is a 5-layer stack, each layer independently replaceable:
 160+ Python files    38,000+ lines
 6 Metal kernels      874 lines (Metal 3.1)
 12 TypeScript files  3,823 lines (Next.js 16)
-2,162 tests passing  95+ test files
+2,487 tests passing  95+ test files
 ```
 
 ## API Reference
@@ -217,7 +217,7 @@ yunshu/
 │   └── yunshu_cli/        # CLI
 ├── metal/                  # Metal 3.1 compute shaders (6 kernels)
 ├── webui/                  # Next.js 16 dashboard
-├── tests/                  # Test suite (2162 tests)
+├── tests/                  # Test suite (2487 tests)
 ├── scripts/                # Benchmarks and utilities
 ├── docs/                   # Documentation
 └── bench/                  # Benchmark results
@@ -227,7 +227,7 @@ yunshu/
 
 ```bash
 just dev              # Start dev server with auto-reload
-just test             # Run all tests (2162 tests)
+just test             # Run all tests (2487 tests)
 just test-unit        # Unit tests only
 just lint             # Lint with ruff + mypy
 just format           # Auto-format
