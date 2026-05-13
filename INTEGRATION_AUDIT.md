@@ -844,10 +844,10 @@ Yunshu 有而 vLLM 沒有的:
 
 | 機制 | oMLX | Yunshu | 差距 |
 |------|------|--------|------|
-| **SpecPrefill** | 完整整合: BatchedEngine.start() 加載 draft, stream_chat() 計算 system_end, EngineCore.add_request() 傳播 | spec_prefill.py 存在但**使用錯誤的評分方法** (key magnitude 而非 attention capture)，零整合 | 評分方法根本錯誤 |
+| **SpecPrefill** | 完整整合: BatchedEngine.start() 加載 draft, stream_chat() 計算 system_end, EngineCore.add_request() 傳播 | ✅ **WIRED** — attention capture 評分 + key magnitude 備用，接入 _generate_fast (P1-3) | 評分方法已修正 |
 | **DFlash Block Diffusion** | 獨立引擎 dflash.py, 3-4x 加速, 有自己的 L1/L2 緩存 | 無對等實現 | 完全缺失 |
-| **Native MTP** | Monkey-patch mlx-lm, 模型專用補丁 (deepseek_v4, qwen35), 含 VLM MTP | mtp_patch.py 存在但零調用者 | 完全未接入 |
-| **N-gram** | 調度器 logits processors | ngram_proposer.py 存在但零調用者 | 完全未接入 |
+| **Native MTP** | Monkey-patch mlx-lm, 模型專用補丁 (deepseek_v4, qwen35), 含 VLM MTP | mtp_patch.py 僅 scripts/ | 研究性質 |
+| **N-gram** | 調度器 logits processors | ✅ **WIRED** — BatchedEngine 雙路徑接入 (P1-2) | 已接入 |
 
 ### 13.2 oMLX 有而 Yunshu 完全缺失的功能
 
@@ -871,15 +871,9 @@ Yunshu 有而 vLLM 沒有的:
 | **Disaggregated Prefill/Decode** | 獨立預填充和解碼節點 | 分佈式性能 |
 | **Native macOS App** | Swift 菜單欄應用 + 自動更新 | 用戶體驗 |
 
-### 13.3 Yunshu 的 spec_prefill.py 使用了錯誤的評分方法
+### 13.3 Yunshu 的 spec_prefill.py 評分方法
 
-oMLX 的 SpecPrefill 使用 **attention-based query capture** — 通過 `_AttentionCapture` 包裝器記錄查詢向量，計算真實的注意力分數。
-
-Yunshu 的 spec_prefill.py 使用 **key magnitude proxy**:
-```python
-scores = mx.mean(mx.abs(prompt_keys.astype(mx.float32)), axis=-1)
-```
-這不是注意力分數，而是 KV cache 鍵的平均絕對值。這個替代方法在學術上沒有驗證過，可能導致選出錯誤的 token。
+✅ **已修復 (P1-3/C5)**: `score_tokens()` 使用 oMLX 的 attention capture 模式 — 通過 `_patch_attention_capture()` 包裝器記錄查詢向量，計算 `Q @ K^T / sqrt(d_k)` 注意力分數。僅在捕獲失敗時回退到 key magnitude。
 
 ### 13.4 oMLX 的配置系統 vs Yunshu
 
@@ -942,24 +936,16 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 
 **Yunshu 從未使用 `insert_segments()`** — 永遠使用 `insert()` 將整個 prompt 作為一個段。這意味著 Yunshu 的 KV prefix cache 只能在 `generate_step` 單請求路徑中使用，不能在 BatchGenerator 連續批處理路徑中使用。
 
-### 15.2 採樣器問題 — 重複懲罰是壞的
+### 15.2 採樣器問題 — 重複懲罰
 
-BatchedEngine 的 `_generate_fast()` 中的重複懲罰實現:
-```python
-tid = int(tokens[-1])
-logits[..., tid] = logits[..., tid] / rp if logits[..., tid] > 0 else logits[..., tid] * rp
-```
-
-mlx-lm 的 `make_repetition_penalty()` 查看最後 `context_size` (默認 20) 個 token 並對所有這些應用懲罰。
-
-**Yunshu 只查看最後一個 token — 這使得重複懲罰幾乎無效。**
+✅ **已修復 (C1)**: 使用 mlx-lm 的 `make_repetition_penalty()` 模式，查看最後 `context_size=20` 個 token。
 
 ### 15.3 其他 mlx-lm 整合差距
 
 | # | 差距 | 嚴重度 | 說明 |
 |---|------|--------|------|
 | G1 | `insert_segments()` 未使用 | ✅ **已修復** (C16) | 批處理路徑 prefix cache 重用 |
-| G2 | BatchGenerator `close()` 未在 Scheduler 路徑調用 | **中** | wired memory 洩漏 |
+| G2 | BatchGenerator `close()` 未在 Scheduler 路徑調用 | ✅ **已修復** (BG-CLOSE) | scheduler.shutdown() 調用 close() |
 | G3 | Paged KV cache 與 mlx-lm 原生 cache types 不連接 | ✅ **已修復** | mlx_cache + model_cache_config 已接入 |
 | G4 | 無漸進式 KV 量化 (僅在生成結束後量化) | ✅ **已修復** (C6) | 每 256 tokens 量化 |
 | G5 | 無 quantization config 傳遞給 load() | **中** | 無法覆蓋量化參數 |

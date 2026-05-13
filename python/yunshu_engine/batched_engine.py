@@ -168,9 +168,15 @@ class BatchedEngine:
             )
 
         # KV cache quantization config (mlx-lm pattern: to_quantized)
-        self._kv_quant_bits: int | None = None
-        self._kv_quant_group_size: int = 64
-        self._kv_quant_start: int = 0
+        # Enable via YUNSHU_KV_QUANT_BITS=4 or 8
+        _qbits = os.environ.get("YUNSHU_KV_QUANT_BITS")
+        self._kv_quant_bits: int | None = int(_qbits) if _qbits else None
+        self._kv_quant_group_size: int = int(
+            os.environ.get("YUNSHU_KV_QUANT_GROUP_SIZE", "64")
+        )
+        self._kv_quant_start: int = int(
+            os.environ.get("YUNSHU_KV_QUANT_START", "0")
+        )
 
         # Memory pressure eviction config (vllm-mlx pattern)
         self._mem_pressure_threshold = float(
