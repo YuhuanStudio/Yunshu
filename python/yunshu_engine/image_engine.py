@@ -669,6 +669,14 @@ class VAEDecoder(nn.Module):
         return h.transpose(0, 3, 1, 2)
 
 
+def _cosine_ramp(n: int) -> np.ndarray:
+    """Cosine blending ramp for tiled VAE overlap regions."""
+    if n <= 0:
+        return np.zeros((0,), dtype=np.float32)
+    t = np.linspace(0.0, 1.0, num=n, dtype=np.float32)
+    return 0.5 - 0.5 * np.cos(t * np.pi)
+
+
 class VAE:
     """VAE wrapper with scaling constants and optional encoder."""
 
@@ -730,6 +738,189 @@ class VAE:
         mean, _logvar = self.encoder(image)
         z = self.scaling_factor * (mean - self.shift_factor)
         return z[0]
+
+    def decode_tiled(
+        self,
+        latents: mx.array,
+        tile_size_px: int = 512,
+        overlap_px: int = 64,
+    ) -> mx.array:
+        """Decode latents in tiles to reduce peak memory for large images.
+
+        Splits the latent spatial grid into overlapping tiles, decodes each
+        tile independently, then blends the outputs with cosine weighting in
+        the overlap regions (mflux pattern).
+
+        Args:
+            latents: (C, F, H, W) or (C, H, W) latent tensor.
+            tile_size_px: Maximum output pixel dimension per tile.
+            overlap_px: Overlap in output pixels between adjacent tiles.
+
+        Returns:
+            (1, 3, H_out, W_out) decoded image.
+        """
+        # Normalize to (C, F, H_lat, W_lat)
+        if latents.ndim == 3:
+            latents = latents[:, np.newaxis, :, :]
+        C, F, H_lat, W_lat = latents.shape
+        scale = 8
+        H_out = H_lat * scale
+        W_out = W_lat * scale
+
+        tile_lat_h = max(1, tile_size_px // scale)
+        tile_lat_w = max(1, tile_size_px // scale)
+        ov_lat_h = max(0, min(overlap_px // scale, tile_lat_h - 1))
+        ov_lat_w = max(0, min(overlap_px // scale, tile_lat_w - 1))
+
+        # If the image fits in one tile, just decode normally
+        if H_lat <= tile_lat_h and W_lat <= tile_lat_w:
+            return self.decode(latents)
+
+        stride_h = max(1, tile_lat_h - ov_lat_h)
+        stride_w = max(1, tile_lat_w - ov_lat_w)
+
+        ramp_h = _cosine_ramp(overlap_px)
+        ramp_w = _cosine_ramp(overlap_px)
+
+        out_np = np.zeros((H_out, W_out, 3), dtype=np.float32)
+        count_np = np.zeros((H_out, W_out, 1), dtype=np.float32)
+
+        for y_lat in range(0, H_lat, stride_h):
+            y_lat_end = min(y_lat + tile_lat_h, H_lat)
+            for x_lat in range(0, W_lat, stride_w):
+                x_lat_end = min(x_lat + tile_lat_w, W_lat)
+
+                # Skip sliver tiles
+                if (y_lat > 0 and (y_lat_end - y_lat) <= ov_lat_h) or \
+                   (x_lat > 0 and (x_lat_end - x_lat) <= ov_lat_w):
+                    continue
+
+                tile_lat = latents[:, :, y_lat:y_lat_end, x_lat:x_lat_end]
+                decoded_tile = self.decode(tile_lat)
+                tile_np = np.array(decoded_tile.astype(mx.float32))[0].transpose(1, 2, 0)
+
+                y_out = y_lat * scale
+                x_out = x_lat * scale
+                y_out_end = y_lat_end * scale
+                x_out_end = x_lat_end * scale
+
+                eff_h = min(y_out_end - y_out, tile_np.shape[0], H_out - y_out)
+                eff_w = min(x_out_end - x_out, tile_np.shape[1], W_out - x_out)
+                tile_np = tile_np[:eff_h, :eff_w, :]
+
+                ov_h_out = max(0, min(overlap_px, eff_h - 1))
+                ov_w_out = max(0, min(overlap_px, eff_w - 1))
+
+                wh = np.ones((eff_h,), dtype=np.float32)
+                ww = np.ones((eff_w,), dtype=np.float32)
+
+                if ov_h_out > 0:
+                    if y_lat > 0:
+                        wh[:ov_h_out] = ramp_h[:ov_h_out]
+                    if y_lat_end < H_lat:
+                        wh[-ov_h_out:] = 1.0 - ramp_h[:ov_h_out]
+                if ov_w_out > 0:
+                    if x_lat > 0:
+                        ww[:ov_w_out] = ramp_w[:ov_w_out]
+                    if x_lat_end < W_lat:
+                        ww[-ov_w_out:] = 1.0 - ramp_w[:ov_w_out]
+
+                w2d = wh[:, None] * ww[None, :]
+                out_np[y_out:y_out + eff_h, x_out:x_out + eff_w, :] += tile_np * w2d[:, :, None]
+                count_np[y_out:y_out + eff_h, x_out:x_out + eff_w, :] += w2d[:, :, None]
+
+        out_np = out_np / np.clip(count_np, 1e-6, None)
+        out_chw = out_np.transpose(2, 0, 1)
+        return mx.array(out_chw[None, ...])
+
+    def encode_tiled(
+        self,
+        image: mx.array,
+        tile_size_px: int = 512,
+        overlap_px: int = 64,
+    ) -> mx.array:
+        """Encode image in tiles to reduce peak memory.
+
+        Args:
+            image: (1, 3, H, W) float image in [-1, 1].
+            tile_size_px: Maximum input pixel dimension per tile.
+            overlap_px: Overlap in input pixels between adjacent tiles.
+
+        Returns:
+            (16, H/8, W/8) scaled latent representation.
+        """
+        if self.encoder is None:
+            raise RuntimeError("VAE encoder not loaded")
+
+        B, C_in, H, W = image.shape
+        scale = 8
+        H_lat = (H + scale - 1) // scale
+        W_lat = (W + scale - 1) // scale
+
+        tile_lat_h = max(1, tile_size_px // scale)
+        tile_lat_w = max(1, tile_size_px // scale)
+        ov_lat_h = max(0, min(overlap_px // scale, tile_lat_h - 1))
+        ov_lat_w = max(0, min(overlap_px // scale, tile_lat_w - 1))
+
+        if H <= tile_size_px and W <= tile_size_px:
+            return self.encode_deterministic(image)
+
+        stride_h = max(1, tile_lat_h - ov_lat_h)
+        stride_w = max(1, tile_lat_w - ov_lat_w)
+
+        ramp_h = _cosine_ramp(ov_lat_h)
+        ramp_w = _cosine_ramp(ov_lat_w)
+
+        out_np = np.zeros((H_lat, W_lat, 16), dtype=np.float32)
+        count_np = np.zeros((H_lat, W_lat, 1), dtype=np.float32)
+
+        for y_lat in range(0, H_lat, stride_h):
+            y_lat_end = min(y_lat + tile_lat_h, H_lat)
+            for x_lat in range(0, W_lat, stride_w):
+                x_lat_end = min(x_lat + tile_lat_w, W_lat)
+
+                if (y_lat > 0 and (y_lat_end - y_lat) <= ov_lat_h) or \
+                   (x_lat > 0 and (x_lat_end - x_lat) <= ov_lat_w):
+                    continue
+
+                y_in = y_lat * scale
+                x_in = x_lat * scale
+                y_in_end = min(y_lat_end * scale, H)
+                x_in_end = min(x_lat_end * scale, W)
+
+                tile_img = image[:, :, y_in:y_in_end, x_in:x_in_end]
+                mean, _logvar = self.encoder(tile_img)
+                z = self.scaling_factor * (mean - self.shift_factor)
+                enc_np = np.array(z.astype(mx.float32))[0].transpose(1, 2, 0)
+
+                eff_h = min(y_lat_end - y_lat, enc_np.shape[0], H_lat - y_lat)
+                eff_w = min(x_lat_end - x_lat, enc_np.shape[1], W_lat - x_lat)
+                enc_np = enc_np[:eff_h, :eff_w, :]
+
+                ov_h = max(0, min(ov_lat_h, eff_h - 1))
+                ov_w = max(0, min(ov_lat_w, eff_w - 1))
+
+                wh = np.ones((eff_h,), dtype=np.float32)
+                ww = np.ones((eff_w,), dtype=np.float32)
+
+                if ov_h > 0:
+                    if y_lat > 0:
+                        wh[:ov_h] = ramp_h[:ov_h]
+                    if y_lat_end < H_lat:
+                        wh[-ov_h:] = 1.0 - ramp_h[:ov_h]
+                if ov_w > 0:
+                    if x_lat > 0:
+                        ww[:ov_w] = ramp_w[:ov_w]
+                    if x_lat_end < W_lat:
+                        ww[-ov_w:] = 1.0 - ramp_w[:ov_w]
+
+                w2d = wh[:, None] * ww[None, :]
+                out_np[y_lat:y_lat + eff_h, x_lat:x_lat + eff_w, :] += enc_np * w2d[:, :, None]
+                count_np[y_lat:y_lat + eff_h, x_lat:x_lat + eff_w, :] += w2d[:, :, None]
+
+        out_np = out_np / np.clip(count_np, 1e-6, None)
+        out_chw = out_np.transpose(2, 0, 1)
+        return mx.array(out_chw)
 
 
 # ── VAE Encoder ──
@@ -1537,8 +1728,11 @@ class ImageGenEngine:
             mx.eval(latents)
             logger.debug(f"Step {t+1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
 
-        # 6. VAE decode
-        image = self._vae.decode(latents)
+        # 6. VAE decode (auto-tile for large images to reduce peak memory)
+        if width * height > 1024 * 1024:
+            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
+        else:
+            image = self._vae.decode(latents)
         mx.eval(image)
 
         # 7. Convert to PNG
@@ -1689,8 +1883,11 @@ class ImageGenEngine:
             latents = (1 - mask_4d) * known_latents_4d + mask_4d * denoised
             mx.eval(latents)
 
-        # 8. VAE decode
-        image = self._vae.decode(latents)
+        # 8. VAE decode (auto-tile for large images)
+        if width * height > 1024 * 1024:
+            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
+        else:
+            image = self._vae.decode(latents)
         mx.eval(image)
 
         return self._to_png(image)
