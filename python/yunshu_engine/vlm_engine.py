@@ -86,6 +86,7 @@ class VLMEngine:
         self._start_time = 0.0
         self._has_vision = False
         self._is_vlm = False
+        self._temp_files: list[str] | None = None
 
         # mRoPE state (detected during load)
         self._mrope_info = None
@@ -238,6 +239,7 @@ class VLMEngine:
         t0 = time.monotonic()
         self._active_count += 1
         image_paths = await self._extract_images(messages)
+        audio_paths = await self._extract_audio(messages)
         self._enable_thinking = enable_thinking
 
         def _generate_sync():
@@ -245,7 +247,7 @@ class VLMEngine:
                 mx.random.seed(seed)
 
             if image_paths and self._has_vision and self._is_vlm:
-                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop)
+                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths)
 
             prompt_text = self._format_prompt(messages)
             input_ids = mx.array(self._tokenizer.encode(prompt_text))
@@ -323,15 +325,17 @@ class VLMEngine:
 
         # Extract images for VLM vision path (same as non-streaming)
         image_paths = await self._extract_images(messages)
+        audio_paths = await self._extract_audio(messages)
         has_images = bool(image_paths) and self._has_vision and self._is_vlm
+        has_audio = bool(audio_paths) and self._is_vlm
 
         def _stream_sync():
             try:
                 if seed is not None:
                     mx.random.seed(seed)
 
-                if has_images:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, stop)
+                if has_images or has_audio:
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, stop, audio_paths=audio_paths)
                     return
 
                 prompt_text = self._format_prompt(messages)
@@ -436,6 +440,7 @@ class VLMEngine:
         top_p: float,
         top_k: int = 0,
         stop: list[str] | None = None,
+        audio_paths: list[str] | None = None,
     ) -> str:
         """Vision + text generation using mlx_vlm.generate()."""
         from mlx_vlm.generate import generate as vlm_generate
@@ -444,6 +449,11 @@ class VLMEngine:
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if getattr(self, '_enable_thinking', None) is not None:
             tpl_kwargs["enable_thinking"] = self._enable_thinking
+
+        # Include audio count in template kwargs for Omni models
+        if audio_paths:
+            tpl_kwargs["num_audios"] = len(audio_paths)
+
         prompt = self._processor.apply_chat_template(
             vlm_messages, **tpl_kwargs,
         )
@@ -459,14 +469,21 @@ class VLMEngine:
             except Exception:
                 logger.debug("vision cache lookup failed", exc_info=True)
 
+        gen_kwargs: dict = {
+            "max_tokens": max_tokens,
+            "temp": temperature,
+            "verbose": False,
+        }
+        if image_paths:
+            gen_kwargs["image"] = image_paths if len(image_paths) > 1 else image_paths[0]
+        if audio_paths:
+            gen_kwargs["audio"] = audio_paths if len(audio_paths) > 1 else audio_paths[0]
+
         result = vlm_generate(
             self._model,
             self._processor,
             prompt=prompt,
-            image=image_paths if len(image_paths) > 1 else image_paths[0],
-            max_tokens=max_tokens,
-            temp=temperature,
-            verbose=False,
+            **gen_kwargs,
         )
 
         # Trim output at stop sequences if provided
@@ -601,6 +618,7 @@ class VLMEngine:
         queue: asyncio.Queue,
         top_k: int = 0,
         stop: list[str] | None = None,
+        audio_paths: list[str] | None = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate()."""
         from mlx_vlm.generate import stream_generate as vlm_stream_generate
@@ -610,6 +628,10 @@ class VLMEngine:
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if getattr(self, '_enable_thinking', None) is not None:
             tpl_kwargs["enable_thinking"] = self._enable_thinking
+
+        if audio_paths:
+            tpl_kwargs["num_audios"] = len(audio_paths)
+
         prompt = self._processor.apply_chat_template(
             vlm_messages, **tpl_kwargs,
         )
@@ -618,13 +640,20 @@ class VLMEngine:
         stop_suffix = stop or []
         token_count = 0
         try:
+            stream_kwargs: dict = {
+                "max_tokens": max_tokens,
+                "sampler": sampler,
+            }
+            if image_paths:
+                stream_kwargs["image"] = image_paths if len(image_paths) > 1 else image_paths[0]
+            if audio_paths:
+                stream_kwargs["audio"] = audio_paths if len(audio_paths) > 1 else audio_paths[0]
+
             for result in vlm_stream_generate(
                 self._model,
                 self._processor,
                 prompt=prompt,
-                image=image_paths if len(image_paths) > 1 else image_paths[0],
-                max_tokens=max_tokens,
-                sampler=sampler,
+                **stream_kwargs,
             ):
                 token_count += 1
                 text = result.text if hasattr(result, 'text') else ""
@@ -817,7 +846,7 @@ class VLMEngine:
     # ── Prompt Formatting ──
 
     def _build_vlm_messages(self, messages: list[dict]) -> list[dict]:
-        """Build messages with image references for processor's chat template."""
+        """Build messages with image/audio references for processor's chat template."""
         vlm_messages = []
         for msg in messages:
             content = msg.get("content", "")
@@ -827,6 +856,10 @@ class VLMEngine:
                     if isinstance(part, dict):
                         if part.get("type") == "image_url":
                             parts.append({"type": "image"})
+                        elif part.get("type") == "input_audio":
+                            parts.append({"type": "audio"})
+                        elif part.get("type") == "audio_url":
+                            parts.append({"type": "audio"})
                         elif part.get("type") == "text":
                             parts.append({"type": "text", "text": part.get("text", "")})
                     elif isinstance(part, str):
@@ -894,7 +927,52 @@ class VLMEngine:
                             paths.append(url)
         return paths
 
-    _temp_files: list[str] | None = None
+    # ── Audio Extraction ──
+
+    async def _extract_audio(self, messages: list[dict]) -> list[str]:
+        """Extract audio file paths from OpenAI-format message content parts.
+
+        Supports:
+        - {"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}
+        - {"type": "audio_url", "audio_url": {"url": "file://..."}}
+        """
+        paths = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    ptype = part.get("type", "")
+                    if ptype == "input_audio":
+                        ia = part.get("input_audio", {})
+                        data = ia.get("data")
+                        fmt = ia.get("format", "wav")
+                        if data:
+                            paths.append(await self._save_base64_audio(data, fmt))
+                    elif ptype == "audio_url":
+                        url = part.get("audio_url", {}).get("url", "")
+                        if url.startswith("data:audio"):
+                            header, data = url.split(",", 1)
+                            fmt = header.split("/")[1].split(";")[0]
+                            paths.append(await self._save_base64_audio(data, fmt))
+                        elif url.startswith("file://"):
+                            path = url[7:]
+                            if os.path.exists(path):
+                                paths.append(path)
+                        elif os.path.exists(url):
+                            paths.append(url)
+        return paths
+
+    async def _save_base64_audio(self, data: str, fmt: str = "wav") -> str:
+        ext = fmt if fmt in ("wav", "mp3", "ogg", "flac", "pcm") else "wav"
+        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        tmp.write(base64.b64decode(data))
+        tmp.close()
+        if self._temp_files is None:
+            self._temp_files = []
+        self._temp_files.append(tmp.name)
+        return tmp.name
 
     async def _save_base64_image(self, data_url: str) -> str:
         header, data = data_url.split(",", 1)

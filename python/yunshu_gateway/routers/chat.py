@@ -215,6 +215,17 @@ def _has_images(messages: list[dict]) -> bool:
     return False
 
 
+def _has_audio(messages: list[dict]) -> bool:
+    """Check if any message contains audio content."""
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in ("input_audio", "audio_url"):
+                    return True
+    return False
+
+
 def _inject_tool_system_prompt(
     messages: list[dict],
     tools: list[ToolDefinition],
@@ -463,12 +474,13 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
+    has_audio = _has_audio(messages)
 
-    # Route to VLM engine if images are present
-    if has_images:
+    # Route to VLM/Omni engine if images or audio are present
+    if has_images or has_audio:
         return await _handle_vlm_chat(req, messages, request)
 
-    # Check if the target model is a VLM (route through VLM handler)
+    # Check if the target model is a VLM/Omni (route through VLM handler)
     from yunshu_engine.vlm_engine import VLMEngine
     manager = get_model_manager()
     if manager is not None:
