@@ -218,6 +218,7 @@ class TestSessionConfig:
             "max_response_output_tokens",
             "temperature",
             "tools",
+            "instructions",
         }
         assert set(d.keys()) == expected_keys
 

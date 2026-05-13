@@ -171,6 +171,17 @@
 |------|------|------|------|
 | PROF | Profiling 端點 — `/v1/start_profile` + `/v1/stop_profile` Metal GPU 追蹤 | vLLM §12.5 | ✅ 已實現 |
 
+### 新增功能 (2026-05-13 第九批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| VAD | VAD (Voice Activity Detection) — EnergyVAD + WebRTCVAD，自適應閾值，工廠模式 | §21.1 | ✅ 已實現 |
+| MCP-C | MCP Client Manager — 多服務器連接、工具發現、MCP↔OpenAI 格式轉換、mcp.json 配置 | oMLX §21.2 | ✅ 已實現 |
+| TTS-EXT | TTS 擴展參數 — top_k/top_p/repetition_penalty/max_tokens/voice_cloning/segment_size | oMLX §19.7 | ✅ 已實現 |
+| RT-FC | Realtime API 函數調用 — 工具調用偵測 + function_call 事件流 | §21.1 | ✅ 已實現 |
+| RT-AF | Realtime 音頻格式協商 — pcm16/g711_ulaw/g711_alaw 格式驗證 | §21.1 | ✅ 已實現 |
+| RT-INS | Realtime instructions 支持 — 系統指令注入 + response.create | §21.1 | ✅ 已實現 |
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -1257,11 +1268,11 @@ oMLX 有完整的 STSEngine 支持:
 | mlx-audio 能力 | Yunshu 暴露 |
 |---------------|------------|
 | STS (Speech-to-Speech) | ❌ |
-| VAD (語音活動偵測) | ❌ |
+| VAD (語音活動偵測) | ✅ EnergyVAD + WebRTCVAD (VAD) |
 | LID (語言識別) | ❌ |
 | VoicePipeline (STT→LLM→TTS 端到端) | ❌ |
 | 原生 streaming (`stream=True`, `streaming_interval`) | ❌ |
-| Voice cloning (`ref_audio`, `ref_text`) | ❌ |
+| Voice cloning (`ref_audio`, `ref_text`) | ✅ TTSRequest params (TTS-EXT) |
 
 ### 19.7 vs oMLX Audio 對比
 
@@ -1270,7 +1281,7 @@ oMLX 有完整的 STSEngine 支持:
 | 引擎類型 | 3 個 (TTS, STT, STS) | 2 個 (TTS, ASR) |
 | 原生 streaming | ✅ `stream_synthesize_pcm()` | ❌ 自己的 queue 包裝 |
 | Voice cloning | ✅ ref_audio/ref_text | ❌ |
-| TTS 參數 | top_k, top_p, repetition_penalty, max_tokens | 僅 voice, speed, temperature |
+| TTS 參數 | top_k, top_p, repetition_penalty, max_tokens | ✅ 全部已暴露 (TTS-EXT) |
 | 文本分段 streaming | ✅ 300 字符分段 | ❌ |
 | 視頻容器路由 | ✅ ffmpeg 提取音軌 | ❌ |
 
@@ -1323,13 +1334,13 @@ Realtime API 實現了 WebSocket 基本框架 (session, conversation, 7 客戶�
 
 | 功能 | OpenAI Realtime | Yunshu |
 |------|----------------|--------|
-| Function calling | ✅ 完整 | ❌ 定義了事件但未實現 |
+| Function calling | ✅ 完整 | ✅ 工具調用偵測 + function_call 事件 (RT-FC) |
 | 音頻流式合成 (token 級) | ✅ 逐 token | ❌ 先全部生成再分塊 |
 | VAD 自動觸發 response | ✅ | ❌ 客戶端需手動 commit |
-| Neural VAD | ✅ Silero | ❌ RMS 能量閾值 |
+| Neural VAD | ✅ Silero | ✅ EnergyVAD + WebRTCVAD (VAD) |
 | 中斷音頻截斷 | ✅ | ❌ 只取消生成，不截斷 |
-| response.create with instructions | ✅ | ❌ |
-| 音頻格式協商 | ✅ | ❌ 硬編碼 PCM16 24kHz |
+| response.create with instructions | ✅ | ✅ instructions 支持已實現 (RT-INS) |
+| 音頻格式協商 | ✅ | ✅ pcm16/g711_ulaw/g711_alaw 驗證 (RT-AF) |
 
 ### 21.2 MCP 只有 Server 角色
 
@@ -1337,12 +1348,12 @@ Yunshu 的 MCP 是 **Server** — 讓外部 agent 調用 Yunshu 的推理能力�
 
 oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件系統、搜索、數據庫)。
 
-**Yunshu 完全缺失 MCP Client 角色**:
-- 無 `MCPClientManager`
-- 無外部工具服務器連接
-- 無 `mcp.json` 配置加載
-- 無工具格式轉換 (MCP ↔ OpenAI)
-- 無並行/序列工具執行
+**Yunshu MCP Client 狀態**:
+- ✅ `MCPClientManager` 已實現 (MCP-C)
+- ✅ 外部工具服務器連接 (stdio + HTTP)
+- ✅ `mcp.json` 配置加載 + YUNSHU_MCP_SERVERS env var
+- ✅ 工具格式轉換 (MCP ↔ OpenAI)
+- ❌ 並行工具執行
 
 ### 21.3 多模態路由 Bug
 

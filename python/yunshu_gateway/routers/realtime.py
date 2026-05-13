@@ -67,6 +67,9 @@ class Voice(str):
 class SessionConfig:
     """Mutable session state for a realtime connection."""
 
+    # Supported audio formats
+    SUPPORTED_AUDIO_FORMATS = {"pcm16", "g711_ulaw", "g711_alaw"}
+
     def __init__(self):
         self.model = "default"
         self.modalities = ["text"]
@@ -82,12 +85,16 @@ class SessionConfig:
         self.max_response_output_tokens = 4096
         self.temperature = 0.7
         self.tools: list[dict] = []
+        self.instructions: str = ""  # System instructions for response.create
 
     def update(self, data: dict) -> list[str]:
         """Apply partial updates, return list of changed fields."""
         changed = []
         for key, value in data.items():
             if hasattr(self, key):
+                if key in ("input_audio_format", "output_audio_format"):
+                    if value not in self.SUPPORTED_AUDIO_FORMATS:
+                        continue
                 setattr(self, key, value)
                 changed.append(key)
         return changed
@@ -103,6 +110,7 @@ class SessionConfig:
             "max_response_output_tokens": self.max_response_output_tokens,
             "temperature": self.temperature,
             "tools": self.tools,
+            "instructions": self.instructions,
         }
 
 
@@ -422,16 +430,53 @@ class RealtimeSession:
                     text=full_text,
                 ))
 
+            # Check for tool calls in the response
+            tool_calls = None
+            if self.session.tools:
+                from yunshu_engine.tool_call_parser import parse_tool_calls
+                tool_calls = parse_tool_calls(full_text, model_name=self.session.model)
+
+            if tool_calls:
+                # Send function_call events for each tool call
+                for tc in tool_calls:
+                    call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    await self.send_event(_event(
+                        RealtimeEvent.RESPONSE_FUNCTION_CALL_ARGUMENTS_DELTA,
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=0,
+                        call_id=call_id,
+                        name=tc.name,
+                        delta=tc.arguments,
+                    ))
+                    await self.send_event(_event(
+                        RealtimeEvent.RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE,
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=0,
+                        call_id=call_id,
+                        name=tc.name,
+                        arguments=tc.arguments,
+                    ))
+
             # Audio output: synthesize text to speech if audio modality is requested
             if "audio" in modalities and full_text:
                 await self._synthesize_audio_response(full_text, response_id, item_id)
 
             # Add assistant item to conversation
+            content_parts = [{"type": "text", "text": full_text}]
+            if tool_calls:
+                for tc in tool_calls:
+                    content_parts.append({
+                        "type": "function_call",
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                    })
             assistant_item = ConversationItem(
                 item_id=item_id,
                 item_type="message",
                 role="assistant",
-                content=[{"type": "text", "text": full_text}],
+                content=content_parts,
             )
             assistant_item.status = "completed"
             self.conversation.add_item(assistant_item)
@@ -682,6 +727,10 @@ class RealtimeSession:
     def _build_messages(self) -> list[dict]:
         """Build messages list from conversation items."""
         messages = []
+        # Prepend instructions as system message if configured
+        session_cfg = getattr(self, 'session', None)
+        if session_cfg and getattr(session_cfg, 'instructions', ''):
+            messages.append({"role": "system", "content": session_cfg.instructions})
         for item in self.conversation.items:
             if item.item_type != "message" or not item.role:
                 continue

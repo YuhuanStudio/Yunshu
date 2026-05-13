@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..engine import get_model_manager
 
@@ -40,6 +40,16 @@ class TTSRequest(BaseModel):
     response_format: str = "wav"  # Only "wav" currently supported
     temperature: Optional[float] = None
     instruct: Optional[str] = None  # Voice description for VoiceDesign models
+    # Extended parameters (oMLX pattern)
+    top_k: int = Field(default=50, ge=0)
+    top_p: float = Field(default=0.95, ge=0.0, le=1.0)
+    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=4096, ge=1, le=32768)
+    # Voice cloning parameters (mlx-audio pattern)
+    ref_audio: Optional[str] = None  # Reference audio path for voice cloning
+    ref_text: Optional[str] = None  # Reference text for voice cloning
+    # Segmented streaming (oMLX pattern: 300-char chunks)
+    segment_size: int = Field(default=300, ge=50, le=2000)
 
 
 @router.post("/audio/speech", response_class=Response)
