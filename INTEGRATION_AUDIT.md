@@ -218,7 +218,7 @@
 | 編號 | 功能 | 來源 | 狀態 |
 |------|------|------|------|
 | OCR | OCR 引擎 — GLM-OCR-bf16 實測通過，chat template + KV cache 生成，支持 text/formula/table 三種任務 | §20.3 | ✅ 已實現 |
-| OCR-EP | `POST /v1/images/ocr` 端點 — 圖片上傳 + task 參數，接入 ModelManager | §20.3 | ✅ 已實現 |
+| OCR-EP | `POST /v1/ocr` 端點 — 圖片上傳 + task 參數，接入 ModelManager | §20.3 | ✅ 已實現 |
 | VIDEO-ASR | 視頻音頻提取 — ffmpeg 提取音軌 → ASR 轉寫，支持 mp4/mkv/avi/mov/wmv/ts/mts | §19.6 | ✅ 已實現 |
 | MAX-MODEL | ModelManager max_models 限制 — LRU 淘汰策略，`loaded_count` 屬性 | §4.2 | ✅ 已實現 |
 
@@ -1324,8 +1324,8 @@ oMLX 有完整的 STSEngine 支持:
 | 原生 streaming | ✅ `stream_synthesize_pcm()` | ❌ 自己的 queue 包裝 |
 | Voice cloning | ✅ ref_audio/ref_text | ❌ |
 | TTS 參數 | top_k, top_p, repetition_penalty, max_tokens | ✅ 全部已暴露 (TTS-EXT) |
-| 文本分段 streaming | ✅ 300 字符分段 | ❌ |
-| 視頻容器路由 | ✅ ffmpeg 提取音軌 | ❌ |
+| 文本分段 streaming | ✅ 300 字符分段 | ✅ (TTS-SEG) |
+| 視頻容器路由 | ✅ ffmpeg 提取音軌 | ✅ (VIDEO-ASR) |
 
 ---
 

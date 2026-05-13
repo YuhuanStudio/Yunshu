@@ -1,6 +1,5 @@
-"""OCR endpoint — POST /v1/images/ocr for image-to-text extraction."""
+"""OCR endpoint — POST /v1/ocr for image-to-text extraction."""
 
-import base64
 import os
 import tempfile
 import logging
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ocr"])
 
 
-@router.post("/v1/images/ocr")
+@router.post("/v1/ocr")
 async def extract_text_from_image(
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
@@ -41,7 +40,6 @@ async def extract_text_from_image(
         # Find OCR engine
         from ..engine import get_model_manager
         from yunshu_engine.ocr_engine import OCREngine
-        from yunshu_engine.model_manager import ModelType
 
         manager = get_model_manager()
         if manager is None:
