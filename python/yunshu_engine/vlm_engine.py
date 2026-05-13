@@ -223,6 +223,10 @@ class VLMEngine:
         max_tokens: int = 512,
         temperature: float = 0.7,
         top_p: float = 1.0,
+        top_k: int = 0,
+        seed: int | None = None,
+        repetition_penalty: float = 1.0,
+        stop: list[str] | None = None,
         **kwargs,
     ) -> dict[str, Any]:
         """Non-streaming generation. Supports image input for VLM models."""
@@ -235,6 +239,9 @@ class VLMEngine:
         image_paths = await self._extract_images(messages)
 
         def _generate_sync():
+            if seed is not None:
+                mx.random.seed(seed)
+
             if image_paths and self._has_vision and self._is_vlm:
                 return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p)
 
@@ -247,8 +254,19 @@ class VLMEngine:
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
 
-            sampler = make_sampler(temp=temperature, top_p=top_p)
+            sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
             eos_ids = self._get_eos_ids()
+
+            # Build stop token IDs from string stop sequences
+            stop_ids = set(eos_ids)
+            if stop:
+                for s in stop:
+                    try:
+                        ids = self._tokenizer.encode(s)
+                        if len(ids) == 1:
+                            stop_ids.add(ids[0])
+                    except Exception:
+                        pass
 
             tokens = []
             for token_id, _ in generate_step(
@@ -257,7 +275,7 @@ class VLMEngine:
                 sampler=sampler,
             ):
                 tokens.append(token_id)
-                if token_id in eos_ids:
+                if token_id in stop_ids:
                     break
 
             return self._tokenizer.decode(tokens, skip_special_tokens=True)
@@ -279,6 +297,9 @@ class VLMEngine:
         max_tokens: int = 512,
         temperature: float = 0.7,
         top_p: float = 1.0,
+        top_k: int = 0,
+        seed: int | None = None,
+        stop: list[str] | None = None,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation: yields RequestOutput per token."""
@@ -297,6 +318,9 @@ class VLMEngine:
 
         def _stream_sync():
             try:
+                if seed is not None:
+                    mx.random.seed(seed)
+
                 if has_images:
                     self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue)
                     return
@@ -311,8 +335,19 @@ class VLMEngine:
                 from mlx_lm.generate import generate_step
                 from mlx_lm.sample_utils import make_sampler
 
-                sampler = make_sampler(temp=temperature, top_p=top_p)
+                sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
                 eos_ids = self._get_eos_ids()
+
+                # Build stop token IDs
+                stop_ids = set(eos_ids)
+                if stop:
+                    for s in stop:
+                        try:
+                            ids = self._tokenizer.encode(s)
+                            if len(ids) == 1:
+                                stop_ids.add(ids[0])
+                        except Exception:
+                            pass
 
                 has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
                 if has_detokenizer:
@@ -326,7 +361,7 @@ class VLMEngine:
                     sampler=sampler,
                 ):
                     token_count += 1
-                    is_eos = token_id in eos_ids
+                    is_eos = token_id in stop_ids
                     finish_reason = "stop" if is_eos else None
 
                     if not is_eos:

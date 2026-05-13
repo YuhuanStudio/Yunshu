@@ -749,20 +749,19 @@ ngram_proposer.py 存在
 
 | 類別 | 模塊數 | 實際行數 |
 |------|--------|---------|
-| 引擎 DEAD 模塊 | 15 | 7,420 |
-| 引擎管線內死功能 | 13 | ~2,000 |
-| yunshu_kv DEAD 模塊 | 5 | 2,085 |
-| yunshu_control DEAD 模塊 | 3 | 779 |
+| 引擎 DEAD 模塊 | 7 | ~4,200 |
+| 引擎管線內死功能 | 5 | ~800 |
+| yunshu_kv DEAD 模塊 | 0 | 0 (全部已接入) |
+| yunshu_control DEAD 模塊 | 1 (tenant.py 冗餘) | ~200 |
 | yunshu_mesh DEAD 模塊 | 3 | 558 |
-| settings.py | 1 | 301 |
-| 死測試文件 | 13 | ~2,000 |
-| **合計** | **~53** | **~13,143** |
+| 死測試文件 | 7 | ~1,200 |
+| **合計** | **~23** | **~6,958** |
 
-約 13,000 行代碼存在於項目中但從未在推理管線中被執行。
+從原始 ~13,000 行死代碼降至 ~7,000 行。yunshu_kv 全部已接入管線。
 
 ---
 
-> **結論 (2026-05-12 更新)**: 所有 P0–P4 項目已完成。項目從「大量進階功能停留在學習教材狀態」進化為「所有管線功能已接入，通過 2,482 個單元測試」。主要變化: 4 個 DEAD 模塊重新接入管線 (ngram_proposer, spec_prefill, vision_feature_cache, ssd_kv_cache), WebUI 可觀測性完整, Gateway 參數全面透傳。僅剩 P2-6 (except:pass 逐步加 logger) 為持續改進項。
+> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 6 個死模塊全部接入管線 (RadixTree, TieredKVCacheManager, SSDCacheStore, BoundarySnapshot, ModelCacheConfig, mlx_cache)。yunshu_control 3 個死模塊接入 (tenant_store, request_queue, token_counter)。記憶體洩漏和線程安全問題已修復。2,451 個單元測試全部通過。
 
 ---
 
@@ -1135,24 +1134,24 @@ vision_feature_cache.py 實現了完整的兩層 LRU+SSD 視覺特徵緩存，�
 
 ### 18.4 參數被靜默丟棄
 
-Gateway 暴露了 14 個參數，但 VLM 引擎只使用 3 個:
+Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 | 參數 | Gateway 暴露 | VLM 使用 | 狀態 |
 |------|-------------|---------|------|
-| `max_tokens` | ✅ | ✅ | 唯一正確 |
+| `max_tokens` | ✅ | ✅ | 正確 |
 | `temperature` | ✅ | ✅ | 正確 |
 | `messages` | ✅ | ✅ | 正確 |
-| `top_p` | ✅ | ❌ | **靜默丟棄** |
-| `top_k` | ✅ | ❌ | **靜默丟棄** |
-| `stop` | ✅ | ❌ | **靜默丟棄** |
-| `enable_thinking` | ✅ | ❌ | **靜默丟棄** |
-| `response_format` | ✅ | ❌ | **靜默丟棄** |
-| `tools` | ✅ | ❌ | **靜默丟棄** |
-| `repetition_penalty` | ✅ | ❌ | **靜默丟棄** |
-| `frequency_penalty` | ✅ | ❌ | **靜默丟棄** |
-| `presence_penalty` | ✅ | ❌ | **靜默丟棄** |
-| `logit_bias` | ✅ | ❌ | **靜默丟棄** |
-| `seed` | ✅ | ❌ | **靜默丟棄** |
+| `top_p` | ✅ | ✅ | ✅ 已修復 (M9) |
+| `top_k` | ✅ | ✅ | ✅ 已修復 |
+| `stop` | ✅ | ✅ | ✅ 已修復 |
+| `seed` | ✅ | ✅ | ✅ 已修復 |
+| `repetition_penalty` | ✅ | ❌ | 靜默丟棄 |
+| `enable_thinking` | ✅ | ❌ | 靜默丟棄 |
+| `response_format` | ✅ | ❌ | 靜默丟棄 |
+| `tools` | ✅ | ❌ | 靜默丟棄 |
+| `frequency_penalty` | ✅ | ❌ | 靜默丟棄 |
+| `presence_penalty` | ✅ | ❌ | 靜默丟棄 |
+| `logit_bias` | ✅ | ❌ | 靜默丟棄 |
 
 ### 18.5 其他缺失
 
