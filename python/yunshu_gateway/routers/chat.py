@@ -706,6 +706,10 @@ async def _handle_vlm_chat(
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
+    # Inject tool definitions if provided
+    if req.tools:
+        messages = _inject_tool_system_prompt(messages, req.tools, req.tool_choice, req.parallel_tool_calls)
+
     if req.stream:
         return StreamingResponse(
             _stream_vlm_response(vlm_engine, messages, req, completion_id, request),
@@ -745,14 +749,38 @@ async def _handle_vlm_chat(
     else:
         completion_tok = max(1, len(content) // 4)
 
-    return JSONResponse(format_openai_non_stream(
-        completion_id=completion_id,
-        model=req.model,
-        content=content,
-        prompt_tokens=prompt_tok,
-        completion_tokens=completion_tok,
-        finish_reason=result.get("finish_reason", "stop"),
-    ))
+    # Extract tool calls if tools were provided
+    tool_calls = None
+    finish_reason = result.get("finish_reason", "stop")
+    if req.tools:
+        tool_calls = extract_tool_calls(content)
+        if tool_calls:
+            content = clean_tool_call_markup(content)
+            finish_reason = "tool_calls"
+
+    message = {"role": "assistant", "content": content.strip()}
+    if tool_calls:
+        message["tool_calls"] = [
+            {"id": f"call_vlm:{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+            for i, tc in enumerate(tool_calls)
+        ]
+
+    return JSONResponse({
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": req.model,
+        "choices": [{
+            "index": 0,
+            "message": message,
+            "finish_reason": finish_reason,
+        }],
+        "usage": {
+            "prompt_tokens": prompt_tok,
+            "completion_tokens": completion_tok,
+            "total_tokens": prompt_tok + completion_tok,
+        },
+    })
 
 
 async def _stream_vlm_response(

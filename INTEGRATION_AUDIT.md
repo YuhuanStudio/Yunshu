@@ -1151,7 +1151,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | `repetition_penalty` | ✅ | ✅ | ✅ 已修復 (generate) |
 | `enable_thinking` | ✅ | ✅ | ✅ 已修復 — passthrough to chat template |
 | `response_format` | ✅ | ❌ | ~~靜默丟棄~~ — Completions 路由已修復 (COMP-1)，VLM 路由仍丟棄 |
-| `tools` | ✅ | ❌ | 靜默丟棄 |
+| `tools` | ✅ | ⚠️ | ~~靜默丟棄~~ ✅ 已修復 — 工具定義注入系統提示 + 工具調用提取 |
 | `frequency_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
 | `presence_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
 | `logit_bias` | ✅ | ✅ | ✅ 已修復 — VLM text path logits bias |
@@ -1305,8 +1305,8 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 ### 21.3 多模態路由 Bug
 
 1. **VLM streaming 丟失圖片** (§18.1) — ✅ **已修復 (M1)** — streaming 使用 mlx_vlm.stream_generate()
-2. **音頻內容被靜默丟棄** — Chat 消息中的音頻部分被忽略
-3. **Anthropic 路由器不支持圖片** — `image` 塊被轉為文本佔位符 `[Image: ...]`
+2. **音頻內容被靜默丟棄** — ✅ **已修復 (AUDIO-1)** — VLM 引擎 _extract_audio() + _has_audio() 路由
+3. **Anthropic 路由器不支持圖片** — ✅ **已修復 (IMG-1)** — base64 轉 temp file + OpenAI content parts
 4. **多 VLM 模型路由不正確** — ✅ **已修復 (M5)** — 優先匹配 req.model
 5. **VLM 無 context window 驗證** — ✅ **已修復** — 通用路徑已有 validate_context_window
 
