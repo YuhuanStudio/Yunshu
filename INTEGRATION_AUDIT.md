@@ -182,6 +182,12 @@
 | RT-AF | Realtime 音頻格式協商 — pcm16/g711_ulaw/g711_alaw 格式驗證 | §21.1 | ✅ 已實現 |
 | RT-INS | Realtime instructions 支持 — 系統指令注入 + response.create | §21.1 | ✅ 已實現 |
 
+### 新增功能 (2026-05-13 第十批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| CLASSIFY | `/v1/classify` 端點 — 零樣本文本分類 (嵌入 + 餘弦相似度 + softmax) | vLLM §12.5 | ✅ 已實現 |
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -511,12 +517,12 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 字段 | 管線使用? | 實際來源 |
 |------|----------|---------|
-| ServerSettings.host | ❌ | CLI serve.py 自己的 `--host` |
-| ServerSettings.port | ❌ | CLI serve.py 自己的 `--port` |
-| ServerSettings.log_level | ❌ | CLI 直接傳給 uvicorn |
-| ServerSettings.cors_origins | ❌ | Gateway main.py 直接讀環境變數 |
-| ModelSettings.model_dirs | ❌ | 環境變數 YUNSHU_MODEL |
-| ModelSettings.max_model_memory | ❌ | 環境變數 YUNSHU_MAX_MEMORY_GB |
+| ServerSettings.host | ❌ (設計選擇: env var) | CLI serve.py 自己的 `--host` |
+| ServerSettings.port | ❌ (設計選擇: env var) | CLI serve.py 自己的 `--port` |
+| ServerSettings.log_level | ❌ (設計選擇: env var) | CLI 直接傳給 uvicorn |
+| ServerSettings.cors_origins | ❌ (設計選擇: env var) | YUNSHU_CORS_ORIGINS env var |
+| ModelSettings.model_dirs | ❌ (設計選擇: env var) | YUNSHU_MODEL + YUNSHU_MODELS_DIR |
+| ModelSettings.max_model_memory | ❌ (設計選擇: env var) | YUNSHU_MAX_MEMORY_GB |
 | ModelSettings.model_fallback | ❌ | 零引用 |
 | CacheSettings.* (5 個字段) | ❌ | 零引用 |
 | EngineSettings.* (8 個字段) | ❌ | 各組件有獨立的 Config 類 |

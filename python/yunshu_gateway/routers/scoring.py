@@ -186,6 +186,59 @@ async def create_rerank(req: RerankRequest):
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
 
+@router.post("/classify", response_model=None)
+async def classify_input(req: "ClassifyRequest"):
+    """Classify input text using a model's hidden states.
+
+    Returns class probabilities computed from the model's pooled
+    hidden representation using a softmax over label embeddings.
+    """
+    if not req.input:
+        raise HTTPException(status_code=400, detail="Input cannot be empty")
+
+    engine = await _resolve_engine(req.model)
+    if engine is None:
+        raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")
+
+    try:
+        input_emb = (await _get_embeddings(engine, [req.input]))[0]
+    except Exception as e:
+        logger.error(f"Classify error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Classification failed")
+
+    if req.labels:
+        label_embs = await _get_embeddings(engine, req.labels)
+        scores = []
+        for label_emb in label_embs:
+            sim = _compute_similarity(input_emb, label_emb, "cosine")
+            scores.append(sim)
+        # Softmax normalization
+        import math
+        max_score = max(scores) if scores else 0
+        exp_scores = [math.exp(s - max_score) for s in scores]
+        total = sum(exp_scores)
+        probs = [e / total for e in exp_scores]
+
+        results = []
+        for i, (label, prob) in enumerate(zip(req.labels, probs)):
+            results.append({"label": label, "score": round(prob, 6), "index": i})
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+    else:
+        results = []
+
+    return JSONResponse({
+        "model": req.model,
+        "results": results,
+    })
+
+
+class ClassifyRequest(BaseModel):
+    model: str
+    input: str
+    labels: list[str] = Field(default_factory=list)
+
+
 async def _resolve_engine(model_id: str):
     from ..engine import get_engine, get_model_manager
 
