@@ -1087,7 +1087,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 搶佔粒度 | 每步 KV 塊重試 | ✅ block-level preemption — 保留前綴緩存，僅重填尾部 (Wave 15) | vLLM 可在塊級搶佔 |
 | Spec token 調度 | 整合: num_tokens_with_spec, lookahead blocks | 不整合 BatchGenerator | 只在單請求 fast path 工作 |
 | 編碼器-解碼器 | 完整 EncoderCacheManager | 無 | 不支持 |
-| 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema 約束採樣器 + VLM 接入 | 僅缺 xgrammar 後端 |
+| 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema + regex + choice + CFG 約束 | ✅ 僅缺 xgrammar native 後端 |
 | 遠程 KV 傳輸 | KVConnectorFactory, 異步 load/store | 無 | 無分離式預填充 |
 | LoRA 調度 | max_loras 約束, LoRA 緩存 | ✅ LoRAAdapterManager + LRU + auto-discover + merge | 已實現 (LORA) |
 | Mamba/混合模型 | 塊對齊緩存分割 | 無 | 不處理混合注意力/SSM |
@@ -1101,7 +1101,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | KV 卸載框架 | 完整 OffloadingManager + GPU/CPU specs | 無正式框架 | 有分層但無異步協議 |
 | **Radix tree 前綴匹配** | 無 (平面 hash) | RadixTree 已接入 KVCacheManager (C8) | **Yunshu 優勢** — ✅ 已啟用 |
 | **SSD 持久化** | 非內建 | SSDCacheStore 接入 KVPrefixCache (YUNSHU_SSD_CACHE) | **Yunshu 優勢** — ✅ 已啟用 |
-| **思考段 KV 重用** | 無 | ThinkingSegmentSubstore 存在 | **Yunshu 優勢** — 但未觸發 |
+| **思考段 KV 重用** | 無 | ThinkingSegmentSubstore 存在 | **Yunshu 優勢** — ✅ 已接入三路徑 (scheduler + fast + streaming fast) |
 
 ### 12.4 猜測解碼對比
 
@@ -1614,7 +1614,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | **視頻生成** | ❌ | — | ✅ (3+ 模型) | — | ✅ |
 | **視頻理解** | ✅ VLM frame extraction (Wave 24) | — | ✅ | — | — |
 | OCR | ✅ GLM-OCR-bf16 實測通過 | ✅ (3 模型) | — | — | — |
-| LoRA (任何模態) | ✅ 文本 LoRA 已實現 + gateway passthrough (Wave 24)，缺圖像/VLM LoRA | — | ✅ | ✅ | ✅ |
+| LoRA (任何模態) | ✅ 文本 LoRA + gateway passthrough + 圖像 LoRA (load_lora_adapter) | — | ✅ | ✅ | ✅ |
 | img2img | ✅ generate() + variations/edits (Wave 24) | — | ✅ | ✅ | — |
 | Inpainting | ❌ | — | ✅ | ✅ | — |
 
