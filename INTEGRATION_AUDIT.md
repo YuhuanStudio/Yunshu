@@ -1142,7 +1142,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | `tools` | ✅ | ❌ | 靜默丟棄 |
 | `frequency_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
 | `presence_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
-| `logit_bias` | ✅ | ❌ | VLM text path 無 logits 存取 |
+| `logit_bias` | ✅ | ✅ | ✅ 已修復 — VLM text path logits bias |
 
 ### 18.5 其他缺失
 
