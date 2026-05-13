@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 11: completions thinking_budget, image OOM, realtime token-level audio)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — Wave 11: completions thinking_budget, image OOM, realtime token-level audio)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **2673 passed, 0 failed**。
+> 以下為基於本報告發現所完成的修復，最新測試: **2636 passed, 13 skipped**。
 
 ### 已完成修復 (2026-05-12)
 
@@ -70,7 +70,7 @@
 | P3-4 | WebUI 後端 URL 可配置 (YUNSHU_BACKEND_URL env var) | ✅ 已修復 | 全數通過 |
 | P3-5 | WebUI monitoring 頁面添加延遲百分位數顯示 (requests endpoint) | ✅ 已修復 | 全數通過 |
 | P4-1 | 修正 CLAUDE.md Metal kernels 描述 (paged_attention, sdpa, sgmv, kivi_quant, gemv) | ✅ 已修復 | 全數通過 |
-| P4-2 | 修正 README 測試數量 (2162→2482) 和 spec decode 描述 | ✅ 已修復 | 全數通過 |
+| P4-2 | 修正 README 測試數量 (2162→2636) 和 spec decode 描述 | ✅ 已修復 | 全數通過 |
 | P4-3 | INTEGRATION_AUDIT.md 所有完成標記均基於實際代碼修改和測試驗證 | ✅ 已修復 | 全數通過 |
 | P2-2 | 刪除 settings.py (DEAD, 零調用者) 及其測試 | ✅ 已修復 | 全數通過 |
 | P3-6 | WebUI Embeddings 頁面 — 向量可視化 + 複製 JSON + 側邊欄導航 | ✅ 已修復 | 全數通過 |
@@ -228,7 +228,7 @@
 | IMG-OOM | Image engine OOM 保護 — 生成前內存檢查 + MemoryError 捕獲 | §20.3 | ✅ 已實現 |
 | RT-AUDIO | Realtime token-level audio streaming — synthesize_stream 優先，逐 chunk 發送 | §21.1 | ✅ 已實現 |
 
-> **Wave 9 測試**: 2673 passed, 0 failed。OCR 引擎使用 GLM-OCR-bf16 模型完成實機驗證。
+> **Wave 9 測試**: 2636 passed, 13 skipped。OCR 引擎使用 GLM-OCR-bf16 模型完成實機驗證。
 
 ### 跨項目學習進度
 
@@ -266,10 +266,10 @@
 
 | 指標 | 數值 |
 |------|------|
-| 引擎模塊總數 | 46 |
-| **完全死亡 (DEAD)** | **6 個** — 零管線調用者 (原 15 個，9 個已接入/刪除) |
-| 部分接入 (PARTIAL) | 0 個 (SSD 子路徑已啟用) |
-| 已接入 (WIRED) | 38 個 |
+| 引擎模塊總數 | 47 (+ocr_engine) |
+| **完全死亡 (DEAD)** | **11 個** — 零管線調用者 (原 15 個，4 個已接入) |
+| 已刪除 (DELETED) | 1 個 (settings.py) |
+| 已接入 (WIRED) | 35 個 |
 | Gateway 缺失的引擎參數 | 0 個 (全部已暴露) |
 | WebUI 缺失的後端 endpoint | 0 個 (全部已修復) |
 | WebUI 未暴露的後端功能 | 10+ (持續補充中) |
@@ -281,7 +281,7 @@
 
 ### 三大問題
 
-1. **死代碼堆積**: 15 個模塊 + 13 個管線功能永遠不會被觸發。測試覆蓋率看似完整，但測的是從未運行的代碼。
+1. **死代碼堆積**: 11 個模塊 + 13 個管線功能永遠不會被觸發。測試覆蓋率看似完整，但測的是從未運行的代碼。
 2. **API 層斷裂**: 用戶無法通過任何接口啟用 spec_decode、thinking_budget、SSD cache、N-gram 等功能。Gateway 不暴露，引擎不接收。
 3. **文檔虛假**: AUDIT_REPORT 標記多項為「完成」，但實際上是「代碼寫了+測試通了」，從未接入管線。
 
@@ -305,6 +305,7 @@
 | 10 | exceptions.py | external_prefill, scheduler | WIRED** |
 | 11 | external_prefill.py | scheduler | WIRED** |
 | 12 | image_engine.py | model_manager, gateway/images, gateway/mcp | WIRED |
+| 12b | ocr_engine.py | model_manager, gateway/ocr | **WIRED** ✅ (GLM-OCR-bf16) |
 | 13 | json_schema.py | scheduler | WIRED** |
 | 14 | kv_prefix_cache.py | batched_engine | **WIRED** ✅ (含 SSD 子路徑) |
 | 15 | kv_quantization.py | yunshu_kv/thinking_segment | WIRED |
@@ -349,28 +350,25 @@
 
 ### 2.2 DEAD 模塊詳情
 
-15 個完全死亡的模塊，僅存在於文件系統和測試中：
+11 個完全死亡的模塊，僅存在於文件系統和測試中：
 
 | 模塊 | 行數 | 測試文件 | 說明 |
 |------|------|----------|------|
-| adaptive_batch.py | 273 | test_adaptive_batch.py | 自適應批處理，零調用 |
-| ane_embedding.py | 950 | test_ane_embedding.py | ANE 嵌入，僅 bench 腳本 |
-| benchmark.py | 469 | test_benchmark.py | 基準測試框架，僅 scripts/ |
-| bfcl_eval.py | 1,124 | 無 | BFCL 評估，零調用 |
-| deltanet_inversion.py | 268 | test_deltanet_inversion.py | DeltaNet 狀態反轉 |
-| metal_kernels.py | 698 | test_metal_kernels*.py | Metal 內核管理，僅 scripts/ |
-| mtp_decoder.py | 285 | test_mtp_decoder.py | MTP 解碼層 |
-| mtp_patch.py | 256 | test_mtp_patch.py | MTP 模型補丁 |
-| n_confirmed_patch.py | 313 | test_n_confirmed_patch.py | n_confirmed 驗證補丁 |
-| ngram_proposer.py | 157 | test_ngram_proposer.py | N-gram 猜測解碼 |
-| roofline.py | 746 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
-| settings.py | 301 | test_settings.py | 配置系統 |
-| spec_prefill.py | 361 | test_spec_prefill.py | 稀疏預填充 |
-| ssd_kv_cache.py | 581 | test_ssd_kv_cache.py | SSD KV 持久化 |
-| telemetry.py | 193 | test_telemetry.py | 遙測系統 |
-| vision_feature_cache.py | 445 | test_vision_feature_cache.py | 視覺特徵緩存 |
+| adaptive_batch.py | 276 | test_adaptive_batch.py | 自適應批處理，零調用 |
+| ane_embedding.py | 953 | test_ane_embedding.py | ANE 嵌入，僅 bench 腳本 |
+| benchmark.py | 472 | test_benchmark.py | 基準測試框架，僅 scripts/ |
+| bfcl_eval.py | 1,127 | 無 | BFCL 評估，零調用 |
+| deltanet_inversion.py | 271 | test_deltanet_inversion.py | DeltaNet 狀態反轉 |
+| metal_kernels.py | 698 | test_metal_kernels*.py (2) | Metal 內核管理，僅 scripts/ |
+| mtp_decoder.py | 288 | test_mtp_decoder.py | MTP 解碼層 |
+| mtp_patch.py | 259 | 無 | MTP 模型補丁 |
+| n_confirmed_patch.py | 316 | test_n_confirmed_patch.py | n_confirmed 驗證補丁 |
+| roofline.py | 749 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
+| telemetry.py | 196 | test_telemetry.py | 遙測系統 |
 
-**合計: 7,420 行死代碼 + 16 個測試文件**
+**合計: 5,605 行死代碼 + 10 個測試文件**
+
+已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine)。已刪除: settings.py。
 
 ---
 
@@ -553,9 +551,9 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ## 6. Config/Settings 審計
 
-### settings.py — 100% 死代碼
+### settings.py — 已刪除
 
-**整個 settings.py 模塊從未被任何管線代碼調用。** `get_settings()` 和 `init_settings()` 零調用者。
+**settings.py 已被刪除** (P2-2)。原模塊從未被任何管線代碼調用。`get_settings()` 和 `init_settings()` 零調用者。
 
 | 字段 | 管線使用? | 實際來源 |
 |------|----------|---------|
@@ -569,7 +567,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | CacheSettings.* (5 個字段) | ❌ | 零引用 |
 | EngineSettings.* (8 個字段) | ❌ | 各組件有獨立的 Config 類 |
 
-**根本原因**: CLI 和 Gateway 各自直接讀環境變數/命令行參數，完全繞過了 settings.py 的統一配置系統。項目有兩套平行的配置機制。
+**根本原因**: CLI 和 Gateway 各自直接讀環境變數/命令行參數，完全繞過了 settings.py 的統一配置系統。項目有兩套平行的配置機制。~~已通過刪除 settings.py 統一~~。
 
 ---
 
@@ -579,11 +577,11 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 類別 | 數量 |
 |------|------|
-| 測試文件總數 | 110 |
-| 單元測試 (tests/unit/) | 108 |
+| 測試文件總數 | 130 |
+| 單元測試 (tests/unit/) | 128 |
 | 集成測試 (tests/integration/) | 1 |
 | E2E 測試 (tests/e2e/) | 1 |
-| 測試函數總數 (def test_*) | **2,466** |
+| 測試函數總數 (def test_*) | **2,686** (collected) / **2,604** (grep count) |
 | 使用 Mock 的測試 | ~52 |
 | 不使用 Mock 的測試 | ~58 |
 | 從 yunshu_engine import 的測試 | ~65 |
@@ -606,7 +604,9 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 4. `test_ane_embedding.py` — ANE embedding 零管線調用
 5. `test_adaptive_batch.py` — adaptive batch 零管線調用
 6. `test_roofline.py` — roofline 不被 bench router 使用
-7. `test_metal_kernels.py` — metal_kernels 僅被 scripts/ 使用
+7. `test_metal_kernels.py` + `test_metal_kernels_phase0.py` — metal_kernels 僅被 scripts/ 使用
+8. `test_benchmark.py` — benchmark 框架零管線調用
+9. `test_telemetry.py` — telemetry 零管線調用
 
 **這些測試給人「功能完整」的錯覺，但實際上測的是從未在推理管線中運行的代碼。**
 
@@ -619,7 +619,8 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | CHANGELOG.md | 2,162 |
 | AUDIT_REPORT.md header | 2,449 |
 | AUDIT_REPORT §10.4 | 2,245 |
-| **實際 (grep test 函數)** | **~2,466** |
+| **實際 (pytest --co)** | **2,686** |
+| **實際 (pytest 執行)** | **2,636 passed, 13 skipped** |
 
 ---
 
@@ -666,15 +667,15 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ### 8.5 硬編碼 URL
 
-3 個文件硬編碼 `localhost:8000`:
-- `webui/src/app/settings/page.tsx`
-- `webui/src/app/realtime/page.tsx`
-- `webui/next.config.js`
+2 個文件有 `localhost:8000` 作為 SSR fallback:
+- `webui/src/app/settings/page.tsx` — `window.location.origin || "http://localhost:8000"` (SSR fallback)
+- `webui/src/app/realtime/page.tsx` — `window.location.host || "ws://localhost:8000/realtime"` (SSR fallback)
+- ✅ P3-4 已添加 YUNSHU_BACKEND_URL env var 支持
 
 ### 8.6 重複代碼
 
-- `fmtBytes` 在 4 個頁面中重複
-- `guessModelType` 在 2 個頁面中重複
+- ~~`fmtBytes` 在 4 個頁面中重複~~ ✅ 已統一到 lib/utils.ts (P2-5)
+- ~~`guessModelType` 在 2 個頁面中重複~~ ✅ 已統一到 lib/utils.ts (P2-5)
 - API 響應類型在各頁面中內聯定義
 
 ---
@@ -738,7 +739,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 聲稱 | 實際 | 嚴重度 |
 |------|------|--------|
-| "2,162 tests passing" | ~2,466 | MEDIUM |
+| "2,162 tests passing" | ~2,686 | MEDIUM |
 | "EAGLE-3 Speculative Decoding" | 0.54x 性能 (比基線慢) | HIGH |
 | Roadmap Phase 3/4 "Done" | 關鍵功能未接入管線 | HIGH |
 | "6 Metal kernels, 874 lines" | .metal 已廢棄; inline JIT 698 行 | MEDIUM |
@@ -747,22 +748,23 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 聲稱 | 實際 | 嚴重度 |
 |------|------|--------|
-| Wave 21 NgramProposer "complete" | 從未被管線調用 | HIGH |
-| Wave 21 SpecPrefill "complete" | 從未被管線調用 | HIGH |
-| Wave 21 SSD KV Cache "complete" | enable_ssd_cache() 從未被調用 | HIGH |
-| PagedAttention "complete" | enable_paged_kv 從未設為 True | HIGH |
-| "2,449 tests" | ~2,466 | LOW |
+| Wave 21 NgramProposer "complete" | ✅ 已接入 BatchedEngine (P1-2) | ~~HIGH~~ 已修復 |
+| Wave 21 SpecPrefill "complete" | ✅ 已接入 _generate_fast (P1-3) | ~~HIGH~~ 已修復 |
+| Wave 21 SSD KV Cache "complete" | ✅ enable_ssd_cache() 已接入 (YUNSHU_SSD_CACHE) | ~~HIGH~~ 已修復 |
+| PagedAttention "complete" | ✅ enable_paged_kv 默認 True (C11) | ~~HIGH~~ 已修復 |
+| "2,449 tests" | 2686 collected / 2636 passed | LOW |
 | "~19,000 lines engine" | 20,843 lines | LOW |
+| 測試函數數量不一致 | 實際 2686 collected / 2636 passed | LOW |
 
-### 10.4 虛假「完成」的五大模塊
+### 10.4 已修正的虛假「完成」模塊
 
-這些在 AUDIT_REPORT 中被標記為完成，實際上只是「代碼存在+測試通過」：
+這些在 AUDIT_REPORT 中曾被標記為完成，實際上只是「代碼存在+測試通過」，現已真正接入管線：
 
-1. **ngram_proposer.py** — 有測試，零管線調用
-2. **spec_prefill.py** — 有測試，零管線調用
-3. **ssd_kv_cache.py** — 有代碼+測試，enable_ssd_cache() 從未被調用
-4. **PagedAttention 管線** — 完整實現，enable_paged_kv 永遠 False
-5. **deltanet_inversion.py** — 有測試，僅通過未接入的 spec decode 路徑可達
+1. **ngram_proposer.py** — ✅ 已接入 BatchedEngine (P1-2)
+2. **spec_prefill.py** — ✅ 已接入 _generate_fast (P1-3)
+3. **ssd_kv_cache.py** — ✅ 已接入 KVPrefixCache (YUNSHU_SSD_CACHE)
+4. **PagedAttention 管線** — ✅ enable_paged_kv 默認 True (C11)
+5. **deltanet_inversion.py** — 仍為研究性質，僅 scripts/ 使用
 
 ---
 
@@ -868,19 +870,19 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 | 類別 | 模塊數 | 實際行數 |
 |------|--------|---------|
-| 引擎 DEAD 模塊 | 6 | ~4,200 |
+| 引擎 DEAD 模塊 | 11 | ~5,605 |
 | 引擎管線內死功能 | 4 | ~800 |
 | yunshu_kv DEAD 模塊 | 0 | 0 (全部已接入，含 warm_tier) |
 | yunshu_control DEAD 模塊 | 0 (tenant.py 已標記 deprecated) | ~0 |
 | yunshu_mesh DEAD 模塊 | 1 | 558 |
-| 死測試文件 | 7 | ~1,200 |
-| **合計** | **~17** | **~6,358** |
+| 死測試文件 | 10 | ~1,500 |
+| **合計** | **~26** | **~8,463** |
 
-從原始 ~13,000 行死代碼降至 ~6,400 行。yunshu_kv + yunshu_control 全部已接入管線。
+從原始 ~13,000 行死代碼降至 ~8,500 行。yunshu_kv + yunshu_control 全部已接入管線。
 
 ---
 
-> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,563 個測試全數通過 (565s→24s)。
+> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2636 個測試全數通過 (565s→25s)。
 
 ---
 
@@ -978,9 +980,9 @@ Yunshu 有而 vLLM 沒有的:
 | **Responses API** | ~~OpenAI Responses API endpoint~~ ✅ 已實現 | `/v1/responses` |
 | **15+ Tool Call Parsers** | ~~OpenAI, Anthropic, Gemini, Qwen, DeepSeek...~~ ✅ 9 格式 Tool Call Parser Factory + 模型自動路由 | 工具調用兼容 |
 | **Multiple Reasoning Parsers** | ~~Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony~~ ✅ Reasoning Parser Factory 5 家族自動偵測 | 思考模式兼容 |
-| **MoE top-k Optimization** | 減少激活專家數, +7-16% 吞吐 | 性能提升 |
-| **Warm Prompts** | 啟動時預加熱熱門前綴, 1.3-2.25x TTFT | 性能提升 |
-| **Vision Feature Cache (SSD)** | VLM 視覺特徵持久化 | VLM 性能 |
+| **MoE top-k Optimization** | 減少激活專家數, +7-16% 吞吐 | ✅ 已實現 (MOE) |
+| **Warm Prompts** | 啟動時預加熱熱門前綴, 1.3-2.25x TTFT | ✅ 已實現 (C4) |
+| **Vision Feature Cache (SSD)** | VLM 視覺特徵持久化 | ✅ 已接入 VLMEngine (M6) |
 | **Disaggregated Prefill/Decode** | 獨立預填充和解碼節點 | 分佈式性能 |
 | **Native macOS App** | Swift 菜單欄應用 + 自動更新 | 用戶體驗 |
 
@@ -992,11 +994,11 @@ Yunshu 有而 vLLM 沒有的:
 
 | 維度 | oMLX | Yunshu |
 |------|------|--------|
-| settings.py 行數 | ~1100 行 | ~250 行 |
-| 配置區段 | 8+ (Server, Model, Generation, Scheduler, Cache, PagedSSD, MCP, Admin, AdaptiveDefaults) | 4 (Server, Model, Cache, Engine) |
+| settings.py 行數 | ~1100 行 | 已刪除 (DELETED) — 使用 env var 直接配置 |
+| 配置區段 | 8+ (Server, Model, Generation, Scheduler, Cache, PagedSSD, MCP, Admin, AdaptiveDefaults) | env var + per-model config |
 | 每模型設置 | 40+ 字段 (TurboQuant, SpecPrefill, DFlash, MTP...) | ✅ ModelSettings 25+ 字段，接入 BatchedEngine |
 | 自適應默認 | 根據硬件自動計算 | 不存在 |
-| 使用狀態 | **活躍** — CLI/Gateway/API 全部使用 | **死代碼** — 零調用者 |
+| 使用狀態 | **活躍** — CLI/Gateway/API 全部使用 | **env var 為主** — 各組件直接讀取 |
 
 ---
 
@@ -1023,9 +1025,9 @@ SGLang 的 RadixCache (828 行) 是**生產級基數樹**:
 - **Prometheus 淘汰指標**
 
 Yunshu 的 RadixTree (radix_attention.py, 365 行):
-- 基本基數樹結構存在
-- **但從未被任何引擎代碼 import — 完全是死代碼**
-- ~~缺少多淘汰策略~~ ✅ LRU/LFU/FIFO 三策略已實現 (RADIX-EVICT)
+- ✅ 已接入 KVCacheManager (C8) — 替代平面 hash prefix cache
+- ✅ LRU/LFU/FIFO 三淘汰策略 (RADIX-EVICT)
+- 缺少: 節點分裂、大gram 視圖、Prometheus 淘汰指標
 
 ### 14.3 SGLang 的性能優化 (Yunshu 可學習)
 
@@ -1071,13 +1073,13 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 
 | 功能 | mlx-lm 支持 | Yunshu 使用 |
 |------|-------------|-------------|
-| `insert_segments()` | ✅ 分段預填充 | ❌ |
-| `maybe_quantize_kv_cache()` 每步 | ✅ 漸進式量化 | ❌ 僅生成結束後 |
-| `make_logits_processors()` | ✅ 正確的重複/頻率懲罰 | ❌ 自製版本有 bug |
-| `save_prompt_cache()` / `load_prompt_cache()` | ✅ KV 序列化 | ❌ 有自己的序列化但不兼容 |
+| `insert_segments()` | ✅ 分段預填充 | ✅ (C16) |
+| `maybe_quantize_kv_cache()` 每步 | ✅ 漸進式量化 | ✅ (C6) 每 256 tokens |
+| `make_logits_processors()` | ✅ 正確的重複/頻率懲罰 | ✅ (C1) |
+| `save_prompt_cache()` / `load_prompt_cache()` | ✅ KV 序列化 | ✅ 有自己的序列化 |
 | `prompt_progress_callback` | ✅ 預填充進度回調 | ❌ |
-| XTC 採樣 | ✅ Exclude Top Tokens | ❌ |
-| LoRA 合併 | ✅ 適配器支持 | ❌ |
+| XTC 採樣 | ✅ Exclude Top Tokens | ✅ (XTC) |
+| LoRA 合併 | ✅ 適配器支持 | ✅ (LORA) |
 
 ---
 
@@ -1143,11 +1145,11 @@ vllm-mlx 是與 Yunshu 解決**完全相同問題**的項目: 在 Apple Silicon 
 |------|----------|--------|
 | SSD cache 元數據 | **SQLite** (原子操作, 崩潰一致) | JSON 索引文件 |
 | 記憶體感知淘汰 | psutil 實時記憶體壓力淘汰 | 靜態 kv_cache_ratio |
-| Tool call parsers | **15+ 解析器** (OpenAI, Anthropic, Gemini, Qwen, DeepSeek...) | tool_call_streamer.py (有限) |
-| Reasoning parsers | **多個** (Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony) | thinking_budget.py (單一) |
+| Tool call parsers | **15+ 解析器** (OpenAI, Anthropic, Gemini, Qwen, DeepSeek...) | ✅ 9 格式 Tool Call Parser Factory (TCPARSER) |
+| Reasoning parsers | **多個** (Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony) | ✅ Reasoning Parser Factory 5 家族 (RPARSER) |
 | MoE top-k | 減少激活專家, +7-16% Qwen3-30B | ✅ moe_optimization.py (MOE) |
-| Warm prompts | 啟動預加熱, **1.3-2.25x TTFT** | 不支持 |
-| SpecPrefill query extractors | 多架構 (Qwen3.5, LLaMA, Nemotron-H) | 錯誤方法 (key magnitude) |
+| Warm prompts | 啟動預加熱, **1.3-2.25x TTFT** | ✅ Warm prompt 預加載 (C4) |
+| SpecPrefill query extractors | 多架構 (Qwen3.5, LLaMA, Nemotron-H) | ✅ attention capture 評分 (C5) |
 
 ### 16.5 vllm-omni — 多模態管線
 
@@ -1155,7 +1157,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 **Yunshu 的多模態差距**:
 - 無**階段式多模態管線** — vllm-omni 分離 text/image/audio 階段
-- 無**多模態前綴緩存** — OmniTensorPrefixCache 緩存視覺/音頻特徵 + KV
+- ✅ **多模態前綴緩存** — VisionFeatureCache 已接入 VLMEngine (C21/M6)
 - 無**模型特定預處理器** — Qwen3-Omni 音頻 token, CosyVoice 音素編碼等
 - 無**擴散管線基礎設施** — LoRA for diffusion, distributed diffusion, offloader
 
@@ -1205,7 +1207,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。15 個死模塊 + 13 個未觸發的管線功能 + 23 處錯誤處理問題 + 5 個安全漏洞，這些都是「寫了但沒用」的具體表現。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。
 
 ---
 
@@ -1255,12 +1257,12 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 ### 18.5 其他缺失
 
-- ~~**不支援遠端 URL 圖片**: HTTP/HTTPS 圖片 URL 被靜默跳過~~ ✅ `_download_image()` 支持遠端 URL
+- ~~**不支援遠端 URL 圖片**~~ ✅ `_download_image()` 支持遠端 URL (M15)
 - **不支援視頻輸入**: 無視頻偵測、無視頻幀提取
-- ~~**不支援音頻輸入**: Chat 消息中的音頻內容被靜默丟棄~~ ✅ 已修復 (AUDIO-1) — VLM 引擎 `_extract_audio()` + `_has_audio()` 路由
+- ~~**不支援音頻輸入**~~ ✅ 已修復 (AUDIO-1) — VLM 引擎 `_extract_audio()` + `_has_audio()` 路由
 - **不支援連續批處理**: oMLX 的 VLMBatchedEngine 使用 AsyncEngineCore 做並發 VLM 推理
-- ~~**不支援 OCR 模型**: oMLX 支持 deepseekocr, dots_ocr, glm_ocr~~ ✅ GLM-OCR-bf16 實測 (Wave 9)
-- ~~**多 VLM 路由不正確**: `_handle_vlm_chat` 選取第一個載入的 VLM 引擎，不考慮 `req.model`~~ ✅ 已修復 (M5)
+- ~~**不支援 OCR 模型**~~ ✅ GLM-OCR-bf16 實測 (Wave 9)
+- ~~**多 VLM 路由不正確**~~ ✅ 已修復 (M5)
 
 ### 18.6 vs oMLX VLMBatchedEngine 對比
 
@@ -1322,9 +1324,9 @@ oMLX 有完整的 STSEngine 支持:
 
 | 功能 | oMLX | Yunshu |
 |------|------|--------|
-| 引擎類型 | 3 個 (TTS, STT, STS) | 2 個 (TTS, ASR) |
-| 原生 streaming | ✅ `stream_synthesize_pcm()` | ❌ 自己的 queue 包裝 |
-| Voice cloning | ✅ ref_audio/ref_text | ❌ |
+| 引擎類型 | 3 個 (TTS, STT, STS) | 2 個 (TTS, ASR) — 缺 STS |
+| 原生 streaming | ✅ `stream_synthesize_pcm()` | ✅ synthesize_stream 優先 (TTS-NATIVE) |
+| Voice cloning | ✅ ref_audio/ref_text | ✅ TTSRequest params (TTS-EXT) |
 | TTS 參數 | top_k, top_p, repetition_penalty, max_tokens | ✅ 全部已暴露 (TTS-EXT) |
 | 文本分段 streaming | ✅ 300 字符分段 | ✅ (TTS-SEG) |
 | 視頻容器路由 | ✅ ffmpeg 提取音軌 | ✅ (VIDEO-ASR) |
@@ -1417,14 +1419,14 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 |------|--------|------|-----------|-------|-----------|
 | LLM 文本生成 | ✅ | ✅ | ✅ | — | — |
 | VLM 視覺語言 | ✅ streaming 已修復 (M1) | ✅ | ✅ (18 處理器) | — | — |
-| TTS 語音合成 | ✅ (30 模型) | ✅ | ✅ (8+ 模型) | — | — |
+| TTS 語音合成 | ✅ (30 模型, 原生串流) | ✅ | ✅ (8+ 模型) | — | — |
 | ASR 語音識別 | ✅ (13 模型) | ✅ | — | — | — |
 | **STS 語音到語音** | ❌ | ✅ | — | — | — |
 | 圖像生成 | ⚠️ 僅 Z-Image | — | ✅ (25+ 模型) | ✅ (7+ 模型) | — |
 | **視頻生成** | ❌ | — | ✅ (3+ 模型) | — | ✅ |
 | **視頻理解** | ❌ | — | ✅ | — | — |
 | OCR | ✅ GLM-OCR-bf16 實測通過 | ✅ (3 模型) | — | — | — |
-| LoRA (任何模態) | ❌ | — | ✅ | ✅ | ✅ |
+| LoRA (任何模態) | ⚠️ 文本 LoRA 已實現 (LORA)，缺圖像/VLM LoRA | — | ✅ | ✅ | ✅ |
 | img2img | ❌ | — | ✅ | ✅ | — |
 | Inpainting | ❌ | — | ✅ | ✅ | — |
 
@@ -1435,6 +1437,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | vision_feature_cache.py | 446 | ✅ **WIRED** | VLMEngine 中已實例化 (YUNSHU_VISION_CACHE) |
 | mrope.py (VLM 部分) | ~239 | ✅ **WIRED** | VLMEngine 中已接入 capture/clear rope_deltas (M7) |
 | vlm_engine.py streaming | ~100 | ✅ **修復** | streaming 路徑使用 mlx_vlm.stream_generate() (M1) |
+| ocr_engine.py | ~200 | ✅ **WIRED** | GLM-OCR-bf16 實測通過 (Wave 9)，gateway/ocr endpoint |
 
 ### 22.3 多模態行動計劃
 
@@ -1471,4 +1474,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，Realtime token-level 音頻串流已實現，MCP client 已實現。剩餘缺口：STS 引擎（需指定模型）、視頻生成、img2img/inpainting、圖像 LoRA。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現。剩餘缺口：STS 引擎（需指定模型）、視頻生成/理解、img2img/inpainting、圖像 LoRA。測試套件 2636 passed, 13 skipped。
