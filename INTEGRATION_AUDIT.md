@@ -930,11 +930,11 @@ Yunshu 的 RadixTree (radix_attention.py, 365 行):
 
 | 優化 | 說明 | Yunshu 狀態 |
 |------|------|-------------|
-| **TTFT + ITL 直方圖** | 指數桶直方圖追蹤延遲分布 | **完全缺失** — 無 TTFT/ITL 指標 |
-| **Cache hit rate 實時追蹤** | 每步更新 cache_hit_rate Prometheus gauge | 僅有 total_cached_tokens 計數器 |
-| **隊列深度指標** | num_running_reqs, num_queue_reqs | 無隊列可見性 |
-| **Spec decode 指標** | spec_accept_length, spec_accept_rate | SpeculativeDecoder.get_stats() 存在但未暴露 |
-| **請求收縮 (Retraction)** | 暫時驅逐 decode 請求為高優先 prefill 騰位 | 無收縮機制 |
+| **TTFT + ITL 直方圖** | 指數桶直方圖追蹤延遲分布 | ✅ TTFT 直方圖已接入 (C2)，ITL 待補 |
+| **Cache hit rate 實時追蹤** | 每步更新 cache_hit_rate Prometheus gauge | ✅ KV prefix cache hits/misses gauges 已添加 |
+| **隊列深度指標** | num_running_reqs, num_queue_reqs | ✅ `/admin/queue/stats` endpoint 已接入 (CTRL-Q) |
+| **Spec decode 指標** | spec_accept_length, spec_accept_rate | ✅ `/gw/monitoring/spec-decode` 已暴露 |
+| **請求收縮 (Retraction)** | 暫時驅逐 decode 請求為高優先 prefill 騰位 | ✅ 已接入 (C14) |
 | **自適應 Spec Decode** | AdaptiveController 基於接受率動態調整 draft 長度 | 僅在 thinking 模式有 LookaheadReasoning |
 | **CUDA Graphs** | BreakableCudaGraph + EAGLEDraftCudaGraphRunner | MLX mx.compile() 可做類似但未整合 |
 
