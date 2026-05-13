@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 14: COW, adaptive spec, heap scheduler, prefill progress, WebUI MCP/Batch/Tool Calling)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 15: ngram-mod hash pool, block-level preemption, scheduler spec decode, WebUI monitoring)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **2762 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **2889 passed, 13 skipped**。
 
 ### 已完成修復 (2026-05-12)
 
@@ -276,6 +276,18 @@
 
 > **Wave 14 測試**: 2807 passed, 13 skipped。
 
+### 新增功能 (2026-05-14 Wave 15)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| NG-MOD | NgramHashPool — O(1) ngram 猜測解碼 (dict lookup, 容量淘汰, LPS 退回) | llama.cpp §16.1 | ✅ 已實現 |
+| NG-MODE | YUNSHU_NGRAM_MODE env var — lps (默認) 或 hashpool 模式選擇 | — | ✅ 已實現 |
+| BLK-PRE | Block-level preemption — 保留前綴緩存 tokens，僅重新預填充未緩存尾部 | vLLM §12.2 | ✅ 已實現 |
+| SCH-SPD | 調度器猜測解碼接入 — step loop 生成 draft + 驗證 + 統計 | vLLM §12.4 | ✅ 已實現 |
+| WEB-MON | WebUI 監控頁面新增 Memory Guard, SSD Cache, Prefill Progress | §8.4 | ✅ 已實現 |
+
+> **Wave 15 測試**: 2889 passed, 13 skipped。
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -319,7 +331,7 @@
 | Gateway 缺失的引擎參數 | 0 個 (全部已暴露) |
 | WebUI 缺失的後端 endpoint | 0 個 (全部已修復) |
 | WebUI 未暴露的後端功能 | 10+ (持續補充中) |
-| 管線中永遠不會觸發的功能 | 5 個 (持續修復中) |
+| 管線中永遠不會觸發的功能 | 4 個 (EAGLE-3 draft, hybrid prefill, external prefill, legacy Engine) |
 | settings.py 字段使用率 | 已刪除 (DEAD, 零調用者) |
 | 安全問題 (HIGH) | ✅ 全部已修復 |
 | `except Exception: pass` | **0 處** (全部已加 logger 或標記為合理) |
@@ -490,14 +502,14 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | 1 | **猜測解碼 (EAGLE-3)** | batched_engine.py | `_spec_decoder` 永遠是 `None` — 沒有加載 draft model |
 | 2 | **連續批處理管線** | engine_core.py | ⚠️ EngineCore 已自動啟動 (EC-AUTO)，參數已補齊 (stop_token_ids, thinking_budget, logprobs)，但 Gateway 仍默認 `use_engine_loop=False`。空閒時使用 event-driven wake-up 消除 CPU 輪詢。 |
 | 3 | **PagedAttention** | paged_scheduler.py | ✅ `enable_paged_kv` 默認 `True` (C11) |
-| 4 | **請求搶佔/收縮** | scheduler.py | ✅ request retraction 已接入 (C14) |
+| 4 | **請求搶佔/收縮** | scheduler.py | ✅ request retraction 已接入 (C14)，block-level preemption 保留前綴緩存 (Wave 15) |
 | 5 | **混合分塊預填充** | scheduler.py | `enable_hybrid_prefill` 默認 `False` |
 | 6 | **外部預填充** | scheduler.py | `use_external_prefill` 默認 `False` |
-| 7 | **調度器猜測解碼** | scheduler.py | `enable_spec_decode` 默認 `False` |
+| 7 | **調度器猜測解碼** | scheduler.py | ✅ 已接入 scheduler step loop (Wave 15)，`enable_spec_decode` 默認 `False` (feature flag) |
 | 8 | **思考預算處理** | scheduler.py | ✅ `thinking_budget` 已透傳到 _generate_fast，思考 token 上限強制執行 |
 | 9 | **mRoPE delta 管理** | scheduler.py | ✅ mRoPE 已接入 VLM (M7) |
-| 10 | **思考段 KV 子存儲** | scheduler.py | 僅在調度器步進循環中（從不運行） |
-| 11 | **JSON Schema 約束生成** | json_schema.py | 僅從調度器的 `_make_sampler()` 調用（從不運行） |
+| 10 | **思考段 KV 子存儲** | batched_engine.py | ✅ 已接入快速路徑 (fast path store + lookup) |
+| 11 | **JSON Schema 約束生成** | json_schema.py | ✅ 快速路徑通過 grammar 參數支持 json_schema (GRAMMAR) |
 | 12 | **記憶體守衛預檢** | batched_engine.py | ✅ 記憶體壓力淘汰已接入 (C12) |
 | 13 | **Legacy Engine 所有功能** | engine.py | Gateway 從不創建 Engine 實例 |
 
@@ -957,7 +969,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
 | 優先級隊列 | RequestQueue ABC + 堆 O(log n) | heapq 優先級隊列 O(log n) | ✅ 已對齊 (HEAP-SCH) |
-| 搶佔粒度 | 每步 KV 塊重試 | 整個請求搶佔 | vLLM 可在塊級搶佔 |
+| 搶佔粒度 | 每步 KV 塊重試 | ✅ block-level preemption — 保留前綴緩存，僅重填尾部 (Wave 15) | vLLM 可在塊級搶佔 |
 | Spec token 調度 | 整合: num_tokens_with_spec, lookahead blocks | 不整合 BatchGenerator | 只在單請求 fast path 工作 |
 | 編碼器-解碼器 | 完整 EncoderCacheManager | 無 | 不支持 |
 | 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema 約束採樣器 + VLM 接入 | 僅缺 xgrammar 後端 |
@@ -984,7 +996,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | 僅單請求 | **關鍵差距**: 批量無法受益 |
 | GPU 拒絕採樣 | GPU kernel | CPU 逐個驗證 | 慢得多 |
 | Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | 無整合 | 無法組合使用 |
-| 調度器整合 | draft token IDs 每請求追蹤 | 不整合調度器 | draft 不經過連續批處理路徑 |
+| 調度器整合 | draft token IDs 每請求追蹤 | ✅ 已接入 scheduler step loop (Wave 15) | draft 生成 + 驗證 + 統計 |
 
 ### 12.5 API Server 對比
 
@@ -1248,6 +1260,14 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 | C15 | **15+ Tool Call Parsers**: 支持更多模型格式 | vllm-mlx | 生態兼容 |
 | C16 | **`insert_segments()` 使用**: 批處理路徑支持 prefix cache | mlx-lm | 批處理多輪加速 |
 
+### 已完成 (2026-05-14 Wave 15)
+
+| # | 行動 | 來源 | 狀態 |
+|---|------|------|------|
+| NG-MOD | **NgramHashPool**: O(1) dict lookup 替代 KMP O(n) | llama.cpp | ✅ 已完成 |
+| BLK-PRE | **Block-level preemption**: 保留前綴緩存，僅重填尾部 | vLLM | ✅ 已完成 |
+| SCH-SPD | **調度器 spec decode 接入**: step loop draft/verify/stats | vLLM | ✅ 已完成 |
+
 ### 長期架構 (更高影響, 更高風險)
 
 | # | 行動 | 來源 | 影響 |
@@ -1262,11 +1282,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。
-
----
-
-## 18. 多模態深度審計: VLM Engine
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 2889 passed, 13 skipped。
 
 ### 18.1 致命 Bug: Streaming VLM 丟失圖片
 
