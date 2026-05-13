@@ -57,6 +57,7 @@ class CompletionRequest(BaseModel):
     xtc_probability: float = 0.0
     xtc_threshold: float = 0.0
     lora_adapter: Optional[str] = None
+    grammar: Optional[dict] = None  # {"type": "regex", "pattern": "..."} etc.
 
 
 @router.post("/completions", response_model=None)
@@ -85,9 +86,16 @@ async def create_completion(req: CompletionRequest, request: Request):
     else:
         prompt = req.prompt
 
-    # Extract JSON schema from response_format
+    # Extract JSON schema from response_format or grammar
     json_schema = None
-    if req.response_format:
+    if req.grammar:
+        gtype = req.grammar.get("type")
+        if gtype == "json":
+            schema = req.grammar.get("schema")
+            json_schema = schema if schema else {}
+        elif gtype in ("regex", "choice", "cfg"):
+            json_schema = req.grammar  # Pass through for ConstraintFactory
+    if json_schema is None and req.response_format:
         rf = req.response_format
         if rf.get("type") == "json_schema":
             js = rf.get("json_schema")
