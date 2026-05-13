@@ -321,7 +321,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | 5 | **混合分塊預填充** | scheduler.py | `enable_hybrid_prefill` 默認 `False` |
 | 6 | **外部預填充** | scheduler.py | `use_external_prefill` 默認 `False` |
 | 7 | **調度器猜測解碼** | scheduler.py | `enable_spec_decode` 默認 `False` |
-| 8 | **思考預算處理** | scheduler.py | ✅ `thinking_budget` 已透傳 (P1-4) |
+| 8 | **思考預算處理** | scheduler.py | ✅ `thinking_budget` 已透傳到 _generate_fast，思考 token 上限強制執行 |
 | 9 | **mRoPE delta 管理** | scheduler.py | ✅ mRoPE 已接入 VLM (M7) |
 | 10 | **思考段 KV 子存儲** | scheduler.py | 僅在調度器步進循環中（從不運行） |
 | 11 | **JSON Schema 約束生成** | json_schema.py | 僅從調度器的 `_make_sampler()` 調用（從不運行） |

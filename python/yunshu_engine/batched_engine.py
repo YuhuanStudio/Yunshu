@@ -367,6 +367,7 @@ class BatchedEngine:
                 enable_thinking=enable_thinking,
                 logprobs=logprobs,
                 top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
             )
 
         # Engine loop path: continuous batching with scheduler overhead
@@ -418,6 +419,7 @@ class BatchedEngine:
         enable_thinking: bool | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        thinking_budget: int | None = None,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -492,6 +494,13 @@ class BatchedEngine:
             cached_tokens = 0
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
+            thinking_tokens_used = 0
+            think_end_token = None
+            if thinking_budget is not None:
+                try:
+                    think_end_token = tokenizer.encode("</think")[-1]
+                except Exception:
+                    pass
 
             # Try KV prefix cache hit
             prefix_cache = self._kv_prefix_cache
@@ -574,6 +583,13 @@ class BatchedEngine:
                             ttft_s = time.perf_counter() - gen_t0
                             first = False
                         tokens.append(token)
+                        # Thinking budget enforcement: cap thinking tokens
+                        if thinking_budget is not None and enable_thinking:
+                            thinking_tokens_used += 1
+                            if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                                # Force end of thinking phase
+                                tokens.append(think_end_token)
+                                break
                         # Progressive KV quantization (C6: keep memory flat during generation)
                         if self._kv_quant_bits is not None:
                             _progressive_quantize_kv_cache(
