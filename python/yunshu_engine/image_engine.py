@@ -1168,6 +1168,7 @@ class ImageGenEngine:
         num_inference_steps: int = 4,
         guidance_scale: float = 0.0,
         seed: int | None = None,
+        preview_interval: int = 0,
         **kwargs,
     ):
         """Stream image generation progress, yielding step-by-step updates.
@@ -1178,11 +1179,22 @@ class ImageGenEngine:
         - "progress": 0.0 to 1.0
         - "image": PNG bytes of current latent (decoded preview) or None
         - "is_final": True for the last chunk
+
+        preview_interval: decode and emit intermediate preview images every N steps.
+            0 = no intermediate previews (default), final image only.
+            1 = preview at every step, 2 = every other step, etc.
         """
         if self._transformer is None:
             raise RuntimeError("Engine not started")
 
         queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=64)
+
+        def _should_preview(step: int, total: int) -> bool:
+            if preview_interval <= 0:
+                return False
+            if step == total:
+                return True
+            return step % preview_interval == 0
 
         def _stream_sync():
             try:
@@ -1223,11 +1235,19 @@ class ImageGenEngine:
                     mx.eval(latents)
 
                     progress = (t + 1) / num_inference_steps
+                    step_num = t + 1
+
+                    preview_png = None
+                    if _should_preview(step_num, num_inference_steps):
+                        image = self._vae.decode(latents)
+                        mx.eval(image)
+                        preview_png = self._to_png(image)
+
                     queue.put_nowait({
-                        "step": t + 1,
+                        "step": step_num,
                         "total_steps": num_inference_steps,
                         "progress": progress,
-                        "image": None,
+                        "image": preview_png,
                         "is_final": False,
                     })
 

@@ -58,6 +58,33 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         logger.debug("server_metrics recording failed", exc_info=True)
 
 
+def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:
+    """Apply a LoRA adapter to the engine for this request.
+
+    Returns the adapter_id if loaded, None if not applicable.
+    The caller must call _release_lora_adapter() after generation.
+    """
+    if not adapter_id:
+        return None
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is None:
+        logger.warning(f"LoRA adapter '{adapter_id}' requested but engine has no LoRA manager")
+        return None
+    if lora_mgr.load_adapter(adapter_id):
+        return adapter_id
+    logger.warning(f"Failed to load LoRA adapter '{adapter_id}'")
+    return None
+
+
+def _release_lora_adapter(engine, adapter_id: str | None) -> None:
+    """Unload a LoRA adapter after generation completes."""
+    if not adapter_id:
+        return
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is not None:
+        lora_mgr.unload_adapter(adapter_id)
+
+
 # ── Request / Response schemas (OpenAI-compatible) ──
 
 
@@ -144,6 +171,7 @@ class ChatCompletionRequest(BaseModel):
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
     xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     grammar: Optional[dict] = None  # {"type": "json", "schema": {...}} or {"type": "regex", "pattern": "..."}
+    lora_adapter: Optional[str] = None  # LoRA adapter ID to apply for this request
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -240,6 +268,17 @@ def _has_audio(messages: list[dict]) -> bool:
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") in ("input_audio", "audio_url"):
+                    return True
+    return False
+
+
+def _has_video(messages: list[dict]) -> bool:
+    """Check if any message contains video content."""
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in ("video_url", "video_file"):
                     return True
     return False
 
@@ -496,9 +535,10 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
     has_audio = _has_audio(messages)
+    has_video = _has_video(messages)
 
-    # Route to VLM/Omni engine if images or audio are present
-    if has_images or has_audio:
+    # Route to VLM/Omni engine if images, audio, or video are present
+    if has_images or has_audio or has_video:
         json_schema = _parse_response_format(req.response_format, req.grammar)
         return await _handle_vlm_chat(req, messages, request, json_schema=json_schema)
 
@@ -595,97 +635,101 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     # Non-streaming with disconnect guard (oMLX pattern)
     async def _build_response():
-        if req.n > 1:
-            return await _build_multi_choice(
-                engine, req, messages, completion_id, is_batched, json_schema,
-            )
+        loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+        try:
+            if req.n > 1:
+                return await _build_multi_choice(
+                    engine, req, messages, completion_id, is_batched, json_schema,
+                )
 
-        if is_batched:
-            result = await engine.chat(
-                messages=messages,
-                max_tokens=req.max_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                min_p=req.min_p,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
-                stop=req.stop,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                json_schema=json_schema,
-                logprobs=req.logprobs,
-                spec_decode=req.spec_decode,
-                thinking_budget=req.thinking_budget,
-                stop_token_ids=req.stop_token_ids,
-                reasoning_effort=req.reasoning_effort,
-                xtc_probability=req.xtc_probability,
-                xtc_threshold=req.xtc_threshold,
-            )
-            raw_text = result.text
-            prompt_tok = result.prompt_tokens
-            completion_tok = result.completion_tokens
-            finish = result.finish_reason or "stop"
-            logprobs_data = _format_logprobs(
-                getattr(result, 'logprobs', None),
-                getattr(engine, '_tokenizer', None),
-                req.top_logprobs,
-            )
-        else:
-            state = await engine.generate(
-                prompt=messages,
-                max_tokens=req.max_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                min_p=req.min_p,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
-                stop=req.stop,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                stop_token_ids=req.stop_token_ids,
-            )
-            raw_text = state.generated_text
-            prompt_tok = state.prompt_token_count
-            completion_tok = state.completion_token_count
-            finish = state.finish_reason or "stop"
-            logprobs_data = _format_logprobs(
-                getattr(state, 'logprobs', None),
-                getattr(engine, '_tokenizer', None),
-                req.top_logprobs,
-            )
+            if is_batched:
+                result = await engine.chat(
+                    messages=messages,
+                    max_tokens=req.max_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    min_p=req.min_p,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=req.logit_bias,
+                    stop=req.stop,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    json_schema=json_schema,
+                    logprobs=req.logprobs,
+                    spec_decode=req.spec_decode,
+                    thinking_budget=req.thinking_budget,
+                    stop_token_ids=req.stop_token_ids,
+                    reasoning_effort=req.reasoning_effort,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                )
+                raw_text = result.text
+                prompt_tok = result.prompt_tokens
+                completion_tok = result.completion_tokens
+                finish = result.finish_reason or "stop"
+                logprobs_data = _format_logprobs(
+                    getattr(result, 'logprobs', None),
+                    getattr(engine, '_tokenizer', None),
+                    req.top_logprobs,
+                )
+            else:
+                state = await engine.generate(
+                    prompt=messages,
+                    max_tokens=req.max_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    min_p=req.min_p,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=req.logit_bias,
+                    stop=req.stop,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    stop_token_ids=req.stop_token_ids,
+                )
+                raw_text = state.generated_text
+                prompt_tok = state.prompt_token_count
+                completion_tok = state.completion_token_count
+                finish = state.finish_reason or "stop"
+                logprobs_data = _format_logprobs(
+                    getattr(state, 'logprobs', None),
+                    getattr(engine, '_tokenizer', None),
+                    req.top_logprobs,
+                )
 
-        # Extract thinking (oMLX pattern)
-        thinking_content, regular_content = extract_thinking(raw_text, req.model)
+            # Extract thinking (oMLX pattern)
+            thinking_content, regular_content = extract_thinking(raw_text, req.model)
 
-        # Extract tool calls (oMLX pattern)
-        tool_calls = []
-        cleaned_content = regular_content
-        if req.tools:
-            tool_calls = extract_tool_calls(regular_content)
-            if tool_calls:
-                cleaned_content = clean_tool_call_markup(regular_content)
+            # Extract tool calls (oMLX pattern)
+            tool_calls = []
+            cleaned_content = regular_content
+            if req.tools:
+                tool_calls = extract_tool_calls(regular_content)
+                if tool_calls:
+                    cleaned_content = clean_tool_call_markup(regular_content)
 
-        finish_reason = "tool_calls" if tool_calls else finish
+            finish_reason = "tool_calls" if tool_calls else finish
 
-        _record_metrics(prompt_tok, completion_tok)
+            _record_metrics(prompt_tok, completion_tok)
 
-        return JSONResponse(format_openai_non_stream(
-            completion_id=completion_id,
-            model=req.model,
-            content=cleaned_content.strip(),
-            prompt_tokens=prompt_tok,
-            completion_tokens=completion_tok,
-            finish_reason=finish_reason,
-            thinking_content=thinking_content if thinking_content else None,
-            tool_calls=tool_calls if tool_calls else None,
-            logprobs=logprobs_data,
-        ))
+            return JSONResponse(format_openai_non_stream(
+                completion_id=completion_id,
+                model=req.model,
+                content=cleaned_content.strip(),
+                prompt_tokens=prompt_tok,
+                completion_tokens=completion_tok,
+                finish_reason=finish_reason,
+                thinking_content=thinking_content if thinking_content else None,
+                tool_calls=tool_calls if tool_calls else None,
+                logprobs=logprobs_data,
+            ))
+        finally:
+            _release_lora_adapter(engine, loaded_adapter)
 
     return await run_with_disconnect_guard(request, _build_response())
 
@@ -834,6 +878,7 @@ async def _stream_vlm_response(
     json_schema: dict | str | None = None,
 ) -> AsyncIterator[bytes]:
     """SSE streaming for VLM engine (oMLX with_sse_keepalive pattern)."""
+    loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
 
     async def _token_source():
         first_chunk = True
@@ -865,11 +910,14 @@ async def _stream_vlm_response(
 
         yield format_openai_done()
 
-    async for event in with_sse_keepalive(
-        _token_source(),
-        http_request=request,
-    ):
-        yield event.encode("utf-8")
+    try:
+      async for event in with_sse_keepalive(
+          _token_source(),
+          http_request=request,
+      ):
+          yield event.encode("utf-8")
+    finally:
+      _release_lora_adapter(engine, loaded_adapter)
 
 
 async def _stream_response_multi(
@@ -997,11 +1045,15 @@ async def _stream_response_multi(
             )
         yield format_openai_done()
 
-    async for event in with_sse_keepalive(
-        _token_source(),
-        http_request=request,
-    ):
-        yield event.encode("utf-8")
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    try:
+      async for event in with_sse_keepalive(
+          _token_source(),
+          http_request=request,
+      ):
+          yield event.encode("utf-8")
+    finally:
+      _release_lora_adapter(engine, loaded_adapter)
     tracker.unregister(completion_id)
 
 
@@ -1052,6 +1104,7 @@ async def _stream_response(
     tool call detection — buffers tokens and emits tool_calls in
     OpenAI streaming delta format when detected.
     """
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     use_tool_streamer = req.tools is not None and len(req.tools) > 0
     tool_streamer = ToolCallStreamer() if use_tool_streamer else None
     tool_call_index = 0  # Track index for streaming tool_calls delta
@@ -1248,8 +1301,11 @@ async def _stream_response(
 
         yield format_openai_done()
 
-    async for event in with_sse_keepalive(
-        _token_source(),
-        http_request=request,
-    ):
-        yield event.encode("utf-8")
+    try:
+      async for event in with_sse_keepalive(
+          _token_source(),
+          http_request=request,
+      ):
+          yield event.encode("utf-8")
+    finally:
+      _release_lora_adapter(engine, loaded_adapter)

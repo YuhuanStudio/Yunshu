@@ -148,3 +148,48 @@ class TestChatLogprobs:
             "logprobs": "not_a_bool",
         })
         assert resp.status_code == 422
+
+
+class TestChatLoRAAdapter:
+    """Test LoRA adapter passthrough in chat completions."""
+
+    def test_chat_accepts_lora_adapter_field(self):
+        """lora_adapter field should be accepted without 422."""
+        client = TestClient(_client().app, raise_server_exceptions=False)
+        resp = client.post("/v1/chat/completions", json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "lora_adapter": "my-lora-v1",
+        })
+        # Engine has no real model — 500 is expected (schema accepted)
+        assert resp.status_code == 500
+
+    def test_chat_accepts_null_lora_adapter(self):
+        client = TestClient(_client().app, raise_server_exceptions=False)
+        resp = client.post("/v1/chat/completions", json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "lora_adapter": None,
+        })
+        assert resp.status_code == 500
+
+    def test_chat_without_lora_adapter_still_works(self):
+        """Backward compatibility: requests without lora_adapter work."""
+        client = TestClient(_client().app, raise_server_exceptions=False)
+        resp = client.post("/v1/chat/completions", json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        assert resp.status_code == 500
+
+    def test_chat_streaming_accepts_lora_adapter(self):
+        """Streaming path also accepts lora_adapter."""
+        client = TestClient(_client().app, raise_server_exceptions=False)
+        resp = client.post("/v1/chat/completions", json={
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "lora_adapter": "test-adapter",
+            "stream": True,
+        })
+        # Streaming may 500 due to no real engine, but not 422
+        assert resp.status_code in (200, 500)

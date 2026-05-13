@@ -25,6 +25,7 @@ class ImageGenerateRequest(BaseModel):
     response_format: str = "b64_json"
     num_inference_steps: int = 4
     seed: Optional[int] = None
+    preview_interval: int = 0  # Decode & emit intermediate preview every N steps (0=off)
     # Note: guidance_scale and negative_prompt removed — Turbo models
     # don't support classifier-free guidance. These params were accepted
     # but silently ignored by the engine.
@@ -142,10 +143,14 @@ async def stream_image_generation(req: ImageGenerateRequest):
             height=int(req.size.split("x")[1]) if "x" in req.size else 1024,
             num_inference_steps=req.num_inference_steps,
             seed=req.seed,
+            preview_interval=req.preview_interval,
         ):
             if chunk.get("is_final") and chunk.get("image"):
                 b64 = base64.b64encode(chunk["image"]).decode("ascii")
                 yield f"data: {json.dumps({'step': chunk['step'], 'progress': 1.0, 'image': b64, 'is_final': True})}\n\n"
+            elif not chunk.get("is_final") and chunk.get("image"):
+                b64 = base64.b64encode(chunk["image"]).decode("ascii")
+                yield f"data: {json.dumps({'step': chunk['step'], 'total_steps': chunk['total_steps'], 'progress': chunk['progress'], 'image': b64, 'is_final': False, 'is_preview': True})}\n\n"
             elif not chunk.get("is_final"):
                 yield f"data: {json.dumps({'step': chunk['step'], 'total_steps': chunk['total_steps'], 'progress': chunk['progress'], 'is_final': False})}\n\n"
 

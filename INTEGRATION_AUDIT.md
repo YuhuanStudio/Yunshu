@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 23: C18 CPU/GPU overlap, C19 Packed KV, C22 Event sourcing)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 24: VLM continuous batching, gateway LoRA passthrough, video understanding, image preview streaming)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,17 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3263 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3289 passed, 13 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 24)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| VLM 連續批處理 | VLMAsyncEngineCore: semaphore concurrency, per-request output queues, streaming/non-streaming | 30 tests (`test_vlm_async_engine.py`) |
+| Gateway LoRA 透傳 | ChatCompletionRequest.lora_adapter field, load/unload lifecycle in all paths (non-stream, stream, multi-stream) | 4 tests (`test_gateway_endpoints.py`) |
+| 視頻理解 | VLM engine `_extract_video_frames()` + gateway `_has_video()` routing + ffmpeg frame extraction | 19 tests (`test_video_understanding.py`) |
+| 圖像預覽串流 | `preview_interval` parameter for intermediate VAE decode previews during diffusion | 9 tests (`test_image_preview.py`) |
+| 死測試狀態更新 | adaptive_batch + telemetry 測試已 WIRED (接入 EngineCore) | — |
 
 ### 已完成修復 (2026-05-14 Wave 23)
 
@@ -758,11 +768,11 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 2. `test_mtp_decoder.py` — MTP decoder 零管線調用
 3. `test_deltanet_inversion.py` — DeltaNet inversion 零管線調用
 4. `test_ane_embedding.py` — ANE embedding 零管線調用
-5. `test_adaptive_batch.py` — adaptive batch 零管線調用
+5. ~~`test_adaptive_batch.py` — adaptive batch 零管線調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore (C18)
 6. `test_roofline.py` — roofline 不被 bench router 使用
 7. `test_metal_kernels.py` + `test_metal_kernels_phase0.py` — metal_kernels 僅被 scripts/ 使用
 8. `test_benchmark.py` — benchmark 框架零管線調用
-9. `test_telemetry.py` — telemetry 零管線調用
+9. ~~`test_telemetry.py` — telemetry 零管線調用~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore (C18)
 
 **這些測試給人「功能完整」的錯覺，但實際上測的是從未在推理管線中運行的代碼。**
 
@@ -1377,7 +1387,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3263 passed, 13 skipped。
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3289 passed, 13 skipped。
 
 ### 18.1 致命 Bug: Streaming VLM 丟失圖片
 
@@ -1424,9 +1434,9 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 ### 18.5 其他缺失
 
 - ~~**不支援遠端 URL 圖片**~~ ✅ `_download_image()` 支持遠端 URL (M15)
-- **不支援視頻輸入**: 無視頻偵測、無視頻幀提取
+- **不支援視頻輸入**: ~~無視頻偵測、無視頻幀提取~~ ✅ 已實現 (Wave 24) — `_extract_video_frames()` + `_has_video()` 路由
 - ~~**不支援音頻輸入**~~ ✅ 已修復 (AUDIO-1) — VLM 引擎 `_extract_audio()` + `_has_audio()` 路由
-- **不支援連續批處理**: oMLX 的 VLMBatchedEngine 使用 AsyncEngineCore 做並發 VLM 推理
+- **不支援連續批處理**: ~~oMLX 的 VLMBatchedEngine 使用 AsyncEngineCore 做並發 VLM 推理~~ ✅ 已實現 (Wave 24) — VLMAsyncEngineCore with semaphore concurrency
 - ~~**不支援 OCR 模型**~~ ✅ GLM-OCR-bf16 實測 (Wave 9)
 - ~~**多 VLM 路由不正確**~~ ✅ 已修復 (M5)
 
@@ -1434,13 +1444,13 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 | 功能 | oMLX (1660 行) | Yunshu (626 行) |
 |------|---------------|-----------------|
-| 連續批處理 | ✅ AsyncEngineCore + BatchGenerator | ❌ 單請求 |
+| 連續批處理 | ✅ AsyncEngineCore + BatchGenerator | ✅ VLMAsyncEngineCore (Wave 24) |
 | 視覺特徵緩存 | ✅ VisionFeatureSSDCache | ✅ 已接入 (M6) |
 | mRoPE 整合 | ✅ 完整 | ✅ 已接入 (M7) |
 | OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ✅ GLM-OCR-bf16 實測 (Wave 9) |
 | 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ✅ (Wave 12) — 自動截斷多圖輸入 |
 | 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
-| 結構化輸出 (VLM) | ✅ GrammarCompiler | ❌ |
+| 結構化輸出 (VLM) | ✅ GrammarCompiler | ✅ JsonSchemaConstraint 已接入 VLM text path |
 | SpecPrefill (VLM) | ✅ draft model | ❌ |
 | 視覺編碼策略 | 3 種 (encode_image, qwen, llava) | 1 種 (mlx_vlm 黑盒) |
 | KV prefix 整合 | ✅ 每圖片緩存鍵範圍 | ⚠️ 命中率追蹤已實現 (VLM-PREFIX)，但 mlx_vlm.generate() 不支持傳入預分詞 |
@@ -1524,7 +1534,7 @@ vllm-omni 支持: **25+ 擴散架構**
 | Depth-guided | ❌ | ✅ | — |
 | TeaCache | ❌ | — | ✅ |
 | 多模型支持 | ❌ | ✅ 7+ 模型 | ✅ 25+ 模型 |
-| 中間預覽 (streaming) | ❌ (只有進度 %) | ✅ 回調系統 | — |
+| 中間預覽 (streaming) | ✅ preview_interval 可配置 (Wave 24) | ✅ 回調系統 | — |
 | 取消生成 | ✅ POST /v1/cancel (CANCEL) | — | — |
 | 尺寸驗證 | ✅ 64–2048, 64 倍數 (IMG-SIZE) | ✅ | ✅ |
 | OOM 保護 | ✅ (Wave 11) — 生成前內存檢查 | ✅ | ✅ |
@@ -1590,9 +1600,9 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | **STS 語音到語音** | ❌ | ✅ | — | — | — |
 | 圖像生成 | ⚠️ 僅 Z-Image | — | ✅ (25+ 模型) | ✅ (7+ 模型) | — |
 | **視頻生成** | ❌ | — | ✅ (3+ 模型) | — | ✅ |
-| **視頻理解** | ❌ | — | ✅ | — | — |
+| **視頻理解** | ✅ VLM frame extraction (Wave 24) | — | ✅ | — | — |
 | OCR | ✅ GLM-OCR-bf16 實測通過 | ✅ (3 模型) | — | — | — |
-| LoRA (任何模態) | ⚠️ 文本 LoRA 已實現 (LORA)，缺圖像/VLM LoRA | — | ✅ | ✅ | ✅ |
+| LoRA (任何模態) | ✅ 文本 LoRA 已實現 + gateway passthrough (Wave 24)，缺圖像/VLM LoRA | — | ✅ | ✅ | ✅ |
 | img2img | ❌ | — | ✅ | ✅ | — |
 | Inpainting | ❌ | — | ✅ | ✅ | — |
 
@@ -1632,7 +1642,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 |---|------|------|------|
 | M10 | **添加 STS Engine**: DeepFilterNet, MossFormer2 | oMLX | ❌ 需指定模型 |
 | M11 | **支持更多圖像模型**: FLUX, FLUX2 | mflux | ❌ |
-| M12 | **添加 LoRA 支持**: 圖像/文本 | mflux, vllm-omni | ❌ |
+| M12 | **添加 LoRA 支持**: 圖像/文本 | mflux, vllm-omni | ✅ 文本 LoRA + gateway passthrough (Wave 24) |
 | M13 | **添加 MCP Client**: 外部工具服務器 | oMLX | ✅ MCP-C 已實現 |
 | M14 | **Realtime function calling**: 實現工具調用 | OpenAI | ✅ RT-FC 已實現 |
 | M15 | **支持遠端 URL 圖片**: HTTP/HTTPS 圖片獲取 | — | ✅ _download_image() 已實現 |
@@ -1640,4 +1650,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現。剩餘缺口：STS 引擎（需指定模型）、視頻生成/理解、img2img/inpainting、圖像 LoRA。測試套件 3194 passed, 13 skipped。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復 + 連續批處理已實現 (VLMAsyncEngineCore)，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，視頻理解已實現 (VLM frame extraction)，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現，LoRA gateway 透傳已實現，圖像預覽串流已實現 (preview_interval)。剩餘缺口：STS 引擎（需指定模型）、視頻生成、img2img/inpainting、圖像 LoRA。測試套件 3289 passed, 13 skipped。

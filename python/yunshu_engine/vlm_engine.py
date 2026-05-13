@@ -257,6 +257,8 @@ class VLMEngine:
         self._active_count += 1
         image_paths = await self._extract_images(messages)
         audio_paths = await self._extract_audio(messages)
+        video_frames = await self._extract_video_frames(messages)
+        image_paths.extend(video_frames)
         self._enable_thinking = enable_thinking
 
         def _generate_sync():
@@ -344,6 +346,8 @@ class VLMEngine:
         # Extract images for VLM vision path (same as non-streaming)
         image_paths = await self._extract_images(messages)
         audio_paths = await self._extract_audio(messages)
+        video_frames = await self._extract_video_frames(messages)
+        image_paths.extend(video_frames)
         has_images = bool(image_paths) and self._has_vision and self._is_vlm
         has_audio = bool(audio_paths) and self._is_vlm
 
@@ -1106,6 +1110,118 @@ class VLMEngine:
                 except OSError:
                     pass
             self._temp_files.clear()
+
+    # ── Video Frame Extraction ──
+
+    async def _extract_video_frames(
+        self,
+        messages: list[dict],
+        fps: float = 1.0,
+        max_frames: int = 8,
+    ) -> list[str]:
+        """Extract video frames from message content parts and return image paths.
+
+        Supports:
+        - {"type": "video_url", "video_url": {"url": "file://..."}}  (local file)
+        - {"type": "video_url", "video_url": {"url": "data:video/..."}}  (base64)
+        - {"type": "video_file", "video_file": {"file_id": "/path/to/video.mp4"}}
+
+        Frames are extracted using ffmpeg at the given fps, up to max_frames.
+        """
+        video_paths = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "video_url":
+                        url = part.get("video_url", {}).get("url", "")
+                        if url.startswith("data:video"):
+                            header, data = url.split(",", 1)
+                            ext = header.split("/")[1].split(";")[0]
+                            ext = ext if ext in ("mp4", "webm", "avi", "mov", "mkv") else "mp4"
+                            path = await self._save_base64_file(data, ext)
+                            video_paths.append(path)
+                        elif url.startswith("file://"):
+                            path = url[7:]
+                            if os.path.exists(path):
+                                video_paths.append(path)
+                        elif os.path.exists(url):
+                            video_paths.append(url)
+                    elif part.get("type") == "video_file":
+                        fid = part.get("video_file", {}).get("file_id", "")
+                        if fid and os.path.exists(fid):
+                            video_paths.append(fid)
+
+        if not video_paths:
+            return []
+
+        frame_paths = []
+        for vp in video_paths:
+            frames = await self._extract_frames_from_file(vp, fps=fps, max_frames=max_frames)
+            frame_paths.extend(frames)
+
+        return frame_paths[:max_frames]
+
+    async def _extract_frames_from_file(
+        self,
+        video_path: str,
+        fps: float = 1.0,
+        max_frames: int = 8,
+    ) -> list[str]:
+        """Extract frames from a video file using ffmpeg."""
+        import subprocess
+
+        tmpdir = tempfile.mkdtemp(prefix="yunshu_video_")
+        output_pattern = os.path.join(tmpdir, "frame_%04d.jpg")
+
+        cmd = [
+            "ffmpeg", "-i", video_path,
+            "-vf", f"fps={fps}",
+            "-frames:v", str(max_frames),
+            "-q:v", "2",
+            "-y", output_pattern,
+        ]
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, timeout=60, check=True),
+            )
+        except FileNotFoundError:
+            logger.warning("ffmpeg not available — cannot extract video frames")
+            return []
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"ffmpeg failed: {e.stderr.decode()[:200] if e.stderr else 'unknown'}")
+            return []
+        except Exception as e:
+            logger.warning(f"Video frame extraction failed: {e}")
+            return []
+
+        frames = sorted(
+            os.path.join(tmpdir, f) for f in os.listdir(tmpdir)
+            if f.startswith("frame_") and f.endswith(".jpg")
+        )
+
+        if self._temp_files is None:
+            self._temp_files = []
+        self._temp_files.append(tmpdir)
+        for f in frames:
+            self._temp_files.append(f)
+
+        return frames
+
+    async def _save_base64_file(self, data: str, ext: str = "mp4") -> str:
+        """Save base64-encoded data to a temp file."""
+        tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        tmp.write(base64.b64decode(data))
+        tmp.close()
+        if self._temp_files is None:
+            self._temp_files = []
+        self._temp_files.append(tmp.name)
+        return tmp.name
 
     # ── Helpers ──
 
