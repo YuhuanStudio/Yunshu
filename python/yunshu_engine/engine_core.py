@@ -361,6 +361,8 @@ class EngineCore:
             logit_bias=logit_bias,
             stop=stop or [],
             json_schema=json_schema,
+            enable_thinking=enable_thinking,
+            thinking_budget=kwargs.get('thinking_budget'),
         )
 
         request = Request(
@@ -369,6 +371,7 @@ class EngineCore:
             sampling_params=sampling_params,
             prompt_token_ids=token_ids,
             num_prompt_tokens=num_prompt_tokens,
+            enable_thinking=enable_thinking,
         )
 
         # Set up per-request output management (oMLX EngineCore pattern)

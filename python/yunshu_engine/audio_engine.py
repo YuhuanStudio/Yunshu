@@ -305,16 +305,28 @@ class TTSEngine:
 
         def _stream_sync():
             try:
-                results = model.generate(**gen_kwargs)
-                for result in results:
-                    audio = np.array(result.audio)
-                    wav = _audio_to_wav_bytes(audio, int(sample_rate))
-                    segment_text = getattr(result, "text", "")
-                    queue.put_nowait({
-                        "audio": wav,
-                        "text": segment_text,
-                        "is_final": False,
-                    })
+                # Use native stream_generate when available (chatterbox_turbo, pocket_tts)
+                if hasattr(model, 'stream_generate') and callable(model.stream_generate):
+                    for result in model.stream_generate(**gen_kwargs):
+                        audio = np.array(result.audio)
+                        wav = _audio_to_wav_bytes(audio, int(sample_rate))
+                        segment_text = getattr(result, "text", "")
+                        queue.put_nowait({
+                            "audio": wav,
+                            "text": segment_text,
+                            "is_final": False,
+                        })
+                else:
+                    results = model.generate(**gen_kwargs)
+                    for result in results:
+                        audio = np.array(result.audio)
+                        wav = _audio_to_wav_bytes(audio, int(sample_rate))
+                        segment_text = getattr(result, "text", "")
+                        queue.put_nowait({
+                            "audio": wav,
+                            "text": segment_text,
+                            "is_final": False,
+                        })
                 queue.put_nowait({"audio": b"", "text": "", "is_final": True})
             except Exception as e:
                 logger.error(f"TTS stream error: {e}")

@@ -71,6 +71,7 @@ class SamplingParams:
     priority: int = 0
     thinking_budget: int | None = None
     reasoning_effort: str | None = None
+    enable_thinking: bool | None = None
     # Structured output (JSON schema constrained generation)
     json_schema: dict | str | None = None
 

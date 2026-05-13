@@ -569,7 +569,7 @@ class Scheduler:
                     })
                     if config is not None:
                         self._thinking_processors[req.request_id] = ThinkingBudgetProcessor(config)
-                elif getattr(sp, 'enable_thinking', False):
+                elif getattr(sp, 'enable_thinking', False) or getattr(req, 'enable_thinking', False):
                     # Auto-detected thinking mode with default budget
                     from .thinking_budget import (
                         ThinkingBudgetProcessor, ThinkingBudgetConfig,

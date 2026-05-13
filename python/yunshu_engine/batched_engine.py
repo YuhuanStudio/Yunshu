@@ -914,6 +914,7 @@ class BatchedEngine:
             repetition_penalty=repetition_penalty, frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty, logit_bias=logit_bias,
             stop=stop, seed=seed, json_schema=json_schema,
+            enable_thinking=enable_thinking,
         )
 
         finished_normally = False

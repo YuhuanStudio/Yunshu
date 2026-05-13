@@ -221,6 +221,9 @@
 | OCR-EP | `POST /v1/ocr` 端點 — 圖片上傳 + task 參數，接入 ModelManager | §20.3 | ✅ 已實現 |
 | VIDEO-ASR | 視頻音頻提取 — ffmpeg 提取音軌 → ASR 轉寫，支持 mp4/mkv/avi/mov/wmv/ts/mts | §19.6 | ✅ 已實現 |
 | MAX-MODEL | ModelManager max_models 限制 — LRU 淘汰策略，`loaded_count` 屬性 | §4.2 | ✅ 已實現 |
+| THINK | enable_thinking 傳遞完整 — SamplingParams + Request + engine_core.add_request + scheduler | §4.4 | ✅ 已實現 |
+| MCP-PAR | MCP 並行工具執行 — call_tools_parallel() 使用 asyncio.gather | §21.2 | ✅ 已實現 |
+| TTS-NATIVE | TTS 原生串流 — 優先使用 model.stream_generate() (chatterbox_turbo, pocket_tts) | §19.6 | ✅ 已實現 |
 
 > **Wave 9 測試**: 2673 passed, 0 failed。OCR 引擎使用 GLM-OCR-bf16 模型完成實機驗證。
 
