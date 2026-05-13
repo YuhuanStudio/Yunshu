@@ -1513,11 +1513,12 @@ class BatchedEngine:
             from .ngram_proposer import NgramProposer, NgramConfig
             max_n = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
             k = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
-            self._ngram_proposer = NgramProposer(NgramConfig(max_n=max_n, k=k))
+            mode = os.environ.get("YUNSHU_NGRAM_MODE", "lps").strip()
+            self._ngram_proposer = NgramProposer(NgramConfig(max_n=max_n, k=k, mode=mode))
             # Also create unified SpecProposer wrapper
             from .spec_proposer import NgramSpecProposer
-            self._spec_proposer = NgramSpecProposer(NgramConfig(max_n=max_n, k=k))
-            logger.info(f"N-gram proposer initialized: max_n={max_n}, k={k}")
+            self._spec_proposer = NgramSpecProposer(NgramConfig(max_n=max_n, k=k, mode=mode))
+            logger.info(f"N-gram proposer initialized: max_n={max_n}, k={k}, mode={mode}")
 
         # Adaptive spec controller (requires N-gram proposer active)
         if self._ngram_proposer is not None:
@@ -2170,6 +2171,8 @@ class BatchedEngine:
             stats["thinking_segment_store"] = self._thinking_store.get_stats()
         if self._adaptive_spec is not None:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
+        if self._ngram_proposer is not None:
+            stats["ngram"] = {**self._ngram_stats, **self._ngram_proposer.get_stats()}
         return stats
 
     def get_kv_cache_stats(self) -> dict:

@@ -443,3 +443,94 @@ class TestRequestPreemption:
         sched.running.pop("repeat")
         sched._preempt_request(req)
         assert req.num_preemptions == 2
+
+    def test_block_level_preemption_preserves_cached_prefix(self):
+        """Block-level preemption preserves cached prefix tokens (vLLM pattern).
+
+        When a request is preempted and has prefix tokens cached in the
+        KV prefix cache, num_computed_tokens should reflect the cached
+        prefix rather than resetting to 0. This means re-scheduling only
+        needs to prefill the uncached tail.
+        """
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        # Mock prefix cache that returns 64 matched tokens
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = (MagicMock(), [], 64)
+        sched._prefix_cache = mock_cache
+
+        req = Request(request_id="block-preempt", prompt="test")
+        req.status = RequestStatus.RUNNING
+        req.batch_uid = 42
+        req.prompt_token_ids = list(range(128))
+        req.num_computed_tokens = 128
+
+        sched.running["block-preempt"] = req
+        sched._uid_to_req[42] = "block-preempt"
+
+        sched.running.pop("block-preempt")
+        sched._preempt_request(req)
+
+        assert req.status == RequestStatus.PREEMPTED
+        assert req.num_computed_tokens == 64  # Preserved from prefix cache
+        assert req.num_preemptions == 1
+
+    def test_preempt_without_prefix_cache_resets_to_zero(self):
+        """Without prefix cache, preemption resets num_computed_tokens to 0."""
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+        # No _prefix_cache set (None)
+
+        req = Request(request_id="no-cache", prompt="test")
+        req.status = RequestStatus.RUNNING
+        req.batch_uid = 42
+        req.prompt_token_ids = list(range(128))
+        req.num_computed_tokens = 128
+
+        sched.running["no-cache"] = req
+        sched._uid_to_req[42] = "no-cache"
+
+        sched.running.pop("no-cache")
+        sched._preempt_request(req)
+
+        assert req.num_computed_tokens == 0  # No cache → reset to 0
+
+    def test_preempt_preserves_min_of_cache_and_computed(self):
+        """num_computed_tokens is min(cache_hit, already_computed)."""
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        config = SchedulerConfig(policy=SchedulingPolicy.PRIORITY)
+        sched = Scheduler(model, tokenizer, config)
+        sched._batch_gen = MagicMock()
+
+        # Cache claims 200 matched, but request only computed 100
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = (MagicMock(), [], 200)
+        sched._prefix_cache = mock_cache
+
+        req = Request(request_id="partial", prompt="test")
+        req.status = RequestStatus.RUNNING
+        req.batch_uid = 42
+        req.prompt_token_ids = list(range(256))
+        req.num_computed_tokens = 100
+
+        sched.running["partial"] = req
+        sched._uid_to_req[42] = "partial"
+
+        sched.running.pop("partial")
+        sched._preempt_request(req)
+
+        assert req.num_computed_tokens == 100  # min(200, 100) = 100

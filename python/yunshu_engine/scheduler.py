@@ -740,15 +740,16 @@ class Scheduler:
     def _preempt_request(self, request: Request) -> None:
         """Preempt a running request and return it to the waiting queue.
 
-        Following vLLM's _preempt_request pattern:
+        vLLM block-level preemption pattern:
         1. Free KV resources (remove from BatchGenerator)
-        2. Reset computed tokens
-        3. Set status to PREEMPTED
-        4. Increment preemption counter
+        2. Preserve cached prefix tokens (RadixTree maintains these)
+        3. Only reset computed tokens beyond the cached prefix
+        4. Set status to PREEMPTED
         5. Put back at front of waiting queue for re-scheduling
 
-        The request will be re-inserted into BatchGenerator on the next
-        scheduler step, effectively re-prefilling from scratch.
+        When the request is re-scheduled, the prefix cache will be checked
+        and only the uncached tail needs re-prefilling, significantly
+        reducing re-prefill overhead compared to whole-request preemption.
         """
         uid = request.batch_uid
         if uid is not None and self._batch_gen is not None:
@@ -764,17 +765,31 @@ class Scheduler:
         self._pending_prefill.pop(request.request_id, None)
         self._cleanup_spec_state(request.request_id)
 
+        # Block-level preemption: check how many prefix tokens are cached
+        cached_prefix = 0
+        if self._prefix_cache is not None and request.prompt_token_ids:
+            try:
+                import mlx.core as mx
+                ids_arr = mx.array(request.prompt_token_ids)
+                _, _, matched = self._prefix_cache.get(ids_arr)
+                if matched > 0:
+                    cached_prefix = matched
+            except Exception:
+                pass
+
         request.status = RequestStatus.PREEMPTED
-        request.num_computed_tokens = 0
+        # Preserve cached prefix tokens — only reset beyond cache boundary
+        request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens)
         request.batch_uid = None
         request.num_preemptions += 1
 
         self.waiting.push_front(request, priority=request.sampling_params.priority)
 
+        prefix_info = f", cached_prefix={cached_prefix}" if cached_prefix > 0 else ""
         logger.info(
             f"Preempted request {request.request_id} "
             f"(preemptions={request.num_preemptions}, "
-            f"output_tokens={request.num_output_tokens})"
+            f"output_tokens={request.num_output_tokens}{prefix_info})"
         )
 
     def _retract_decode_requests(self, count: int) -> int:

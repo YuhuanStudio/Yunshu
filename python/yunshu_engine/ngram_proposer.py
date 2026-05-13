@@ -1,30 +1,30 @@
 """Yunshu N-gram Speculative Decoding — model-free draft token proposal.
 
-Studied from vLLM's NgramProposer, adapted for pure Python (no numba):
-- Finds longest N-gram match in the prompt/output history
-- Proposes K tokens following the match as draft tokens
-- No draft model required — pure CPU pattern matching
-- Uses KMP (Knuth-Morris-Pratt) LPS array for O(n) matching
+Two proposer modes:
+1. **LPS mode** (default): KMP-based O(n) matching via LPS array (vLLM pattern)
+2. **HashPool mode**: O(1) lookup via hash map of ngram→continuation (llama.cpp pattern)
 
-Algorithm:
-  1. Reverse the token sequence
-  2. Build LPS (longest proper prefix which is also suffix) array
-  3. Find longest match of suffix in [min_n, max_n] range
-  4. Extract K tokens following the match as draft proposals
+The HashPool mode (ngram-mod) is preferred for code/reasoning tasks where
+repeated patterns are common across different positions. It maintains a
+dict mapping (ngram tuple) → list of continuation tokens, enabling O(1)
+lookup for the current suffix ngram.
 
 Integration:
-  - Scheduler calls propose() before each decode step
+  - BatchedEngine fast path calls propose() before each decode step
+  - Scheduler spec decode loop calls propose() per active request
   - Draft tokens are verified by the target model
   - Accepted tokens are kept; rejected tokens trigger resample
 
 References:
   - vLLM NgramProposer (vllm/v1/spec_decode/ngram_proposer.py)
+  - llama.cpp ngram-mod (ggml/src/ggml-common/speculative.h)
   - "Fast Inference from Transformers via Autoregressive Diffusion"
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,10 @@ class NgramConfig:
     k: int = 5
     # Maximum model context length
     max_model_len: int = 32768
+    # Proposer mode: "lps" (KMP) or "hashpool" (O(1) dict lookup)
+    mode: str = "lps"
+    # HashPool: max number of ngram entries before eviction
+    hashpool_capacity: int = 1 << 17  # 131072 entries (~16MB for int keys)
 
 
 def _find_longest_ngram_and_propose(
@@ -111,11 +115,98 @@ def _find_longest_ngram_and_propose(
     return token_ids[start_position:end]
 
 
-class NgramProposer:
-    """N-gram based speculative decoding proposer (vLLM pattern).
+class NgramHashPool:
+    """Hash-based ngram pool for O(1) draft token lookup (llama.cpp pattern).
 
-    Proposes draft tokens by finding repeated N-gram patterns in
-    the prompt + output history. No draft model required.
+    Maintains a dict mapping ngram tuples to continuation token lists.
+    For each position in the sequence, stores ngrams of lengths [min_n, max_n]
+    and their continuations (up to k tokens following).
+
+    When proposing, looks up the current suffix ngram in the pool and returns
+    the stored continuation. O(1) per proposal regardless of context length.
+
+    The pool has a capacity limit with LRU-like eviction to bound memory.
+    """
+
+    def __init__(self, config: NgramConfig) -> None:
+        self.config = config
+        self._pool: dict[tuple[int, ...], list[int]] = {}
+        self._capacity = config.hashpool_capacity
+        self._total_inserts = 0
+        self._total_evictions = 0
+
+    def update(self, token_ids: list[int]) -> None:
+        """Index all ngrams from the token sequence into the pool.
+
+        Only indexes new tokens — call with the full sequence each time;
+        repeated entries are harmless (dict overwrites).
+        """
+        min_n = self.config.min_n
+        max_n = self.config.max_n
+        k = self.config.k
+        total = len(token_ids)
+
+        if total < min_n + 1:
+            return
+
+        for n in range(min_n, max_n + 1):
+            for i in range(total - n):
+                ngram = tuple(token_ids[i:i + n])
+                cont_start = i + n
+                cont_end = min(cont_start + k, total)
+                if cont_start < total:
+                    self._pool[ngram] = token_ids[cont_start:cont_end]
+                    self._total_inserts += 1
+
+        # Evict oldest entries if over capacity
+        if len(self._pool) > self._capacity:
+            excess = len(self._pool) - self._capacity
+            keys_to_evict = list(self._pool.keys())[:excess]
+            for key in keys_to_evict:
+                del self._pool[key]
+            self._total_evictions += excess
+
+    def propose(self, token_ids: list[int]) -> list[int]:
+        """Propose draft tokens by looking up current suffix ngrams.
+
+        Tries ngrams from max_n down to min_n, returns the longest match's
+        continuation. O(1) per lookup.
+        """
+        min_n = self.config.min_n
+        max_n = self.config.max_n
+        total = len(token_ids)
+
+        if total < min_n:
+            return []
+
+        for n in range(min(max_n, total), min_n - 1, -1):
+            suffix = tuple(token_ids[-n:])
+            continuation = self._pool.get(suffix)
+            if continuation:
+                k = min(self.config.k, self.config.max_model_len - total)
+                return continuation[:max(k, 0)] if k > 0 else []
+
+        return []
+
+    def clear(self) -> None:
+        """Clear the pool."""
+        self._pool.clear()
+
+    def get_stats(self) -> dict:
+        return {
+            "pool_size": len(self._pool),
+            "capacity": self._capacity,
+            "total_inserts": self._total_inserts,
+            "total_evictions": self._total_evictions,
+        }
+
+
+class NgramProposer:
+    """N-gram based speculative decoding proposer.
+
+    Two modes:
+    - "lps": KMP-based O(n) matching (vLLM pattern, good for short contexts)
+    - "hashpool": O(1) hash lookup (llama.cpp pattern, good for long contexts)
 
     Usage:
         proposer = NgramProposer(NgramConfig(min_n=1, max_n=5, k=5))
@@ -124,6 +215,9 @@ class NgramProposer:
 
     def __init__(self, config: NgramConfig) -> None:
         self.config = config
+        self._hashpool: Optional[NgramHashPool] = None
+        if config.mode == "hashpool":
+            self._hashpool = NgramHashPool(config)
 
     def propose(self, token_ids: list[int]) -> list[int]:
         """Propose draft tokens for a single request.
@@ -134,6 +228,13 @@ class NgramProposer:
         Returns:
             List of proposed draft token IDs.
         """
+        if self._hashpool is not None:
+            self._hashpool.update(token_ids)
+            result = self._hashpool.propose(token_ids)
+            if result:
+                return result
+            # Fall through to LPS if hashpool finds nothing
+
         return _find_longest_ngram_and_propose(
             token_ids=token_ids,
             min_n=self.config.min_n,
@@ -143,15 +244,10 @@ class NgramProposer:
         )
 
     def batch_propose(self, batch_token_ids: list[list[int]]) -> list[list[int]]:
-        """Propose draft tokens for a batch of requests.
+        """Propose draft tokens for a batch of requests."""
+        return [self.propose(token_ids) for token_ids in batch_token_ids]
 
-        Args:
-            batch_token_ids: List of token ID lists, one per request.
-
-        Returns:
-            List of draft token lists (empty list if no proposal).
-        """
-        results = []
-        for token_ids in batch_token_ids:
-            results.append(self.propose(token_ids))
-        return results
+    def get_stats(self) -> dict:
+        if self._hashpool is not None:
+            return {"mode": "hashpool", **self._hashpool.get_stats()}
+        return {"mode": "lps"}
