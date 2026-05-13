@@ -269,11 +269,20 @@ async def get_model_settings(model_id: str, _=Depends(require_permission("can_vi
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model not registered: {model_id}")
 
-    if entry.settings is None:
+    settings_data = {}
+    if entry.settings is not None:
+        settings_data = entry.settings.to_dict()
+    else:
         from yunshu_engine.model_settings import ModelSettings
-        return {"model_id": model_id, "settings": ModelSettings().to_dict()}
+        settings_data = ModelSettings().to_dict()
 
-    return {"model_id": model_id, "settings": entry.settings.to_dict()}
+    return {
+        "model_id": model_id,
+        "model_type": getattr(entry, 'model_type', 'unknown'),
+        "loaded": entry.is_loaded,
+        "pinned": getattr(entry, 'is_pinned', False),
+        "settings": settings_data,
+    }
 
 
 @router.patch("/models/{model_id}/settings")
@@ -594,34 +603,6 @@ async def get_memory_guard_stats(_=Depends(require_permission("can_view_admin"))
 # ---------------------------------------------------------------------------
 # WebUI-required endpoints (frontend calls these)
 # ---------------------------------------------------------------------------
-
-@router.get("/models/{model_id}/settings")
-async def get_model_settings(model_id: str, _=Depends(require_permission("can_view_admin"))):
-    """Return per-model settings (WebUI Admin models tab)."""
-    from ..engine import get_model_manager
-
-    manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=404, detail="Model manager not initialized")
-
-    for entry in manager.list_entries():
-        if entry.model_id == model_id:
-            return {
-                "model_id": model_id,
-                "model_type": getattr(entry, 'model_type', 'unknown'),
-                "loaded": entry.is_loaded,
-                "pinned": getattr(entry, 'is_pinned', False),
-                "settings": {},
-            }
-    raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
-
-
-@router.put("/models/{model_id}/settings")
-async def update_model_settings(model_id: str, request: Request, _=Depends(require_permission("can_load_models"))):
-    """Update per-model settings (WebUI Admin models tab)."""
-    body = await request.json()
-    # Placeholder — per-model settings not yet implemented
-    return {"model_id": model_id, "updated": True, "settings": body}
 
 
 @router.get("/logs")
