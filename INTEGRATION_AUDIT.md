@@ -456,7 +456,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | # | 功能 | 所在模塊 | 為何不觸發 |
 |---|------|----------|-----------|
 | 1 | **猜測解碼 (EAGLE-3)** | batched_engine.py | `_spec_decoder` 永遠是 `None` — 沒有加載 draft model |
-| 2 | **連續批處理管線** | engine_core.py | ⚠️ EngineCore 已自動啟動 (EC-AUTO)，但 Gateway 仍默認 `use_engine_loop=False` |
+| 2 | **連續批處理管線** | engine_core.py | ⚠️ EngineCore 已自動啟動 (EC-AUTO)，參數已補齊 (stop_token_ids, thinking_budget, logprobs)，但 Gateway 仍默認 `use_engine_loop=False`。空閒時使用 event-driven wake-up 消除 CPU 輪詢。 |
 | 3 | **PagedAttention** | paged_scheduler.py | ✅ `enable_paged_kv` 默認 `True` (C11) |
 | 4 | **請求搶佔/收縮** | scheduler.py | ✅ request retraction 已接入 (C14) |
 | 5 | **混合分塊預填充** | scheduler.py | `enable_hybrid_prefill` 默認 `False` |
@@ -662,22 +662,24 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | N-gram 猜測解碼 | ✅ 完整實現 | ❌ |
 | SpecPrefill 稀疏預填充 | ✅ 完整實現 | ❌ |
 | SSD KV Cache | ✅ 完整實現 | ❌ |
-| 思考預算控制 | ✅ SamplingParams 支持 | ⚠️ 僅 enable_thinking 開關 |
+| 思考預算控制 | ✅ SamplingParams 支持 | ✅ enable_thinking + thinking_budget (P3-3) |
 | KV 量化 | ✅ 4/8-bit 量化 | ❌ |
-| KV 前綴緩存統計 | ✅ get_stats() | ❌ |
-| 記憶體守衛 | ✅ 完整實現 | ❌ |
+| KV 前綴緩存統計 | ✅ get_stats() | ✅ monitoring 頁面 (P3-2) |
+| 記憶體守衛 | ✅ 完整實現 | ✅ monitoring 頁面 |
 | Tool Calling | ✅ 完整支持 | ❌ |
-| Logprobs | ✅ 完整支持 | ❌ |
-| Embeddings | ✅ Gateway endpoint | ❌ 無頁面 |
+| Logprobs | ✅ 完整支持 | ✅ chat 頁面 checkbox + 折疊顯示 |
+| Embeddings | ✅ Gateway endpoint | ✅ embeddings 頁面 (P3-6) |
 | Completions | ✅ Gateway endpoint | ❌ 無頁面 |
 | MCP | ✅ Gateway endpoint | ❌ |
 | Mesh 拓撲 | ✅ API endpoint | ❌ |
 | 批處理推理 | ✅ Gateway endpoint | ❌ |
 | Tokenize | ✅ Gateway endpoint | ❌ |
-| 延遲百分位數 | ✅ 數據存在 | ❌ 不調用 |
+| 延遲百分位數 | ✅ 數據存在 | ✅ monitoring 頁面 (P3-5) |
 | 預填充進度 | ✅ 實時追蹤 | ❌ |
 | TTS 流式 | ✅ SSE endpoint | ❌ |
 | 圖片流式 | ✅ SSE endpoint | ❌ |
+| Spec Decode 開關 | ✅ 完整支持 | ✅ chat 頁面 checkbox |
+| ITL 直方圖 | ✅ ServerMetrics | ✅ monitoring 頁面 ITL section |
 
 ### 8.5 硬編碼 URL
 
