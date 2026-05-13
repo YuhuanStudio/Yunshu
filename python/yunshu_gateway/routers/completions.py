@@ -50,6 +50,7 @@ class CompletionRequest(BaseModel):
     seed: Optional[int] = None
     spec_decode: bool = False
     enable_thinking: Optional[bool] = None
+    response_format: Optional[dict] = None
 
 
 @router.post("/completions", response_model=None)
@@ -78,11 +79,22 @@ async def create_completion(req: CompletionRequest, request: Request):
     else:
         prompt = req.prompt
 
+    # Extract JSON schema from response_format
+    json_schema = None
+    if req.response_format:
+        rf = req.response_format
+        if rf.get("type") == "json_schema":
+            js = rf.get("json_schema")
+            if js:
+                json_schema = js.get("schema", js)
+        elif rf.get("type") == "json_object":
+            json_schema = {}
+
     completion_id = f"cmpl-{uuid.uuid4().hex[:24]}"
 
     if req.stream:
         return StreamingResponse(
-            _stream_completion(engine, prompt, req, completion_id, request),
+            _stream_completion(engine, prompt, req, completion_id, request, json_schema=json_schema),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -108,6 +120,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             seed=req.seed,
             spec_decode=req.spec_decode,
             enable_thinking=req.enable_thinking,
+            json_schema=json_schema,
         )
         text = result.text
         prompt_tokens = result.prompt_tokens
@@ -129,6 +142,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             stop=req.stop,
             stop_token_ids=req.stop_token_ids,
             seed=req.seed,
+            enable_thinking=req.enable_thinking,
         )
         text = state.generated_text
         prompt_tokens = state.prompt_token_count
@@ -163,7 +177,7 @@ async def create_completion(req: CompletionRequest, request: Request):
 
 
 async def _stream_completion(
-    engine, prompt, req, completion_id, request
+    engine, prompt, req, completion_id, request, json_schema=None
 ) -> AsyncIterator[bytes]:
     """SSE streaming for text completions with keepalive and disconnect detection."""
     from ..streaming import with_sse_keepalive
@@ -198,6 +212,8 @@ async def _stream_completion(
                 stop=req.stop,
                 stop_token_ids=req.stop_token_ids,
                 seed=req.seed,
+                enable_thinking=req.enable_thinking,
+                json_schema=json_schema,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens

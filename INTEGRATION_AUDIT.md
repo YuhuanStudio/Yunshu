@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — 全部安全問題修復 + KV 層接入 + 參數透傳 + 記憶體洩漏修復)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — 音頻輸入 + 記憶體修復 + completions 參數)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -111,6 +111,18 @@
 | TENANT | tenant.py → deprecated wrapper，tenant_store 成為唯一實現 | ✅ 已修復 |
 | DRAIN | Gateway drain timeout 可配置 (YUNSHU_DRAIN_TIMEOUT env var) | ✅ 已修復 |
 | TEST-1 | 測試套件 565s→23s (24x 加速)，e2e_gateway 540s→0.5s | ✅ 已修復 |
+
+### 已修復 (2026-05-13 第三批)
+
+| 編號 | 修復 | 狀態 |
+|------|------|------|
+| TEST-2 | 測試套件記憶體 25GB→1.5GB — integration 測試排除默認運行 (pyproject.toml `--ignore`) | ✅ 已修復 |
+| AUDIO-1 | Omni 模型音頻輸入 — VLM 引擎 `_extract_audio()` + mlx-vlm audio 參數傳遞 | ✅ 已修復 |
+| AUDIO-2 | Chat 路由器 `_has_audio()` 偵測音頻內容，路由至 VLM/Omni 引擎 | ✅ 已修復 |
+| IMG-1 | Anthropic 圖片塊 VLM 路徑 — base64 轉 temp file + OpenAI content parts | ✅ 已修復 |
+| COMP-1 | Completions `response_format` → `json_schema` 解析並傳遞至引擎 | ✅ 已修復 |
+| COMP-2 | Completions streaming 傳遞 `enable_thinking` 和 `json_schema` | ✅ 已修復 |
+| MTP-MEM | test_mtp.py loaded_model fixture + gc.collect+mx.clear_cache 釋放 GPU 記憶體 | ✅ 已修復 |
 
 ### 跨項目學習進度
 
@@ -275,8 +287,8 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 ### 3.2 Completions Router 缺失參數
 
 除了上述全部缺失外，還缺:
-- `enable_thinking` — 引擎支持但 completions 不暴露
-- `json_schema` / `response_format` — 引擎支持但 completions 不暴露
+- `enable_thinking` — ✅ 已修復 (COMP-2)
+- `json_schema` / `response_format` — ✅ 已修復 (COMP-1) — `response_format` 解析為 `json_schema` 傳遞
 
 ### 3.3 參數接收但被忽略
 
@@ -1138,7 +1150,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | `seed` | ✅ | ✅ | ✅ 已修復 |
 | `repetition_penalty` | ✅ | ✅ | ✅ 已修復 (generate) |
 | `enable_thinking` | ✅ | ✅ | ✅ 已修復 — passthrough to chat template |
-| `response_format` | ✅ | ❌ | 靜默丟棄 |
+| `response_format` | ✅ | ❌ | ~~靜默丟棄~~ — Completions 路由已修復 (COMP-1)，VLM 路由仍丟棄 |
 | `tools` | ✅ | ❌ | 靜默丟棄 |
 | `frequency_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
 | `presence_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
@@ -1148,7 +1160,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 - **不支援遠端 URL 圖片**: HTTP/HTTPS 圖片 URL 被靜默跳過
 - **不支援視頻輸入**: 無視頻偵測、無視頻幀提取
-- **不支援音頻輸入**: Chat 消息中的音頻內容被靜默丟棄
+- **不支援音頻輸入**: ~~Chat 消息中的音頻內容被靜默丟棄~~ ✅ 已修復 (AUDIO-1) — VLM 引擎 `_extract_audio()` + `_has_audio()` 路由
 - **不支援連續批處理**: oMLX 的 VLMBatchedEngine 使用 AsyncEngineCore 做並發 VLM 推理
 - **不支援 OCR 模型**: oMLX 支持 deepseekocr, dots_ocr, glm_ocr
 - **多 VLM 路由不正確**: `_handle_vlm_chat` 選取第一個載入的 VLM 引擎，不考慮 `req.model`
