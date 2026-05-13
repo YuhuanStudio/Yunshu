@@ -716,6 +716,7 @@ async def _handle_vlm_chat(
         enable_thinking=req.enable_thinking,
         frequency_penalty=req.frequency_penalty,
         presence_penalty=req.presence_penalty,
+        logit_bias=req.logit_bias,
     )
 
     content = result.get("text", "")
@@ -765,6 +766,7 @@ async def _stream_vlm_response(
             enable_thinking=req.enable_thinking,
             frequency_penalty=req.frequency_penalty,
             presence_penalty=req.presence_penalty,
+            logit_bias=req.logit_bias,
         ):
             yield format_openai_chunk(
                 completion_id=completion_id,

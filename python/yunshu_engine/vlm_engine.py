@@ -253,7 +253,8 @@ class VLMEngine:
             if self._is_vlm:
                 freq_p = kwargs.get('frequency_penalty', 0.0)
                 pres_p = kwargs.get('presence_penalty', 0.0)
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p)
+                lb = kwargs.get('logit_bias', None)
+                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p, lb)
 
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
@@ -339,7 +340,8 @@ class VLMEngine:
                 if self._is_vlm:
                     freq_p = kwargs.get('frequency_penalty', 0.0)
                     pres_p = kwargs.get('presence_penalty', 0.0)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop, repetition_penalty, freq_p, pres_p)
+                    lb = kwargs.get('logit_bias', None)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop, repetition_penalty, freq_p, pres_p, lb)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -519,6 +521,7 @@ class VLMEngine:
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -535,7 +538,7 @@ class VLMEngine:
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
 
-        has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0
+        has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
         # Build stop IDs from string sequences
         stop_ids = set(eos_ids)
@@ -575,6 +578,9 @@ class VLMEngine:
                     if presence_penalty != 0.0:
                         tid = tokens[-1]
                         logits[..., tid] -= presence_penalty
+                    if logit_bias:
+                        for tid, bias in logit_bias.items():
+                            logits[..., tid] += bias
 
                 current = sampler(logits)
                 mx.eval(current)
@@ -680,6 +686,7 @@ class VLMEngine:
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -694,7 +701,7 @@ class VLMEngine:
         cache = make_prompt_cache(lm)
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
-        has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0
+        has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
         # Build stop IDs
         stop_ids = set(eos_ids)
@@ -762,6 +769,9 @@ class VLMEngine:
                     logits[..., tokens_list[-1]] -= frequency_penalty
                 if presence_penalty != 0.0:
                     logits[..., tokens_list[-1]] -= presence_penalty
+                if logit_bias:
+                    for tid, bias in logit_bias.items():
+                        logits[..., tid] += bias
 
             current = sampler(logits)
             mx.eval(current)
