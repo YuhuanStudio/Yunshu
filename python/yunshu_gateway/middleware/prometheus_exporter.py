@@ -281,6 +281,20 @@ class PrometheusMetrics:
             "Whether speculative decoding is enabled (1=yes, 0=no)",
         )
 
+        # KV prefix cache gauges
+        self._gauges["kv_prefix_cache_entries"] = _Gauge(
+            "yunshu_kv_prefix_cache_entries",
+            "Number of entries in the KV prefix cache",
+        )
+        self._gauges["kv_prefix_cache_hits"] = _Gauge(
+            "yunshu_kv_prefix_cache_hits_total",
+            "Total KV prefix cache hits",
+        )
+        self._gauges["kv_prefix_cache_misses"] = _Gauge(
+            "yunshu_kv_prefix_cache_misses_total",
+            "Total KV prefix cache misses",
+        )
+
     # --- Counter API ---
 
     def inc_counter(self, name: str, labels: Optional[dict[str, str]] = None, amount: int = 1) -> None:

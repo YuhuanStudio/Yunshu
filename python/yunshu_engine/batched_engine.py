@@ -703,7 +703,12 @@ class BatchedEngine:
         if ttft_s > 0:
             try:
                 from ..middleware.prometheus_exporter import get_prometheus_metrics
-                get_prometheus_metrics().observe_histogram("ttft_seconds", ttft_s)
+                pm = get_prometheus_metrics()
+                pm.observe_histogram("ttft_seconds", ttft_s)
+                if cached_tokens > 0:
+                    pm.set_gauge("kv_prefix_cache_hits", 1)
+                else:
+                    pm.set_gauge("kv_prefix_cache_misses", 1)
             except Exception:
                 logger.debug("TTFT prometheus recording failed", exc_info=True)
 
