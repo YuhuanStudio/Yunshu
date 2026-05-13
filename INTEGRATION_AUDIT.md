@@ -603,7 +603,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | # | 功能 | 所在模塊 | 為何不觸發 |
 |---|------|----------|-----------|
 | 1 | **猜測解碼 (EAGLE-3)** | batched_engine.py | `_spec_decoder` 永遠是 `None` — 沒有加載 draft model |
-| 2 | **連續批處理管線** | engine_core.py | ⚠️ EngineCore 已自動啟動 (EC-AUTO)，參數已補齊 (stop_token_ids, thinking_budget, logprobs)，但 Gateway 仍默認 `use_engine_loop=False`。空閒時使用 event-driven wake-up 消除 CPU 輪詢。 |
+| 2 | **連續批處理管線** | engine_core.py | ✅ 可通過 `YUNSHU_ENGINE_LOOP=1` 啟用。Gateway 默認使用 fast path (單請求高吞吐)，設置 env var 後使用 EngineCore 連續批處理管線。 |
 | 3 | **PagedAttention** | paged_scheduler.py | ✅ `enable_paged_kv` 默認 `True` (C11) |
 | 4 | **請求搶佔/收縮** | scheduler.py | ✅ request retraction 已接入 (C14)，block-level preemption 保留前綴緩存 (Wave 15) |
 | 5 | **混合分塊預填充** | scheduler.py | `enable_hybrid_prefill` 默認 `False` |
