@@ -44,6 +44,7 @@ class MeshManager:
         self._collective = CollectiveOps(backend=backend)
         self._pipeline: Optional[PipelineParallel] = None
         self._dp_router: Optional[Any] = None
+        self._disagg_router: Optional[Any] = None
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
         # C22: Event sourcing for crash recovery + audit
@@ -211,6 +212,7 @@ class MeshManager:
             "local_node": self._local_node.to_dict() if self._local_node else None,
             "pipeline": self._pipeline.to_dict() if self._pipeline else None,
             "data_parallel": self._dp_router.get_stats() if self._dp_router else None,
+            "disagg_pd": self._disagg_router.get_stats() if self._disagg_router else None,
         }
         if self._event_log:
             stats["event_log"] = self._event_log.get_stats()
@@ -223,7 +225,29 @@ class MeshManager:
         self._dp_router = DataParallelRouter(strategy=strategy)
         for n in self._topology.nodes:
             self._dp_router.add_node(n.node_id, n.rank)
+            # Set node capacity for C17 memory-proportional routing
+            if hasattr(n, 'capabilities') and n.capabilities:
+                self._dp_router.set_node_capacity(
+                    n.node_id,
+                    int(n.capabilities.total_memory_gb * 1024**3),
+                    gpu_cores=n.capabilities.gpu_cores,
+                )
         logger.info(f"Data-parallel router initialized: {strategy}, {len(self._topology.nodes)} nodes")
+
+        # C20: Setup disaggregated prefill/decode router if enabled
+        if os.environ.get("YUNSHU_DISAGG_PD", "0") == "1":
+            self._setup_disagg_router()
+
+    def _setup_disagg_router(self) -> None:
+        """Setup disaggregated prefill/decode router (C20)."""
+        from .disagg_pd import DisaggRouter, DisaggConfig
+        self._disagg_router = DisaggRouter(DisaggConfig(enabled=True))
+        for n in self._topology.nodes:
+            caps = n.capabilities if hasattr(n, 'capabilities') else None
+            mem_gb = caps.total_memory_gb if caps else 0.0
+            gpu_cores = caps.gpu_cores if caps else 0
+            self._disagg_router.add_node(n.node_id, memory_gb=mem_gb, gpu_cores=gpu_cores)
+        logger.info(f"Disaggregated P/D router initialized: {len(self._topology.nodes)} nodes")
 
     # ── Discovery & Heartbeat Integration ──
 
@@ -300,6 +324,19 @@ class MeshManager:
         rank = self._topology.add_node(node)
         if self._dp_router:
             self._dp_router.add_node(node.node_id, rank)
+            if hasattr(node, 'capabilities') and node.capabilities:
+                self._dp_router.set_node_capacity(
+                    node.node_id,
+                    int(node.capabilities.total_memory_gb * 1024**3),
+                    gpu_cores=node.capabilities.gpu_cores,
+                )
+        if self._disagg_router:
+            caps = node.capabilities if hasattr(node, 'capabilities') else None
+            self._disagg_router.add_node(
+                node.node_id,
+                memory_gb=caps.total_memory_gb if caps else 0.0,
+                gpu_cores=caps.gpu_cores if caps else 0,
+            )
         self._publish_event("node_join", node.node_id, {
             "hostname": node.hostname,
             "rank": rank,
@@ -312,6 +349,8 @@ class MeshManager:
         self._topology.remove_node(node.node_id)
         if self._dp_router:
             self._dp_router.remove_node(node.node_id)
+        if self._disagg_router:
+            self._disagg_router.remove_node(node.node_id)
         self._publish_event("node_leave", node.node_id, {
             "hostname": node.hostname,
         })
