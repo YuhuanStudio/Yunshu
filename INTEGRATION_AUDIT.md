@@ -743,17 +743,16 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 ```
 BatchedEngine.__init__()
   → KVPrefixCache() 創建
-  → enable_ssd_cache() 從未被調用 ❌ BREAK
-  → SSD 功能完全不可達
+  → enable_ssd_cache() ✅ YUNSHU_SSD_CACHE env var 啟用
+  → SSD 子路徑可用
 ```
 
 ### A.4 N-gram Proposer 激活鏈
 
 ```
-ngram_proposer.py 存在
-  → 零 import ❌ BREAK
-  → 無配置入口、無 CLI 參數、無環境變數、無 Gateway 參數
-  → 完全無法啟用
+ngram_proposer.py → BatchedEngine._generate_ngram_spec()
+  → YUNSHU_NGRAM_SPEC env var 啟用 ✅
+  → Gateway spec_decode=True 觸發 ✅
 ```
 
 ---
@@ -762,10 +761,10 @@ ngram_proposer.py 存在
 
 | 類別 | 模塊數 | 實際行數 |
 |------|--------|---------|
-| 引擎 DEAD 模塊 | 7 | ~4,200 |
+| 引擎 DEAD 模塊 | 6 | ~4,200 |
 | 引擎管線內死功能 | 5 | ~800 |
 | yunshu_kv DEAD 模塊 | 0 | 0 (全部已接入，含 warm_tier) |
-| yunshu_control DEAD 模塊 | 1 (tenant.py 冗餘) | ~200 |
+| yunshu_control DEAD 模塊 | 0 (tenant.py 已標記 deprecated) | ~0 |
 | yunshu_mesh DEAD 模塊 | 1 | 558 |
 | 死測試文件 | 7 | ~1,200 |
 | **合計** | **~23** | **~6,958** |
@@ -774,7 +773,7 @@ ngram_proposer.py 存在
 
 ---
 
-> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 6 個死模塊全部接入管線 (RadixTree, TieredKVCacheManager, SSDCacheStore, BoundarySnapshot, ModelCacheConfig, mlx_cache)。yunshu_control 3 個死模塊接入 (tenant_store, request_queue, token_counter)。記憶體洩漏和線程安全問題已修復。2,451 個單元測試全部通過。
+> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,450 個測試全數通過 (565s→23s)。
 
 ---
 
