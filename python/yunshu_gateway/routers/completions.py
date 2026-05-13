@@ -52,6 +52,9 @@ class CompletionRequest(BaseModel):
     enable_thinking: Optional[bool] = None
     thinking_budget: Optional[int] = None
     response_format: Optional[dict] = None
+    reasoning_effort: Optional[str] = None
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.0
 
 
 @router.post("/completions", response_model=None)
@@ -123,6 +126,9 @@ async def create_completion(req: CompletionRequest, request: Request):
             enable_thinking=req.enable_thinking,
             thinking_budget=req.thinking_budget,
             json_schema=json_schema,
+            reasoning_effort=req.reasoning_effort,
+            xtc_probability=req.xtc_probability,
+            xtc_threshold=req.xtc_threshold,
         )
         text = result.text
         prompt_tokens = result.prompt_tokens
@@ -218,6 +224,9 @@ async def _stream_completion(
                 enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
                 json_schema=json_schema,
+                reasoning_effort=req.reasoning_effort,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens

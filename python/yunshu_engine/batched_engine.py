@@ -418,6 +418,7 @@ class BatchedEngine:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
+        reasoning_effort: str | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
     ) -> GenerationOutput:
@@ -441,6 +442,13 @@ class BatchedEngine:
         guard_rejection = self._check_memory_guard(prompt, max_tokens)
         if guard_rejection is not None:
             return guard_rejection
+
+        # Resolve reasoning_effort → thinking_budget if not explicitly set
+        if thinking_budget is None and reasoning_effort is not None:
+            effort_map = {"low": 2048, "medium": 8192, "high": 32768}
+            thinking_budget = effort_map.get(reasoning_effort, 8192)
+            if enable_thinking is None:
+                enable_thinking = True
 
         # Speculative decoding path (Phase 4: single-request EAGLE-3)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
@@ -476,6 +484,9 @@ class BatchedEngine:
                 top_k=top_k,
                 min_p=min_p,
                 repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop,
                 stop_token_ids=stop_token_ids,
                 seed=seed,
@@ -535,6 +546,9 @@ class BatchedEngine:
         top_k: int = 0,
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
@@ -610,6 +624,23 @@ class BatchedEngine:
                     logits[..., recent] = sel
                 return logits
             logits_processors.append(_rep_penalty)
+        if frequency_penalty != 0.0 or presence_penalty != 0.0:
+            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
+                import mlx.core as _mx
+                counts = {}
+                for t in tokens:
+                    counts[int(t)] = counts.get(int(t), 0) + 1
+                for tid, cnt in counts.items():
+                    logits[..., tid] -= fp * cnt
+                    logits[..., tid] -= pp
+                return logits
+            logits_processors.append(_freq_pres_penalty)
+        if logit_bias:
+            def _logit_bias_proc(tokens, logits, biases=logit_bias):
+                for tid, bias in biases.items():
+                    logits[..., tid] += bias
+                return logits
+            logits_processors.append(_logit_bias_proc)
 
         def _run():
             import mlx.core as mx
@@ -874,6 +905,10 @@ class BatchedEngine:
         spec_decode: bool = False,
         use_engine_loop: bool = False,
         enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
+        reasoning_effort: str | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -882,6 +917,13 @@ class BatchedEngine:
         """
         if not self._loaded:
             await self.start()
+
+        # Resolve reasoning_effort → thinking_budget if not explicitly set
+        if thinking_budget is None and reasoning_effort is not None:
+            effort_map = {"low": 2048, "medium": 8192, "high": 32768}
+            thinking_budget = effort_map.get(reasoning_effort, 8192)
+            if enable_thinking is None:
+                enable_thinking = True
 
         # Memory guard preflight check
         guard_rejection = self._check_memory_guard(prompt, max_tokens)
@@ -918,6 +960,9 @@ class BatchedEngine:
                 logit_bias=logit_bias,
                 stop=stop, stop_token_ids=stop_token_ids,
                 seed=seed, enable_thinking=enable_thinking,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             ):
                 yield output
             return
@@ -932,6 +977,7 @@ class BatchedEngine:
             stop=stop, stop_token_ids=stop_token_ids,
             seed=seed, json_schema=json_schema,
             enable_thinking=enable_thinking,
+            thinking_budget=thinking_budget,
         )
 
         finished_normally = False
@@ -977,6 +1023,9 @@ class BatchedEngine:
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue."""
         from mlx_lm.generate import generate_step
@@ -1011,7 +1060,10 @@ class BatchedEngine:
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
 
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+        sampler = make_sampler(
+            temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0,
+            min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+        )
 
         # Build logits processors for penalty/bias params
         logits_processors = []
@@ -1027,9 +1079,13 @@ class BatchedEngine:
             logits_processors.append(_repetition_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
-                tid = int(tokens[-1])
-                logits[..., tid] -= fp
-                logits[..., tid] -= pp
+                import mlx.core as _mx
+                counts = {}
+                for t in tokens:
+                    counts[int(t)] = counts.get(int(t), 0) + 1
+                for tid, cnt in counts.items():
+                    logits[..., tid] -= fp * cnt
+                    logits[..., tid] -= pp
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
@@ -1069,6 +1125,13 @@ class BatchedEngine:
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
             n_tok = 0
+            thinking_tokens_used = 0
+            think_end_token = None
+            if thinking_budget is not None:
+                try:
+                    think_end_token = tokenizer.encode("</think")[-1]
+                except Exception:
+                    pass
 
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
@@ -1093,6 +1156,14 @@ class BatchedEngine:
                     if not stop_hit and stop_suffixes:
                         if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                             suffix_hit = True
+                    # Thinking budget enforcement in streaming
+                    if thinking_budget is not None and enable_thinking:
+                        thinking_tokens_used += 1
+                        if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                            _put((new_text, n_tok, True))
+                            prefix_cache.add(ids, cache)
+                            mx.synchronize()
+                            return
                     _put((new_text, n_tok, stop_hit or suffix_hit))
                     if stop_hit or suffix_hit:
                         prefix_cache.add(ids, cache)

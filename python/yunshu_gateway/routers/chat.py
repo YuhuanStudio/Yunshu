@@ -412,6 +412,7 @@ async def _build_multi_choice(
                 spec_decode=req.spec_decode,
                 thinking_budget=req.thinking_budget,
                 stop_token_ids=req.stop_token_ids,
+                reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
             )
@@ -619,6 +620,9 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 spec_decode=req.spec_decode,
                 thinking_budget=req.thinking_budget,
                 stop_token_ids=req.stop_token_ids,
+                reasoning_effort=req.reasoning_effort,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
             )
             raw_text = result.text
             prompt_tok = result.prompt_tokens
@@ -916,9 +920,14 @@ async def _stream_response_multi(
                     presence_penalty=req.presence_penalty,
                     logit_bias=req.logit_bias,
                     stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
                     seed=(req.seed + choice_idx) if req.seed is not None else None,
                     enable_thinking=req.enable_thinking,
                     json_schema=json_schema,
+                    thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1098,9 +1107,14 @@ async def _stream_response(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                stop_token_ids=req.stop_token_ids,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
             ):
                 token_text = output.new_text
                 finish_reason = output.finish_reason

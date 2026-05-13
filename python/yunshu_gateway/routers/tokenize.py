@@ -21,6 +21,11 @@ class TokenCountRequest(BaseModel):
     max_tokens: int = 0
 
 
+class DetokenizeRequest(BaseModel):
+    model: str
+    tokens: list[int]
+
+
 @router.post("/tokenize", response_model=None)
 async def tokenize(req: TokenizeRequest):
     """Tokenize text into token IDs."""
@@ -41,11 +46,11 @@ async def tokenize(req: TokenizeRequest):
 
 
 @router.post("/detokenize", response_model=None)
-async def detokenize(model: str, tokens: list[int]):
+async def detokenize(req: DetokenizeRequest):
     """Convert token IDs back to text."""
-    tokenizer = _resolve_tokenizer(model)
-    text = tokenizer.decode(tokens)
-    return {"text": text, "model": model}
+    tokenizer = _resolve_tokenizer(req.model)
+    text = tokenizer.decode(req.tokens)
+    return {"text": text, "model": req.model}
 
 
 @router.post("/token_count", response_model=None)
