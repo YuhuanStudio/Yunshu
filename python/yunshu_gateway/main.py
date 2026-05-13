@@ -207,7 +207,7 @@ def create_app() -> FastAPI:
         )
 
     # Import routers lazily to reduce startup memory
-    from .routers import anthropic, audio, batch_inference, bench, chat, completions, embeddings, images, mcp, models, monitoring as gw_monitoring, realtime, tokenize
+    from .routers import anthropic, audio, batch_inference, bench, chat, completions, embeddings, images, mcp, models, monitoring as gw_monitoring, realtime, scoring, tokenize
 
     # Routes — L1 Gateway
     from .routers import sleep as sleep_mod
@@ -223,6 +223,7 @@ def create_app() -> FastAPI:
     app.include_router(tokenize.router, prefix="/v1")
     app.include_router(batch_inference.router, prefix="/v1")
     app.include_router(mcp.router, prefix="/v1")
+    app.include_router(scoring.router, prefix="/v1")
     app.include_router(realtime.router)
     app.include_router(bench.router)
     app.include_router(sleep_mod.router)

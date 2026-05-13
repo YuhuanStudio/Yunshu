@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — 音頻輸入 + 記憶體修復 + completions 參數)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — Pooling/Score/Rerank + Tool Call/Reasoning Parser Factory + Per-Model Settings)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -138,6 +138,17 @@
 | RESPONSES | OpenAI Responses API — `POST /v1/responses` 統一端點 | oMLX §13.2 | ✅ 已實現 |
 | XTC | XTC 採樣支持 — `xtc_probability` + `xtc_threshold` 參數 | mlx-lm §15.4 | ✅ 已實現 |
 | VLM-JSON | VLM response_format — json_schema 約束接入 VLM text loop | §18.4 | ✅ 已實現 |
+
+### 新增功能 (2026-05-13 第五批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| POOLING | `/v1/pooling` 端點 — CLS/MEAN/LAST 隱藏狀態池化 | vLLM §12.5 | ✅ 已實現 |
+| SCORE | `/v1/score` 端點 — cosine/dot/euclidean 相似度計算 | vLLM §12.5 | ✅ 已實現 |
+| RERANK | `/v1/rerank` 端點 — 查詢-文檔相關性排序 (top_n 過濾) | vLLM/oMLX §12.5/§13.2 | ✅ 已實現 |
+| RPARSER | Reasoning Parser Factory — Qwen3/DeepSeek/GLM/Harmony/Gemma 5 家族自動偵測 | oMLX §13.2 | ✅ 已實現 |
+| TCPARSER | Tool Call Parser Factory — 9 格式 (Hermes/QwenXML/Mistral/ChatML/DeepSeek/Anthropic/Gemini/DirectJSON/CodeBlock) + 模型自動路由 | oMLX §13.2 | ✅ 已實現 |
+| PM-SET | Per-Model Settings 接入 BatchedEngine — model_settings.json + env var 覆蓋 + 自動應用 | oMLX §13.4 | ✅ 已實現 |
 
 ### 跨項目學習進度
 
@@ -793,7 +804,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,450 個測試全數通過 (565s→23s)。
+> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,543 個測試全數通過 (565s→24s)。
 
 ---
 
@@ -848,7 +859,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 vLLM 有而 Yunshu 沒有的 endpoint:
 - ~~`/v1/responses` — OpenAI Responses API~~ ✅ 已實現 (RESPONSES)
-- `/pooling`, `/classify`, `/score`, `/rerank` — 評分/重排
+- ~~`/pooling`, `/classify`, `/score`, `/rerank` — 評分/重排~~ ✅ 已實現 (POOLING/SCORE/RERANK)
 - ~~`/sleep`, `/wake_up` — 3 級休眠/喚醒~~ ✅ 已實現 (SLEEP)
 - `/start_profile`, `/stop_profile` — 性能分析
 - ~~`/reset_prefix_cache` — 緩存管理~~ ✅ 已有 `/api/v1/admin/cache/clear`
@@ -889,8 +900,8 @@ Yunshu 有而 vLLM 沒有的:
 | **DeepSeek V4 Patch Suite** | 7 文件: model, tokenizer, cache, tool parser, chat template | 模型支持 |
 | **Qwen 3.5 Attention Patch** | Qwen 3.5 特定注意力優化 | 性能提升 |
 | **Responses API** | ~~OpenAI Responses API endpoint~~ ✅ 已實現 | `/v1/responses` |
-| **15+ Tool Call Parsers** | OpenAI, Anthropic, Gemini, Qwen, DeepSeek... | 工具調用兼容 |
-| **Multiple Reasoning Parsers** | Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony | 思考模式兼容 |
+| **15+ Tool Call Parsers** | ~~OpenAI, Anthropic, Gemini, Qwen, DeepSeek...~~ ✅ 9 格式 Tool Call Parser Factory + 模型自動路由 | 工具調用兼容 |
+| **Multiple Reasoning Parsers** | ~~Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony~~ ✅ Reasoning Parser Factory 5 家族自動偵測 | 思考模式兼容 |
 | **MoE top-k Optimization** | 減少激活專家數, +7-16% 吞吐 | 性能提升 |
 | **Warm Prompts** | 啟動時預加熱熱門前綴, 1.3-2.25x TTFT | 性能提升 |
 | **Vision Feature Cache (SSD)** | VLM 視覺特徵持久化 | VLM 性能 |
@@ -907,7 +918,7 @@ Yunshu 有而 vLLM 沒有的:
 |------|------|--------|
 | settings.py 行數 | ~1100 行 | ~250 行 |
 | 配置區段 | 8+ (Server, Model, Generation, Scheduler, Cache, PagedSSD, MCP, Admin, AdaptiveDefaults) | 4 (Server, Model, Cache, Engine) |
-| 每模型設置 | 40+ 字段 (TurboQuant, SpecPrefill, DFlash, MTP...) | 不存在 |
+| 每模型設置 | 40+ 字段 (TurboQuant, SpecPrefill, DFlash, MTP...) | ✅ ModelSettings 25+ 字段，接入 BatchedEngine |
 | 自適應默認 | 根據硬件自動計算 | 不存在 |
 | 使用狀態 | **活躍** — CLI/Gateway/API 全部使用 | **死代碼** — 零調用者 |
 
@@ -976,7 +987,7 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 | G4 | 無漸進式 KV 量化 (僅在生成結束後量化) | ✅ **已修復** (C6) | 每 256 tokens 量化 |
 | G5 | 無 quantization config 傳遞給 load() | **中** | 無法覆蓋量化參數 |
 | G6 | 無 LoRA 適配器支持 | **低** | 缺少微調模型服務能力 |
-| G7 | 無 XTC 採樣支持 | **低** | 缺少 mlx-lm 支持的採樣方法 |
+| G7 | ~~無 XTC 採樣支持~~ | **低** | ✅ 已實現 (XTC) |
 | G8 | Streaming 路徑跳過 `detokenizer.finalize()` | ✅ **已修復** | 所有 streaming 路徑已加 finalize() |
 | G9 | ThinkingParser 與 mlx-lm 的 thinking 檢測重複 | **低** | 兩個獨立解析器可能不一致 |
 

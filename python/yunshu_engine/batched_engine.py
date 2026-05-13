@@ -183,6 +183,9 @@ class BatchedEngine:
             os.environ.get("YUNSHU_MEM_PRESSURE_THRESHOLD", "85.0")
         )
 
+        # Per-model settings (loaded from model_settings.json + env vars)
+        self._settings = None
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -216,6 +219,9 @@ class BatchedEngine:
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
 
+        # Load per-model settings from model_settings.json + env overrides
+        self._load_model_settings()
+
         # Detect model's cache types for type-aware KV management
         try:
             from yunshu_kv.model_cache_config import ModelCacheConfig
@@ -239,6 +245,54 @@ class BatchedEngine:
 
         # Warm prompt prefill: pre-populate KV cache with common system prompts
         await self._warm_prompt_prefill()
+
+    def _load_model_settings(self):
+        """Load per-model settings from model directory and apply to engine."""
+        from .model_settings import load_model_settings
+        model_path = ""
+        if self._model is not None:
+            config = getattr(self._model, 'config', None)
+            if config is not None:
+                if isinstance(config, dict):
+                    model_path = config.get("_name_or_path", self.model_name)
+                else:
+                    model_path = getattr(config, '_name_or_path', self.model_name)
+        self._settings = load_model_settings(model_path or self.model_name, self.model_name)
+        self._apply_settings()
+
+    def _apply_settings(self):
+        """Apply loaded ModelSettings to engine config."""
+        if self._settings is None:
+            return
+        s = self._settings
+        if s.kv_cache_quant_bits is not None:
+            self._kv_quant_bits = s.kv_cache_quant_bits
+        if s.kv_cache_quant_group_size != 64:
+            self._kv_quant_group_size = s.kv_cache_quant_group_size
+        if s.kv_cache_quant_start_layer != 0:
+            self._kv_quant_start = s.kv_cache_quant_start_layer
+        if not s.prefix_cache_enabled:
+            self._kv_prefix_cache = None
+        if s.spec_decode_enabled:
+            self._spec_enabled = True
+        if s.ngram_spec_enabled:
+            self._ngram_spec_enabled = True
+        if s.spec_prefill_enabled:
+            self._spec_prefill_enabled = True
+            self._spec_prefill_threshold = s.spec_prefill_threshold
+            self._spec_prefill_keep_rate = s.spec_prefill_keep_rate
+        if s.ssd_cache_enabled:
+            if self._kv_prefix_cache is not None:
+                self._kv_prefix_cache.enable_ssd_cache(
+                    cache_dir=s.ssd_cache_dir,
+                    max_size_bytes=s.ssd_cache_max_gb * 1024 ** 3,
+                    model_name=self.model_name,
+                )
+        if s.enable_thinking is not None:
+            self.enable_thinking = s.enable_thinking
+
+    def get_settings(self):
+        return self._settings
 
     async def _ensure_engine_core(self):
         """Lazy-create EngineCore only when continuous batching is needed."""

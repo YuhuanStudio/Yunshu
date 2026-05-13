@@ -256,7 +256,7 @@ _THINKING_PATTERN = re.compile(r"<think/>(.*?)</think/>", re.DOTALL)
 _THINKING_TAIL_PATTERN = re.compile(r"^(.*?)</think/>", re.DOTALL)
 
 
-def extract_thinking(text: str) -> tuple[str, str]:
+def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str]:
     """Extract thinking and content from complete text.
 
     Handles:
@@ -265,11 +265,38 @@ def extract_thinking(text: str) -> tuple[str, str]:
     - Partial (no open tag): "reasoning</think/>answer" -> ("reasoning", "answer")
     - Empty think: <think/></think/>answer -> ("", "answer")
     - Think only: <think/>reasoning</think/> -> ("reasoning", "")
+    - Gemma4: <start_think/>...</end_think/> markers
+    - Harmony: [REASONING]...[/REASONING] markers
 
-    Direct replication of oMLX's extract_thinking pattern.
+    Uses ReasoningParser factory for model-specific extraction when
+    model_name is provided. Falls back to oMLX-style <think/> parsing.
     """
     if not text:
         return ("", "")
+
+    # Try model-specific reasoning parser (Gemma, Harmony, etc.)
+    if model_name:
+        try:
+            from yunshu_engine.reasoning_parser import get_reasoning_parser
+            parser = get_reasoning_parser(model_name)
+            if parser.family_name() != "generic":
+                out = parser.parse(text)
+                if out.reasoning:
+                    return (out.reasoning, out.content)
+        except Exception:
+            pass
+
+    # Also handle Gemma4 <start_think/>...</end_think/> without model_name
+    _GEMMA_THINK_PATTERN = re.compile(r"<start_think\s*/?\s*>(.*?)</end_think\s*/?\s*>(.*)", re.DOTALL)
+    gemma_m = _GEMMA_THINK_PATTERN.match(text)
+    if gemma_m:
+        return (gemma_m.group(1).strip(), gemma_m.group(2).strip())
+
+    # Also handle Harmony [REASONING]...[/REASONING]
+    _HARMONY_PATTERN = re.compile(r"\[REASONING\](.*?)\[/REASONING\](.*)", re.DOTALL | re.IGNORECASE)
+    harmony_m = _HARMONY_PATTERN.match(text)
+    if harmony_m:
+        return (harmony_m.group(1).strip(), harmony_m.group(2).strip())
 
     thinking_parts = []
     remaining = text
