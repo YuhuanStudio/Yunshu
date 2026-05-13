@@ -95,7 +95,7 @@
 
 ### 待處理
 
-- `grammar` 參數 — Gateway 接收但 SamplingParams 不支持語法約束生成
+- ~~`grammar` 參數 — Gateway 接收但 SamplingParams 不支持語法約束生成~~ ✅ 已實現 (GRAMMAR) — grammar 參數 → json_schema 約束
 - `n > 1` streaming — 僅支持 n=1
 
 ### 已修復 (2026-05-13 第二批)
@@ -164,6 +164,12 @@
 |------|------|------|------|
 | MOE | MoE top-k 優化 — 動態調整激活專家數 +7-16% 吞吐 | oMLX §13.2 | ✅ 已實現 |
 | QUANT | 量化配置覆蓋 — YUNSHU_QUANT_CONFIG env var 傳遞至 load() | G5 | ✅ 已修復 |
+
+### 新增功能 (2026-05-13 第八批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| PROF | Profiling 端點 — `/v1/start_profile` + `/v1/stop_profile` Metal GPU 追蹤 | vLLM §12.5 | ✅ 已實現 |
 
 ### 跨項目學習進度
 
@@ -876,7 +882,7 @@ vLLM 有而 Yunshu 沒有的 endpoint:
 - ~~`/v1/responses` — OpenAI Responses API~~ ✅ 已實現 (RESPONSES)
 - ~~`/pooling`, `/classify`, `/score`, `/rerank` — 評分/重排~~ ✅ 已實現 (POOLING/SCORE/RERANK)
 - ~~`/sleep`, `/wake_up` — 3 級休眠/喚醒~~ ✅ 已實現 (SLEEP)
-- `/start_profile`, `/stop_profile` — 性能分析
+- ~~`/start_profile`, `/stop_profile` — 性能分析~~ ✅ 已實現 (PROF)
 - ~~`/reset_prefix_cache` — 緩存管理~~ ✅ 已有 `/api/v1/admin/cache/clear`
 - ~~動態 LoRA 加載/卸載~~ ✅ 已實現 (LORA/LORA-API)
 - 分離式 serving (P/D render + generate)
