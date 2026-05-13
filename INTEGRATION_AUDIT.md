@@ -307,8 +307,8 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | KV Cache 統計 | `BatchedEngine.get_kv_cache_stats()` | ✅ `/gw/monitoring/kv-cache` |
 | 猜測解碼統計 | `BatchedEngine._spec_decoder._stats` | ✅ `/gw/monitoring/spec-decode` |
 | 預填充進度 | `prefill_progress.PrefillProgressTracker` | ✅ endpoint 已添加 |
-| 記憶體守衛 | `EngineCore._memory_guard` | 無 endpoint |
-| SSD Cache 統計 | `SSDKVCache.get_stats()` | 無 endpoint |
+| 記憶體守衛 | `EngineCore._memory_guard` | ✅ `/gw/monitoring/memory-guard` |
+| SSD Cache 統計 | `SSDKVCache.get_stats()` | ✅ `/gw/monitoring/ssd-cache` |
 | 每模型指標 | `ServerMetrics._per_model` | 無獨立 endpoint |
 | 請求隊列統計 | `RequestQueueManager` | ✅ `/admin/queue/stats` |
 
@@ -1120,19 +1120,15 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ### 18.2 mRoPE 死代碼
 
-mrope.py 定義了完整的 multi-dimensional RoPE 支持 (對 Qwen2-VL, Qwen3-VL 至關重要)，但:
+~~mrope.py 定義了完整的 multi-dimensional RoPE 支持 (對 Qwen2-VL, Qwen3-VL 至關重要)，但:~~
 
-- `vlm_engine.py` **從未 import mrope**
-- VLM 預填充後不調用 `capture_rope_deltas()`
-- 多輪 VLM 對話中不應用位置 delta
-- **影響**: Qwen-VL 系列模型在多輪對話中可能產生錯誤的位置編碼，導致質量下降
+✅ **已修復 (M7)** — vlm_engine 自動偵測 mRoPE config，預填充後調用 capture_rope_deltas()。
 
 ### 18.3 Vision Feature Cache 死代碼
 
-vision_feature_cache.py 實現了完整的兩層 LRU+SSD 視覺特徵緩存，但:
+~~vision_feature_cache.py 實現了完整的兩層 LRU+SSD 視覺特徵緩存，但從未被任何文件 import。~~
 
-- **從未被任何文件 import**
-- 緩存視覺編碼結果可避免重複編碼同一圖片 (多輪對話加速)
+✅ **已修復 (M6)** — VLMEngine 集成 VisionFeatureCache (YUNSHU_VISION_CACHE)。
 - oMLX 的 VisionFeatureSSDCache 在 VLMBatchedEngine 中**活躍使用**
 
 ### 18.4 參數被靜默丟棄
@@ -1170,8 +1166,8 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 功能 | oMLX (1660 行) | Yunshu (626 行) |
 |------|---------------|-----------------|
 | 連續批處理 | ✅ AsyncEngineCore + BatchGenerator | ❌ 單請求 |
-| 視覺特徵緩存 | ✅ VisionFeatureSSDCache | ❌ 死代碼 |
-| mRoPE 整合 | ✅ 完整 | ❌ 死代碼 |
+| 視覺特徵緩存 | ✅ VisionFeatureSSDCache | ✅ 已接入 (M6) |
+| mRoPE 整合 | ✅ 完整 | ✅ 已接入 (M7) |
 | OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ❌ |
 | 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ❌ |
 | 工具調用 (VLM) | ✅ | ❌ |

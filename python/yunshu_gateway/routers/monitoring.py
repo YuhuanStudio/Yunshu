@@ -293,3 +293,48 @@ async def prefill_progress() -> dict[str, Any]:
     if tracker is None:
         return {"active": False}
     return {"active": True, "requests": tracker.get_all_progress()}
+
+
+@router.get("/memory-guard")
+async def memory_guard_stats() -> dict[str, Any]:
+    """Memory guard pressure statistics."""
+    from ..engine import get_engine
+    engine = get_engine()
+    if engine is None:
+        return {"active": False}
+
+    guard = getattr(engine, '_memory_guard', None)
+    if guard is None:
+        # Try BatchedEngine's engine_core
+        core = getattr(engine, '_engine_core', None)
+        if core:
+            guard = getattr(core, '_memory_guard', None)
+
+    if guard is None:
+        return {"active": False}
+
+    return {
+        "active": True,
+        "pressure_level": getattr(guard, 'pressure_level', 'unknown'),
+        "eviction_count": getattr(guard, '_eviction_count', 0),
+    }
+
+
+@router.get("/ssd-cache")
+async def ssd_cache_stats() -> dict[str, Any]:
+    """SSD KV cache statistics."""
+    from ..engine import get_engine
+    engine = get_engine()
+    if engine is None:
+        return {"active": False}
+
+    cache = getattr(engine, '_kv_prefix_cache', None)
+    if cache is None:
+        return {"active": False}
+
+    ssd = getattr(cache, '_ssd_store', None)
+    if ssd is None:
+        return {"active": False, "entries": 0}
+
+    stats = getattr(ssd, 'get_stats', lambda: {})()
+    return {"active": True, **stats}
