@@ -1152,21 +1152,40 @@ class BatchedEngine:
 
         # Fast path: bypass EngineCore for single-request streaming
         if not _use_engine_loop:
-            async for output in self._stream_generate_fast(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p,
-                repetition_penalty=repetition_penalty,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                logit_bias=logit_bias,
-                stop=stop, stop_token_ids=stop_token_ids,
-                seed=seed, enable_thinking=enable_thinking,
-                thinking_budget=thinking_budget,
-                xtc_probability=xtc_probability,
-                xtc_threshold=xtc_threshold,
-                json_schema=json_schema,
-            ):
-                yield output
+            # Register with request tracker for cancellation support
+            import uuid as _uuid
+            _stream_req_id = f"stream-{_uuid.uuid4().hex[:8]}"
+            try:
+                from .request_tracker import get_request_tracker
+                _tracker = get_request_tracker()
+                _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
+                _cancel_event = _active_gen.cancel_event
+            except Exception:
+                _cancel_event = None
+
+            try:
+                async for output in self._stream_generate_fast(
+                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
+                    stop=stop, stop_token_ids=stop_token_ids,
+                    seed=seed, enable_thinking=enable_thinking,
+                    thinking_budget=thinking_budget,
+                    xtc_probability=xtc_probability,
+                    xtc_threshold=xtc_threshold,
+                    json_schema=json_schema,
+                    cancel_event=_cancel_event,
+                ):
+                    yield output
+            finally:
+                if _cancel_event is not None:
+                    try:
+                        _tracker.unregister(_stream_req_id)
+                    except Exception:
+                        pass
             return
 
         # Engine loop path: continuous batching with scheduler
@@ -1229,6 +1248,7 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         json_schema: dict | str | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue."""
         from mlx_lm.generate import generate_step
@@ -1376,6 +1396,10 @@ class BatchedEngine:
                 ):
                     detokenizer.add_token(token)
                     n_tok += 1
+                    # Check cancellation
+                    if cancel_event is not None and cancel_event.is_set():
+                        mx.synchronize()
+                        return
                     # Prefill complete on first token — remove from progress tracker
                     if _first_token:
                         _first_token = False
