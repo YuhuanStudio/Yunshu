@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 25: grammar constraint backend, disaggregated P/D, thinking segment streaming, VLM request fields, CLI path fixes)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 26: VAE encoder, inpainting, VAE tiling, ControlNet, depth-guided, TeaCache, pipeline registry)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,20 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **3445 passed, 13 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 26 — Image Engine 完整化)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| VAE Encoder | VAEEncoder (128→256→512→512 down, 32-ch output → mean+logvar), encode + encode_deterministic, OIHW→OHWI weight remap | 20 tests (`test_inpaint.py`) |
+| Inpainting | _run_inpaint_pipeline: image→VAE encode→known latents, mask loading (binary threshold), masked denoising (blend per step), denoise_strength interpolation, /images/inpaint endpoint | 20 tests (`test_inpaint.py`) |
+| VAE Tiling | _cosine_ramp helper, decode_tiled/encode_tiled with cosine blend overlap, auto-tile >1024×1024, mflux VAETiler pattern | 14 tests (`test_vae_tiling.py`) |
+| ControlNet | ConditioningPreprocessor (canny edges + depth normalization), ControlNetBlock (step-range + strength control), /images/controlnet endpoint | 25 tests (`test_controlnet.py`) |
+| Depth-guided | DepthGuider (depth image → latent encode + concatenation), /images/depth-guided endpoint, step-decaying depth conditioning | 25 tests (`test_controlnet.py`) |
+| TeaCache | TeaCacheConfig (Z-Image + Flux + Qwen coefficients), TeaCacheHook (L1 distance + polynomial rescaling), YUNSHU_TEACACHE env var, auto-enabled in _run_pipeline | 19 tests (`test_teacache.py`) |
+| Pipeline Registry | PipelineType enum (Z-Image, Flux, Flux2, Qwen-Image), auto-detection from path/config, register/get/list API, create_pipeline_for_path factory | 20 tests (`test_image_pipeline.py`) |
+| base64 驗證 | 所有 images router 的 base64 decode 改為 validate=True (防止非法字元靜默通過) | existing tests |
+| Video Engine | VideoEngine wrapping mlx-video (Wan2.2 + LTX2), /video/generations endpoint, ModelType.VIDEO auto-detection, I2V support | 22 tests (`test_video_engine.py`) |
 
 ### 已完成修復 (2026-05-14 Wave 25)
 
@@ -1501,7 +1515,7 @@ oMLX 有完整的 STSEngine 支持:
 
 | mlx-audio 能力 | Yunshu 暴露 |
 |---------------|------------|
-| STS (Speech-to-Speech) | ❌ (需要指定模型) |
+| STS (Speech-to-Speech) | ✅ STSEngine + /audio/speech-to-speech/* endpoints (Wave 25) |
 | VAD (語音活動偵測) | ✅ EnergyVAD + WebRTCVAD (VAD) |
 | LID (語言識別) | ✅ lid.py — 14 語言偵測 (LID) |
 | VoicePipeline (STT→LLM→TTS 端到端) | ✅ voice_pipeline.py + /audio/voice-pipeline (VPIPE) |
@@ -1539,13 +1553,13 @@ vllm-omni 支持: **25+ 擴散架構**
 | 功能 | 狀態 | mflux | vllm-omni |
 |------|------|-------|-----------|
 | img2img | ✅ ImageGenEngine.generate() + variations/edits endpoints (Wave 24) | ✅ (redux, in_context) | ✅ |
-| Inpainting | ❌ | ✅ (fill variant) | ✅ (bagel) |
+| Inpainting | ✅ VAE encoder + masked denoising + /images/inpaint endpoint (Wave 26) | ✅ (fill variant) | ✅ (bagel) |
 | LoRA | ✅ ImageGenEngine.load_lora_adapter() (Wave 24) | ✅ 完整支持 | ✅ DiffusionLoRAManager |
-| VAE Tiling | ❌ | ✅ cos-ramp 混合 | ✅ 分佈式 VAE |
-| ControlNet | ❌ | ✅ | — |
-| Depth-guided | ❌ | ✅ | — |
-| TeaCache | ❌ | — | ✅ |
-| 多模型支持 | ❌ | ✅ 7+ 模型 | ✅ 25+ 模型 |
+| VAE Tiling | ✅ Tiled decode/encode with cosine blend, auto-tile >1024x1024 (Wave 26) | ✅ cos-ramp 混合 | ✅ 分佈式 VAE |
+| ControlNet | ✅ ConditioningPreprocessor + ControlNetBlock + /images/controlnet endpoint (Wave 26) | ✅ | — |
+| Depth-guided | ✅ DepthGuider + /images/depth-guided endpoint (Wave 26) | ✅ | — |
+| TeaCache | ✅ Timestep embedding aware cache, YUNSHU_TEACACHE env var, Z-Image coefficients (Wave 26) | — | ✅ |
+| 多模型支持 | ✅ Pipeline registry: Z-Image, Flux, Flux2, Qwen-Image with auto-detection (Wave 26) | ✅ 7+ 模型 | ✅ 25+ 模型 |
 | 中間預覽 (streaming) | ✅ preview_interval 可配置 (Wave 24) | ✅ 回調系統 | — |
 | 取消生成 | ✅ POST /v1/cancel (CANCEL) | — | — |
 | 尺寸驗證 | ✅ 64–2048, 64 倍數 (IMG-SIZE) | ✅ | ✅ |
@@ -1553,10 +1567,16 @@ vllm-omni 支持: **25+ 擴散架構**
 | `/v1/images/edits` | ✅ (IMG-EDIT) | — | — |
 | `/v1/images/variations` | ✅ (IMG-VAR) | — | — |
 
-### 20.4 視頻生成完全缺失
+### 20.4 視頻生成
 
-mlx-video 支持 Wan2.2 和 LTX2 (text-to-video, image-to-video)。vllm-omni 支持 hunyuan_video, wan2_2, ltx2。
-**Yunshu 零視頻能力。**
+VideoEngine 已實現 (Wave 26)，包裝 mlx-video 的 Wan2.2 和 LTX2 pipeline:
+- Text-to-Video (T2V): 文字生成視頻
+- Image-to-Video (I2V): 圖片+文字生成動畫
+- `/v1/video/generations` gateway 端點
+- ModelType.VIDEO 自動偵測
+- Fallback 模式 (無模型時生成佔位幀)
+
+尚待: 原生 MLX 視頻 pipeline (不依賴 mlx-video 庫)、串流視頻幀、視頻 LoRA。
 
 ---
 
@@ -1609,14 +1629,14 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | VLM 視覺語言 | ✅ streaming 已修復 (M1) | ✅ | ✅ (18 處理器) | — | — |
 | TTS 語音合成 | ✅ (30 模型, 原生串流) | ✅ | ✅ (8+ 模型) | — | — |
 | ASR 語音識別 | ✅ (13 模型) | ✅ | — | — | — |
-| **STS 語音到語音** | ❌ | ✅ | — | — | — |
-| 圖像生成 | ⚠️ 僅 Z-Image | — | ✅ (25+ 模型) | ✅ (7+ 模型) | — |
-| **視頻生成** | ❌ | — | ✅ (3+ 模型) | — | ✅ |
+| **STS 語音到語音** | ✅ STSEngine: enhance/separate/transform + gateway endpoints (Wave 25) | ✅ | — | — | — |
+| 圖像生成 | ✅ Pipeline registry: Z-Image + Flux/Flux2/Qwen-Image auto-detection (Wave 26) | — | ✅ (25+ 模型) | ✅ (7+ 模型) | — |
+| **視頻生成** | ✅ VideoEngine (Wan2.2/LTX2 wrapper) + /video/generations endpoint (Wave 26) | — | ✅ (3+ 模型) | — | ✅ |
 | **視頻理解** | ✅ VLM frame extraction (Wave 24) | — | ✅ | — | — |
 | OCR | ✅ GLM-OCR-bf16 實測通過 | ✅ (3 模型) | — | — | — |
 | LoRA (任何模態) | ✅ 文本 LoRA + gateway passthrough + 圖像 LoRA (load_lora_adapter) | — | ✅ | ✅ | ✅ |
 | img2img | ✅ generate() + variations/edits (Wave 24) | — | ✅ | ✅ | — |
-| Inpainting | ❌ | — | ✅ | ✅ | — |
+| Inpainting | ✅ VAE encoder + masked denoising + /images/inpaint (Wave 26) | — | ✅ | ✅ | — |
 
 ### 22.2 死代碼 vs 可整合功能
 
@@ -1652,8 +1672,8 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 | # | 行動 | 參考 | 狀態 |
 |---|------|------|------|
-| M10 | **添加 STS Engine**: DeepFilterNet, MossFormer2 | oMLX | ❌ 需指定模型 |
-| M11 | **支持更多圖像模型**: FLUX, FLUX2 | mflux | ❌ |
+| M10 | **添加 STS Engine**: DeepFilterNet, MossFormer2 | oMLX | ✅ STSEngine + signal processing fallback (Wave 25) |
+| M11 | **支持更多圖像模型**: FLUX, FLUX2 | mflux | ✅ Pipeline registry with auto-detection (Wave 26) |
 | M12 | **添加 LoRA 支持**: 圖像/文本 | mflux, vllm-omni | ✅ 文本 LoRA + gateway passthrough (Wave 24) |
 | M13 | **添加 MCP Client**: 外部工具服務器 | oMLX | ✅ MCP-C 已實現 |
 | M14 | **Realtime function calling**: 實現工具調用 | OpenAI | ✅ RT-FC 已實現 |
