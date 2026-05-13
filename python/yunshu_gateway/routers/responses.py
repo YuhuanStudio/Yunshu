@@ -54,6 +54,7 @@ class ResponsesRequest(BaseModel):
     seed: Optional[int] = None
     enable_thinking: Optional[bool] = None
     stop: Optional[list[str]] = None
+    lora_adapter: Optional[str] = None
 
 
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
@@ -123,6 +124,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             enable_thinking=req.enable_thinking,
             stop=req.stop,
             stream=False,
+            lora_adapter=req.lora_adapter,
         )
         return await _handle_vlm_chat(chat_req, messages, request)
 
@@ -140,89 +142,96 @@ async def create_response(req: ResponsesRequest, request: Request):
 
     response_id = f"resp-{uuid.uuid4().hex[:24]}"
 
-    if req.stream:
-        return StreamingResponse(
-            _stream_response(engine, req, messages, response_id, json_schema),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+    # LoRA adapter lifecycle
+    from .chat import _apply_lora_adapter, _release_lora_adapter
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
-    # Non-streaming
-    from yunshu_engine.batched_engine import BatchedEngine
-    is_batched = isinstance(engine, BatchedEngine)
+    try:
+        if req.stream:
+            return StreamingResponse(
+                _stream_response(engine, req, messages, response_id, json_schema),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
-    if is_batched:
-        result = await engine.generate(
-            prompt=messages,
-            max_tokens=req.max_output_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            seed=req.seed,
-            enable_thinking=req.enable_thinking,
-            json_schema=json_schema,
-            stop=req.stop,
-        )
-        text = result.text
-        pt = result.prompt_tokens
-        ct = result.completion_tokens
-        finish_reason = result.finish_reason or "stop"
-    else:
-        state = await engine.generate(
-            prompt=messages,
-            max_tokens=req.max_output_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            seed=req.seed,
-            enable_thinking=req.enable_thinking,
-            stop=req.stop,
-        )
-        text = state.generated_text
-        pt = state.prompt_token_count
-        ct = state.completion_token_count
-        finish_reason = state.finish_reason or "stop"
+        # Non-streaming
+        from yunshu_engine.batched_engine import BatchedEngine
+        is_batched = isinstance(engine, BatchedEngine)
 
-    # Extract tool calls
-    tool_calls = None
-    if req.tools:
-        from .chat import extract_tool_calls, clean_tool_call_markup
-        tool_calls = extract_tool_calls(text)
+        if is_batched:
+            result = await engine.generate(
+                prompt=messages,
+                max_tokens=req.max_output_tokens,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                seed=req.seed,
+                enable_thinking=req.enable_thinking,
+                json_schema=json_schema,
+                stop=req.stop,
+            )
+            text = result.text
+            pt = result.prompt_tokens
+            ct = result.completion_tokens
+            finish_reason = result.finish_reason or "stop"
+        else:
+            state = await engine.generate(
+                prompt=messages,
+                max_tokens=req.max_output_tokens,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                seed=req.seed,
+                enable_thinking=req.enable_thinking,
+                stop=req.stop,
+            )
+            text = state.generated_text
+            pt = state.prompt_token_count
+            ct = state.completion_token_count
+            finish_reason = state.finish_reason or "stop"
+
+        # Extract tool calls
+        tool_calls = None
+        if req.tools:
+            from .chat import extract_tool_calls, clean_tool_call_markup
+            tool_calls = extract_tool_calls(text)
+            if tool_calls:
+                text = clean_tool_call_markup(text)
+                finish_reason = "tool_calls"
+
+        # Build output items
+        output_items = []
+        content_parts = [{"type": "output_text", "text": text.strip()}]
+        output_items.append({
+            "type": "message",
+            "id": f"msg-{uuid.uuid4().hex[:24]}",
+            "role": "assistant",
+            "content": content_parts,
+        })
+
         if tool_calls:
-            text = clean_tool_call_markup(text)
-            finish_reason = "tool_calls"
+            for tc in tool_calls:
+                output_items.append({
+                    "type": "function_call",
+                    "id": f"fc-{uuid.uuid4().hex[:24]}",
+                    "call_id": f"call_{uuid.uuid4().hex[:8]}",
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                })
 
-    # Build output items
-    output_items = []
-    content_parts = [{"type": "output_text", "text": text.strip()}]
-    output_items.append({
-        "type": "message",
-        "id": f"msg-{uuid.uuid4().hex[:24]}",
-        "role": "assistant",
-        "content": content_parts,
-    })
-
-    if tool_calls:
-        for tc in tool_calls:
-            output_items.append({
-                "type": "function_call",
-                "id": f"fc-{uuid.uuid4().hex[:24]}",
-                "call_id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": tc["name"],
-                "arguments": tc["arguments"],
-            })
-
-    return JSONResponse({
-        "id": response_id,
-        "object": "response",
-        "created_at": int(time.time()),
-        "model": req.model,
-        "status": "completed",
-        "output": output_items,
-        "usage": {
-            "input_tokens": pt,
-            "output_tokens": ct,
-            "total_tokens": pt + ct,
-        },
-    })
+        return JSONResponse({
+            "id": response_id,
+            "object": "response",
+            "created_at": int(time.time()),
+            "model": req.model,
+            "status": "completed",
+            "output": output_items,
+            "usage": {
+                "input_tokens": pt,
+                "output_tokens": ct,
+                "total_tokens": pt + ct,
+            },
+        })
+    finally:
+        _release_lora_adapter(engine, loaded_adapter)
 
 
 async def _stream_response(engine, req, messages, response_id, json_schema):
