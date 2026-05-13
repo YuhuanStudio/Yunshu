@@ -30,9 +30,18 @@ import "katex/dist/katex.min.css";
 
 // ── Types ──
 
+interface ToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
 interface Message {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
   imageUrl?: string;
   reasoning?: string;
@@ -40,6 +49,8 @@ interface Message {
   tokens?: number;
   latencyMs?: number;
   logprobs?: { tokens: string[]; token_logprobs: number[] };
+  toolCalls?: ToolCall[];
+  toolCallId?: string;
   streaming?: boolean;
 }
 
@@ -97,6 +108,7 @@ export default function ChatPage() {
   const [jsonMode, setJsonMode] = useState(false);
   const [specDecode, setSpecDecode] = useState(false);
   const [showLogprobs, setShowLogprobs] = useState(false);
+  const [toolsJson, setToolsJson] = useState("");
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -307,6 +319,16 @@ export default function ChatPage() {
         payload.response_format = { type: "json_object" };
       }
 
+      // Parse tools if provided
+      if (toolsJson.trim()) {
+        try {
+          const tools = JSON.parse(toolsJson);
+          if (Array.isArray(tools) && tools.length > 0) {
+            payload.tools = tools;
+          }
+        } catch {}
+      }
+
       const response = await fetch("/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -356,6 +378,24 @@ export default function ChatPage() {
                 }
                 if (delta.content) {
                   last.content += delta.content;
+                }
+
+                // Capture tool calls from streaming delta
+                if (delta.tool_calls) {
+                  if (!last.toolCalls) last.toolCalls = [];
+                  for (const tc of delta.tool_calls) {
+                    const idx = tc.index ?? last.toolCalls.length;
+                    if (!last.toolCalls[idx]) {
+                      last.toolCalls[idx] = {
+                        id: tc.id || `call_${idx}`,
+                        type: "function",
+                        function: { name: tc.function?.name || "", arguments: tc.function?.arguments || "" },
+                      };
+                    } else {
+                      if (tc.function?.name) last.toolCalls[idx].function.name += tc.function.name;
+                      if (tc.function?.arguments) last.toolCalls[idx].function.arguments += tc.function.arguments;
+                    }
+                  }
                 }
 
                 const usage = chunk.usage;
@@ -708,6 +748,19 @@ export default function ChatPage() {
             />
           </div>
 
+          <div>
+            <label className="text-sm text-[var(--color-text-secondary)] block mb-1">
+              Tools (JSON)
+            </label>
+            <textarea
+              value={toolsJson}
+              onChange={(e) => setToolsJson(e.target.value)}
+              rows={5}
+              placeholder={'[\n  {\n    "type": "function",\n    "function": {\n      "name": "get_weather",\n      "description": "Get weather",\n      "parameters": {\n        "type": "object",\n        "properties": {"city": {"type": "string"}},\n        "required": ["city"]\n      }\n    }\n  }\n]'}
+              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-xs font-mono resize-none focus:outline-none focus:border-[var(--color-accent)]"
+            />
+          </div>
+
           <div className="pt-4 border-t border-[var(--color-border)]">
             <h4 className="text-xs font-medium text-[var(--color-text-secondary)] mb-2">
               About
@@ -914,6 +967,33 @@ function MessageBubble({ msg }: { msg: Message }) {
             ) : msg.streaming ? (
               <span className="inline-block w-2 h-4 bg-[var(--color-text-secondary)] animate-pulse" />
             ) : null}
+          </div>
+        )}
+
+        {/* Tool Calls */}
+        {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {msg.toolCalls.map((tc, i) => (
+              <div key={i} className="p-3 bg-[var(--color-bg-tertiary)] rounded-lg border border-[var(--color-border)]">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="px-1.5 py-0.5 rounded bg-[var(--color-accent)]/20 text-[var(--color-accent)] font-mono">
+                    {tc.function.name}
+                  </span>
+                  <span className="text-[var(--color-text-secondary)]">tool call</span>
+                </div>
+                {tc.function.arguments && (
+                  <pre className="mt-2 text-xs font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words max-h-40 overflow-auto">
+                    {(() => {
+                      try {
+                        return JSON.stringify(JSON.parse(tc.function.arguments), null, 2);
+                      } catch {
+                        return tc.function.arguments;
+                      }
+                    })()}
+                  </pre>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
