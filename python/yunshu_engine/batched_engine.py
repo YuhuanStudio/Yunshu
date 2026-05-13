@@ -2295,6 +2295,24 @@ class BatchedEngine:
             }
         return {}
 
+    def _get_spec_strategy(self):
+        """Return the appropriate unified SpecStrategy for this engine.
+
+        Uses SpecStrategyFactory to create a strategy based on the engine's
+        current spec decode configuration. Priority:
+          1. If a draft model is loaded → CrossModelStrategy
+          2. If N-gram proposer is active → NgramStrategy
+          3. Otherwise → None (no speculative decoding)
+
+        The returned strategy can be used with the unified begin/draft/accept
+        lifecycle from spec_interface.
+
+        Returns:
+            A SpecStrategy instance, or None if spec decode is not configured.
+        """
+        from .spec_interface import SpecStrategyFactory
+        return SpecStrategyFactory.from_env()
+
     def _check_memory_guard(
         self, prompt: str, max_tokens: int,
     ) -> GenerationOutput | None:

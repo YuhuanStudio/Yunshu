@@ -810,12 +810,12 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 功能 | 後端實現 | 前端暴露 |
 |------|---------|---------|
-| 猜測解碼 (EAGLE-3/MTP) | ✅ 完整實現 | ❌ |
-| N-gram 猜測解碼 | ✅ 完整實現 | ❌ |
-| SpecPrefill 稀疏預填充 | ✅ 完整實現 | ❌ |
-| SSD KV Cache | ✅ 完整實現 | ❌ |
+| 猜測解碼 (EAGLE-3/MTP) | ✅ 完整實現 | ✅ chat 頁面 checkbox + monitoring spec decode section |
+| N-gram 猜測解碼 | ✅ 完整實現 | ✅ monitoring 頁面 spec decode section |
+| SpecPrefill 稀疏預填充 | ✅ 完整實現 | ✅ 可通過 model_settings.json 啟用 |
+| SSD KV Cache | ✅ 完整實現 | ✅ monitoring 頁面 SSD Cache section |
 | 思考預算控制 | ✅ SamplingParams 支持 | ✅ enable_thinking + thinking_budget (P3-3) |
-| KV 量化 | ✅ 4/8-bit 量化 | ❌ |
+| KV 量化 | ✅ 4/8-bit 量化 | ✅ 可通過 YUNSHU_KV_QUANT_BITS env var 啟用 |
 | KV 前綴緩存統計 | ✅ get_stats() | ✅ monitoring 頁面 (P3-2) |
 | 記憶體守衛 | ✅ 完整實現 | ✅ monitoring 頁面 |
 | Tool Calling | ✅ 完整支持 | ✅ chat 頁面工具 JSON 輸入 + tool_calls 串流捕獲 (WEB-TOOL) |
@@ -1357,7 +1357,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 |---|------|------|------|
 | C8 | **啟用 RadixTree**: 接入調度器，替換平面 KVPrefixCache | SGLang | ✅ 已接入 PagedScheduler (Wave 23 驗證) |
 | C9 | **索引共享**: 存儲 KV 池索引而非張量副本 | SGLang, vllm-mlx | ✅ BlockTable + ref_count + COW (Wave 23 驗證) |
-| C10 | **批量猜測驗證**: 一次 forward 驗證所有 K 個 draft tokens | SGLang, vLLM | 可能 2x spec decode 吞吐 |
+| C10 | **批量猜測驗證**: 一次 forward 驗證所有 K 個 draft tokens | SGLang, vLLM | ✅ 已實現 — N-gram spec 單次 model() 批量驗證 (batched_engine.py:1908) |
 | C11 | **啟用 paged KV 默認**: enable_paged_kv=True | vLLM, SGLang | ✅ enable_paged_kv=True by default |
 | C12 | **記憶體壓力淘汰**: 動態記憶體壓力驅動 cache 淘汰 | vllm-mlx | ✅ 已實現 (Wave 23) |
 | C13 | **SQLite SSD 元數據**: 替代 JSON 索引 | vllm-mlx | ✅ 崩潰一致性 (ssd_sqlite_store.py) |
@@ -1383,7 +1383,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 | C20 | **分離式 P/D**: 獨立 prefill/decode 節點 | exo, vLLM | ✅ 已實現 (Wave 23) |
 | C21 | **多模態前綴緩存**: 緩存視覺/音頻特徵 | vllm-omni | ✅ VLM 加速 (Wave 21) |
 | C22 | **事件溯源集群狀態**: 崩潰恢復 + 審計 | exo | ✅ 已實現 (Wave 23) |
-| C23 | **Per-Model Settings**: 40+ 配置字段 | oMLX | 運維必需 |
+| C23 | **Per-Model Settings**: 40+ 配置字段 | oMLX | ✅ 已實現 — load_model_settings + _apply_settings + admin API |
 
 ---
 
