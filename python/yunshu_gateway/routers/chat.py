@@ -442,7 +442,7 @@ async def _build_multi_choice(
             ct = state.completion_token_count
             fr = state.finish_reason or "stop"
 
-        thinking_content, regular_content = extract_thinking(text)
+        thinking_content, regular_content = extract_thinking(text, req.model)
         cleaned = regular_content.strip()
 
         tool_calls = []
@@ -661,7 +661,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             )
 
         # Extract thinking (oMLX pattern)
-        thinking_content, regular_content = extract_thinking(raw_text)
+        thinking_content, regular_content = extract_thinking(raw_text, req.model)
 
         # Extract tool calls (oMLX pattern)
         tool_calls = []

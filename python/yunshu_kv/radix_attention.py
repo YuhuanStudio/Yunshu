@@ -406,23 +406,34 @@ class RadixTree:
         return leaves
 
     def get_stats(self) -> dict:
-        """Return tree statistics."""
+        """Return tree statistics with detailed metrics."""
         total_blocks = 0
         total_tokens = 0
+        active_refs = 0
+        max_depth = 0
+        leaf_count = 0
 
-        def _walk(node: RadixNode) -> None:
-            nonlocal total_blocks, total_tokens
+        def _walk(node: RadixNode, depth: int = 0) -> None:
+            nonlocal total_blocks, total_tokens, active_refs, max_depth, leaf_count
             total_blocks += node.num_blocks
             total_tokens += node.num_tokens
+            if node.ref_count > 0:
+                active_refs += 1
+            if not node.children:
+                leaf_count += 1
+            max_depth = max(max_depth, depth)
             for child in node.children.values():
-                _walk(child)
+                _walk(child, depth + 1)
 
-        _walk(self.root)
+        _walk(self.root, 0)
         return {
             "total_nodes": self._total_nodes,
             "total_blocks": total_blocks,
             "total_tokens": total_tokens,
             "total_ref_count": self._total_ref_count,
+            "active_ref_nodes": active_refs,
+            "leaf_count": leaf_count,
+            "max_depth": max_depth,
             "eviction_strategy": self._eviction_strategy,
             "eviction_stats": dict(self._eviction_stats),
         }

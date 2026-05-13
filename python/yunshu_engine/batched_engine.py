@@ -221,6 +221,12 @@ class BatchedEngine:
         # LoRA adapter manager (vLLM pattern)
         self._lora_manager = None
 
+        # mx.compile() for Metal kernel caching (SGLang CUDA Graphs equivalent)
+        self._compiled = False
+        self._use_compile = os.environ.get(
+            "YUNSHU_MX_COMPILE", ""
+        ).strip() in ("1", "true", "yes")
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -259,6 +265,15 @@ class BatchedEngine:
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
 
+        # Apply model-specific patches (DeepSeek MLA, Qwen 3.5 YARN, Gemma softcap)
+        try:
+            from .model_patches import apply_model_patches
+            patches = apply_model_patches(self._model, self._tokenizer, self.model_name)
+            if patches:
+                logger.info(f"Model patches applied: {patches}")
+        except Exception:
+            logger.debug("Model patches skipped", exc_info=True)
+
         # Load per-model settings from model_settings.json + env overrides
         self._load_model_settings()
 
@@ -279,6 +294,22 @@ class BatchedEngine:
         # Warmup generation + cache clear drops RSS from ~3.8GB to ~200MB
         # by forcing OS to reclaim clean mmap pages
         await loop.run_in_executor(executor, _warmup)
+
+        # mx.compile() for Metal kernel caching (SGLang CUDA Graphs equivalent)
+        # Compiles the model's forward pass into optimized Metal kernels.
+        # Only enabled via YUNSHU_MX_COMPILE=1 env var.
+        if self._use_compile and not self._compiled:
+            try:
+                import mlx.core as mx
+
+                def _compile_model():
+                    mx.compile(self._model)
+
+                await loop.run_in_executor(executor, _compile_model)
+                self._compiled = True
+                logger.info("Model compiled with mx.compile() — Metal kernels cached")
+            except Exception as e:
+                logger.warning(f"mx.compile() failed ({e}), continuing without compilation")
 
         # Initialize speculative decoding if model supports it (Phase 4)
         self._init_spec_decode()
@@ -1560,6 +1591,26 @@ class BatchedEngine:
             f"draft_length={spec_config.draft_length}"
         )
 
+        # Attempt to load draft model if configured (EAGLE/EAGLE-3 path)
+        draft_path = os.environ.get("YUNSHU_DRAFT_MODEL", "").strip()
+        if not draft_path and model_config:
+            draft_path = model_config.get("draft_model_path", "")
+        if draft_path:
+            try:
+                from mlx_lm.utils import load as load_model
+                draft_model, _ = load_model(draft_path)
+                from .speculative_decoder import SpeculativeDecoder
+                self._spec_decoder = SpeculativeDecoder(
+                    self._model, draft_model, self._tokenizer,
+                )
+                self._spec_enabled = True
+                logger.info(
+                    f"Draft model loaded from {draft_path}: "
+                    f"speculative decoding ACTIVE (type={head_info.head_type})"
+                )
+            except Exception as e:
+                logger.warning(f"Draft model load failed ({e}), speculative decoding disabled")
+
         # Store config for on-demand decoder creation
         # (actual decoder created when first requested, since it needs a draft model)
         self._spec_config = spec_config
@@ -2117,6 +2168,13 @@ class BatchedEngine:
         thinking = enable_thinking if enable_thinking is not None else self.enable_thinking
         tokenizer = self._tokenizer
 
+        # Apply model-specific message adapter (oMLX §13.2 pattern)
+        try:
+            from yunshu_engine.message_adapter import adapt_messages
+            messages = adapt_messages(messages, self.model_name)
+        except Exception:
+            pass
+
         if tokenizer and hasattr(tokenizer, "apply_chat_template"):
             try:
                 clean = [
@@ -2182,6 +2240,21 @@ class BatchedEngine:
             paged = self._engine_core.get_kv_cache_stats()
             result["paged_kv"] = paged
         return result
+
+    def get_radix_tree_stats(self) -> dict:
+        """Return RadixTree statistics (node count, eviction metrics, block usage)."""
+        if not self._engine_core:
+            return {"enabled": False}
+        scheduler = getattr(self._engine_core, "_scheduler", None)
+        if scheduler is None:
+            return {"enabled": False}
+        kv_mgr = getattr(scheduler, "_kv_manager", None)
+        if kv_mgr is None:
+            return {"enabled": False}
+        tree = getattr(kv_mgr, "_radix_tree", None)
+        if tree is None:
+            return {"enabled": False}
+        return {"enabled": True, **tree.get_stats()}
 
     @staticmethod
     def _extract_model_arch(model: Any) -> dict:

@@ -122,6 +122,15 @@ class JsonSchemaConstraint:
             return "array"
         if "enum" in schema:
             return "enum"
+        if "const" in schema:
+            return "const"
+        if "anyOf" in schema or "oneOf" in schema:
+            # Use the first option's type
+            options = schema.get("anyOf") or schema.get("oneOf") or []
+            non_null = [o for o in options if o.get("type") != "null"]
+            if non_null:
+                return self._get_type_from_schema(non_null[0])
+            return "any"
         return "any"
 
     def _resolve_schema_for_value(self, schema: dict, key: str | None = None) -> dict:
@@ -129,16 +138,35 @@ class JsonSchemaConstraint:
 
         For objects, look up the key in properties.
         For arrays, use items schema.
+        Handles anyOf/oneOf by resolving to first non-null option.
         """
         schema_type = self._get_type_from_schema(schema)
+
+        # Resolve anyOf/oneOf to concrete schema
+        if "anyOf" in schema:
+            non_null = [o for o in schema["anyOf"] if o.get("type") != "null"]
+            if non_null:
+                return self._resolve_schema_for_value(non_null[0], key)
+        if "oneOf" in schema:
+            non_null = [o for o in schema["oneOf"] if o.get("type") != "null"]
+            if non_null:
+                return self._resolve_schema_for_value(non_null[0], key)
 
         if schema_type == "object" or "properties" in schema:
             if key and "properties" in schema:
                 return schema["properties"].get(key, {"type": "string"})
+            # Check additionalProperties for unknown keys
+            if key and "additionalProperties" in schema:
+                add_props = schema["additionalProperties"]
+                if isinstance(add_props, dict):
+                    return add_props
             return {"type": "string"}  # default for unknown keys
 
         if schema_type == "array" or "items" in schema:
             return schema.get("items", {"type": "string"})
+
+        if schema_type == "enum":
+            return {"type": "string"}  # enum values are strings
 
         return schema
 
@@ -734,6 +762,20 @@ class JsonSchemaConstraint:
         self._schema_stack.clear()
         self._object_keys_remaining.clear()
         self._current_key = None
+        self._in_string = False
+        self._string_start = 0
+        self._number_start = 0
+        self._is_first_value = True
+
+    def get_stats(self) -> dict[str, Any]:
+        """Return constraint statistics for monitoring."""
+        return {
+            "state": self._state.name,
+            "schema_stack_depth": len(self._schema_stack),
+            "has_schema": self._schema is not None,
+            "is_done": self.is_done,
+            "text_buffer_len": len(self._text_buffer),
+        }
         self._in_string = False
         self._is_first_value = True
 

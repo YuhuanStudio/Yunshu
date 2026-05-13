@@ -27,6 +27,7 @@ export default function ImagesPage() {
   const [loading, setLoading] = useState(false);
   const [genTime, setGenTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/v1/models")
@@ -47,6 +48,7 @@ export default function ImagesPage() {
     setLoading(true);
     setError(null);
     setImageUrl(null);
+    setProgress("Starting generation...");
     const start = performance.now();
 
     try {
@@ -69,9 +71,11 @@ export default function ImagesPage() {
         if (img?.b64_json) {
           setImageUrl(`data:image/png;base64,${img.b64_json}`);
           setGenTime((performance.now() - start) / 1000);
+          setProgress(`Completed in ${((performance.now() - start) / 1000).toFixed(1)}s`);
         } else if (img?.url) {
           setImageUrl(img.url);
           setGenTime((performance.now() - start) / 1000);
+          setProgress(`Completed in ${((performance.now() - start) / 1000).toFixed(1)}s`);
         }
       } else {
         setError(`Generation failed: ${resp.status} ${await resp.text()}`);
@@ -221,6 +225,11 @@ export default function ImagesPage() {
             </>
           )}
         </button>
+        {progress && !imageUrl && (
+          <div className="text-xs text-[var(--color-text-secondary)] mt-2 animate-pulse">
+            {progress}
+          </div>
+        )}
       </div>
 
       {/* Result */}

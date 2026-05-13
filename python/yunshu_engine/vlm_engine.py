@@ -119,6 +119,8 @@ class VLMEngine:
         # C21: Multimodal prefix cache — maps image_hash + system_prompt hash to
         # processed token IDs, enabling reuse across conversations with same image
         self._multimodal_prefix_cache: dict[str, list[int]] = {}
+        self._mm_prefix_hits = 0
+        self._mm_prefix_misses = 0
 
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
@@ -474,6 +476,18 @@ class VLMEngine:
         prompt = self._processor.apply_chat_template(
             vlm_messages, **tpl_kwargs,
         )
+
+        # Check multimodal prefix cache for hit rate tracking
+        try:
+            system_text = ""
+            for m in messages:
+                if m.get("role") == "system":
+                    system_text += m.get("content", "")
+            cached_prefix = self._get_mm_prefix_tokens(image_paths, system_text)
+            if cached_prefix is not None:
+                logger.debug(f"VLM prefix cache hit: {len(cached_prefix)} tokens")
+        except Exception:
+            pass
 
         # Check vision feature cache
         cached_features = None
@@ -1116,7 +1130,12 @@ class VLMEngine:
     def _get_mm_prefix_tokens(self, image_paths: list[str], system_text: str) -> list[int] | None:
         """Get cached token IDs for a multimodal prefix (C21)."""
         key = self._mm_prefix_key(image_paths, system_text)
-        return self._multimodal_prefix_cache.get(key)
+        result = self._multimodal_prefix_cache.get(key)
+        if result is not None:
+            self._mm_prefix_hits += 1
+        else:
+            self._mm_prefix_misses += 1
+        return result
 
     def _store_mm_prefix_tokens(self, image_paths: list[str], system_text: str, token_ids: list[int]) -> None:
         """Store processed token IDs for a multimodal prefix (C21)."""
@@ -1132,6 +1151,7 @@ class VLMEngine:
 
     def get_stats(self) -> dict:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
+        total = self._mm_prefix_hits + self._mm_prefix_misses
         return {
             "model": self._model_path,
             "loaded": self.is_loaded,
@@ -1140,4 +1160,9 @@ class VLMEngine:
             "is_vlm": self._is_vlm,
             "num_requests_processed": self._num_requests_processed,
             "uptime_seconds": uptime,
+            "mm_prefix_cache_entries": len(self._multimodal_prefix_cache),
+            "mm_prefix_cache_hits": self._mm_prefix_hits,
+            "mm_prefix_cache_misses": self._mm_prefix_misses,
+            "mm_prefix_cache_hit_rate": self._mm_prefix_hits / total if total > 0 else 0.0,
+            "vision_cache_enabled": self._vision_cache is not None,
         }

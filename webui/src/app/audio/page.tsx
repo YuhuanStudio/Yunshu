@@ -30,6 +30,9 @@ export default function AudioPage() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [streamProgress, setStreamProgress] = useState("");
+  const [streamChunks, setStreamChunks] = useState<number>(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -76,6 +79,53 @@ export default function AudioPage() {
       setError(`Error: ${err}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleTtsStream = async () => {
+    if (!ttsText.trim() || !selectedModel) return;
+    setStreaming(true);
+    setError(null);
+    setStreamProgress("Connecting...");
+    setStreamChunks(0);
+    const start = performance.now();
+    try {
+      const resp = await fetch("/v1/audio/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          input: ttsText,
+          voice: ttsVoice,
+          instruct: ttsInstruct || undefined,
+          response_format: "wav",
+          stream: true,
+        }),
+      });
+      if (!resp.ok) {
+        setError(`Streaming TTS failed: ${resp.status}`);
+        return;
+      }
+      const reader = resp.body?.getReader();
+      if (!reader) { setError("No stream body"); return; }
+      const chunks: Uint8Array[] = [];
+      let chunkCount = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        chunkCount++;
+        setStreamChunks(chunkCount);
+        setStreamProgress(`Streaming... ${chunkCount} chunks received`);
+      }
+      const blob = new Blob(chunks, { type: "audio/wav" });
+      setAudioUrl(URL.createObjectURL(blob));
+      setGenTime((performance.now() - start) / 1000);
+      setStreamProgress(`Completed — ${chunkCount} chunks in ${((performance.now() - start) / 1000).toFixed(1)}s`);
+    } catch (err) {
+      setError(`Stream error: ${err}`);
+    } finally {
+      setStreaming(false);
     }
   };
 
@@ -201,14 +251,30 @@ export default function AudioPage() {
               </div>
             </div>
 
-            <button
-              onClick={handleTts}
-              disabled={loading || !ttsText.trim() || !selectedModel}
-              className="flex items-center gap-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
-              {loading ? "Generating..." : "Generate Speech"}
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleTts}
+                disabled={loading || streaming || !ttsText.trim() || !selectedModel}
+                className="flex items-center gap-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
+                {loading ? "Generating..." : "Generate"}
+              </button>
+              <button
+                onClick={handleTtsStream}
+                disabled={loading || streaming || !ttsText.trim() || !selectedModel}
+                className="flex items-center gap-2 bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-secondary)] border border-[var(--color-border)] disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                {streaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Music className="w-4 h-4" />}
+                {streaming ? "Streaming..." : "Stream"}
+              </button>
+            </div>
+
+            {streamProgress && (
+              <div className="text-xs text-[var(--color-text-secondary)] mt-1">
+                {streamProgress} {streamChunks > 0 && `(${streamChunks} chunks)`}
+              </div>
+            )}
           </div>
 
           {/* Audio Output */}

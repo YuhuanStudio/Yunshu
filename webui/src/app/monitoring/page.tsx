@@ -58,6 +58,9 @@ export default function MonitoringPage() {
   const [memoryGuard, setMemoryGuard] = useState<Record<string, unknown> | null>(null);
   const [ssdCache, setSsdCache] = useState<Record<string, unknown> | null>(null);
   const [prefillProgress, setPrefillProgress] = useState<Record<string, unknown> | null>(null);
+  const [radixTree, setRadixTree] = useState<Record<string, unknown> | null>(null);
+  const [hwProfile, setHwProfile] = useState<Record<string, unknown> | null>(null);
+  const [meshStatus, setMeshStatus] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -75,7 +78,7 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes] = await Promise.all([
+        const [sysRes, engRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes] = await Promise.all([
           fetch("/api/v1/monitoring/system"),
           fetch("/api/v1/monitoring/engine"),
           fetch("/v1/gw/monitoring/spec-decode").catch(() => null),
@@ -84,6 +87,9 @@ export default function MonitoringPage() {
           fetch("/v1/gw/monitoring/memory-guard").catch(() => null),
           fetch("/v1/gw/monitoring/ssd-cache").catch(() => null),
           fetch("/v1/gw/monitoring/prefill-progress").catch(() => null),
+          fetch("/api/v1/admin/radix-tree").catch(() => null),
+          fetch("/api/v1/admin/hardware-profile").catch(() => null),
+          fetch("/api/v1/mesh/status").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
@@ -121,6 +127,18 @@ export default function MonitoringPage() {
         if (ppRes && ppRes.ok) {
           const ppData = await ppRes.json();
           if (mounted.current) setPrefillProgress(ppData);
+        }
+        if (radixRes && radixRes.ok) {
+          const radixData = await radixRes.json();
+          if (mounted.current) setRadixTree(radixData);
+        }
+        if (hwRes && hwRes.ok) {
+          const hwData = await hwRes.json();
+          if (mounted.current) setHwProfile(hwData);
+        }
+        if (meshRes && meshRes.ok) {
+          const meshData = await meshRes.json();
+          if (mounted.current) setMeshStatus(meshData);
         }
         if (mounted.current) {
           setLastUpdate(new Date());
@@ -542,6 +560,127 @@ export default function MonitoringPage() {
                     ))}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* RadixTree Stats */}
+          {radixTree && radixTree.enabled && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <HardDrive className="w-4 h-4 text-[var(--color-accent)]" />
+                RadixTree Prefix Cache
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Total Nodes</div>
+                  <div className="font-medium tabular-nums">{Number(radixTree.total_nodes || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Total Blocks</div>
+                  <div className="font-medium tabular-nums">{Number(radixTree.total_blocks || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Total Tokens</div>
+                  <div className="font-medium tabular-nums">{Number(radixTree.total_tokens || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Active Refs</div>
+                  <div className="font-medium tabular-nums">{Number(radixTree.total_ref_count || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Leaf Count</div>
+                  <div className="font-medium tabular-nums">{Number(radixTree.leaf_count || 0).toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Max Depth</div>
+                  <div className="font-medium tabular-nums">{Number(radixTree.max_depth || 0)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Eviction Strategy</div>
+                  <div className="font-medium">{String(radixTree.eviction_strategy || "lru").toUpperCase()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Evicted (Total)</div>
+                  <div className="font-medium tabular-nums">
+                    {Number((radixTree.eviction_stats as Record<string, number>)?.total_freed_blocks || 0).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Hardware Profile */}
+          {hwProfile && !hwProfile.error && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
+                Hardware Profile
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Chip</div>
+                  <div className="font-medium text-xs">{String(hwProfile.chip_name || "—")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Generation</div>
+                  <div className="font-medium">{String(hwProfile.chip_generation || "—")} {String(hwProfile.chip_tier || "")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Total Memory</div>
+                  <div className="font-medium tabular-nums">{Number(hwProfile.total_memory_gb || 0).toFixed(1)} GB</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Working Set</div>
+                  <div className="font-medium tabular-nums">{Number(hwProfile.working_set_gb || 0).toFixed(1)} GB</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">GPU Cores</div>
+                  <div className="font-medium tabular-nums">{String(hwProfile.gpu_cores || "—")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">MLX / MLX-LM</div>
+                  <div className="font-medium text-xs">{String(hwProfile.mlx_version || "—")} / {String(hwProfile.mlx_lm_version || "—")}</div>
+                </div>
+              </div>
+              {(hwProfile.adaptive_defaults as Record<string, unknown>) && (
+                <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
+                  <div className="text-xs text-[var(--color-text-secondary)] mb-2">Adaptive Defaults</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    {Object.entries(hwProfile.adaptive_defaults as Record<string, unknown>).map(([k, v]) => (
+                      <div key={k}>
+                        <div className="text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                        <div className="font-medium tabular-nums">
+                          {typeof v === "number" ? (v > 1024 * 1024 ? fmtBytes(v) : v.toLocaleString()) : String(v)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Mesh Topology */}
+          {meshStatus && meshStatus.topology_type && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
+                Mesh Topology
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Topology</div>
+                  <div className="font-medium">{String(meshStatus.topology_type || "—").toUpperCase()}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Node Count</div>
+                  <div className="font-medium tabular-nums">{Number(meshStatus.node_count || 0)}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Backend</div>
+                  <div className="font-medium">{String(meshStatus.backend || "—")}</div>
+                </div>
               </div>
             </div>
           )}

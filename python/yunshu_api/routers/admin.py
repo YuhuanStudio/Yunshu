@@ -767,6 +767,42 @@ async def register_lora_adapter(model_id: str, req: LoRARegisterRequest, _=Depen
     return {"status": "registered", "adapter_id": req.adapter_id}
 
 
+@router.get("/radix-tree")
+async def get_radix_tree_stats(_=Depends(require_permission("can_view_admin"))):
+    """Get RadixTree prefix cache statistics.
+
+    Returns tree size, node count, eviction metrics, and block usage.
+    """
+    from yunshu_gateway.engine import get_engine, get_model_manager
+
+    engine = get_engine()
+    if engine is not None and hasattr(engine, "get_radix_tree_stats"):
+        return engine.get_radix_tree_stats()
+
+    manager = get_model_manager()
+    if manager is not None:
+        for mid, entry in manager._entries.items():
+            if entry.is_loaded and hasattr(entry, "_engine"):
+                eng = entry._engine
+                if hasattr(eng, "get_radix_tree_stats"):
+                    return eng.get_radix_tree_stats()
+
+    return {"enabled": False}
+
+
+@router.get("/hardware-profile")
+async def get_hardware_profile(_=Depends(require_permission("can_view_admin"))):
+    """Get hardware profile with adaptive defaults.
+
+    Returns chip info, memory, GPU cores, and computed optimal settings.
+    """
+    try:
+        from yunshu_engine.utils.hardware import get_hardware_profile
+        return get_hardware_profile()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _get_engine_for_model(model_id: str):
     from yunshu_gateway.engine import get_engine, get_model_manager
     manager = get_model_manager()

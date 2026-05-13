@@ -184,3 +184,114 @@ def detect_hardware() -> HardwareInfo:
         mlx_device_name=get_mlx_device_name(),
         os_version=get_os_version(),
     )
+
+
+def compute_adaptive_defaults(hw: HardwareInfo | None = None) -> dict:
+    """Compute optimal ModelSettings overrides based on detected hardware.
+
+    oMLX pattern: auto-tune batch size, KV cache limits, prefill chunks,
+    and prefix cache size based on chip generation and memory.
+
+    Returns a dict of ModelSettings field overrides (only non-default values).
+    """
+    if hw is None:
+        hw = detect_hardware()
+
+    overrides: dict = {}
+
+    chip_gen, chip_tier = parse_chip_info(hw.chip_name)
+    mem_gb = hw.total_memory_gb
+    ws_bytes = hw.max_working_set_bytes
+    ws_gb = ws_bytes / (1024 ** 3)
+
+    # ── Max KV cache memory ──
+    # Reserve 40% of working set for model weights + activations, rest for KV
+    max_kv = int(ws_bytes * 0.60)
+    overrides["max_kv_cache_memory"] = max_kv
+
+    # ── Memory pressure threshold ──
+    # Lower threshold on memory-constrained devices (8GB)
+    if mem_gb <= 8:
+        overrides["memory_pressure_threshold"] = 70.0
+    elif mem_gb <= 16:
+        overrides["memory_pressure_threshold"] = 80.0
+    else:
+        overrides["memory_pressure_threshold"] = 85.0
+
+    # ── Batch size ──
+    # M1/M2 base: 1, Pro: 2, Max: 4, Ultra: 8
+    tier_batch = {"": 1, "Pro": 2, "Max": 4, "Ultra": 8}
+    base_batch = tier_batch.get(chip_tier, 1)
+    # Scale with memory: 8GB → base, 16GB → base*2, 32+ → base*3
+    if mem_gb <= 8:
+        overrides["batch_size"] = base_batch
+    elif mem_gb <= 16:
+        overrides["batch_size"] = base_batch * 2
+    elif mem_gb <= 32:
+        overrides["batch_size"] = base_batch * 3
+    else:
+        overrides["batch_size"] = base_batch * 4
+
+    # ── Prefill chunk size ──
+    # Larger chunks on higher-bandwidth chips
+    if chip_tier in ("Max", "Ultra"):
+        overrides["prefill_chunk_size"] = 4096
+    elif chip_tier == "Pro":
+        overrides["prefill_chunk_size"] = 2048
+    else:
+        overrides["prefill_chunk_size"] = 1024
+
+    # ── Prefix cache ──
+    # More entries on larger memory systems
+    if mem_gb <= 8:
+        overrides["prefix_cache_max_entries"] = 16
+        overrides["prefix_cache_min_prefix"] = 64
+    elif mem_gb <= 16:
+        overrides["prefix_cache_max_entries"] = 32
+        overrides["prefix_cache_min_prefix"] = 48
+    else:
+        overrides["prefix_cache_max_entries"] = 64
+        overrides["prefix_cache_min_prefix"] = 32
+
+    # ── KV quantization ──
+    # Auto-enable 4-bit KV quant on 8GB devices
+    if mem_gb <= 8:
+        overrides["kv_cache_quant_bits"] = 4
+        overrides["kv_cache_quant_group_size"] = 64
+
+    # ── Spec decode ──
+    # N-gram spec decode is cheap — enable on 16GB+
+    if mem_gb >= 16:
+        overrides["ngram_spec_enabled"] = True
+
+    # ── SSD cache ──
+    if mem_gb <= 16:
+        overrides["ssd_cache_enabled"] = True
+        overrides["ssd_cache_max_gb"] = min(int(mem_gb), 10)
+
+    # ── Streaming ──
+    # Shorter keepalive on memory-constrained devices
+    if mem_gb <= 8:
+        overrides["stream_keepalive_interval"] = 10.0
+
+    return overrides
+
+
+def get_hardware_profile() -> dict:
+    """Return a full hardware profile summary for diagnostics."""
+    hw = detect_hardware()
+    chip_gen, chip_tier = parse_chip_info(hw.chip_name)
+    adaptive = compute_adaptive_defaults(hw)
+    return {
+        "chip_name": hw.chip_name,
+        "chip_generation": chip_gen,
+        "chip_tier": chip_tier,
+        "total_memory_gb": round(hw.total_memory_gb, 1),
+        "working_set_gb": round(hw.max_working_set_bytes / (1024 ** 3), 1),
+        "gpu_cores": hw.gpu_cores,
+        "mlx_device": hw.mlx_device_name,
+        "os_version": hw.os_version,
+        "mlx_version": get_mlx_version(),
+        "mlx_lm_version": get_mlx_lm_version(),
+        "adaptive_defaults": adaptive,
+    }

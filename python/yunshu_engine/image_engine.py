@@ -973,6 +973,14 @@ class ImageGenEngine:
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
 
+        # DFlash Block Diffusion (opt-in via YUNSHU_DFLASH=1)
+        self._dflash = None
+        import os
+        if os.environ.get("YUNSHU_DFLASH", "").strip() in ("1", "true", "yes"):
+            from .dflash import DFlashEngine, DFlashConfig
+            self._dflash = DFlashEngine(DFlashConfig.from_env())
+            logger.info("DFlash Block Diffusion enabled")
+
     @property
     def model_name(self) -> str:
         return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else self._model_path

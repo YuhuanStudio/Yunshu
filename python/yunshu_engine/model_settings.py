@@ -134,15 +134,27 @@ class ModelSettings:
         return changed
 
 
-def load_model_settings(model_path: str, model_id: str) -> ModelSettings:
+def load_model_settings(model_path: str, model_id: str, use_adaptive: bool = True) -> ModelSettings:
     """Load per-model settings from model directory or env vars.
 
     Priority (highest to lowest):
     1. Environment variable overrides
     2. model_settings.json in model directory
-    3. Defaults
+    3. Adaptive hardware defaults (if use_adaptive=True)
+    4. Defaults
     """
     settings = ModelSettings()
+
+    # 3. Apply adaptive hardware defaults (lowest priority override)
+    if use_adaptive and os.environ.get("YUNSHU_ADAPTIVE_DEFAULTS", "1").strip() not in ("0", "false", "no"):
+        try:
+            from yunshu_engine.utils.hardware import compute_adaptive_defaults
+            adaptive = compute_adaptive_defaults()
+            if adaptive:
+                settings.apply_overrides(adaptive)
+                logger.debug(f"Applied {len(adaptive)} adaptive defaults for {model_id}")
+        except Exception:
+            logger.debug("Adaptive defaults unavailable", exc_info=True)
 
     # 2. Load from model_settings.json
     settings_path = Path(model_path) / "model_settings.json"
