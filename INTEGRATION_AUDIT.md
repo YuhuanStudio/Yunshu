@@ -135,6 +135,9 @@
 |------|------|------|------|
 | SLEEP | 3 級休眠/喚醒端點 — `POST /sleep` (L0/L1/L2) + `POST /wake-up` | vLLM §12.5 | ✅ 已實現 |
 | SHUTDOWN | 優雅關閉狀態機 — RUNNING → REQUESTED → SHUTTING_DOWN | vLLM §12.1 | ✅ 已實現 |
+| RESPONSES | OpenAI Responses API — `POST /v1/responses` 統一端點 | oMLX §13.2 | ✅ 已實現 |
+| XTC | XTC 採樣支持 — `xtc_probability` + `xtc_threshold` 參數 | mlx-lm §15.4 | ✅ 已實現 |
+| VLM-JSON | VLM response_format — json_schema 約束接入 VLM text loop | §18.4 | ✅ 已實現 |
 
 ### 跨項目學習進度
 
@@ -815,7 +818,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 搶佔粒度 | 每步 KV 塊重試 | 整個請求搶佔 | vLLM 可在塊級搶佔 |
 | Spec token 調度 | 整合: num_tokens_with_spec, lookahead blocks | 不整合 BatchGenerator | 只在單請求 fast path 工作 |
 | 編碼器-解碼器 | 完整 EncoderCacheManager | 無 | 不支持 |
-| 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema 約束採樣器 | 缺乏多後端 |
+| 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema 約束採樣器 + VLM 接入 | 僅缺 xgrammar 後端 |
 | 遠程 KV 傳輸 | KVConnectorFactory, 異步 load/store | 無 | 無分離式預填充 |
 | LoRA 調度 | max_loras 約束, LoRA 緩存 | 無 | 完全缺失 |
 | Mamba/混合模型 | 塊對齊緩存分割 | 無 | 不處理混合注意力/SSM |
@@ -844,7 +847,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 ### 12.5 API Server 對比
 
 vLLM 有而 Yunshu 沒有的 endpoint:
-- `/v1/responses` — OpenAI Responses API
+- ~~`/v1/responses` — OpenAI Responses API~~ ✅ 已實現 (RESPONSES)
 - `/pooling`, `/classify`, `/score`, `/rerank` — 評分/重排
 - ~~`/sleep`, `/wake_up` — 3 級休眠/喚醒~~ ✅ 已實現 (SLEEP)
 - `/start_profile`, `/stop_profile` — 性能分析
@@ -877,8 +880,7 @@ Yunshu 有而 vLLM 沒有的:
 
 | 功能 | 說明 | 價值 |
 |------|------|------|
-| **Grammar Compiler (xgrammar)** | 結構化輸出，支持 JSON Schema, regex, context-free grammar | 生產必需 |
-| **Per-Model Settings Manager** | 40+ 每模型配置 (TurboQuant, SpecPrefill, DFlash, MTP, context window...) | 運維必需 |
+| **Grammar Compiler (xgrammar)** | 結構化輸出，支持 JSON Schema, regex, context-free grammar | ⚠️ json_schema 約束已實現，缺 xgrammar 後端 |
 | **Model Profiles & Templates** | 模型配置文件和全局模板 | 運維必需 |
 | **TurboQuant KV Cache** | 修補注意力層的混合精度 KV | 性能提升 |
 | **Harmony/gpt_oss Adapter** | GPT-OSS 消息格式適配 | 模型兼容 |
@@ -886,7 +888,7 @@ Yunshu 有而 vLLM 沒有的:
 | **Output Parser Factory** | 自動檢測模型特定的消息提取器 | 模型兼容 |
 | **DeepSeek V4 Patch Suite** | 7 文件: model, tokenizer, cache, tool parser, chat template | 模型支持 |
 | **Qwen 3.5 Attention Patch** | Qwen 3.5 特定注意力優化 | 性能提升 |
-| **Responses API** | OpenAI Responses API endpoint | API 兼容 |
+| **Responses API** | ~~OpenAI Responses API endpoint~~ ✅ 已實現 | `/v1/responses` |
 | **15+ Tool Call Parsers** | OpenAI, Anthropic, Gemini, Qwen, DeepSeek... | 工具調用兼容 |
 | **Multiple Reasoning Parsers** | Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony | 思考模式兼容 |
 | **MoE top-k Optimization** | 減少激活專家數, +7-16% 吞吐 | 性能提升 |

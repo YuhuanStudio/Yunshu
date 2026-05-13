@@ -211,8 +211,10 @@ def create_app() -> FastAPI:
 
     # Routes — L1 Gateway
     from .routers import sleep as sleep_mod
+    from .routers import responses as responses_mod
     app.include_router(chat.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
+    app.include_router(responses_mod.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
     app.include_router(models.router, prefix="/v1")
     app.include_router(anthropic.router, prefix="/v1")

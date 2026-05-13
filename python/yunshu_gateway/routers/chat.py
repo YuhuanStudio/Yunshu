@@ -138,6 +138,8 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Optional[str] = None
     stop_token_ids: Optional[list[int]] = None
     priority: int = Field(default=0, ge=0, le=100)
+    xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -394,6 +396,8 @@ async def _build_multi_choice(
                 spec_decode=req.spec_decode,
                 thinking_budget=req.thinking_budget,
                 stop_token_ids=req.stop_token_ids,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
             )
             text = result.text
             pt = result.prompt_tokens

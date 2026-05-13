@@ -256,7 +256,8 @@ class VLMEngine:
                 freq_p = kwargs.get('frequency_penalty', 0.0)
                 pres_p = kwargs.get('presence_penalty', 0.0)
                 lb = kwargs.get('logit_bias', None)
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p, lb)
+                js = kwargs.get('json_schema', None)
+                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p, lb, js)
 
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
@@ -539,6 +540,7 @@ class VLMEngine:
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
+        json_schema: dict | None = None,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -554,6 +556,15 @@ class VLMEngine:
         cache = make_prompt_cache(lm)
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
+
+        # JSON schema constraint
+        json_constraint = None
+        if json_schema is not None:
+            try:
+                from .json_schema import JsonSchemaConstraint
+                json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+            except Exception:
+                logger.debug("JSON schema constraint init failed", exc_info=True)
 
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
@@ -598,6 +609,16 @@ class VLMEngine:
                     if logit_bias:
                         for tid, bias in logit_bias.items():
                             logits[..., tid] += bias
+
+                # JSON schema constraint masking
+                if json_constraint is not None and tokens:
+                    try:
+                        allowed = json_constraint.get_allowed_tokens(self._tokenizer, tokens)
+                        if allowed:
+                            from .json_schema import apply_json_constraint
+                            logits = apply_json_constraint(logits, allowed)
+                    except Exception:
+                        pass
 
                 current = sampler(logits)
                 mx.eval(current)

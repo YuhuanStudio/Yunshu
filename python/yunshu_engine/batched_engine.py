@@ -313,6 +313,8 @@ class BatchedEngine:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -376,6 +378,8 @@ class BatchedEngine:
                 logprobs=logprobs,
                 top_logprobs=top_logprobs,
                 thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
             )
 
         # Engine loop path: continuous batching with scheduler overhead
@@ -430,6 +434,8 @@ class BatchedEngine:
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
         timeout_seconds: float = 300.0,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -480,6 +486,8 @@ class BatchedEngine:
             top_p=top_p,
             top_k=top_k if top_k > 0 else 0,
             min_p=min_p,
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
         )
 
         logits_processors = []
