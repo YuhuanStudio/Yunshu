@@ -374,6 +374,10 @@ class Scheduler:
         self._step_counter += 1
         self._maybe_clear_cache()
 
+        # 7b. Periodic memory pressure eviction (C12)
+        if self._step_counter % 64 == 0 and self._memory_monitor is not None:
+            self._maybe_evict_kv_cache()
+
         # 8. Cleanup finished
         self._cleanup_finished()
 
@@ -1163,6 +1167,34 @@ class Scheduler:
                 mx.clear_cache()
             except Exception:
                 pass
+
+    def _maybe_evict_kv_cache(self) -> None:
+        """Proactive memory pressure eviction (C12).
+
+        Called periodically from step(). When active memory exceeds
+        the configured threshold, evicts the oldest cached KV blocks.
+        """
+        try:
+            import mlx.core as mx
+            active_mem = mx.get_active_memory()
+            from .utils.hardware import get_hardware_info
+            hw = get_hardware_info()
+            total_mem = hw.total_memory_bytes
+            if total_mem <= 0:
+                return
+            usage = active_mem / total_mem
+            threshold = self.config.memory_guard_soft_limit
+            if usage >= threshold and hasattr(self, '_prefix_cache') and self._prefix_cache is not None:
+                mgr = getattr(self._prefix_cache, '_manager', None)
+                if mgr is not None and hasattr(mgr, 'memory_pressure_evict'):
+                    evicted = mgr.memory_pressure_evict(pressure_threshold=threshold)
+                    if evicted > 0:
+                        logger.info(
+                            f"Memory pressure eviction: {evicted} KV blocks freed "
+                            f"(usage {usage:.1%})"
+                        )
+        except Exception:
+            pass
 
     def _cleanup_finished(self) -> None:
         """Remove finished requests from running dict."""

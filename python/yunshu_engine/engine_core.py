@@ -51,6 +51,8 @@ class EngineCoreConfig:
     num_kv_heads: int = 0
     head_dim: int = 0
     kv_num_blocks: int = 0  # pre-computed block count (0 = auto-compute)
+    # C18: CPU/GPU overlap scheduling (SGLang pattern)
+    enable_cpu_gpu_overlap: bool = False  # Disabled by default; enable via YUNSHU_CPU_GPU_OVERLAP=1
 
 
 class EngineCore:
@@ -183,6 +185,22 @@ class EngineCore:
 
         # Memory guard (created after model info is available)
         self._memory_guard: Any = None
+
+        # C18: CPU/GPU overlap scheduler
+        from .cpu_gpu_overlap import OverlapConfig, OverlapScheduler
+        overlap_cfg = OverlapConfig.from_env()
+        if self.config.enable_cpu_gpu_overlap:
+            overlap_cfg.enabled = True
+        self._overlap_scheduler = OverlapScheduler(overlap_cfg)
+
+        # Adaptive batch scheduler (load-aware batch sizing)
+        from .adaptive_batch import AdaptiveBatchScheduler, AdaptiveBatchConfig
+        self._adaptive_batch = AdaptiveBatchScheduler(AdaptiveBatchConfig())
+
+        # Telemetry (sampled metric collection)
+        from .telemetry import TelemetryCollector, TelemetryConfig
+        telemetry_enabled = os.environ.get("YUNSHU_TELEMETRY", "0") == "1"
+        self._telemetry = TelemetryCollector(TelemetryConfig(enabled=telemetry_enabled))
 
         # Lifecycle
         self._running = False
@@ -523,9 +541,15 @@ class EngineCore:
 
             try:
                 # Run scheduler step on MLX executor thread
-                scheduler_output = await loop.run_in_executor(
-                    self._executor, self.scheduler.step
-                )
+                # C18: When CPU/GPU overlap is enabled, use async/sync pattern
+                if self._overlap_scheduler.config.enabled:
+                    scheduler_output = await loop.run_in_executor(
+                        self._executor, self._overlap_step,
+                    )
+                else:
+                    scheduler_output = await loop.run_in_executor(
+                        self._executor, self.scheduler.step
+                    )
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
                 failed = self.scheduler.fail_all_requests()
@@ -557,6 +581,32 @@ class EngineCore:
                 if req_output.finished:
                     self._signal_finished(rid)
                     self._num_requests_processed += 1
+
+            # Update adaptive batch scheduler metrics
+            if scheduler_output.outputs:
+                try:
+                    import mlx.core as mx
+                    active_mem = mx.get_active_memory()
+                    from .utils.hardware import get_hardware_info
+                    hw = get_hardware_info()
+                    mem_usage = active_mem / max(hw.total_memory_bytes, 1)
+                    self._adaptive_batch.update_metrics(
+                        latency_ms=0.0,  # Latency tracked per-request
+                        memory_usage=mem_usage,
+                        batch_size=len(scheduler_output.outputs),
+                    )
+                    # Telemetry: record step-level metrics
+                    self._telemetry.collect(
+                        "engine_step_batch_size",
+                        float(len(scheduler_output.outputs)),
+                        tags={"model": getattr(self.scheduler, 'model_id', '')},
+                    )
+                    self._telemetry.collect(
+                        "engine_step_memory_usage",
+                        mem_usage,
+                    )
+                except Exception:
+                    pass
 
             await asyncio.sleep(0)
 
@@ -608,13 +658,26 @@ class EngineCore:
         """Return engine core stats (oMLX pattern)."""
         uptime = time.monotonic() - self._start_time if self._start_time else 0
         scheduler_stats = self.scheduler.get_stats()
-        return {
+        stats = {
             "running": self._running,
             "num_requests_processed": self._num_requests_processed,
             "active_collectors": len(self._output_collectors),
             "uptime_seconds": round(uptime, 1),
+            "cpu_gpu_overlap": self._overlap_scheduler.get_stats(),
+            "adaptive_batch": self._adaptive_batch.get_stats(),
             **{f"scheduler_{k}": v for k, v in scheduler_stats.items()},
         }
+        return stats
+
+    def _overlap_step(self) -> Any:
+        """Run one scheduler step with CPU/GPU overlap (C18).
+
+        Called on the MLX executor thread. Overlaps CPU post-processing
+        from the previous step with GPU forward of the current step.
+        """
+        self._overlap_scheduler.step_async(self.scheduler)
+        # CPU can do other work here while GPU is computing
+        return self._overlap_scheduler.step_sync()
 
     def get_kv_cache_stats(self) -> dict:
         """Return KV prefix cache statistics (for admin endpoint)."""

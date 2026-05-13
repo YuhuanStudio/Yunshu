@@ -46,6 +46,8 @@ class MeshManager:
         self._dp_router: Optional[Any] = None
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
+        # C22: Event sourcing for crash recovery + audit
+        self._event_log: Optional[Any] = None
 
     @property
     def is_distributed(self) -> bool:
@@ -103,6 +105,9 @@ class MeshManager:
             f"{self._local_node.capabilities.gpu_cores} GPU cores"
         )
 
+        # 1b. C22: Initialize event log for crash recovery
+        self._init_event_log()
+
         # 2. Try to initialize mx.distributed
         initialized = self._collective.initialize(backend=backend)
 
@@ -147,6 +152,11 @@ class MeshManager:
                 pass
         self.stop_discovery()
         self._collective.shutdown()
+        # C22: Take final snapshot before shutdown
+        if self._event_log:
+            state = {n.node_id: n.to_dict() for n in self._topology.nodes}
+            self._event_log.take_snapshot(state)
+            self._event_log.close()
         logger.info("Mesh manager shut down")
 
     async def _heartbeat_loop(self) -> None:
@@ -192,7 +202,7 @@ class MeshManager:
 
     def get_stats(self) -> dict:
         """Return mesh status information."""
-        return {
+        stats = {
             "distributed": self.is_distributed,
             "rank": self.rank,
             "world_size": self.world_size,
@@ -202,6 +212,9 @@ class MeshManager:
             "pipeline": self._pipeline.to_dict() if self._pipeline else None,
             "data_parallel": self._dp_router.get_stats() if self._dp_router else None,
         }
+        if self._event_log:
+            stats["event_log"] = self._event_log.get_stats()
+        return stats
 
     def _setup_data_parallel(self) -> None:
         """Setup data-parallel router for multi-node deployments."""
@@ -270,6 +283,10 @@ class MeshManager:
         failed_node = self._topology.get_node(self._topology.get_rank(node_id))
         if failed_node:
             failed_node.state = MeshNodeState.OFFLINE
+            self._publish_event("node_state_change", node_id, {
+                "new_state": "offline",
+                "reason": "failure",
+            })
             logger.warning(f"Node failure: {failed_node.hostname} ({node_id})")
             # Re-evaluate topology
             if self._topology.size > 1:
@@ -283,6 +300,11 @@ class MeshManager:
         rank = self._topology.add_node(node)
         if self._dp_router:
             self._dp_router.add_node(node.node_id, rank)
+        self._publish_event("node_join", node.node_id, {
+            "hostname": node.hostname,
+            "rank": rank,
+            "capabilities": node.capabilities.__dict__ if hasattr(node.capabilities, '__dict__') else {},
+        })
         logger.info(f"Peer discovered: {node.hostname} rank={rank}")
 
     def _on_peer_lost(self, node: MeshNode) -> None:
@@ -290,6 +312,9 @@ class MeshManager:
         self._topology.remove_node(node.node_id)
         if self._dp_router:
             self._dp_router.remove_node(node.node_id)
+        self._publish_event("node_leave", node.node_id, {
+            "hostname": node.hostname,
+        })
         logger.info(f"Peer lost: {node.hostname}")
 
     def _on_node_timeout(self, node: MeshNode) -> None:
@@ -303,4 +328,50 @@ class MeshManager:
         node.state = MeshNodeState.READY
         if self._dp_router:
             self._dp_router.mark_available(node.node_id)
+        self._publish_event("node_state_change", node.node_id, {
+            "new_state": "ready",
+            "reason": "heartbeat_recovered",
+        })
         logger.info(f"Node recovered: {node.hostname}")
+
+    # ── C22: Event Sourcing Helpers ──
+
+    def _init_event_log(self) -> None:
+        """Initialize event log for cluster state persistence (C22)."""
+        db_dir = os.environ.get("YUNSHU_EVENT_LOG_DIR", "")
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+            db_path = os.path.join(db_dir, "cluster_events.db")
+        else:
+            db_path = ":memory:"
+
+        try:
+            from .event_sourcing import EventLog
+            self._event_log = EventLog(db_path=db_path)
+            self._event_log.initialize()
+
+            if db_path != ":memory:" and self._event_log.stats.total_events > 0:
+                states = self._event_log.recover_state()
+                logger.info(
+                    f"Event log recovered: {len(states)} nodes from "
+                    f"{self._event_log.stats.total_events} events"
+                )
+
+            # Record local node join
+            if self._local_node:
+                self._event_log.append("node_join", node_id=self._local_node.node_id, payload={
+                    "hostname": self._local_node.hostname,
+                    "rank": 0,
+                })
+        except Exception as e:
+            logger.warning(f"Event log init failed ({e}), running without persistence")
+            self._event_log = None
+
+    def _publish_event(self, event_type: str, node_id: str, payload: dict | None = None) -> None:
+        """Publish an event to the event log (C22)."""
+        if self._event_log is not None:
+            try:
+                self._event_log.append(event_type, node_id=node_id, payload=payload)
+            except Exception as e:
+                logger.debug(f"Event log append failed: {e}")
+

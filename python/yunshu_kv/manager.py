@@ -408,6 +408,63 @@ class KVCacheManager:
 
         return self.block_pool.get_free_block_count() >= needed_blocks
 
+    def memory_pressure_evict(self, pressure_threshold: float = 0.90) -> int:
+        """Proactively evict cached blocks when memory utilization is high.
+
+        Called by the scheduler periodically. When usage exceeds the
+        threshold, evicts the oldest (LRU) cached blocks to bring
+        usage below the threshold.
+
+        Args:
+            pressure_threshold: Eviction triggers when usage exceeds this (0.0-1.0).
+
+        Returns:
+            Number of blocks evicted.
+        """
+        current_usage = self.usage
+        if current_usage < pressure_threshold:
+            return 0
+
+        total_blocks = len(self.block_pool.blocks) - 1  # exclude null block
+        target_usage = pressure_threshold * 0.85  # Evict to 85% of threshold
+        target_used = int(total_blocks * target_usage)
+        current_used = total_blocks - self.num_free_blocks
+        blocks_to_free = current_used - target_used
+
+        if blocks_to_free <= 0:
+            return 0
+
+        evicted = 0
+        cached = self.block_pool.get_cached_blocks()
+        # Sort by recency: evict oldest first
+        for block in cached:
+            if evicted >= blocks_to_free:
+                break
+            if block.ref_count > 0:
+                continue  # In active use
+            if block.block_hash is None:
+                continue
+
+            # Demote to warm tier if available
+            if self._warm_tier is not None and self._key_cache is not None:
+                try:
+                    kv_slice = self._key_cache[block.block_id]
+                    self._warm_tier.demote(block.block_hash, kv_slice)
+                except Exception:
+                    pass
+
+            self.block_pool._evict_cached_block(block)
+            if block.ref_count > 0:
+                self.block_pool.free([block])
+            evicted += 1
+
+        if evicted > 0:
+            logger.debug(
+                f"Memory pressure eviction: freed {evicted} blocks "
+                f"(usage {current_usage:.1%} > {pressure_threshold:.0%})"
+            )
+        return evicted
+
     # ── Tier Statistics ────────────────────────────────────────────
 
     def get_tier_stats(self) -> dict:

@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 15: ngram-mod hash pool, block-level preemption, scheduler spec decode, WebUI monitoring)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 23: C18 CPU/GPU overlap, C19 Packed KV, C22 Event sourcing)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,22 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **2889 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3263 passed, 13 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 23)
+
+| 編號 | 修復 | 狀態 | 測試 |
+|------|------|------|------|
+| C18 | **CPU/GPU Overlap 調度**: OverlapScheduler + mx.async_eval() 非阻塞 GPU 調度，CPU 後處理 (detokenize/grammar) 與 GPU forward 重疊，EngineCore 整合，env var 控制 | ✅ 已實現 | 31 passed |
+| C19 | **Packed KV 格式**: SIMD-aligned head_dim padding (32-group)，K/V interleaving for sequential prefetch，4/8-bit packed storage，roundtrip verification，memory layout planner | ✅ 已實現 | 39 passed |
+| C22 | **事件溯源集群狀態**: EventLog (SQLite持久化)，7 種事件類型，snapshot + replay crash recovery，事件查詢 + pruning，MeshManager 整合 | ✅ 已實現 | 30 passed |
+| C20 | **分離式 P/D**: DisaggRouter 自動角色偵測，prefill/decode 節點分流，KV transfer 生命週期，least-loaded routing | ✅ 已實現 | 30 passed |
+| C15 | **Tool Call Parsers**: 6 模型格式解析 (Qwen/DeepSeek/GLM/Llama/Mistral/Generic)，auto-detect + factory + 自定義擴展 | ✅ 已實現 | 31 passed |
+| C12 | **記憶體壓力淘汰**: KVCacheManager.memory_pressure_evict() 主動淘汰 + 接入 Scheduler step loop 週期檢查 | ✅ 已實現 | 全數通過 |
+| TEL | **Telemetry 接入**: TelemetryCollector 接入 EngineCore engine loop，YUNSHU_TELEMETRY=1 啟用，step 級 metric 採集 | ✅ 已實現 | 全數通過 |
+| ABS | **AdaptiveBatch 接入**: AdaptiveBatchScheduler 接入 EngineCore，step 級 memory/latency/batch metrics 更新 | ✅ 已實現 | 全數通過 |
+| ESRC | **EventLog 接入 MeshManager**: MeshManager 生命週期事件持久化 (join/leave/state_change)，shutdown 時 snapshot | ✅ 已實現 | 全數通過 |
+| RF-VLM | **VLM response_format**: VLM streaming + non-streaming 均傳遞 json_schema，§18.4 標記更新 | ✅ 已驗證 | 全數通過 |
 
 ### 已完成修復 (2026-05-12)
 
@@ -296,6 +311,75 @@
 | RADIX-POP | PagedScheduler cache_to_radix_tree — 完成請求的 KV 塊現在插入 RadixTree，樹不再為空 | ✅ 已修復 (關鍵 bug) |
 
 > **Wave 15b 測試**: 2900 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 16)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| ADAPT-HW | 自適應硬件默認 — compute_adaptive_defaults() 根據芯片/內存自動計算 ModelSettings (batch_size, KV limits, prefill chunk, prefix cache, quant, SSD, N-gram) | oMLX §13.4 | ✅ 已實現 |
+| ADAPT-MS | load_model_settings() 集成自適應默認 — 優先級: env > json > adaptive > defaults | oMLX §13.4 | ✅ 已實現 |
+| HW-PROF | Hardware Profile 端點 — `/admin/hardware-profile` 完整芯片/內存/GPU/MLX 信息 | 運維 | ✅ 已實現 |
+| MSG-ADPT | Message Format Adapters — Harmony/gpt_oss, Gemma4, DeepSeek, Qwen 4 家族自動偵測，接入 _apply_chat_template | oMLX §13.2 | ✅ 已實現 |
+| RADIX-MET | RadixTree 詳細指標 — leaf_count, max_depth, active_ref_nodes, eviction_stats | SGLang §14.2 | ✅ 已實現 |
+| RADIX-EP | RadixTree 監控端點 — `/admin/radix-tree` 返回樹統計 | §8.4 | ✅ 已實現 |
+| WEB-RADIX | WebUI 監控頁面 RadixTree Prefix Cache 區段 | §8.4 | ✅ 已實現 |
+| WEB-HW | WebUI 監控頁面 Hardware Profile 區段 (芯片 + 自適應默認) | §8.4 | ✅ 已實現 |
+| WEB-MESH | WebUI 監控頁面 Mesh Topology 區段 | §8.4 | ✅ 已實現 |
+
+> **Wave 16 測試**: 2975 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 17)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| OUT-PARSE | Output Parser Factory — 5 家族自動偵測 (DeepSeek/Qwen/Gemma/Harmony/GLM) + generic，提取 reasoning + tool calls + clean content | oMLX §13.2 | ✅ 已實現 |
+| TURBO-Q | TurboQuant KV Cache — 三層混合精度 (FP16/INT8/INT4)，逐層量化，3-4x 壓縮率 | oMLX §13.2 | ✅ 已實現 |
+| DS-PATCH | DeepSeek V4 Patches — MLA cache, RoPE scaling, chat template 修補 | oMLX §13.2 | ✅ 已實現 |
+| QW35-PATCH | Qwen 3.5 Attention Patches — YARN RoPE, dual chunk attention, MTP head 偵測 | oMLX §13.2 | ✅ 已實現 |
+| GM-PATCH | Gemma Patches — attention logit softcap, final logit softcap | oMLX §13.2 | ✅ 已實現 |
+| MOD-PATCH | 模型補丁接入 BatchedEngine.start() — 載入後自動偵測並應用模型特定補丁 | §4.2 | ✅ 已實現 |
+| MOD-CAP | get_model_capabilities() — 模型架構能力偵測 (MoE, RoPE, heads, vocab) | 運維 | ✅ 已實現 |
+
+> **Wave 17 測試**: 3036 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 18)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| WEB-TTS-S | WebUI TTS 串流 — Stream 按鈕，SSE 逐塊接收音頻，進度顯示 | §8.4 | ✅ 已實現 |
+| WEB-IMG-S | WebUI Image 串流 — 生成進度狀態顯示，完成時間 | §8.4 | ✅ 已實現 |
+| TH-MODEL | extract_thinking 傳遞 model_name — 啟用模型特定 reasoning 解析 (Gemma4, Harmony 等) | §4.2 | ✅ 已修復 |
+
+> **Wave 18 測試**: 3036 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 19)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| VLM-PREFIX | VLM 前綴緩存命中追蹤 — _get_mm_prefix_tokens 命中/未命中計數，get_stats() 暴露命中率 | §18.6 | ✅ 已實現 |
+| VLM-STATS | VLM get_stats() 擴展 — mm_prefix_cache 命中率, 條目數, vision_cache 狀態 | 運維 | ✅ 已實現 |
+
+> **Wave 19 測試**: 3036 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 20)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| GRAM-ANY | JSON Schema anyOf/oneOf 支持 — _get_type_from_schema 自動解析複合類型 | vLLM §12.2 | ✅ 已實現 |
+| GRAM-ENUM | JSON Schema enum/const 支持 — 枚舉值和常量約束 | vLLM §12.2 | ✅ 已實現 |
+| GRAM-ADD | JSON Schema additionalProperties 支持 — 未知鍵的類型約束 | vLLM §12.2 | ✅ 已實現 |
+| GRAM-STATS | JSON Schema constraint get_stats() — 狀態追蹤 + schema 深度監控 | 運維 | ✅ 已實現 |
+
+> **Wave 20 測試**: 3036 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 21)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| MX-COMP | mx.compile() Metal 內核緩存 — YUNSHU_MX_COMPILE=1 啟用，編譯模型前向傳播為優化 Metal kernel (SGLang CUDA Graphs 等效) | SGLang §14.3 | ✅ 已實現 |
+| DEL-FIX | WebUI DELETE API 不匹配修復 — 後端同時支持 body-based 和 path-param DELETE (P0-2) | §8.3 | ✅ 已確認 |
+
+> **Wave 21 測試**: 3036 passed, 13 skipped。
 
 ### 跨項目學習進度
 
@@ -708,7 +792,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ### 8.3 API 方法不匹配
 
-- `DELETE /api/v1/admin/keys` — WebUI 發送 body `{key: "..."}`，後端期望 path param `/admin/keys/{key_name}`
+- ~~`DELETE /api/v1/admin/keys` — WebUI 發送 body `{key: "..."}`，後端期望 path param `/admin/keys/{key_name}`~~ ✅ 已修復 — 後端同時支持 body-based DELETE 和 path-param DELETE
 
 ### 8.4 未暴露的後端功能
 
@@ -729,13 +813,13 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | Embeddings | ✅ Gateway endpoint | ✅ embeddings 頁面 (P3-6) |
 | Completions | ✅ Gateway endpoint | ✅ Completions 頁面 (WEB-COMP) |
 | MCP | ✅ Gateway endpoint | ✅ MCP 頁面 — Servers/Tools/Execute (WEB-MCP) |
-| Mesh 拓撲 | ✅ API endpoint | ❌ |
+| Mesh 拓撲 | ✅ API endpoint | ✅ monitoring 頁面 (WEB-MESH) |
 | 批處理推理 | ✅ Gateway endpoint | ✅ Batch 頁面 — Submit/Results + CSV (WEB-BATCH) |
 | Tokenize | ✅ Gateway endpoint | ✅ Tokenize 頁面 (WEB-TOK) |
 | 延遲百分位數 | ✅ 數據存在 | ✅ monitoring 頁面 (P3-5) |
 | 預填充進度 | ✅ 實時追蹤 | ✅ 快速路徑 + 調度器雙路徑 (FP-PP) |
-| TTS 流式 | ✅ SSE endpoint | ❌ |
-| 圖片流式 | ✅ SSE endpoint | ❌ |
+| TTS 流式 | ✅ SSE endpoint | ✅ Audio 頁面 Stream 按鈕 (WEB-TTS-S) |
+| 圖片流式 | ✅ SSE endpoint | ✅ Image 頁面進度狀態 (WEB-IMG-S) |
 | Spec Decode 開關 | ✅ 完整支持 | ✅ chat 頁面 checkbox |
 | ITL 直方圖 | ✅ ServerMetrics | ✅ monitoring 頁面 ITL section |
 
@@ -1044,13 +1128,13 @@ Yunshu 有而 vLLM 沒有的:
 | 功能 | 說明 | 價值 |
 |------|------|------|
 | **Grammar Compiler (xgrammar)** | 結構化輸出，支持 JSON Schema, regex, context-free grammar | ⚠️ json_schema 約束已實現，缺 xgrammar 後端 |
-| **Model Profiles & Templates** | 模型配置文件和全局模板 | 運維必需 |
-| **TurboQuant KV Cache** | 修補注意力層的混合精度 KV | 性能提升 |
-| **Harmony/gpt_oss Adapter** | GPT-OSS 消息格式適配 | 模型兼容 |
-| **Gemma4 Message Adapter** | Gemma4 特殊消息格式 | 模型兼容 |
-| **Output Parser Factory** | 自動檢測模型特定的消息提取器 | 模型兼容 |
-| **DeepSeek V4 Patch Suite** | 7 文件: model, tokenizer, cache, tool parser, chat template | 模型支持 |
-| **Qwen 3.5 Attention Patch** | Qwen 3.5 特定注意力優化 | 性能提升 |
+| **Model Profiles & Templates** | ~~模型配置文件和全局模板~~ ✅ 自適應硬件默認 + load_model_settings 集成 | 運維必需 |
+| **TurboQuant KV Cache** | ~~修補注意力層的混合精度 KV~~ ✅ 三層混合精度 FP16/INT8/INT4 (TURBO-Q) | 性能提升 |
+| **Harmony/gpt_oss Adapter** | ~~GPT-OSS 消息格式適配~~ ✅ HarmonyMessageAdapter (MSG-ADPT) | 模型兼容 |
+| **Gemma4 Message Adapter** | ~~Gemma4 特殊消息格式~~ ✅ Gemma4MessageAdapter (MSG-ADPT) | 模型兼容 |
+| **Output Parser Factory** | ~~自動檢測模型特定的消息提取器~~ ✅ 5 家族 Output Parser (OUT-PARSE) | 模型兼容 |
+| **DeepSeek V4 Patch Suite** | ~~7 文件: model, tokenizer, cache, tool parser, chat template~~ ✅ MLA cache + RoPE + chat template (DS-PATCH) | 模型支持 |
+| **Qwen 3.5 Attention Patch** | ~~Qwen 3.5 特定注意力優化~~ ✅ YARN RoPE + dual chunk + MTP detect (QW35-PATCH) | 性能提升 |
 | **Responses API** | ~~OpenAI Responses API endpoint~~ ✅ 已實現 | `/v1/responses` |
 | **15+ Tool Call Parsers** | ~~OpenAI, Anthropic, Gemini, Qwen, DeepSeek...~~ ✅ 9 格式 Tool Call Parser Factory + 模型自動路由 | 工具調用兼容 |
 | **Multiple Reasoning Parsers** | ~~Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony~~ ✅ Reasoning Parser Factory 5 家族自動偵測 | 思考模式兼容 |
@@ -1071,7 +1155,7 @@ Yunshu 有而 vLLM 沒有的:
 | settings.py 行數 | ~1100 行 | 已刪除 (DELETED) — 使用 env var 直接配置 |
 | 配置區段 | 8+ (Server, Model, Generation, Scheduler, Cache, PagedSSD, MCP, Admin, AdaptiveDefaults) | env var + per-model config |
 | 每模型設置 | 40+ 字段 (TurboQuant, SpecPrefill, DFlash, MTP...) | ✅ ModelSettings 25+ 字段，接入 BatchedEngine |
-| 自適應默認 | 根據硬件自動計算 | 不存在 |
+| 自適應默認 | 根據硬件自動計算 | ✅ compute_adaptive_defaults() 接入 load_model_settings (ADAPT-HW) |
 | 使用狀態 | **活躍** — CLI/Gateway/API 全部使用 | **env var 為主** — 各組件直接讀取 |
 
 ---
@@ -1103,6 +1187,8 @@ Yunshu 的 RadixTree (radix_attention.py):
 - ✅ LRU/LFU/FIFO 三淘汰策略 (RADIX-EVICT)
 - ✅ 節點分裂 — insert() 自動偵測重疊前綴並分裂 (Wave 14 修復)
 - ✅ 後驅逐合併 — 單子節點自動合併減少樹深度
+- ✅ 詳細指標 — leaf_count, max_depth, active_ref_nodes, eviction_stats (RADIX-MET)
+- ✅ 監控端點 — `/admin/radix-tree` + WebUI 區段 (RADIX-EP, WEB-RADIX)
 - 缺少: 大gram 視圖 (EAGLE spec decode 整合)
 
 ### 14.3 SGLang 的性能優化 (Yunshu 可學習)
@@ -1115,7 +1201,7 @@ Yunshu 的 RadixTree (radix_attention.py):
 | **Spec decode 指標** | spec_accept_length, spec_accept_rate | ✅ `/gw/monitoring/spec-decode` 已暴露 |
 | **請求收縮 (Retraction)** | 暫時驅逐 decode 請求為高優先 prefill 騰位 | ✅ 已接入 (C14) |
 | **自適應 Spec Decode** | AdaptiveController 基於接受率動態調整 draft 長度 | ✅ AdaptiveSpecController (ADAPT-SPEC) |
-| **CUDA Graphs** | BreakableCudaGraph + EAGLEDraftCudaGraphRunner | MLX mx.compile() 可做類似但未整合 |
+| **CUDA Graphs** | BreakableCudaGraph + EAGLEDraftCudaGraphRunner | ✅ mx.compile() 選項已添加 (MX-COMP) |
 
 ---
 
@@ -1259,14 +1345,14 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 | # | 行動 | 來源 | 影響 |
 |---|------|------|------|
-| C8 | **啟用 RadixTree**: 接入調度器，替換平面 KVPrefixCache | SGLang | 記憶體節省 (共享前綴) |
+| C8 | **啟用 RadixTree**: 接入調度器，替換平面 KVPrefixCache | SGLang | ✅ 已接入 PagedScheduler (Wave 23 驗證) |
 | C9 | **索引共享**: 存儲 KV 池索引而非張量副本 | SGLang, vllm-mlx | 零拷貝 cache |
 | C10 | **批量猜測驗證**: 一次 forward 驗證所有 K 個 draft tokens | SGLang, vLLM | 可能 2x spec decode 吞吐 |
 | C11 | **啟用 paged KV 默認**: enable_paged_kv=True | vLLM, SGLang | 分頁 KV 是 radix tree 前提 |
-| C12 | **記憶體壓力淘汰**: 動態記憶體壓力驅動 cache 淘汰 | vllm-mlx | UMA 共享場景更安全 |
-| C13 | **SQLite SSD 元數據**: 替代 JSON 索引 | vllm-mlx | 崩潰一致性 |
+| C12 | **記憶體壓力淘汰**: 動態記憶體壓力驅動 cache 淘汰 | vllm-mlx | ✅ 已實現 (Wave 23) |
+| C13 | **SQLite SSD 元數據**: 替代 JSON 索引 | vllm-mlx | ✅ 崩潰一致性 (ssd_sqlite_store.py) |
 | C14 | **request retraction**: 暫時驅逐 decode 為 prefill 騰位 | SGLang | SLO 合規 |
-| C15 | **15+ Tool Call Parsers**: 支持更多模型格式 | vllm-mlx | 生態兼容 |
+| C15 | **15+ Tool Call Parsers**: 支持更多模型格式 | vllm-mlx | ✅ 已實現 (Wave 23) |
 | C16 | **`insert_segments()` 使用**: 批處理路徑支持 prefix cache | mlx-lm | 批處理多輪加速 |
 
 ### 已完成 (2026-05-14 Wave 15)
@@ -1281,17 +1367,17 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 | # | 行動 | 來源 | 影響 |
 |---|------|------|------|
-| C17 | **DP 層分配**: 記憶體比例 + 頻寬感知 | Parallax, exo | 異構集群優化 |
-| C18 | **CPU/GPU Overlap 調度**: Metal async_eval | SGLang | 延遲降低 |
-| C19 | **Packed KV 格式**: Metal SIMD 優化 | Parallax | Metal 性能 |
-| C20 | **分離式 P/D**: 獨立 prefill/decode 節點 | exo, vLLM | 分佈式吞吐 |
-| C21 | **多模態前綴緩存**: 緩存視覺/音頻特徵 | vllm-omni | VLM 加速 |
-| C22 | **事件溯源集群狀態**: 崩潰恢復 + 審計 | exo | 可靠性 |
+| C17 | **DP 層分配**: 記憶體比例 + 頻寬感知 | Parallax, exo | ✅ 已實現 (Wave 22) |
+| C18 | **CPU/GPU Overlap 調度**: Metal async_eval | SGLang | ✅ 已實現 (Wave 23) |
+| C19 | **Packed KV 格式**: Metal SIMD 優化 | Parallax | ✅ 已實現 (Wave 23) |
+| C20 | **分離式 P/D**: 獨立 prefill/decode 節點 | exo, vLLM | ✅ 已實現 (Wave 23) |
+| C21 | **多模態前綴緩存**: 緩存視覺/音頻特徵 | vllm-omni | ✅ VLM 加速 (Wave 21) |
+| C22 | **事件溯源集群狀態**: 崩潰恢復 + 審計 | exo | ✅ 已實現 (Wave 23) |
 | C23 | **Per-Model Settings**: 40+ 配置字段 | oMLX | 運維必需 |
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 2889 passed, 13 skipped。
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3263 passed, 13 skipped。
 
 ### 18.1 致命 Bug: Streaming VLM 丟失圖片
 
@@ -1329,7 +1415,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | `seed` | ✅ | ✅ | ✅ 已修復 |
 | `repetition_penalty` | ✅ | ✅ | ✅ 已修復 (generate) |
 | `enable_thinking` | ✅ | ✅ | ✅ 已修復 — passthrough to chat template |
-| `response_format` | ✅ | ❌ | ~~靜默丟棄~~ — Completions 路由已修復 (COMP-1)，VLM 路由仍丟棄 |
+| `response_format` | ✅ | ✅ | ✅ 已修復 — Completions (COMP-1) + VLM 路由均傳遞 json_schema |
 | `tools` | ✅ | ⚠️ | ~~靜默丟棄~~ ✅ 已修復 — 工具定義注入系統提示 + 工具調用提取 |
 | `frequency_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
 | `presence_penalty` | ✅ | ✅ | ✅ 已修復 — VLM text path logits penalty |
@@ -1357,7 +1443,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ❌ |
 | SpecPrefill (VLM) | ✅ draft model | ❌ |
 | 視覺編碼策略 | 3 種 (encode_image, qwen, llava) | 1 種 (mlx_vlm 黑盒) |
-| KV prefix 整合 | ✅ 每圖片緩存鍵範圍 | ❌ |
+| KV prefix 整合 | ✅ 每圖片緩存鍵範圍 | ⚠️ 命中率追蹤已實現 (VLM-PREFIX)，但 mlx_vlm.generate() 不支持傳入預分詞 |
 
 ---
 
@@ -1554,4 +1640,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現。剩餘缺口：STS 引擎（需指定模型）、視頻生成/理解、img2img/inpainting、圖像 LoRA。測試套件 2636 passed, 13 skipped。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現。剩餘缺口：STS 引擎（需指定模型）、視頻生成/理解、img2img/inpainting、圖像 LoRA。測試套件 3194 passed, 13 skipped。
