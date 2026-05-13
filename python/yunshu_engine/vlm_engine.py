@@ -246,7 +246,7 @@ class VLMEngine:
             if seed is not None:
                 mx.random.seed(seed)
 
-            if image_paths and self._has_vision and self._is_vlm:
+            if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
                 return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths)
 
             prompt_text = self._format_prompt(messages)
