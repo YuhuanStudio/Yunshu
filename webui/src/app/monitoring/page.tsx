@@ -427,6 +427,28 @@ export default function MonitoringPage() {
               </div>
             </div>
           )}
+
+          {/* ITL (Inter-Token Latency) */}
+          {requests && (requests as Record<string, unknown>).itl && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <CircleDot className="w-4 h-4 text-[var(--color-accent)]" />
+                Inter-Token Latency
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries((requests as Record<string, unknown>).itl as Record<string, unknown>).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">
+                      {k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                    </div>
+                    <div className="font-medium tabular-nums">
+                      {typeof v === "number" ? v.toFixed(2) : String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

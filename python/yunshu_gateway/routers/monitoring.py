@@ -240,6 +240,23 @@ async def prometheus_export() -> str:
                 pm.set_gauge("spec_enabled",
                     1 if (entry.engine._spec_enabled or entry.engine._ngram_proposer is not None) else 0)
 
+                # ITL stats from ServerMetrics
+                try:
+                    core = entry.engine._engine_core
+                    if core and hasattr(core, '_memory_guard') and core._memory_guard:
+                        sm = core._memory_guard._monitor if hasattr(core._memory_guard, '_monitor') else None
+                except Exception:
+                    pass
+                try:
+                    from ..middleware.metrics import get_metrics
+                    metrics = get_metrics()
+                    if hasattr(metrics, '_server_metrics') and metrics._server_metrics:
+                        itl = metrics._server_metrics.get_itl_stats()
+                        pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0))
+                        pm.set_gauge("itl_p99_ms", itl.get("itl_p99_ms", 0))
+                except Exception:
+                    pass
+
     return pm.generate()
 
 
