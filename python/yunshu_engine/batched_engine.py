@@ -112,6 +112,60 @@ def _progressive_quantize_kv_cache(
     _maybe_quantize_kv_cache(prompt_cache, quantized_kv_start, kv_group_size, kv_bits)
 
 
+def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store) -> None:
+    """Store a thinking segment KV for future reuse."""
+    try:
+        import hashlib as _hl
+        conv_id = _hl.sha256(str([int(t) for t in ids[:16]]).encode()).hexdigest()[:16]
+        thinking_store.store(
+            conversation_id=conv_id,
+            thinking_tokens=thinking_tokens,
+            context_tokens=[int(t) for t in ids],
+            kv_data=None,
+        )
+    except Exception:
+        pass
+
+
+def _build_constrained_sampler(sampler, json_schema, tokenizer):
+    """Build a constrained sampler from a grammar specification.
+
+    Handles:
+    - JSON schema dict → JsonSchemaConstraint
+    - "json_object" string → generic JSON constraint
+    - {"type": "regex", "pattern": "..."} → RegexConstraint
+    - {"type": "choice", "choices": [...]} → ChoiceConstraint
+    - {"type": "cfg", "grammar": "..."} → LarkGrammarConstraint
+    """
+    if isinstance(json_schema, dict) and json_schema.get("type") in ("regex", "choice", "cfg"):
+        from .grammar_constraint import ConstraintFactory
+        grammar_type = json_schema["type"]
+        if grammar_type == "regex":
+            grammar = json_schema.get("pattern", "")
+        elif grammar_type == "choice":
+            grammar = json_schema.get("choices", [])
+        elif grammar_type == "cfg":
+            grammar = json_schema.get("grammar", "")
+        else:
+            return sampler
+        try:
+            constraint = ConstraintFactory.create(grammar_type, grammar, tokenizer)
+            from .json_schema import ConstrainedSampler
+            return ConstrainedSampler(sampler, constraint, tokenizer)
+        except Exception:
+            return sampler
+
+    # Standard JSON schema path
+    from .json_schema import JsonSchemaConstraint, ConstrainedSampler
+    if isinstance(json_schema, str):
+        import json as _json
+        schema = _json.loads(json_schema)
+    else:
+        schema = json_schema
+    constraint = JsonSchemaConstraint(schema)
+    return ConstrainedSampler(sampler, constraint, tokenizer)
+
+
 class BatchedEngine:
     """User-facing continuous batching engine (oMLX BatchedEngine pattern).
 
@@ -688,18 +742,12 @@ class BatchedEngine:
             xtc_threshold=xtc_threshold,
         )
 
-        # JSON Schema constraint: wrap sampler with ConstrainedSampler
+        # JSON Schema / grammar constraint: wrap sampler with ConstrainedSampler
         if json_schema is not None:
             try:
-                from .json_schema import JsonSchemaConstraint, ConstrainedSampler
-                if isinstance(json_schema, str):
-                    schema = json.loads(json_schema)
-                else:
-                    schema = json_schema
-                constraint = JsonSchemaConstraint(schema)
-                sampler = ConstrainedSampler(sampler, constraint, tokenizer)
+                sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
             except Exception:
-                logger.warning("JSON schema constraint setup failed, falling back to unconstrained", exc_info=True)
+                logger.warning("Grammar constraint setup failed, falling back to unconstrained", exc_info=True)
 
         logits_processors = []
         if repetition_penalty != 1.0:
@@ -1220,15 +1268,12 @@ class BatchedEngine:
             min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
         )
 
-        # JSON Schema constraint for streaming fast path
+        # Grammar constraint for streaming fast path
         if json_schema is not None:
             try:
-                from .json_schema import JsonSchemaConstraint, ConstrainedSampler
-                schema = json.loads(json_schema) if isinstance(json_schema, str) else json_schema
-                constraint = JsonSchemaConstraint(schema)
-                sampler = ConstrainedSampler(sampler, constraint, tokenizer)
+                sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
             except Exception:
-                logger.warning("JSON schema constraint setup failed in streaming", exc_info=True)
+                logger.warning("Grammar constraint setup failed in streaming", exc_info=True)
 
         # Build logits processors for penalty/bias params
         logits_processors = []
@@ -1292,7 +1337,10 @@ class BatchedEngine:
             n_tok = 0
             thinking_tokens_used = 0
             think_end_token = None
+            think_start_token = None
             _first_token = True
+            _in_thinking = False
+            _thinking_tokens: list[int] = []
 
             # Prefill progress tracking for streaming fast path
             _prefill_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
@@ -1304,9 +1352,10 @@ class BatchedEngine:
             except Exception:
                 _prefill_tracker = None
 
-            if thinking_budget is not None:
+            if thinking_budget is not None or enable_thinking:
                 try:
                     think_end_token = tokenizer.encode("</think")[-1]
+                    think_start_token = tokenizer.encode("<think")[-1]
                 except Exception:
                     pass
 
@@ -1345,15 +1394,33 @@ class BatchedEngine:
                     if thinking_budget is not None and enable_thinking:
                         thinking_tokens_used += 1
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                            # Store thinking segment before returning
+                            if _thinking_tokens and self._thinking_store is not None:
+                                _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
                             _put((new_text, n_tok, True))
                             prefix_cache.add(ids, cache)
                             mx.synchronize()
                             return
+                    # Track thinking segment boundaries in streaming
+                    if think_start_token is not None:
+                        if not _in_thinking and token == think_start_token:
+                            _in_thinking = True
+                            _thinking_tokens = []
+                        elif _in_thinking:
+                            _thinking_tokens.append(token)
+                            if token == think_end_token:
+                                _in_thinking = False
                     _put((new_text, n_tok, stop_hit or suffix_hit))
                     if stop_hit or suffix_hit:
+                        # Store thinking segment on stop
+                        if _thinking_tokens and self._thinking_store is not None:
+                            _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
                         return
+                # Store thinking segment at end of generation
+                if _thinking_tokens and self._thinking_store is not None:
+                    _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
                 prefix_cache.add(ids, cache)
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment

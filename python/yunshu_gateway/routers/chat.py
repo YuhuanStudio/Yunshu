@@ -188,7 +188,13 @@ def _parse_response_format(response_format: dict | None, grammar: dict | None = 
     - {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}} → specific schema
     - grammar: {"type": "json", "schema": {...}} → specific schema
     - grammar: {"type": "json"} → generic JSON constraint
+    - grammar: {"type": "regex", "pattern": "..."} → regex constraint
+    - grammar: {"type": "choice", "choices": [...]} → enumeration constraint
+    - grammar: {"type": "cfg", "grammar": "...", "start": "start"} → context-free grammar
     - None → no constraint
+
+    For non-JSON grammar types, returns the grammar dict as-is for the engine
+    to create the appropriate constraint via ConstraintFactory.
     """
     # grammar takes priority when it specifies a schema
     if grammar is not None:
@@ -198,7 +204,12 @@ def _parse_response_format(response_format: dict | None, grammar: dict | None = 
             if schema:
                 return schema
             return "json_object"
-        # regex/context-free grammar not yet supported
+        if gtype == "regex":
+            return grammar  # Pass through for ConstraintFactory
+        if gtype == "choice":
+            return grammar
+        if gtype == "cfg":
+            return grammar
 
     if response_format is None:
         return None
