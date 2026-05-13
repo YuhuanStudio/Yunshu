@@ -194,6 +194,10 @@ class Scheduler:
         from .mrope import BatchRopeDeltaManager
         self._rope_delta_mgr = BatchRopeDeltaManager()
 
+        # ITL tracking (C2/ITL-1: inter-token latency per request)
+        self._last_token_time: dict[str, float] = {}
+        self._itl_samples: dict[str, list[float]] = {}
+
     def _init_batch_generator(self) -> None:
         """Create BatchGenerator on first use (lazy init)."""
         if self._batch_gen is not None:
@@ -855,7 +859,11 @@ class Scheduler:
             self._pending_prefill.pop(rid, None)
 
     def _process_responses(self, responses: list) -> list[RequestOutput]:
-        """Distribute GenerationBatch.Response to per-request outputs (oMLX pattern)."""
+        """Distribute GenerationBatch.Response to per-request outputs (oMLX pattern).
+
+        Includes ITL tracking and progressive KV quantization.
+        """
+        _now = time.perf_counter()
         outputs = []
         for resp in responses:
             uid = resp.uid
@@ -885,6 +893,17 @@ class Scheduler:
                     token_text = self.tokenizer.decode([resp.token])
 
                 req.output_text += token_text
+
+                # ITL tracking: record inter-token latency per request
+                last_tok = self._last_token_time.get(req_id)
+                if last_tok is not None:
+                    itl = _now - last_tok
+                    if 0 < itl < 10:  # filter outliers
+                        itl_list = self._itl_samples.get(req_id)
+                        if itl_list is None:
+                            self._itl_samples[req_id] = itl_list = []
+                        itl_list.append(itl)
+                self._last_token_time[req_id] = _now
             elif is_finished:
                 pass
 
@@ -1008,6 +1027,15 @@ class Scheduler:
                         generation_duration=req.generation_duration,
                         model_id=self.model_id,
                     )
+                    # Record ITL samples to histogram (ITL-1)
+                    itl_list = self._itl_samples.pop(req_id, [])
+                    if itl_list and hasattr(self._server_metrics, 'record_itl'):
+                        for sample in itl_list:
+                            self._server_metrics.record_itl(sample)
+
+                # Cleanup ITL tracking state
+                self._last_token_time.pop(req_id, None)
+                self._itl_samples.pop(req_id, None)
 
         return outputs
 

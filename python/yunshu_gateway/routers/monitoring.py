@@ -208,6 +208,16 @@ async def requests_stats(
     data["latency_percentiles"] = agg.get_percentiles("duration_ms", window_seconds=window)
     data["token_percentiles"] = agg.get_percentiles("tokens_out", window_seconds=window)
     data["endpoint_breakdown"] = agg.get_endpoint_breakdown(window_seconds=window)
+
+    # ITL stats from ServerMetrics (batch-path ITL tracking)
+    try:
+        from ..middleware.metrics import get_metrics
+        metrics = get_metrics()
+        if hasattr(metrics, '_server_metrics') and metrics._server_metrics is not None:
+            data["itl"] = metrics._server_metrics.get_itl_stats()
+    except Exception:
+        pass
+
     return data
 
 

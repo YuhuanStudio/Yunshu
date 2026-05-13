@@ -257,6 +257,18 @@ class BatchedEngine:
         # Warm prompt prefill: pre-populate KV cache with common system prompts
         await self._warm_prompt_prefill()
 
+        # Auto-start EngineCore for continuous batching (default production path)
+        # Previously was lazy-loaded only when use_engine_loop=True.
+        # Now always starts so the scheduler is ready for concurrent requests.
+        use_fast_only = os.environ.get("YUNSHU_FAST_PATH_ONLY", "").strip() in ("1", "true", "yes")
+        if not use_fast_only:
+            try:
+                await self._ensure_engine_core()
+                logger.info("EngineCore auto-started — continuous batching ready")
+            except Exception as e:
+                logger.warning(f"EngineCore auto-start failed ({e}), falling back to fast-path only")
+                self._engine_core = None
+
     def _load_model_settings(self):
         """Load per-model settings from model directory and apply to engine."""
         from .model_settings import load_model_settings

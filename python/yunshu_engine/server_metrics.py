@@ -48,6 +48,11 @@ class ServerMetrics:
         self._alltime_generation_duration: float = 0.0
         self._alltime_per_model: dict[str, dict[str, Any]] = {}
 
+        # ITL histogram (ITL-1: inter-token latency tracking)
+        self._itl_samples: list[float] = []
+        self._itl_p50: float = 0.0
+        self._itl_p99: float = 0.0
+
         self._start_time = time.time()
         self._last_save_time = time.time()
 
@@ -156,6 +161,38 @@ class ServerMetrics:
 
         if needs_save:
             self.save_alltime()
+
+    def record_itl(self, itl_seconds: float) -> None:
+        """Record an inter-token latency sample (ITL-1).
+
+        Called from Scheduler._process_responses for each generated token.
+        Maintains a bounded buffer and computes percentiles on flush.
+        """
+        self._itl_samples.append(itl_seconds)
+        # Keep buffer bounded (flush and compute percentiles every 1000 samples)
+        if len(self._itl_samples) >= 1000:
+            self._compute_itl_percentiles()
+
+    def _compute_itl_percentiles(self) -> None:
+        """Compute ITL percentiles from collected samples."""
+        if not self._itl_samples:
+            return
+        import bisect
+        samples = sorted(self._itl_samples)
+        n = len(samples)
+        self._itl_p50 = samples[n // 2]
+        self._itl_p99 = samples[min(int(n * 0.99), n - 1)]
+        self._itl_samples = samples[-100:]  # Keep last 100 for rolling stats
+
+    def get_itl_stats(self) -> dict[str, Any]:
+        """Return ITL statistics."""
+        if self._itl_samples:
+            self._compute_itl_percentiles()
+        return {
+            "itl_p50_ms": round(self._itl_p50 * 1000, 2),
+            "itl_p99_ms": round(self._itl_p99 * 1000, 2),
+            "itl_samples_buffered": len(self._itl_samples),
+        }
 
     def _build_snapshot(
         self,
