@@ -1292,11 +1292,11 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ### 21.3 多模態路由 Bug
 
-1. **VLM streaming 丟失圖片** (§18.1) — 最嚴重的多模態 bug
+1. **VLM streaming 丟失圖片** (§18.1) — ✅ **已修復 (M1)** — streaming 使用 mlx_vlm.stream_generate()
 2. **音頻內容被靜默丟棄** — Chat 消息中的音頻部分被忽略
 3. **Anthropic 路由器不支持圖片** — `image` 塊被轉為文本佔位符 `[Image: ...]`
-4. **多 VLM 模型路由不正確** — 選取第一個載入的 VLM 引擎，忽略 `req.model`
-5. **VLM 無 context window 驗證** — 跳過 LLM 的 context window 檢查
+4. **多 VLM 模型路由不正確** — ✅ **已修復 (M5)** — 優先匹配 req.model
+5. **VLM 無 context window 驗證** — ✅ **已修復** — 通用路徑已有 validate_context_window
 
 ---
 
@@ -1307,7 +1307,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | 模態 | Yunshu | oMLX | vllm-omni | mflux | mlx-video |
 |------|--------|------|-----------|-------|-----------|
 | LLM 文本生成 | ✅ | ✅ | ✅ | — | — |
-| VLM 視覺語言 | ⚠️ streaming 壞 | ✅ | ✅ (18 處理器) | — | — |
+| VLM 視覺語言 | ✅ streaming 已修復 (M1) | ✅ | ✅ (18 處理器) | — | — |
 | TTS 語音合成 | ✅ (30 模型) | ✅ | ✅ (8+ 模型) | — | — |
 | ASR 語音識別 | ✅ (13 模型) | ✅ | — | — | — |
 | **STS 語音到語音** | ❌ | ✅ | — | — | — |
