@@ -16,6 +16,7 @@ class TestHealthChecks:
 
         _main._shutting_down = False
         _main._active_requests = 0
+        _main._server_state = _main.ServerState.RUNNING
 
         self._engine = Engine(EngineConfig())
         self._engine._model = object()
@@ -44,11 +45,15 @@ class TestHealthChecks:
         assert resp.status_code == 200
         data = resp.json()
         assert data["alive"] is True
-        assert "shutting_down" in data
+        assert "state" in data
+        assert data["state"] in ("running", "shutdown_requested", "shutting_down")
 
     def test_readiness_probe_with_model(self):
         from yunshu_gateway.main import create_app
-        from yunshu_gateway.engine import set_engine
+        from yunshu_gateway.engine import set_engine, get_engine
+
+        # Save and restore engine state
+        old_engine = get_engine()
 
         # Fresh engine to avoid shared state from other tests
         engine = Engine(EngineConfig())
@@ -57,16 +62,19 @@ class TestHealthChecks:
         engine._running = True
         set_engine(engine)
 
-        app = create_app()
-        client = TestClient(app)
+        try:
+            app = create_app()
+            client = TestClient(app)
 
-        resp = client.get("/health/ready")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["checks"]["model_loaded"] is True
-        assert data["checks"]["gpu_memory_ok"] is True
-        assert data["checks"]["not_shutting_down"] is True
-        assert data["ready"] is True
+            resp = client.get("/health/ready")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["checks"]["model_loaded"] is True
+            assert data["checks"]["gpu_memory_ok"] is True
+            assert data["checks"]["not_shutting_down"] is True
+            assert data["ready"] is True
+        finally:
+            set_engine(old_engine)
 
     def test_readiness_probe_no_model(self):
         from yunshu_gateway.main import create_app

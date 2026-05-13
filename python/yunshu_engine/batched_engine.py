@@ -531,6 +531,8 @@ class BatchedEngine:
 
             gen_t0 = time.perf_counter()
             first = True
+            _itl_samples: list[float] = []
+            _last_tok_time = 0.0
             _lprocs = logits_processors if logits_processors else None
             spec_prefill_done = False
 
@@ -596,6 +598,14 @@ class BatchedEngine:
                         if first:
                             ttft_s = time.perf_counter() - gen_t0
                             first = False
+                            _last_tok_time = time.perf_counter()
+                        else:
+                            # ITL tracking
+                            _tok_now = time.perf_counter()
+                            _itl = _tok_now - _last_tok_time
+                            _last_tok_time = _tok_now
+                            if _itl > 0 and _itl < 10:
+                                _itl_samples.append(_itl)
                         tokens.append(token)
                         # Request-level timeout: check every N tokens
                         if len(tokens) % _timeout_check_interval == 0:
@@ -699,7 +709,7 @@ class BatchedEngine:
         finish_reason = "stop" if tokens and tokens[-1] in stop_ids else "length"
         output_text = _clean_special_tokens(output_text)
 
-        # Record TTFT in Prometheus
+        # Record TTFT + ITL in Prometheus
         if ttft_s > 0:
             try:
                 from ..middleware.prometheus_exporter import get_prometheus_metrics
@@ -709,8 +719,12 @@ class BatchedEngine:
                     pm.set_gauge("kv_prefix_cache_hits", 1)
                 else:
                     pm.set_gauge("kv_prefix_cache_misses", 1)
+                # ITL: average inter-token latency
+                if _itl_samples:
+                    avg_itl = sum(_itl_samples) / len(_itl_samples)
+                    pm.observe_histogram("itl_seconds", avg_itl)
             except Exception:
-                logger.debug("TTFT prometheus recording failed", exc_info=True)
+                logger.debug("TTFT/ITL prometheus recording failed", exc_info=True)
 
         return GenerationOutput(
             text=output_text,

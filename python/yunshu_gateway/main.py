@@ -3,6 +3,8 @@
 import os
 import asyncio
 import logging
+
+from starlette.requests import Request
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -23,8 +25,13 @@ MODELS_DIR = os.environ.get(
 # ProcessMemoryEnforcer instance (multi-model mode only)
 _memory_enforcer = None
 
-# Shutdown state
-_shutting_down = False
+# Shutdown state machine (vLLM pattern: RUNNING → REQUESTED → SHUTTING_DOWN)
+class ServerState:
+    RUNNING = "running"
+    REQUESTED = "shutdown_requested"
+    SHUTTING_DOWN = "shutting_down"
+
+_server_state = ServerState.RUNNING
 _active_requests = 0
 _drain_event: asyncio.Event | None = None
 
@@ -53,10 +60,10 @@ def _get_memory_limit_bytes() -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle."""
-    global _memory_enforcer, _drain_event, _shutting_down
+    global _memory_enforcer, _drain_event, _server_state
 
     _drain_event = asyncio.Event()
-    _shutting_down = False
+    _server_state = ServerState.RUNNING
 
     if DEFAULT_MODEL:
         # Single-model mode: use BatchedEngine directly
@@ -115,12 +122,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    # Graceful shutdown with request draining
-    _shutting_down = True
+    # Graceful shutdown with request draining (state machine)
+    _server_state = ServerState.REQUESTED
 
-    # Wait for active requests to drain (configurable via env, default 30s)
+    # Wait for active requests to drain
     drain_timeout = float(os.environ.get("YUNSHU_DRAIN_TIMEOUT", "30"))
-    if _active_requests > 0 and _drain_event is not None:
+    if _active_requests > 0 and _drain_event is not None and _server_state == ServerState.REQUESTED:
         try:
             await asyncio.wait_for(_drain_event.wait(), timeout=drain_timeout)
         except asyncio.TimeoutError:
@@ -128,6 +135,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if _memory_enforcer is not None:
         await _memory_enforcer.stop()
+
+    _server_state = ServerState.SHUTTING_DOWN
 
     engine = get_engine()
     if engine and engine.is_loaded:
@@ -171,6 +180,16 @@ def create_app() -> FastAPI:
     from .middleware.tenant_auth import TenantAuthMiddleware
 
     app.add_middleware(MetricsMiddleware)
+
+    # Sleep middleware: reject inference requests while sleeping
+    @app.middleware("http")
+    async def sleep_guard(request: Request, call_next):
+        from .routers.sleep import is_sleeping
+        path = request.url.path
+        if is_sleeping() and not path.startswith(("/sleep", "/wake-up", "/health", "/api/v1/admin", "/api/v1/monitoring")):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=503, content={"detail": "Server is sleeping. POST /wake-up to resume."})
+        return await call_next(request)
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TenantAuthMiddleware)
@@ -191,6 +210,7 @@ def create_app() -> FastAPI:
     from .routers import anthropic, audio, batch_inference, bench, chat, completions, embeddings, images, mcp, models, monitoring as gw_monitoring, realtime, tokenize
 
     # Routes — L1 Gateway
+    from .routers import sleep as sleep_mod
     app.include_router(chat.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
@@ -203,6 +223,7 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(realtime.router)
     app.include_router(bench.router)
+    app.include_router(sleep_mod.router)
 
     # Routes — L1 Gateway Monitoring (system, models, requests, prometheus)
     app.include_router(gw_monitoring.router, prefix="/api/v1")
@@ -287,8 +308,8 @@ def create_app() -> FastAPI:
             checks["gpu_memory_ok"] = True
 
         # Check if shutting down
-        checks["not_shutting_down"] = not _shutting_down
-        if _shutting_down:
+        checks["not_shutting_down"] = _server_state == ServerState.RUNNING
+        if _server_state != ServerState.RUNNING:
             ready = False
 
         return {
@@ -299,7 +320,7 @@ def create_app() -> FastAPI:
     @app.get("/health/live")
     async def liveness() -> dict:
         """Liveness probe — is the server alive?"""
-        return {"alive": True, "shutting_down": _shutting_down}
+        return {"alive": True, "state": _server_state}
 
     @app.get("/version")
     async def version() -> dict:

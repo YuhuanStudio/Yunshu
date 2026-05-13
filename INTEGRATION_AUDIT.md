@@ -123,6 +123,18 @@
 | COMP-1 | Completions `response_format` → `json_schema` 解析並傳遞至引擎 | ✅ 已修復 |
 | COMP-2 | Completions streaming 傳遞 `enable_thinking` 和 `json_schema` | ✅ 已修復 |
 | MTP-MEM | test_mtp.py loaded_model fixture + gc.collect+mx.clear_cache 釋放 GPU 記憶體 | ✅ 已修復 |
+| VLM-TOOL | VLM 工具調用 — 工具定義注入系統提示 + 工具調用提取 | ✅ 已修復 |
+| MON-MG | `/gw/monitoring/memory-guard` 記憶體守衛統計端點 | ✅ 已修復 |
+| MON-SSD | `/gw/monitoring/ssd-cache` SSD KV 統計端點 | ✅ 已修復 |
+| MON-PM | `/gw/monitoring/per-model` 每模型請求統計端點 | ✅ 已修復 |
+| ITL-1 | ITL (Inter-Token Latency) 直方圖追蹤 — `_generate_fast` 中採樣 + Prometheus | ✅ 已修復 |
+
+### 新增功能 (2026-05-13 第四批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| SLEEP | 3 級休眠/喚醒端點 — `POST /sleep` (L0/L1/L2) + `POST /wake-up` | vLLM §12.5 | ✅ 已實現 |
+| SHUTDOWN | 優雅關閉狀態機 — RUNNING → REQUESTED → SHUTTING_DOWN | vLLM §12.1 | ✅ 已實現 |
 
 ### 跨項目學習進度
 
@@ -792,8 +804,8 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 調度-執行 | 獨立進程 + 非阻塞 future | asyncio + 單 GPU 線程 | MLX 執行阻塞事件循環 |
 | 流水線並行 | Batch queue + 異步 overlap | 無 | 無調度/執行重疊 |
 | 數據並行 | DPEngineCoreProc + all-reduce | DataParallelRouter 接入 MeshManager (DP-1) | 管線已接入，但尚未在生產請求路徑中使用 |
-| 休眠/喚醒 | 3 級休眠 (L0:暫停 L1:卸載權重 L2:丟棄 GPU) | 無 | 無節能或權重卸載 |
-| 優雅關閉 | 3 狀態機 (RUNNING/REQUESTED/SHUTTING_DOWN) | 基本 _shutting_down 標誌 | 較不健壯 |
+| 休眠/喚醒 | 3 級休眠 (L0:暫停 L1:卸載權重 L2:丟棄 GPU) | ✅ 3 級休眠端點 (SLEEP) | L0 暫停 + L1 卸載 + L2 深度休眠 |
+| 優雅關閉 | 3 狀態機 (RUNNING/REQUESTED/SHUTTING_DOWN) | ✅ 3 狀態機 (SHUTDOWN) | RUNNING → REQUESTED → SHUTTING_DOWN |
 
 ### 12.2 調度器對比
 
@@ -834,9 +846,9 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 vLLM 有而 Yunshu 沒有的 endpoint:
 - `/v1/responses` — OpenAI Responses API
 - `/pooling`, `/classify`, `/score`, `/rerank` — 評分/重排
-- `/sleep`, `/wake_up` — 3 級休眠/喚醒
+- ~~`/sleep`, `/wake_up` — 3 級休眠/喚醒~~ ✅ 已實現 (SLEEP)
 - `/start_profile`, `/stop_profile` — 性能分析
-- `/reset_prefix_cache` — 緩存管理
+- ~~`/reset_prefix_cache` — 緩存管理~~ ✅ 已有 `/api/v1/admin/cache/clear`
 - 動態 LoRA 加載/卸載
 - 分離式 serving (P/D render + generate)
 
@@ -930,7 +942,7 @@ Yunshu 的 RadixTree (radix_attention.py, 365 行):
 
 | 優化 | 說明 | Yunshu 狀態 |
 |------|------|-------------|
-| **TTFT + ITL 直方圖** | 指數桶直方圖追蹤延遲分布 | ✅ TTFT 直方圖已接入 (C2)，ITL 待補 |
+| **TTFT + ITL 直方圖** | 指數桶直方圖追蹤延遲分布 | ✅ TTFT + ITL 直方圖均已接入 (C2 + ITL-1) |
 | **Cache hit rate 實時追蹤** | 每步更新 cache_hit_rate Prometheus gauge | ✅ KV prefix cache hits/misses gauges 已添加 |
 | **隊列深度指標** | num_running_reqs, num_queue_reqs | ✅ `/admin/queue/stats` endpoint 已接入 (CTRL-Q) |
 | **Spec decode 指標** | spec_accept_length, spec_accept_rate | ✅ `/gw/monitoring/spec-decode` 已暴露 |
