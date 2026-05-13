@@ -209,6 +209,21 @@ class BatchedEngine:
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
+
+        # Detect model's cache types for type-aware KV management
+        try:
+            from yunshu_kv.model_cache_config import ModelCacheConfig
+            from mlx_lm.models.cache import make_prompt_cache
+            test_cache = make_prompt_cache(self._model)
+            self._cache_config = ModelCacheConfig.build_from_cache(test_cache)
+            logger.info(
+                f"Cache config: {self._cache_config.num_layers} layers, "
+                f"{self._cache_config.sliceable_count} sliceable"
+            )
+        except Exception as e:
+            logger.debug(f"Cache type detection skipped: {e}")
+            self._cache_config = None
+
         # Warmup generation + cache clear drops RSS from ~3.8GB to ~200MB
         # by forcing OS to reclaim clean mmap pages
         await loop.run_in_executor(executor, _warmup)
@@ -246,6 +261,12 @@ class BatchedEngine:
         if self._engine_core is not None:
             await self._engine_core.stop()
             self._engine_core = None
+        # Release KV prefix cache (holds MLX array refs)
+        if self._kv_prefix_cache is not None:
+            self._kv_prefix_cache.clear()
+        self._spec_decoder = None
+        self._ngram_proposer = None
+        self._warm_prompts = None
         self._model = None
         self._tokenizer = None
         self._loaded = False
@@ -868,6 +889,10 @@ class BatchedEngine:
                         mx.synchronize()
                         return
                 prefix_cache.add(ids, cache)
+                detokenizer.finalize()
+                remaining = detokenizer.last_segment
+                if remaining:
+                    _put((remaining, n_tok, False))
                 _put(("", n_tok, True))
                 mx.synchronize()
             _put(_sentinel)
@@ -1585,6 +1610,10 @@ class BatchedEngine:
                         return
 
             prefix_cache.add(ids, cache)
+            detokenizer.finalize()
+            remaining = detokenizer.last_segment
+            if remaining:
+                _put((remaining, n_tok, False))
             _put(("", n_tok, True))
             mx.synchronize()
             _put(_sentinel)

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -129,6 +130,22 @@ class EngineCore:
                             num_blocks = 1024  # safe default
 
                     kv_manager = KVCacheManager(kv_config, num_blocks=num_blocks)
+
+                    # Wrap with TieredKVCacheManager if SSD cache is configured
+                    ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR")
+                    if ssd_dir:
+                        from yunshu_kv.tiered import TieredKVCacheManager, SSDCacheStore
+                        ssd_store = SSDCacheStore(
+                            cache_dir=ssd_dir,
+                            block_size=self.config.kv_block_size,
+                        )
+                        kv_manager = TieredKVCacheManager(
+                            hot_manager=kv_manager,
+                            ssd_store=ssd_store,
+                            warm_tier=kv_manager._warm_tier,
+                        )
+                        logger.info(f"TieredKVCacheManager enabled: SSD dir={ssd_dir}")
+
                     self.scheduler = PagedScheduler(model, tokenizer, scheduler_config, kv_manager)
                     self._kv_manager = kv_manager
                     logger.info(

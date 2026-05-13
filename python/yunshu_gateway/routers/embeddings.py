@@ -53,7 +53,8 @@ async def create_embedding(req: EmbeddingRequest):
     try:
         embeddings = await _generate_embeddings(engine, texts)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Embedding error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Embedding generation failed")
 
     # Format response
     data = []

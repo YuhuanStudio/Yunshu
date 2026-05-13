@@ -106,8 +106,8 @@ async def create_speech(req: TTSRequest) -> Response:
             instruct=instruct,
         )
     except Exception as e:
-        logger.error(f"TTS synthesis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"TTS synthesis error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Speech synthesis failed")
 
     if req.response_format not in ("wav",):
         raise HTTPException(
@@ -248,8 +248,8 @@ async def create_transcription(
             language=language,
         )
     except Exception as e:
-        logger.error(f"ASR transcription error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"ASR transcription error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Audio transcription failed")
     finally:
         try:
             os.unlink(tmp_path)

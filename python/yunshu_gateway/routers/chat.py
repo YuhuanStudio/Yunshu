@@ -219,6 +219,7 @@ def _inject_tool_system_prompt(
     messages: list[dict],
     tools: list[ToolDefinition],
     tool_choice: Optional[Union[str, ToolChoiceFunction]] = None,
+    parallel_tool_calls: bool = True,
 ) -> list[dict]:
     """Inject tool definitions into the system prompt (oMLX pattern).
 
@@ -268,8 +269,10 @@ def _inject_tool_system_prompt(
         "You have access to the following tools. When you need to call a tool, "
         "output a tool call in the following format:\n"
         '<tool_call\\>{"name": "function_name", "arguments": {...}}</tool_call\\>\n\n'
-        "Available tools:\n"
     )
+    if not parallel_tool_calls:
+        tool_prompt += "You MUST make only ONE tool call per response.\n\n"
+    tool_prompt += "Available tools:\n"
     for td in tool_descriptions:
         tool_prompt += f"- {td['name']}: {td['description']}\n"
         if 'parameters' in td:
@@ -452,6 +455,10 @@ async def _build_multi_choice(
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    # Audit: log user field if provided (OpenAI spec: end-user tracking)
+    if req.user:
+        logger.info(f"[{getattr(request.state, 'request_id', '-')}] user={req.user}")
+
     messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
 
@@ -486,7 +493,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     # Inject tool definitions if provided
     if req.tools:
-        messages = _inject_tool_system_prompt(messages, req.tools, req.tool_choice)
+        messages = _inject_tool_system_prompt(messages, req.tools, req.tool_choice, req.parallel_tool_calls)
 
     # Parse response_format for structured output (JSON schema)
     json_schema = _parse_response_format(req.response_format)
@@ -509,8 +516,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                                 text_parts.append(block.get("text", ""))
                             elif block.get("type") == "image_url":
                                 image_count += 1
-            est_tokens = len(tokenizer.encode(" ".join(text_parts)))
-            # Each image contributes ~256-576 tokens depending on model
+            from yunshu_control.token_counter import count_message_tokens
+            est_tokens = count_message_tokens(messages, tokenizer)
             est_tokens += image_count * 576
             validate_context_window(est_tokens, req.model, engine)
     except HTTPException:

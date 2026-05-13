@@ -86,8 +86,8 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
                 seed=(req.seed + i) if req.seed is not None else None,
             )
         except Exception as e:
-            logger.error(f"Image generation error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.error(f"Image generation error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Image generation failed")
 
         if req.response_format == "b64_json":
             b64 = base64.b64encode(png_bytes).decode("ascii")

@@ -740,12 +740,14 @@ async def realtime_endpoint(ws: WebSocket):
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token:
         # WebSocket doesn't go through HTTP middleware, so check auth manually.
-        # Accept the token via query param or first message.
-        token = ws.query_params.get("token")
+        # Prefer header over query param to avoid token leaking into logs/history.
+        import hmac
+        token = ws.headers.get("authorization", "").removeprefix("Bearer ")
+        if not token:
+            token = ws.query_params.get("token")
         if not token:
             await ws.close(code=4001, reason="Authentication required")
             return
-        import hmac
         if not hmac.compare_digest(token, auth_token):
             await ws.close(code=4001, reason="Invalid token")
             return

@@ -9,6 +9,7 @@ Extends the base Scheduler with:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from .scheduler import Scheduler, SchedulerConfig, SchedulerOutput
@@ -30,6 +31,18 @@ class PagedScheduler(Scheduler):
         super().__init__(model, tokenizer, config)
         self._kv_manager = kv_cache_manager
         self._block_tables: dict[str, Any] = {}
+        # Boundary snapshot store for non-sliceable cache layers
+        self._boundary_store = None
+        ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR")
+        if ssd_dir:
+            try:
+                from pathlib import Path
+                from yunshu_kv.boundary_snapshot import BoundarySnapshotSSDStore
+                self._boundary_store = BoundarySnapshotSSDStore(Path(ssd_dir))
+                self._boundary_store.start()
+                logger.info("BoundarySnapshotSSDStore started for non-sliceable layers")
+            except Exception as e:
+                logger.debug(f"Boundary snapshot store not available: {e}")
 
     def set_kv_cache_manager(self, manager: Any) -> None:
         self._kv_manager = manager

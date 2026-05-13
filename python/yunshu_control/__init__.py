@@ -1,6 +1,6 @@
 """Yunshu Control — Multi-tenant management, RBAC, and request queue."""
 
-from .tenant import Quota, Tenant, TenantManager, TenantTier
+from .tenant_store import Quota, Tenant, TenantManager, TenantTier
 from .request_queue import (
     QueuePriority,
     QueueAction,

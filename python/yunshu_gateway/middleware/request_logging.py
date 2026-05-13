@@ -4,6 +4,7 @@ Structured request/response logging with:
 - Request ID tracking (X-Request-ID header)
 - Latency measurement
 - Active request counting for graceful shutdown drain
+- SSE-aware counting: keeps stream counted until body fully consumed
 - Configurable log levels per status code
 """
 from __future__ import annotations
@@ -13,7 +14,7 @@ import time
 import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 logger = logging.getLogger("yunshu.gateway")
 
@@ -41,13 +42,29 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 f"ERROR {elapsed*1000:.1f}ms — {e}"
             )
             raise
-        finally:
-            _main._active_requests -= 1
-            if _main._active_requests == 0 and _main._drain_event is not None:
-                _main._drain_event.set()
 
         elapsed = time.monotonic() - t0
         response.headers["X-Request-ID"] = request_id
+
+        # For SSE responses, keep request counted until stream completes
+        is_sse = isinstance(response, StreamingResponse)
+        if is_sse:
+            original_body = response.body_iterator
+
+            async def _tracked_body():
+                try:
+                    async for chunk in original_body:
+                        yield chunk
+                finally:
+                    _main._active_requests -= 1
+                    if _main._active_requests == 0 and _main._drain_event is not None:
+                        _main._drain_event.set()
+
+            response.body_iterator = _tracked_body()
+        else:
+            _main._active_requests -= 1
+            if _main._active_requests == 0 and _main._drain_event is not None:
+                _main._drain_event.set()
 
         if request.url.path not in self.SKIP_PATHS:
             level = logging.DEBUG

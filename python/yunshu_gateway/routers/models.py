@@ -95,7 +95,8 @@ async def load_model(req: LoadModelRequest) -> dict:
         except KeyError:
             raise HTTPException(status_code=404, detail=f"Model '{req.model}' not registered")
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.error(f"Model load error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Model loading failed")
 
     # Single-engine mode
     engine = get_engine()
@@ -103,8 +104,9 @@ async def load_model(req: LoadModelRequest) -> dict:
         raise HTTPException(status_code=503, detail="Engine not initialized")
 
     import asyncio
+    from yunshu_engine.mlx_executor import get_mlx_executor
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, engine.load, req.model)
+    await loop.run_in_executor(get_mlx_executor(), engine.load, req.model)
     await engine.start()
 
     return {"status": "loaded", "model": req.model}

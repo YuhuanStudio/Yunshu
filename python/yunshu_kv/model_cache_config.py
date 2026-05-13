@@ -59,6 +59,10 @@ class ModelCacheConfig:
         return len(self.layers)
 
     @property
+    def sliceable_count(self) -> int:
+        return len(self.sliceable_layers)
+
+    @property
     def sliceable_layers(self) -> list[CacheLayerConfig]:
         return [l for l in self.layers if l.sliceable]
 
@@ -90,6 +94,13 @@ class ModelCacheConfig:
                 boundary_eligible=not slice,
             ))
         return ModelCacheConfig(layers)
+
+    @staticmethod
+    def build_from_cache(cache_list: list) -> ModelCacheConfig:
+        """Build config from a make_prompt_cache() result (same as build_from_cache_list)."""
+        if isinstance(cache_list, list):
+            return ModelCacheConfig.build_from_cache_list(cache_list)
+        return ModelCacheConfig.build_from_cache_list([cache_list])
 
     @staticmethod
     def build_from_model(model: Any) -> ModelCacheConfig:

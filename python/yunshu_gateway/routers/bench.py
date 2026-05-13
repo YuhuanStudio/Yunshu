@@ -294,7 +294,6 @@ async def bench_latency(request: LatencyRequest):
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
         _active_benchmark = "latency"
 
-    _active_benchmark = "latency"
     try:
         result = await _run_latency(request)
         _benchmark_results["latency"] = result
@@ -329,7 +328,9 @@ async def bench_throughput(request: ThroughputRequest):
 @router.get("/status")
 async def bench_status():
     """Get current benchmark status."""
+    with _lock:
+        active = _active_benchmark
     return {
-        "active": _active_benchmark,
+        "active": active,
         "results_available": list(_benchmark_results.keys()),
     }

@@ -131,11 +131,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             rate=rpm / 60.0, capacity=rpm,
             max_buckets=max_buckets, ttl=ttl,
         )
-        self._key_buckets: dict[str, _TokenBucket] = {}
+        self._key_buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
+        self._max_key_buckets = max_buckets
 
     def _get_key_bucket(self, key_name: str, rpm: int) -> _TokenBucket:
-        if key_name not in self._key_buckets or self._key_buckets[key_name].capacity != rpm:
-            self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
+        if key_name in self._key_buckets:
+            if self._key_buckets[key_name].capacity != rpm:
+                self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
+            else:
+                self._key_buckets.move_to_end(key_name)
+            return self._key_buckets[key_name]
+        if len(self._key_buckets) >= self._max_key_buckets:
+            self._key_buckets.popitem(last=False)
+        self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
         return self._key_buckets[key_name]
 
     async def dispatch(self, request: Request, call_next):
@@ -158,7 +166,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Fall back to per-IP rate limiting (LRU + TTL safe)
-        client_ip = request.client.host if request.client else "unknown"
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "unknown"
         bucket = self._bucket_cache.get_or_create(client_ip)
 
         if not bucket.consume():

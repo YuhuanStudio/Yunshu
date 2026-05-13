@@ -684,3 +684,13 @@ async def clear_cache(_=Depends(require_permission("can_load_models"))):
                 except Exception:
                     pass
     return {"cleared": cleared, "status": "ok"}
+
+
+@router.get("/queue/stats")
+async def get_queue_stats(_=Depends(require_permission("can_view_system"))):
+    """Request queue statistics (from yunshu_control.request_queue)."""
+    from yunshu_control.request_queue import get_request_queue_manager
+    manager = get_request_queue_manager()
+    if manager is None:
+        return {"enabled": False, "stats": None}
+    return {"enabled": True, "stats": manager.get_stats()}
