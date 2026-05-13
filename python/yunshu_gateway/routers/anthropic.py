@@ -227,9 +227,45 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         system_text = _extract_text_from_content(req.system) if isinstance(req.system, list) else req.system
         messages.append({"role": "system", "content": system_text})
 
+    has_images = any(_has_image_blocks(m.content) for m in req.messages)
+
     for m in req.messages:
-        content = _extract_text_from_content(m.content)
-        messages.append({"role": m.role, "content": content})
+        if has_images and isinstance(m.content, list):
+            # VLM path: preserve image blocks as OpenAI-style content parts
+            converted_parts = []
+            for block in m.content:
+                if not isinstance(block, dict):
+                    converted_parts.append({"type": "text", "text": str(block)})
+                    continue
+                bt = block.get("type", "")
+                if bt == "text":
+                    converted_parts.append({"type": "text", "text": block.get("text", "")})
+                elif bt == "image":
+                    source = block.get("source", {})
+                    media_type = source.get("media_type", "unknown")
+                    data = source.get("data")
+                    if data and source.get("type") == "base64":
+                        import base64 as _b64
+                        import tempfile as _tf
+                        try:
+                            raw = _b64.b64decode(data, validate=False)
+                        except Exception:
+                            raw = _b64.b64decode(data + "==", validate=False)
+                        ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+                        ext = ext_map.get(media_type, "png")
+                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+                        tmp.write(raw)
+                        tmp.close()
+                        converted_parts.append({"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}})
+                    else:
+                        converted_parts.append({"type": "text", "text": f"[Image: {media_type}]"})
+                else:
+                    text = _extract_text_from_content([block])
+                    converted_parts.append({"type": "text", "text": text})
+            messages.append({"role": m.role, "content": converted_parts})
+        else:
+            content = _extract_text_from_content(m.content)
+            messages.append({"role": m.role, "content": content})
 
     stop = req.stop_sequences or []
 

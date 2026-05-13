@@ -120,6 +120,7 @@ xfail_strict = true
 addopts = [
     "-ra",
     "--tb=short",
+    "--ignore=tests/integration",
 ]
 markers = [
     "gpu: requires Apple GPU / MLX runtime",

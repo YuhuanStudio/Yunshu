@@ -27,10 +27,10 @@ build-webui:
 
 # ── Test ──
 
-test: test-unit test-integration
+test: test-unit
 
 test-unit:
-    uv run pytest tests/unit -v
+    uv run pytest tests/ -v
 
 test-integration:
     uv run pytest tests/integration -v
