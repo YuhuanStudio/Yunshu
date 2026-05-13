@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -117,9 +118,12 @@ class MeshManager:
         return True
 
     async def start(self) -> None:
-        """Start background tasks (heartbeat, monitoring)."""
+        """Start background tasks (heartbeat, monitoring, discovery)."""
         self._running = True
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        # Start node discovery if enabled
+        if os.environ.get("YUNSHU_MESH_DISCOVERY", "").lower() in ("1", "true", "yes"):
+            self.start_discovery()
         logger.info("Mesh manager started")
 
     async def shutdown(self) -> None:
@@ -131,6 +135,7 @@ class MeshManager:
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+        self.stop_discovery()
         self._collective.shutdown()
         logger.info("Mesh manager shut down")
 

@@ -243,13 +243,13 @@ class VLMEngine:
                 mx.random.seed(seed)
 
             if image_paths and self._has_vision and self._is_vlm:
-                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p)
+                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop)
 
             prompt_text = self._format_prompt(messages)
             input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
             if self._is_vlm:
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p)
+                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop)
 
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
@@ -322,14 +322,14 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if has_images:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, stop)
                     return
 
                 prompt_text = self._format_prompt(messages)
                 input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
                 if self._is_vlm:
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -422,6 +422,8 @@ class VLMEngine:
         max_tokens: int,
         temperature: float,
         top_p: float,
+        top_k: int = 0,
+        stop: list[str] | None = None,
     ) -> str:
         """Vision + text generation using mlx_vlm.generate()."""
         from mlx_vlm.generate import generate as vlm_generate
@@ -451,6 +453,13 @@ class VLMEngine:
             temp=temperature,
             verbose=False,
         )
+
+        # Trim output at stop sequences if provided
+        if stop and isinstance(result, str):
+            for s in stop:
+                idx = result.find(s)
+                if idx >= 0:
+                    result = result[:idx]
 
         # Capture mRoPE deltas after vision prefill
         if self._mrope_info and self._mrope_info.enabled:
@@ -492,6 +501,8 @@ class VLMEngine:
         max_tokens: int,
         temperature: float,
         top_p: float,
+        top_k: int = 0,
+        stop: list[str] | None = None,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -505,8 +516,19 @@ class VLMEngine:
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
-        sampler = make_sampler(temp=temperature, top_p=top_p)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
+
+        # Build stop IDs from string sequences
+        stop_ids = set(eos_ids)
+        if stop:
+            for s in stop:
+                try:
+                    ids = self._tokenizer.encode(s)
+                    if len(ids) == 1:
+                        stop_ids.add(ids[0])
+                except Exception:
+                    pass
 
         with mx.stream(generation_stream):
             # Prefill
@@ -516,7 +538,7 @@ class VLMEngine:
             mx.eval(current)
 
             tokens = [current.item()]
-            if current.item() in eos_ids:
+            if current.item() in stop_ids:
                 return self._tokenizer.decode(tokens, skip_special_tokens=True)
 
             for _ in range(max_tokens - 1):
@@ -525,7 +547,7 @@ class VLMEngine:
                 current = sampler(logits)
                 mx.eval(current)
                 tokens.append(current.item())
-                if current.item() in eos_ids:
+                if current.item() in stop_ids:
                     break
 
         return self._tokenizer.decode(tokens, skip_special_tokens=True)
@@ -539,6 +561,8 @@ class VLMEngine:
         top_p: float,
         req_id: str,
         queue: asyncio.Queue,
+        top_k: int = 0,
+        stop: list[str] | None = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate()."""
         from mlx_vlm.generate import stream_generate as vlm_stream_generate
@@ -549,7 +573,8 @@ class VLMEngine:
             vlm_messages, tokenize=False, add_generation_prompt=True,
         )
 
-        sampler = make_sampler(temp=temperature, top_p=top_p)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+        stop_suffix = stop or []
         token_count = 0
         try:
             for result in vlm_stream_generate(
@@ -567,6 +592,12 @@ class VLMEngine:
                     finish_reason = result.finish_reason
                 elif token_count >= max_tokens:
                     finish_reason = "length"
+                # Check stop suffixes
+                if not finish_reason and stop_suffix:
+                    for s in stop_suffix:
+                        if text.endswith(s):
+                            finish_reason = "stop"
+                            break
 
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
@@ -609,6 +640,8 @@ class VLMEngine:
         top_p: float,
         req_id: str,
         queue: asyncio.Queue,
+        top_k: int = 0,
+        stop: list[str] | None = None,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -621,8 +654,22 @@ class VLMEngine:
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
-        sampler = make_sampler(temp=temperature, top_p=top_p)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
+
+        # Build stop IDs
+        stop_ids = set(eos_ids)
+        stop_suffixes = []
+        if stop:
+            for s in stop:
+                try:
+                    ids = self._tokenizer.encode(s)
+                    if len(ids) == 1:
+                        stop_ids.add(ids[0])
+                    else:
+                        stop_suffixes.append(s)
+                except Exception:
+                    pass
 
         has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
         if has_detokenizer:
@@ -637,7 +684,7 @@ class VLMEngine:
         token_count = 1
 
         token_id = current.item()
-        is_eos = token_id in eos_ids
+        is_eos = token_id in stop_ids
         finish_reason = "stop" if is_eos else None
 
         if not is_eos:
@@ -668,8 +715,12 @@ class VLMEngine:
             token_count += 1
 
             token_id = current.item()
-            is_eos = token_id in eos_ids
-            finish_reason = "stop" if is_eos else None
+            is_eos = token_id in stop_ids
+            suffix_hit = False
+            if not is_eos and stop_suffixes and has_detokenizer:
+                if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                    suffix_hit = True
+            finish_reason = "stop" if (is_eos or suffix_hit) else None
 
             if not is_eos:
                 if has_detokenizer:

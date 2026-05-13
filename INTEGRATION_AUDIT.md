@@ -385,10 +385,10 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 |------|------|------|
 | sharding.py | WIRED | `load_sharded_model` 被引擎 import |
 | collective.py | WIRED | 直接調用 mx.distributed |
-| manager.py | PARTIAL | 被 mesh API router 導入，但每個請求都重新創建 |
+| manager.py | WIRED | 被 mesh API router 導入，含 discovery 整合 |
 | node.py, topology.py | WIRED | 被 manager 使用 |
-| discovery.py | DEAD | `start_discovery()` 從不被外部調用 |
-| heartbeat.py | DEAD | 僅通過 discovery 啟動 |
+| discovery.py | ✅ **WIRED** | `start_discovery()` 在 `YUNSHU_MESH_DISCOVERY=1` 時自動啟動 |
+| heartbeat.py | ✅ **WIRED** | 通過 discovery 整合，在 manager.start() 時啟動 |
 | pipeline.py | PARTIAL | pipeline parallel 實現存在但未被使用 |
 | data_parallel.py | DEAD | DataParallelRouter 零外部調用者 |
 
@@ -1145,7 +1145,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | `top_k` | ✅ | ✅ | ✅ 已修復 |
 | `stop` | ✅ | ✅ | ✅ 已修復 |
 | `seed` | ✅ | ✅ | ✅ 已修復 |
-| `repetition_penalty` | ✅ | ❌ | 靜默丟棄 |
+| `repetition_penalty` | ✅ | ✅ | ✅ 已修復 (generate) |
 | `enable_thinking` | ✅ | ❌ | 靜默丟棄 |
 | `response_format` | ✅ | ❌ | 靜默丟棄 |
 | `tools` | ✅ | ❌ | 靜默丟棄 |
