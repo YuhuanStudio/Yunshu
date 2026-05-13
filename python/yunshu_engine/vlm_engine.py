@@ -122,6 +122,12 @@ class VLMEngine:
         self._mm_prefix_hits = 0
         self._mm_prefix_misses = 0
 
+        # SpecPrefill for VLM text portion (opt-in via YUNSHU_VLM_SPEC_PREFILL)
+        self._spec_prefill_enabled = False
+        if os.environ.get("YUNSHU_VLM_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
+            self._spec_prefill_enabled = True
+            logger.info("VLM SpecPrefill enabled")
+
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
 
@@ -620,6 +626,18 @@ class VLMEngine:
                     pass
 
         with mx.stream(generation_stream):
+            # SpecPrefill: for long text prompts, use attention-based sparse
+            # prefill to reduce computation by only processing high-attention tokens
+            if self._spec_prefill_enabled and input_ids.shape[0] > 8192:
+                try:
+                    from .spec_prefill import SparsePrefill
+                    sp = SparsePrefill()
+                    indices = sp.select_important_tokens(lm, input_ids[None], top_k=8192)
+                    input_ids = input_ids[indices]
+                    logger.debug(f"SpecPrefill: reduced from {input_ids.shape[0]} to {len(indices)} tokens")
+                except Exception:
+                    logger.debug("SpecPrefill failed, using full prefill", exc_info=True)
+
             # Prefill
             output = lm(input_ids[None], cache=cache)
             logits = output.logits[:, -1, :]

@@ -1477,7 +1477,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ✅ (Wave 12) — 自動截斷多圖輸入 |
 | 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ✅ JsonSchemaConstraint 已接入 VLM text path |
-| SpecPrefill (VLM) | ✅ draft model | ❌ |
+| SpecPrefill (VLM) | ✅ draft model | ✅ SparsePrefill wired into _generate_vlm_text, YUNSHU_VLM_SPEC_PREFILL env var (Wave 26) |
 | 視覺編碼策略 | 3 種 (encode_image, qwen, llava) | 1 種 (mlx_vlm 黑盒) |
 | KV prefix 整合 | ✅ 每圖片緩存鍵範圍 | ⚠️ 命中率追蹤已實現 (VLM-PREFIX)，但 mlx_vlm.generate() 不支持傳入預分詞 |
 
