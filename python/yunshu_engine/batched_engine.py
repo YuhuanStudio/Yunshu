@@ -197,6 +197,10 @@ class BatchedEngine:
         self._spec_decoder = None  # SpeculativeDecoder instance
         self._spec_enabled = False
 
+        # MTP speculative decoding (built-in multi-token prediction heads)
+        self._mtp_decoder = None  # MTPDecoder instance
+        self._mtp_strategy = None  # MTPStrategy wrapper
+
         # N-gram proposer for model-free speculative decoding
         self._ngram_proposer = None  # NgramProposer, created on demand
         self._ngram_stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
@@ -333,6 +337,15 @@ class BatchedEngine:
                 logger.info(f"Model patches applied: {patches}")
         except Exception:
             logger.debug("Model patches skipped", exc_info=True)
+
+        # Apply n_confirmed patch for GatedDeltaNet SSM layers (Qwen3.5)
+        # Enables zero-cost reject in MTP: restore_rollback instead of refeed
+        try:
+            from .n_confirmed_patch import apply_n_confirmed_patch
+            if apply_n_confirmed_patch():
+                logger.info("n_confirmed patch applied — zero-cost SSM rollback ready")
+        except Exception:
+            logger.debug("n_confirmed patch skipped", exc_info=True)
 
         # Load per-model settings from model_settings.json + env overrides
         self._load_model_settings()
@@ -501,6 +514,8 @@ class BatchedEngine:
         self._spec_decoder = None
         self._ngram_proposer = None
         self._adaptive_spec = None
+        self._mtp_decoder = None
+        self._mtp_strategy = None
         self._warm_prompts = None
         self._thinking_store = None
         self._model = None
@@ -580,6 +595,14 @@ class BatchedEngine:
         # Speculative decoding path (Phase 4: single-request EAGLE-3)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
             return await self._generate_speculative(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+
+        # MTP speculative decoding (built-in multi-token prediction heads)
+        if spec_decode and self._mtp_decoder is not None and not _use_engine_loop:
+            return await self._generate_mtp(
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -1135,6 +1158,14 @@ class BatchedEngine:
         # Speculative decoding path (Phase 4)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
             async for output in self._stream_generate_speculative(
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+            ):
+                yield output
+            return
+
+        # MTP speculative decoding streaming (built-in multi-token prediction)
+        if spec_decode and self._mtp_decoder is not None and not _use_engine_loop:
+            async for output in self._stream_generate_mtp(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
             ):
                 yield output
@@ -1712,8 +1743,37 @@ class BatchedEngine:
             except Exception as e:
                 logger.warning(f"Draft model load failed ({e}), speculative decoding disabled")
 
+        # MTP path: use built-in multi-token prediction heads (no external draft model)
+        # Supported by Qwen3.5, DeepSeek-V3, and other models with MTP layers.
+        # Uses n_confirmed=1 for zero-cost reject on GatedDeltaNet SSM layers.
+        if head_info.head_type == "mtp" and self._spec_decoder is None:
+            try:
+                from .mtp_decoder import MTPDecoder, MTPConfig
+                mtp_config = MTPConfig(
+                    max_tokens=256,
+                    cooldown_on_reject=os.environ.get(
+                        "YUNSHU_MTP_COOLDOWN", ""
+                    ).strip() in ("1", "true", "yes"),
+                    fastmtp_top_k=int(os.environ.get("YUNSHU_MTP_FASTMTP_TOP_K", "0")),
+                    use_n_confirmed=True,
+                )
+                self._mtp_decoder = MTPDecoder(
+                    self._model, self._tokenizer, mtp_config,
+                )
+                from .spec_interface import MTPStrategy
+                self._mtp_strategy = MTPStrategy(
+                    decoder=self._mtp_decoder, config=mtp_config,
+                )
+                self._spec_enabled = True
+                logger.info(
+                    f"MTP decoder initialized: heads={head_info.num_heads}, "
+                    f"draft_length={head_info.draft_length}, "
+                    f"n_confirmed=True, config={head_info.head_config}"
+                )
+            except Exception as e:
+                logger.warning(f"MTP decoder init failed ({e})")
+
         # Store config for on-demand decoder creation
-        # (actual decoder created when first requested, since it needs a draft model)
         self._spec_config = spec_config
         self._spec_head_info = head_info
         self._spec_enabled = True
@@ -2260,6 +2320,225 @@ class BatchedEngine:
             if not future.done():
                 future.cancel()
 
+    async def _generate_mtp(
+        self,
+        prompt: str,
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+    ) -> GenerationOutput:
+        """Generate using MTP speculative decoding (built-in prediction heads).
+
+        Uses the model's own MTP heads to propose draft tokens, then verifies
+        via the backbone forward with n_confirmed=1 for zero-cost reject.
+        Best for Qwen3.5 and other models with GatedDeltaNet SSM layers.
+        """
+        from .mlx_executor import get_mlx_executor
+        executor = get_mlx_executor()
+        loop = asyncio.get_running_loop()
+
+        tokenizer = self._tokenizer
+        model = self._model
+        mtp_decoder = self._mtp_decoder
+
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            text = tokenizer.apply_chat_template(
+                prompt, tokenize=False, add_generation_prompt=True,
+            )
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+
+        input_ids = tokenizer.encode(text)
+        prompt_tokens = len(input_ids)
+
+        def _run():
+            return mtp_decoder.generate(input_ids, max_tokens=max_tokens)
+
+        token_ids = await loop.run_in_executor(executor, _run)
+
+        output_text = _clean_special_tokens(
+            tokenizer.decode(token_ids, skip_special_tokens=True)
+        )
+
+        finish_reason = "length"
+        eos_ids = set()
+        if hasattr(tokenizer, 'eos_token_id'):
+            eid = tokenizer.eos_token_id
+            if isinstance(eid, (list, tuple)):
+                eos_ids.update(eid)
+            elif eid is not None:
+                eos_ids.add(eid)
+        if token_ids and token_ids[-1] in eos_ids:
+            finish_reason = "stop"
+
+        # Record MTP stats in Prometheus
+        try:
+            from ..middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            s = mtp_decoder.stats
+            if s.total_cycles > 0:
+                pm.set_gauge("mtp_acceptance_rate", s.accepts / s.total_cycles)
+                pm.set_gauge("mtp_total_cycles", s.total_cycles)
+        except Exception:
+            pass
+
+        return GenerationOutput(
+            text=output_text,
+            new_text=output_text,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=len(token_ids),
+            finished=True,
+            finish_reason=finish_reason,
+        )
+
+    async def _stream_generate_mtp(
+        self,
+        prompt: str,
+        max_tokens: int = 256,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[GenerationOutput]:
+        """Stream generate using MTP speculative decoding (queue-based).
+
+        Runs MTPDecoder on the executor thread and yields accepted tokens
+        as they are verified by the backbone forward pass.
+        """
+        from .mlx_executor import get_mlx_executor
+        import mlx.core as mx
+        from mlx_lm.models.cache import make_prompt_cache
+
+        tokenizer = self._tokenizer
+        model = self._model
+        mtp_decoder = self._mtp_decoder
+
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            text = tokenizer.apply_chat_template(
+                prompt, tokenize=False, add_generation_prompt=True,
+            )
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+
+        input_ids = tokenizer.encode(text)
+        prompt_tokens = len(input_ids)
+
+        eos_ids = set()
+        if hasattr(tokenizer, 'eos_token_id'):
+            eid = tokenizer.eos_token_id
+            if isinstance(eid, (list, tuple)):
+                eos_ids.update(eid)
+            elif eid is not None:
+                eos_ids.add(eid)
+
+        _sentinel = object()
+        _q: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _put(item):
+            loop.call_soon_threadsafe(_q.put_nowait, item)
+
+        def _run():
+            try:
+                ids = mx.array(input_ids)
+                cache = make_prompt_cache(model)
+
+                # Prefill
+                out, hidden = model(ids.reshape(1, -1), cache=cache, return_hidden=True)
+                mx.synchronize()
+                first = int(mx.argmax(out[0, -1, :]).item())
+
+                generated = [first]
+                primary = first
+                primary_h = hidden[:, -1:, :]
+
+                # Yield first token
+                chunk = _clean_special_tokens(tokenizer.decode([first]))
+                _put((chunk, 1, first in eos_ids))
+
+                if first in eos_ids:
+                    _put(_sentinel)
+                    return
+
+                from .n_confirmed_patch import clear_rollback, restore_rollback
+
+                while len(generated) < max_tokens:
+                    # MTP draft
+                    draft = mtp_decoder._mtp_draft(primary_h, primary)
+
+                    # Verify: backbone forward [primary, draft] with n_confirmed=1
+                    verify_out, verify_h = model(
+                        mx.array([[primary, draft]]), cache=cache,
+                        return_hidden=True, n_confirmed=1,
+                    )
+                    mx.synchronize()
+                    v0 = int(mx.argmax(verify_out[0, 0, :]).item())
+                    v1 = int(mx.argmax(verify_out[0, 1, :]).item())
+
+                    if v0 == draft:
+                        # Accept
+                        clear_rollback(cache)
+                        generated.append(draft)
+                        chunk = _clean_special_tokens(tokenizer.decode([draft]))
+                        _put((chunk, len(generated), draft in eos_ids))
+                        if draft in eos_ids:
+                            break
+
+                        # Bonus token
+                        generated.append(v1)
+                        chunk = _clean_special_tokens(tokenizer.decode([v1]))
+                        _put((chunk, len(generated), v1 in eos_ids))
+                        if v1 in eos_ids:
+                            break
+                        primary = v1
+                        primary_h = verify_h[:, -1:, :]
+                    else:
+                        # Reject: restore rollback (zero-cost)
+                        restore_rollback(cache)
+                        generated.append(v0)
+                        chunk = _clean_special_tokens(tokenizer.decode([v0]))
+                        _put((chunk, len(generated), v0 in eos_ids))
+                        if v0 in eos_ids:
+                            break
+                        primary = v0
+                        primary_h = verify_h[:, 0:1, :]
+
+                _put(_sentinel)
+            except Exception as e:
+                _put(e)
+                _put(_sentinel)
+
+        executor = get_mlx_executor()
+        future = loop.run_in_executor(executor, _run)
+
+        accumulated = ""
+        n_tok = 0
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(_q.get(), timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("MTP streaming timeout")
+                    break
+                if item is _sentinel:
+                    break
+                if isinstance(item, BaseException):
+                    logger.warning(f"MTP streaming error: {item}")
+                    break
+                new_text, tok_count, done = item
+                accumulated += new_text
+                n_tok = tok_count
+                finish_reason = "stop" if done else None
+                yield GenerationOutput(
+                    text=_clean_special_tokens(accumulated),
+                    new_text=_clean_special_tokens(new_text),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=n_tok,
+                    finished=done,
+                    finish_reason=finish_reason,
+                )
+                if done:
+                    break
+        finally:
+            if not future.done():
+                future.cancel()
+
     def _apply_chat_template(
         self,
         messages: list[dict],
@@ -2332,6 +2611,15 @@ class BatchedEngine:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
         if self._ngram_proposer is not None:
             stats["ngram"] = {**self._ngram_stats, **self._ngram_proposer.get_stats()}
+        if self._mtp_decoder is not None:
+            s = self._mtp_decoder.stats
+            stats["mtp"] = {
+                "accepts": s.accepts,
+                "rejects": s.rejects,
+                "cooldowns": s.cooldowns,
+                "tokens_generated": s.tokens_generated,
+                "total_cycles": s.total_cycles,
+            }
         return stats
 
     def get_kv_cache_stats(self) -> dict:
@@ -2389,18 +2677,16 @@ class BatchedEngine:
     def _get_spec_strategy(self):
         """Return the appropriate unified SpecStrategy for this engine.
 
-        Uses SpecStrategyFactory to create a strategy based on the engine's
-        current spec decode configuration. Priority:
-          1. If a draft model is loaded → CrossModelStrategy
-          2. If N-gram proposer is active → NgramStrategy
-          3. Otherwise → None (no speculative decoding)
-
-        The returned strategy can be used with the unified begin/draft/accept
-        lifecycle from spec_interface.
+        Priority:
+          1. MTP strategy (built-in prediction heads, if model supports it)
+          2. Env-based strategy from SpecStrategyFactory
+          3. Otherwise → None
 
         Returns:
             A SpecStrategy instance, or None if spec decode is not configured.
         """
+        if self._mtp_strategy is not None:
+            return self._mtp_strategy
         from .spec_interface import SpecStrategyFactory
         return SpecStrategyFactory.from_env()
 

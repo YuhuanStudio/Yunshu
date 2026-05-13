@@ -32,6 +32,7 @@ class TestThinkingSegmentSubstoreInit:
         eng._thinking_store = None
         eng._adaptive_spec = None
         eng._ngram_proposer = None
+        eng._mtp_decoder = None
         stats = eng.get_stats()
         assert "thinking_segment_store" not in stats
 

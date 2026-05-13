@@ -35,7 +35,18 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3445 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3621 passed, 13 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 27 — MTP Pipeline Integration)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| n_confirmed_patch 接入 | apply_n_confirmed_patch() 在 BatchedEngine.start() 中自動調用，Qwen3.5 模型啟用零成本 SSM rollback | 5 tests (`test_mtp_pipeline.py`) |
+| MTP decoder 接入 | _init_spec_decode() 檢測 MTP 頭 → 創建 MTPDecoder + MTPStrategy，支持 n_confirmed=1 零成本 reject | 31 tests (`test_mtp_pipeline.py`) |
+| MTP generate 路徑 | _generate_mtp() 和 _stream_generate_mtp() 方法，spec_decode=True 時自動路由 | 6 tests (`test_mtp_pipeline.py`) |
+| MTP stats | get_stats() 包含 MTP acceptance/reject/cycle 統計 | 1 test |
+| _get_spec_strategy | 優先返回 MTP strategy，fallback 到 env-based strategy | 2 tests |
+| deprecated 標記移除 | n_confirmed_patch.py 和 mtp_decoder.py 移除 deprecated docstring | — |
 
 ### 已完成修復 (2026-05-14 Wave 26 — Image Engine 完整化)
 
@@ -486,7 +497,7 @@
 | 4 | batched_engine.py | gateway/chat, gateway/completions, gateway/main | **WIRED** (主要生產引擎) |
 | 5 | benchmark.py | 僅 scripts/bench.py | **DEAD** |
 | 6 | bfcl_eval.py | 零調用者 | **DEAD** |
-| 7 | deltanet_inversion.py | 僅 scripts/test_inversion.py | **DEAD** |
+| 7 | deltanet_inversion.py | 僅 scripts/test_inversion.py | **DEAD** (研究性質) |
 | 8 | engine.py (legacy) | model_manager, gateway/engine, 所有 router | WIRED* |
 | 9 | engine_core.py | batched_engine, engine | WIRED |
 | 10 | exceptions.py | external_prefill, scheduler | WIRED** |
@@ -504,9 +515,9 @@
 | 21 | model_manager.py | 多處調用 | WIRED |
 | 22 | model_registry.py | api/admin | WIRED |
 | 23 | mrope.py | scheduler (BatchRopeDeltaManager), vlm_engine | WIRED** ✅ |
-| 24 | mtp_decoder.py | 零管線調用者 (僅 scripts/) | **DEAD** |
+| 24 | mtp_decoder.py | batched_engine (_generate_mtp, _stream_generate_mtp) | **WIRED** ✅ |
 | 25 | mtp_patch.py | 僅 scripts/ (5 個 bench 腳本) | **DEAD** |
-| 26 | n_confirmed_patch.py | 僅 mtp_decoder (本身 DEAD) | **DEAD** |
+| 26 | n_confirmed_patch.py | batched_engine.start() + mtp_decoder | **WIRED** ✅ |
 | 27 | ngram_proposer.py | batched_engine (_generate_ngram_spec) | **WIRED** ✅ |
 | 27b | spec_proposer.py | batched_engine (begin/draft/accept lifecycle) | **WIRED** ✅ |
 | 28 | optimizations.py | api/admin | WIRED |
@@ -547,15 +558,15 @@
 | bfcl_eval.py | 1,127 | 無 | BFCL 評估，零調用 |
 | deltanet_inversion.py | 271 | test_deltanet_inversion.py | DeltaNet 狀態反轉 |
 | metal_kernels.py | 698 | test_metal_kernels*.py (2) | Metal 內核管理，僅 scripts/ |
-| mtp_decoder.py | 288 | test_mtp_decoder.py | MTP 解碼層 |
+| ~~mtp_decoder.py~~ | ~~288~~ | test_mtp_decoder.py | ~~MTP 解碼層~~ ✅ **WIRED** — MTPDecoder 已接入 BatchedEngine |
 | mtp_patch.py | 259 | 無 | MTP 模型補丁 |
-| n_confirmed_patch.py | 316 | test_n_confirmed_patch.py | n_confirmed 驗證補丁 |
+| ~~n_confirmed_patch.py~~ | ~~316~~ | test_n_confirmed_patch.py | ~~n_confirmed 驗證補丁~~ ✅ **WIRED** — apply_n_confirmed_patch 已接入 BatchedEngine.start() |
 | roofline.py | 749 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
 | ~~telemetry.py~~ | ~~196~~ | test_telemetry.py | ~~遙測系統~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore |
 
-**合計: 5,133 行死代碼 + 8 個測試文件** (原 5,605 行 + 10 個測試文件，adaptive_batch 和 telemetry 已 WIRED)
+**合計: ~4,529 行死代碼 + 6 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch)
 
-已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore)。已刪除: settings.py。
+已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start())。已刪除: settings.py。
 
 ---
 
@@ -790,9 +801,9 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 - ✅ `test_kv_quantization.py` — 已接入 BatchedEngine (_kv_quant_bits)
 
 仍為純死代碼測試：
-1. `test_n_confirmed_patch.py` — n_confirmed_patch 零管線調用
-2. `test_mtp_decoder.py` — MTP decoder 零管線調用
-3. `test_deltanet_inversion.py` — DeltaNet inversion 零管線調用
+1. ~~`test_n_confirmed_patch.py` — n_confirmed_patch 零管線調用~~ ✅ **WIRED** — apply_n_confirmed_patch 已接入 BatchedEngine.start()
+2. ~~`test_mtp_decoder.py` — MTP decoder 零管線調用~~ ✅ **WIRED** — MTPDecoder 已接入 BatchedEngine._init_spec_decode()
+3. `test_deltanet_inversion.py` — DeltaNet inversion 零管線調用 (研究性質)
 4. `test_ane_embedding.py` — ANE embedding 零管線調用
 5. ~~`test_adaptive_batch.py` — adaptive batch 零管線調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore (C18)
 6. `test_roofline.py` — roofline 不被 bench router 使用
@@ -1501,7 +1512,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 ✅ **已修復 (M8)** — Gateway 現在返回 `segments` 和 `duration`。
 
-### 19.5 完全缺失: STS (Speech-to-Speech)
+### 19.5 STS (Speech-to-Speech) — ✅ 已實現
 
 oMLX 有完整的 STSEngine 支持:
 - DeepFilterNet (語音增強/降噪)
@@ -1509,7 +1520,8 @@ oMLX 有完整的 STSEngine 支持:
 - SAMAudio (文本引導的音頻分離)
 - LFM2.5-Audio (多模態語音到語音生成)
 
-**Yunshu 零 STS 支持** — 沒有 `STSEngine` 類、沒有 `ModelType.STS` 枚舉、沒有 endpoint。
+✅ **Yunshu Wave 25 已實現** — STSEngine 類 + ModelType.STS + /audio/speech-to-speech/* endpoints。
+信號處理 fallback (spectral_gating, energy_mask, pitch/formant shift) 在無 ML 模型時可用。
 
 ### 19.6 mlx-audio 能力未暴露
 
@@ -1526,7 +1538,7 @@ oMLX 有完整的 STSEngine 支持:
 
 | 功能 | oMLX | Yunshu |
 |------|------|--------|
-| 引擎類型 | 3 個 (TTS, STT, STS) | 2 個 (TTS, ASR) — 缺 STS |
+| 引擎類型 | 3 個 (TTS, STT, STS) | ✅ 3 個 (TTS, ASR, STS) — 全部已實現 |
 | 原生 streaming | ✅ `stream_synthesize_pcm()` | ✅ synthesize_stream 優先 (TTS-NATIVE) |
 | Voice cloning | ✅ ref_audio/ref_text | ✅ TTSRequest params (TTS-EXT) |
 | TTS 參數 | top_k, top_p, repetition_penalty, max_tokens | ✅ 全部已暴露 (TTS-EXT) |
