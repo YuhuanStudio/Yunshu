@@ -1291,6 +1291,22 @@ class ImageGenEngine:
             self._dflash = DFlashEngine(DFlashConfig.from_env())
             logger.info("DFlash Block Diffusion enabled")
 
+        # TeaCache (opt-in via YUNSHU_TEACACHE=1 or threshold value)
+        self._teacache = None
+        teacache_env = os.environ.get("YUNSHU_TEACACHE", "").strip()
+        if teacache_env in ("1", "true", "yes"):
+            from .teacache import TeaCacheConfig, TeaCacheHook
+            self._teacache = TeaCacheHook(TeaCacheConfig(rel_l1_thresh=0.2))
+            logger.info("TeaCache enabled (threshold=0.2)")
+        elif teacache_env and teacache_env not in ("0", "false", "no"):
+            try:
+                thresh = float(teacache_env)
+                from .teacache import TeaCacheConfig, TeaCacheHook
+                self._teacache = TeaCacheHook(TeaCacheConfig(rel_l1_thresh=thresh))
+                logger.info(f"TeaCache enabled (threshold={thresh})")
+            except ValueError:
+                pass
+
     @property
     def model_name(self) -> str:
         return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else self._model_path
@@ -1711,22 +1727,36 @@ class ImageGenEngine:
         sigmas = _compute_sigmas(num_steps, width, height)
 
         # 5. Denoising loop
+        if self._teacache is not None:
+            self._teacache.reset()
+
         for t in range(num_steps):
             sigma_t = sigmas[t].reshape((1,))
             timestep = mx.ones_like(sigma_t) - sigma_t
 
-            noise_pred = self._transformer(
-                x=latents,
-                timestep=timestep,
-                sigmas=sigmas,
-                cap_feats=cap_feats,
-            )
+            if self._teacache is not None:
+                noise_pred = self._teacache.forward(
+                    self._transformer, latents, timestep, sigmas, cap_feats,
+                )
+            else:
+                noise_pred = self._transformer(
+                    x=latents,
+                    timestep=timestep,
+                    sigmas=sigmas,
+                    cap_feats=cap_feats,
+                )
 
             # Euler step: x_{t+1} = x_t + (sigma_{t+1} - sigma_t) * noise
             dt = sigmas[t + 1] - sigmas[t]
             latents = latents + noise_pred * dt
             mx.eval(latents)
             logger.debug(f"Step {t+1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+
+        if self._teacache is not None:
+            tc_stats = self._teacache.get_stats()
+            logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
+                        f"{tc_stats['cache_misses']} misses, "
+                        f"hit_rate={tc_stats['hit_rate']:.1%}")
 
         # 6. VAE decode (auto-tile for large images to reduce peak memory)
         if width * height > 1024 * 1024:
