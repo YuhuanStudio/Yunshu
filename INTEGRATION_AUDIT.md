@@ -1137,7 +1137,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | `stop` | ✅ | ✅ | ✅ 已修復 |
 | `seed` | ✅ | ✅ | ✅ 已修復 |
 | `repetition_penalty` | ✅ | ✅ | ✅ 已修復 (generate) |
-| `enable_thinking` | ✅ | ❌ | 靜默丟棄 |
+| `enable_thinking` | ✅ | ✅ | ✅ 已修復 — passthrough to chat template |
 | `response_format` | ✅ | ❌ | 靜默丟棄 |
 | `tools` | ✅ | ❌ | 靜默丟棄 |
 | `frequency_penalty` | ✅ | ❌ | 靜默丟棄 |
