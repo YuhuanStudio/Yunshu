@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 13: fast path params, reasoning_effort, WebUI Completions/Tokenize)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 14: COW, adaptive spec, heap scheduler, prefill progress, WebUI MCP/Batch/Tool Calling)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **2667 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **2762 passed, 13 skipped**。
 
 ### 已完成修復 (2026-05-12)
 
@@ -259,6 +259,20 @@
 | DTOK-FIX | Detokenize 端點修正 — 使用 DetokenizeRequest body 替代 query params | §8.4 | ✅ 已修復 |
 
 > **Wave 13 測試**: 2667 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 14)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| COW | BlockPool COW (copy-on-write) — 共享 KV 塊寫入時透明克隆，防止前綴緩存損壞 | vLLM §12.3 | ✅ 已實現 |
+| FP-PP | 快速路徑 prefill 進度追蹤 — PrefillProgressTracker 接入 _generate_fast + _stream_generate_fast | §4.2 | ✅ 已實現 |
+| ADAPT-SPEC | Adaptive Spec Decode 控制器 — EMA 平滑接受率，動態調整 draft 長度 K | SGLang §14.3 | ✅ 已實現 |
+| HEAP-SCH | 堆優先級隊列 — heapq 替代 deque+sort，O(log n) 調度效率 | vLLM §12.2 | ✅ 已實現 |
+| WEB-MCP | WebUI MCP Client 頁面 — Servers/Tools/Execute 三標籤 | §8.4 | ✅ 已實現 |
+| WEB-BATCH | WebUI Batch Inference 頁面 — Submit/Results + CSV 導出 | §8.4 | ✅ 已實現 |
+| WEB-TOOL | WebUI Chat Tool Calling — 工具 JSON 輸入 + tool_calls 串流捕獲 | §8.4 | ✅ 已實現 |
+
+> **Wave 14 測試**: 2762 passed, 13 skipped。
 
 ### 跨項目學習進度
 
@@ -687,16 +701,16 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | KV 量化 | ✅ 4/8-bit 量化 | ❌ |
 | KV 前綴緩存統計 | ✅ get_stats() | ✅ monitoring 頁面 (P3-2) |
 | 記憶體守衛 | ✅ 完整實現 | ✅ monitoring 頁面 |
-| Tool Calling | ✅ 完整支持 | ❌ |
+| Tool Calling | ✅ 完整支持 | ✅ chat 頁面工具 JSON 輸入 + tool_calls 串流捕獲 (WEB-TOOL) |
 | Logprobs | ✅ 完整支持 | ✅ chat 頁面 checkbox + 折疊顯示 |
 | Embeddings | ✅ Gateway endpoint | ✅ embeddings 頁面 (P3-6) |
 | Completions | ✅ Gateway endpoint | ✅ Completions 頁面 (WEB-COMP) |
-| MCP | ✅ Gateway endpoint | ❌ |
+| MCP | ✅ Gateway endpoint | ✅ MCP 頁面 — Servers/Tools/Execute (WEB-MCP) |
 | Mesh 拓撲 | ✅ API endpoint | ❌ |
-| 批處理推理 | ✅ Gateway endpoint | ❌ |
+| 批處理推理 | ✅ Gateway endpoint | ✅ Batch 頁面 — Submit/Results + CSV (WEB-BATCH) |
 | Tokenize | ✅ Gateway endpoint | ✅ Tokenize 頁面 (WEB-TOK) |
 | 延遲百分位數 | ✅ 數據存在 | ✅ monitoring 頁面 (P3-5) |
-| 預填充進度 | ✅ 實時追蹤 | ❌ |
+| 預填充進度 | ✅ 實時追蹤 | ✅ 快速路徑 + 調度器雙路徑 (FP-PP) |
 | TTS 流式 | ✅ SSE endpoint | ❌ |
 | 圖片流式 | ✅ SSE endpoint | ❌ |
 | Spec Decode 開關 | ✅ 完整支持 | ✅ chat 頁面 checkbox |
@@ -940,7 +954,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
-| 優先級隊列 | RequestQueue ABC + 堆 O(log n) | deque 排序 O(n log n) | 效率差距 |
+| 優先級隊列 | RequestQueue ABC + 堆 O(log n) | heapq 優先級隊列 O(log n) | ✅ 已對齊 (HEAP-SCH) |
 | 搶佔粒度 | 每步 KV 塊重試 | 整個請求搶佔 | vLLM 可在塊級搶佔 |
 | Spec token 調度 | 整合: num_tokens_with_spec, lookahead blocks | 不整合 BatchGenerator | 只在單請求 fast path 工作 |
 | 編碼器-解碼器 | 完整 EncoderCacheManager | 無 | 不支持 |
@@ -954,7 +968,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
 | 多組 KV cache | 不同注意力類型不同規格 (full, SW, MLA, mamba) | 單一注意力類型 | 不支持混合模型 |
-| COW (copy-on-write) | 塊級 COW + 引用計數在調度器 | COW 在 KVPrefixCache 但不在分頁系統 | 分頁塊池缺 COW |
+| COW (copy-on-write) | 塊級 COW + 引用計數在調度器 | COW 在 BlockPool (cow_block) + 分頁系統 | ✅ 已實現 (COW) |
 | KV 卸載框架 | 完整 OffloadingManager + GPU/CPU specs | 無正式框架 | 有分層但無異步協議 |
 | **Radix tree 前綴匹配** | 無 (平面 hash) | RadixTree 已接入 KVCacheManager (C8) | **Yunshu 優勢** — ✅ 已啟用 |
 | **SSD 持久化** | 非內建 | SSDCacheStore 接入 KVPrefixCache (YUNSHU_SSD_CACHE) | **Yunshu 優勢** — ✅ 已啟用 |
@@ -1075,7 +1089,7 @@ Yunshu 的 RadixTree (radix_attention.py, 365 行):
 | **隊列深度指標** | num_running_reqs, num_queue_reqs | ✅ `/admin/queue/stats` endpoint 已接入 (CTRL-Q) |
 | **Spec decode 指標** | spec_accept_length, spec_accept_rate | ✅ `/gw/monitoring/spec-decode` 已暴露 |
 | **請求收縮 (Retraction)** | 暫時驅逐 decode 請求為高優先 prefill 騰位 | ✅ 已接入 (C14) |
-| **自適應 Spec Decode** | AdaptiveController 基於接受率動態調整 draft 長度 | 僅在 thinking 模式有 LookaheadReasoning |
+| **自適應 Spec Decode** | AdaptiveController 基於接受率動態調整 draft 長度 | ✅ AdaptiveSpecController (ADAPT-SPEC) |
 | **CUDA Graphs** | BreakableCudaGraph + EAGLEDraftCudaGraphRunner | MLX mx.compile() 可做類似但未整合 |
 
 ---
