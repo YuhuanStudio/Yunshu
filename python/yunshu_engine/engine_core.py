@@ -188,6 +188,7 @@ class EngineCore:
         self._running = False
         self._loop_task: asyncio.Task | None = None
         self._start_time: float | None = None
+        self._wake_event: asyncio.Event | None = None  # Event-driven wake-up for idle loop
 
         # Stats
         self._num_requests_processed: int = 0
@@ -240,6 +241,7 @@ class EngineCore:
             return
         self._running = True
         self._start_time = time.monotonic()
+        self._wake_event = asyncio.Event()
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
         logger.info("EngineCore started")
 
@@ -397,6 +399,10 @@ class EngineCore:
             self._executor, self.scheduler.add_request, request
         )
 
+        # Wake engine loop from idle sleep (event-driven scheduling)
+        if self._wake_event is not None:
+            self._wake_event.set()
+
         return req_id
 
     async def abort_request(self, request_id: str) -> None:
@@ -492,17 +498,27 @@ class EngineCore:
     async def _engine_loop(self) -> None:
         """Main engine loop — drives continuous batching (oMLX _engine_loop pattern).
 
-        1. Run scheduler.step() on MLX executor (serialized GPU work)
-        2. Distribute outputs to per-request collectors (on event loop)
-        3. Signal finished events
-        4. Yield to event loop
+        Uses event-driven wake-up: when idle (no requests), waits on _wake_event
+        instead of polling at step_interval. This eliminates CPU waste during idle
+        periods. New requests signal _wake_event from add_request().
         """
         loop = asyncio.get_running_loop()
         use_simple_streaming = self.config.stream_interval == 1
 
         while self._running:
             if not self.scheduler.has_requests():
-                await asyncio.sleep(self.config.step_interval)
+                # Event-driven idle: wait for wake signal instead of polling
+                if self._wake_event is not None:
+                    try:
+                        await asyncio.wait_for(
+                            self._wake_event.wait(),
+                            timeout=self.config.step_interval * 100,  # 100ms fallback
+                        )
+                        self._wake_event.clear()
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(self.config.step_interval)
                 continue
 
             try:
