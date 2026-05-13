@@ -380,15 +380,15 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ### 5.2 yunshu_control (控制邏輯)
 
-**狀態: PARTIAL**
+**狀態: WIRED** — 所有模塊均已接入管線。
 
-| 模塊 | 狀態 | 問題 |
+| 模塊 | 狀態 | 說明 |
 |------|------|------|
 | role_manager.py | WIRED | 被 admin router 使用 |
-| tenant.py | DEAD | 與 tenant_store.py 重複，__init__.py 導出 tenant.py |
-| tenant_store.py | DEAD | 更好的版本（有持久化），但無法通過包接口訪問 |
-| request_queue.py | DEAD | 零外部調用者 |
-| token_counter.py | DEAD | 成本估算全返回零 |
+| tenant.py | DEPRECATED | 已改為 re-export wrapper，tenant_store 為唯一實現 |
+| tenant_store.py | ✅ WIRED | 有持久化，__init__.py 正式導出，被 admin router 使用 |
+| request_queue.py | ✅ WIRED | 接入 admin router (/admin/queue/stats) |
+| token_counter.py | ✅ WIRED | 接入 chat router (context window 估算) |
 
 ### 5.3 yunshu_mesh (L3 計算網格)
 
@@ -473,21 +473,22 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ### 7.2 死代碼測試 — 測試從未接入管線的模塊
 
-13 個測試文件測試的是從未被管線使用的模塊：
+以下測試文件測試的模塊已接入管線（已修正）：
+- ✅ `test_ngram_proposer.py` — NgramProposer 已接入 BatchedEngine
+- ✅ `test_ssd_kv_cache.py` — SSDKVCache 已接入 KVPrefixCache (YUNSHU_SSD_CACHE)
+- ✅ `test_spec_prefill.py` — SpecPrefill 已接入 _generate_fast
+- ✅ `test_speculative_decoder.py` — SpeculativeDecoder 已接入 detect_spec_heads
+- ✅ `test_vision_feature_cache.py` — 已接入 VLMEngine (YUNSHU_VISION_CACHE)
+- ✅ `test_kv_quantization.py` — 已接入 BatchedEngine (_kv_quant_bits)
 
-1. `test_ngram_proposer.py` — NgramProposer 零管線調用
-2. `test_ssd_kv_cache.py` — SSDKVCache import 存在但不可達
-3. `test_spec_prefill.py` — SpecPrefill 零管線調用
-4. `test_speculative_decoder.py` — SpeculativeDecoder 永遠不會被實例化
-5. `test_n_confirmed_patch.py` — n_confirmed_patch 零管線調用
-6. `test_mtp_decoder.py` — MTP decoder 零管線調用
-7. `test_deltanet_inversion.py` — DeltaNet inversion 零管線調用
-8. `test_ane_embedding.py` — ANE embedding 零管線調用
-9. `test_vision_feature_cache.py` — vision feature cache 零管線調用
-10. `test_kv_quantization.py` — KV quantization 零管線調用
-11. `test_adaptive_batch.py` — adaptive batch 零管線調用
-12. `test_roofline.py` — roofline 不被 bench router 使用
-13. `test_metal_kernels.py` — metal_kernels 僅被 scripts/ 使用
+仍為純死代碼測試：
+1. `test_n_confirmed_patch.py` — n_confirmed_patch 零管線調用
+2. `test_mtp_decoder.py` — MTP decoder 零管線調用
+3. `test_deltanet_inversion.py` — DeltaNet inversion 零管線調用
+4. `test_ane_embedding.py` — ANE embedding 零管線調用
+5. `test_adaptive_batch.py` — adaptive batch 零管線調用
+6. `test_roofline.py` — roofline 不被 bench router 使用
+7. `test_metal_kernels.py` — metal_kernels 僅被 scripts/ 使用
 
 **這些測試給人「功能完整」的錯覺，但實際上測的是從未在推理管線中運行的代碼。**
 
@@ -512,15 +513,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ### 8.2 會 404 的 Endpoint（前端調用但後端不存在）
 
-| Endpoint | 用途 | 結果 |
-|----------|------|------|
-| `GET /api/v1/admin/models/{id}/settings` | Admin 模型設置 tab | 404 |
-| `PUT /api/v1/admin/models/{id}/settings` | 保存模型設置 | 404 |
-| `GET /api/v1/admin/logs` | Admin 日誌 tab | 404 |
-| `GET /api/v1/admin/cache/status` | Admin 緩存 tab | 404 |
-| `POST /api/v1/admin/cache/clear` | 清除緩存按鈕 | 404 |
-
-**5 個 API 調用在生產中會失敗，影響 Admin 頁面的 3 個 tab。**
+✅ 全部已修復 (P0-1): `models/{id}/settings`, `admin/logs`, `cache/status`, `cache/clear` 均已添加到 admin router。
 
 ### 8.3 API 方法不匹配
 
@@ -762,14 +755,14 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 類別 | 模塊數 | 實際行數 |
 |------|--------|---------|
 | 引擎 DEAD 模塊 | 6 | ~4,200 |
-| 引擎管線內死功能 | 5 | ~800 |
+| 引擎管線內死功能 | 4 | ~800 |
 | yunshu_kv DEAD 模塊 | 0 | 0 (全部已接入，含 warm_tier) |
 | yunshu_control DEAD 模塊 | 0 (tenant.py 已標記 deprecated) | ~0 |
 | yunshu_mesh DEAD 模塊 | 1 | 558 |
 | 死測試文件 | 7 | ~1,200 |
-| **合計** | **~23** | **~6,958** |
+| **合計** | **~17** | **~6,358** |
 
-從原始 ~13,000 行死代碼降至 ~7,000 行。yunshu_kv 全部已接入管線。
+從原始 ~13,000 行死代碼降至 ~6,400 行。yunshu_kv + yunshu_control 全部已接入管線。
 
 ---
 
