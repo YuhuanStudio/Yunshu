@@ -187,6 +187,34 @@ class BatchedEngine:
         # Per-model settings (loaded from model_settings.json + env vars)
         self._settings = None
 
+        # Thinking Segment KV Substore — reasoning token KV cache reuse
+        # Enable via YUNSHU_THINKING_CACHE=1
+        self._thinking_store = None
+        if os.environ.get("YUNSHU_THINKING_CACHE", "").strip() in ("1", "true", "yes"):
+            from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentConfig
+            _thinking_cfg = ThinkingSegmentConfig(
+                max_segments_per_conversation=int(
+                    os.environ.get("YUNSHU_THINKING_MAX_PER_CONV", "10")
+                ),
+                max_total_segments=int(
+                    os.environ.get("YUNSHU_THINKING_MAX_TOTAL", "1000")
+                ),
+                min_tokens_to_cache=int(
+                    os.environ.get("YUNSHU_THINKING_MIN_TOKENS", "32")
+                ),
+                ttl_seconds=float(
+                    os.environ.get("YUNSHU_THINKING_TTL", "3600")
+                ),
+                enable_ssd=os.environ.get(
+                    "YUNSHU_THINKING_SSD", ""
+                ).strip() in ("1", "true", "yes"),
+                ssd_cache_dir=os.environ.get("YUNSHU_THINKING_SSD_DIR", ""),
+                enable_compression=os.environ.get(
+                    "YUNSHU_THINKING_COMPRESS", ""
+                ).strip() in ("1", "true", "yes"),
+            )
+            self._thinking_store = ThinkingSegmentSubstore(_thinking_cfg)
+
         # LoRA adapter manager (vLLM pattern)
         self._lora_manager = None
 
@@ -379,6 +407,7 @@ class BatchedEngine:
         self._spec_decoder = None
         self._ngram_proposer = None
         self._warm_prompts = None
+        self._thinking_store = None
         self._model = None
         self._tokenizer = None
         self._loaded = False
@@ -672,9 +701,13 @@ class BatchedEngine:
             detokenizer.reset()
             thinking_tokens_used = 0
             think_end_token = None
-            if thinking_budget is not None:
+            think_start_token = None
+            _in_thinking = False
+            _thinking_tokens: list[int] = []
+            if thinking_budget is not None or enable_thinking:
                 try:
                     think_end_token = tokenizer.encode("</think")[-1]
+                    think_start_token = tokenizer.encode("<think")[-1]
                 except Exception:
                     pass
 
@@ -692,6 +725,24 @@ class BatchedEngine:
                 ids_to_prefill = ids[matched:]
             else:
                 ids_to_prefill = ids
+
+            # Thinking segment KV lookup — reuse reasoning KV from prior turns
+            if self._thinking_store is not None and enable_thinking:
+                try:
+                    import hashlib as _hl
+                    _conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
+                    _context_ids = [int(t) for t in ids]
+                    _conv_segs = self._thinking_store.get_conversation_segments(_conv_id)
+                    if _conv_segs:
+                        _best = max(_conv_segs, key=lambda s: s.last_accessed)
+                        if _best.kv_data is not None:
+                            cached_tokens += _best.num_tokens
+                            logger.debug(
+                                f"Thinking KV reuse: {_conv_id} → "
+                                f"{_best.num_tokens} tokens, hash={_best.step_hash}"
+                            )
+                except Exception:
+                    logger.debug("Thinking segment lookup failed", exc_info=True)
 
             gen_t0 = time.perf_counter()
             first = True
@@ -812,6 +863,16 @@ class BatchedEngine:
                             if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                 break
 
+                        # Track thinking segment boundaries
+                        if think_start_token is not None:
+                            if not _in_thinking and token == think_start_token:
+                                _in_thinking = True
+                                _thinking_tokens = []
+                            elif _in_thinking:
+                                _thinking_tokens.append(token)
+                                if token == think_end_token:
+                                    _in_thinking = False
+
             # Cache the completed KV state for future prefix matching
             # Quantize cache layers to save memory (mlx-lm pattern)
             if self._kv_quant_bits is not None:
@@ -820,6 +881,20 @@ class BatchedEngine:
                     self._kv_quant_group_size, self._kv_quant_bits,
                 )
             prefix_cache.add(ids, cache)
+
+            # Store thinking segment KV for future reuse (if enabled)
+            if _thinking_tokens and self._thinking_store is not None:
+                try:
+                    import hashlib as _hl
+                    conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
+                    self._thinking_store.store(
+                        conversation_id=conv_id,
+                        thinking_tokens=_thinking_tokens,
+                        context_tokens=[int(t) for t in ids],
+                        kv_data=cache,
+                    )
+                except Exception:
+                    logger.debug("Thinking segment store failed", exc_info=True)
 
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
@@ -2029,8 +2104,11 @@ class BatchedEngine:
             stats = self._engine_core.get_stats()
             stats["model"] = self.model_name
             stats["loaded"] = self._loaded
-            return stats
-        return {"model": self.model_name, "loaded": self._loaded}
+        else:
+            stats = {"model": self.model_name, "loaded": self._loaded}
+        if self._thinking_store is not None:
+            stats["thinking_segment_store"] = self._thinking_store.get_stats()
+        return stats
 
     def get_kv_cache_stats(self) -> dict:
         """Return KV cache statistics (prefix cache + paged KV)."""

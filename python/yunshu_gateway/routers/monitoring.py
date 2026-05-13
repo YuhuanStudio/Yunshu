@@ -378,3 +378,18 @@ async def per_model_stats() -> dict[str, Any]:
         result[mid] = metrics.get_snapshot(model_id=mid)
     result["_summary"] = metrics.get_snapshot()
     return result
+
+
+@router.get("/thinking-segments")
+async def thinking_segment_stats() -> dict[str, Any]:
+    """Thinking segment KV substore statistics."""
+    from ..engine import get_engine
+    engine = get_engine()
+    if engine is None:
+        return {"active": False}
+
+    store = getattr(engine, '_thinking_store', None)
+    if store is None:
+        return {"active": False}
+
+    return {"active": True, **store.get_stats()}
