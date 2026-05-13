@@ -55,6 +55,9 @@ export default function MonitoringPage() {
   const [specDecode, setSpecDecode] = useState<Record<string, unknown> | null>(null);
   const [kvCache, setKvCache] = useState<Record<string, unknown> | null>(null);
   const [requests, setRequests] = useState<Record<string, unknown> | null>(null);
+  const [memoryGuard, setMemoryGuard] = useState<Record<string, unknown> | null>(null);
+  const [ssdCache, setSsdCache] = useState<Record<string, unknown> | null>(null);
+  const [prefillProgress, setPrefillProgress] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -72,12 +75,15 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes, specRes, kvRes, reqRes] = await Promise.all([
+        const [sysRes, engRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes] = await Promise.all([
           fetch("/api/v1/monitoring/system"),
           fetch("/api/v1/monitoring/engine"),
           fetch("/v1/gw/monitoring/spec-decode").catch(() => null),
           fetch("/v1/gw/monitoring/kv-cache").catch(() => null),
           fetch("/v1/gw/monitoring/requests").catch(() => null),
+          fetch("/v1/gw/monitoring/memory-guard").catch(() => null),
+          fetch("/v1/gw/monitoring/ssd-cache").catch(() => null),
+          fetch("/v1/gw/monitoring/prefill-progress").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
@@ -103,6 +109,18 @@ export default function MonitoringPage() {
         if (reqRes && reqRes.ok) {
           const reqData = await reqRes.json();
           if (mounted.current) setRequests(reqData);
+        }
+        if (mgRes && mgRes.ok) {
+          const mgData = await mgRes.json();
+          if (mounted.current) setMemoryGuard(mgData);
+        }
+        if (ssdRes && ssdRes.ok) {
+          const ssdData = await ssdRes.json();
+          if (mounted.current) setSsdCache(ssdData);
+        }
+        if (ppRes && ppRes.ok) {
+          const ppData = await ppRes.json();
+          if (mounted.current) setPrefillProgress(ppData);
         }
         if (mounted.current) {
           setLastUpdate(new Date());
@@ -444,6 +462,84 @@ export default function MonitoringPage() {
                     <div className="font-medium tabular-nums">
                       {typeof v === "number" ? v.toFixed(2) : String(v)}
                     </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Memory Guard */}
+          {memoryGuard && memoryGuard.active && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <AlertTriangle className="w-4 h-4 text-[var(--color-accent)]" />
+                Memory Guard
+              </h3>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Pressure Level</div>
+                  <div className="font-medium">{String(memoryGuard.pressure_level || "normal")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Evictions</div>
+                  <div className="font-medium tabular-nums">{Number(memoryGuard.eviction_count || 0).toLocaleString()}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SSD KV Cache */}
+          {ssdCache && ssdCache.active && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <HardDrive className="w-4 h-4 text-[var(--color-accent)]" />
+                SSD KV Cache
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(ssdCache).filter(([k]) => k !== "active").map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">
+                      {k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                    </div>
+                    <div className="font-medium tabular-nums">
+                      {typeof v === "number" ? v.toLocaleString() : String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Prefill Progress */}
+          {prefillProgress && prefillProgress.active && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Activity className="w-4 h-4 text-[var(--color-accent)]" />
+                Active Prefills
+              </h3>
+              <div className="space-y-2">
+                {Object.entries((prefillProgress.requests || {}) as Record<string, Record<string, unknown>[]>).map(([model, reqs]) => (
+                  <div key={model}>
+                    <div className="text-xs text-[var(--color-text-secondary)] mb-1">{model}</div>
+                    {reqs.map((req, idx) => (
+                      <div key={idx} className="flex items-center gap-3 text-sm py-1">
+                        <div className="flex-1">
+                          <div className="flex justify-between text-xs mb-0.5">
+                            <span>{req.request_id}</span>
+                            <span>{String(req.progress_pct || 0)}%</span>
+                          </div>
+                          <div className="w-full bg-[var(--color-bg-tertiary)] rounded-full h-1.5">
+                            <div
+                              className="bg-[var(--color-accent)] h-1.5 rounded-full transition-all duration-300"
+                              style={{ width: `${Number(req.progress_pct || 0)}%` }}
+                            />
+                          </div>
+                        </div>
+                        <span className="text-xs text-[var(--color-text-secondary)] tabular-nums shrink-0">
+                          {String(req.speed_tok_s || 0)} tok/s
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>

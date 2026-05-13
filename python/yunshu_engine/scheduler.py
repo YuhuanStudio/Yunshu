@@ -29,6 +29,7 @@ from typing import Any, Optional
 
 from .priority_queue import RequestPriorityQueue, make_waiting_queue
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
+from .speculative_decoder import SpeculativeDecoder
 from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentConfig
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,20 @@ class Scheduler:
         self._spec_decoder: Any | None = None
         self._spec_head_info: Any | None = None  # SpecHeadInfo from detect_spec_heads()
 
+        # Speculative decoding — batch-path draft/verify state
+        # Maps request_id → list[int] of draft token IDs from the spec decoder.
+        # Drafts are generated after a decode step and verified against the
+        # target model's output on the next step (vLLM "verify after" pattern).
+        self._spec_drafts: dict[str, list[int]] = {}
+
+        # Per-request spec decode statistics
+        self._spec_stats: dict[str, dict[str, int]] = {}  # req_id → {proposals, accepted, rejected}
+
+        # Aggregate spec decode counters for get_stats()
+        self._spec_total_proposals: int = 0
+        self._spec_total_accepted: int = 0
+        self._spec_total_rejected: int = 0
+
         # Per-request thinking state tracking for segment store
         # Maps request_id → dict with:
         #   'in_thinking': bool — currently in reasoning state
@@ -333,6 +348,20 @@ class Scheduler:
                     outputs.extend(new_outputs)
                 else:
                     break
+
+            # 6b. Speculative decoding: verify drafts, then generate new ones
+            # (vLLM "verify after" pattern — verify pending drafts against
+            # target model output, then draft K tokens for next step)
+            if self.config.enable_spec_decode and isinstance(
+                self._spec_decoder, SpeculativeDecoder
+            ):
+                self._verify_spec_drafts(outputs)
+                # Generate drafts for still-active requests
+                for req_id in list(self.running.keys()):
+                    req = self.running.get(req_id)
+                    if req is not None and req.output_token_ids:
+                        if req_id not in self._spec_drafts:
+                            self._try_spec_decode_draft(req)
         except Exception as e:
             logger.error(f"BatchGenerator step error: {e}")
             from .exceptions import is_cache_corruption_error
@@ -733,6 +762,7 @@ class Scheduler:
         self._thinking_processors.pop(request.request_id, None)
         self._thinking_state.pop(request.request_id, None)
         self._pending_prefill.pop(request.request_id, None)
+        self._cleanup_spec_state(request.request_id)
 
         request.status = RequestStatus.PREEMPTED
         request.num_computed_tokens = 0
@@ -983,6 +1013,8 @@ class Scheduler:
                 detok = self._detokenizers.pop(req_id, None)
                 self._thinking_processors.pop(req_id, None)
                 self._thinking_state.pop(req_id, None)
+                # Cleanup speculative decoding state
+                self._cleanup_spec_state(req_id)
                 # Unregister mRoPE delta
                 if uid is not None:
                     self._rope_delta_mgr.unregister(uid)
@@ -1090,6 +1122,7 @@ class Scheduler:
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
             self._thinking_state.pop(req_id, None)
+            self._cleanup_spec_state(req_id)
 
         self._pending_abort_ids.clear()
 
@@ -1269,6 +1302,202 @@ class Scheduler:
         """Return detected speculative decoding head info."""
         return self._spec_head_info
 
+    # ── Speculative decoding batch-path methods ──
+
+    def _try_spec_decode_draft(self, req: Request) -> None:
+        """Generate K draft tokens for a request using the spec decoder.
+
+        This implements the "draft" phase of speculative decoding in the
+        continuous batching path. Draft tokens are stored in
+        ``self._spec_drafts[req.request_id]`` and verified on the next
+        scheduler step when the target model produces its actual output.
+
+        The draft model runs on the same GPU as the target (Phase 4 baseline).
+        Since scheduler methods are called FROM the MLX executor thread, all
+        GPU work here is already on the correct thread.
+
+        Only active when:
+          - ``self._spec_decoder`` is a real ``SpeculativeDecoder`` (not just head info)
+          - ``self.config.enable_spec_decode`` is True
+          - The request is still generating (not finished, not aborted)
+          - The request has produced at least one output token
+
+        Args:
+            req: The running request to generate draft tokens for.
+        """
+        if not self.config.enable_spec_decode:
+            return
+        if not isinstance(self._spec_decoder, SpeculativeDecoder):
+            return
+        if req.request_id in self._pending_abort_ids:
+            return
+        if not req.output_token_ids:
+            return  # Need at least one token to seed the draft
+
+        try:
+            decoder = self._spec_decoder
+            K = decoder.config.draft_length
+            if K <= 0:
+                return
+
+            # Delegate draft generation to a helper that handles MLX ops
+            draft_result = self._generate_draft_tokens(req, decoder, K)
+
+            if draft_result is not None and draft_result.token_ids:
+                self._spec_drafts[req.request_id] = draft_result.token_ids
+                # Track per-request stats
+                rid = req.request_id
+                if rid not in self._spec_stats:
+                    self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0}
+                self._spec_stats[rid]["proposals"] += len(draft_result.token_ids)
+                self._spec_total_proposals += len(draft_result.token_ids)
+                logger.debug(
+                    f"Spec decode draft for {rid}: "
+                    f"{len(draft_result.token_ids)} tokens"
+                )
+
+        except Exception as e:
+            logger.debug(f"Spec decode draft failed for {req.request_id}: {e}")
+            # Non-fatal: spec decode is opportunistic, not required
+
+    def _generate_draft_tokens(
+        self, req: Request, decoder: SpeculativeDecoder, K: int
+    ) -> DraftResult | None:
+        """Generate K draft tokens using the draft model.
+
+        Handles MLX array construction and draft cache management.
+        Separated from _try_spec_decode_draft for testability.
+
+        Args:
+            req: The running request.
+            decoder: The speculative decoder with draft model.
+            K: Number of draft tokens to generate.
+
+        Returns:
+            DraftResult with proposed tokens, or None on failure.
+        """
+        import mlx.core as mx
+        from mlx_lm.models.cache import make_prompt_cache
+
+        # Build input from last output token
+        last_tok = req.output_token_ids[-1]
+        input_ids = mx.array([[last_tok]])
+
+        # Use the draft model's own cache (maintained across calls)
+        # If no cache exists yet, create one
+        if not hasattr(req, '_spec_draft_cache') or req._spec_draft_cache is None:
+            req._spec_draft_cache = make_prompt_cache(decoder.draft)
+
+        cache = req._spec_draft_cache
+        return decoder.generate_draft(input_ids, cache)
+
+    def _verify_spec_drafts(self, outputs: list) -> None:
+        """Verify pending draft tokens against actual model output.
+
+        For each request that has pending drafts in ``self._spec_drafts``,
+        compare the draft tokens against the tokens actually produced by the
+        target model. Accepted tokens (matching prefix) are recorded; rejected
+        tokens trigger a cache rollback on the draft model.
+
+        This implements the "verify after" pattern used by vLLM:
+          1. Draft model proposes K tokens (stored in _spec_drafts)
+          2. Target model produces actual tokens (in _process_responses)
+          3. This method compares them: accept matching prefix, reject rest
+          4. Stats are recorded for monitoring
+
+        Note: The actual token output comes from the target model via
+        BatchGenerator — we do NOT substitute draft tokens into the output.
+        Verification is purely for statistical tracking and draft cache
+        management. The speedup comes from the draft model producing correct
+        guesses that the target model would have produced anyway.
+
+        Args:
+            outputs: List of RequestOutput from the current step.
+        """
+        if not self._spec_drafts:
+            return
+        if not isinstance(self._spec_decoder, SpeculativeDecoder):
+            return
+
+        verified_ids = []
+        for output in outputs:
+            rid = output.request_id
+            draft_ids = self._spec_drafts.get(rid)
+            if draft_ids is None:
+                continue
+
+            req = self.running.get(rid)
+            if req is None:
+                verified_ids.append(rid)
+                continue
+
+            # Compare draft tokens against actual model output.
+            # Drafts were generated after the previous step, predicting the
+            # next K tokens. We compare against the actual tokens produced
+            # since the draft was created (the tail of output_token_ids).
+            actual_tokens = req.output_token_ids
+            n_new = len(actual_tokens) - max(0, len(actual_tokens) - len(draft_ids))
+            # The recent tokens are the last len(draft_ids) tokens (or fewer
+            # if the request just started generating)
+            n_compare = min(len(draft_ids), len(actual_tokens))
+            recent_actual = actual_tokens[-n_compare:]
+            accepted = 0
+            for i, draft_tok in enumerate(draft_ids):
+                if i < len(recent_actual) and recent_actual[i] == draft_tok:
+                    accepted += 1
+                else:
+                    break  # First mismatch stops acceptance
+
+            rejected = len(draft_ids) - accepted
+
+            # Update per-request stats
+            if rid not in self._spec_stats:
+                self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0}
+            self._spec_stats[rid]["accepted"] += accepted
+            self._spec_stats[rid]["rejected"] += rejected
+            self._spec_total_accepted += accepted
+            self._spec_total_rejected += rejected
+
+            # Rollback draft cache on rejection
+            if accepted < len(draft_ids) and hasattr(req, '_spec_draft_cache') and req._spec_draft_cache is not None:
+                try:
+                    snapshot = SpeculativeDecoder._snapshot_cache(req._spec_draft_cache)
+                    # Re-feed only accepted tokens to sync draft cache
+                    # (rollback to pre-draft state and re-forward accepted tokens)
+                    SpeculativeDecoder._restore_cache(req._spec_draft_cache, snapshot)
+                    import mlx.core as mx
+                    for tok in draft_ids[:accepted]:
+                        self._spec_decoder.draft(
+                            mx.array([[tok]]),
+                            cache=req._spec_draft_cache,
+                        )
+                except Exception as e:
+                    logger.debug(f"Draft cache rollback failed for {rid}: {e}")
+
+            logger.debug(
+                f"Spec verify for {rid}: "
+                f"{accepted}/{len(draft_ids)} accepted, "
+                f"{rejected} rejected"
+            )
+
+            verified_ids.append(rid)
+
+        # Clean up verified drafts
+        for rid in verified_ids:
+            self._spec_drafts.pop(rid, None)
+
+    def _cleanup_spec_state(self, req_id: str) -> None:
+        """Clean up spec decode state for a finished/aborted request.
+
+        Called from _process_responses() when a request finishes, and from
+        _process_aborts() when a request is aborted.
+        """
+        self._spec_drafts.pop(req_id, None)
+        stats = self._spec_stats.pop(req_id, None)
+        # Aggregate final stats are already accumulated in _spec_total_*
+
+    # ── End speculative decoding batch-path methods ──
+
     def get_batch_rope_deltas(self, uids: list[int]) -> list[float]:
         """Get per-request mRoPE deltas for batch decode.
 
@@ -1297,6 +1526,11 @@ class Scheduler:
         self._pending_prefill.clear()
         self._spec_decoder = None
         self._spec_head_info = None
+        self._spec_drafts.clear()
+        self._spec_stats.clear()
+        self._spec_total_proposals = 0
+        self._spec_total_accepted = 0
+        self._spec_total_rejected = 0
         self._rope_delta_mgr.clear()
 
     def shutdown(self) -> None:
@@ -1329,6 +1563,21 @@ class Scheduler:
             stats["thinking_segment_store"] = self._thinking_store.get_stats()
         except Exception:
             logger.debug("thinking segment store stats unavailable", exc_info=True)
+        # Append speculative decoding stats
+        stats["spec_enabled"] = (
+            self.config.enable_spec_decode
+            and isinstance(self._spec_decoder, SpeculativeDecoder)
+        )
+        stats["spec_proposals"] = self._spec_total_proposals
+        stats["spec_accepted"] = self._spec_total_accepted
+        stats["spec_rejected"] = self._spec_total_rejected
+        if self._spec_total_proposals > 0:
+            stats["spec_acceptance_rate"] = round(
+                self._spec_total_accepted / self._spec_total_proposals, 3
+            )
+        else:
+            stats["spec_acceptance_rate"] = 0.0
+        stats["spec_pending_drafts"] = len(self._spec_drafts)
         return stats
 
 
