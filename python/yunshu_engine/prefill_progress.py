@@ -106,3 +106,7 @@ def get_prefill_tracker() -> PrefillProgressTracker:
     if _tracker is None:
         _tracker = PrefillProgressTracker()
     return _tracker
+
+
+# Alias for convenience (used by monitoring endpoints)
+get_instance = get_prefill_tracker

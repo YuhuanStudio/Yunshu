@@ -308,6 +308,10 @@ async def spec_decode_stats() -> dict[str, Any]:
                     info["spec_stats"] = getattr(decoder, '_stats', {})
                 if ngram is not None:
                     info["ngram_stats"] = getattr(entry.engine, '_ngram_stats', {})
+                # Adaptive spec stats
+                adaptive_spec = getattr(entry.engine, '_adaptive_spec', None)
+                if adaptive_spec is not None:
+                    info["adaptive_spec"] = adaptive_spec.get_stats()
                 results.append(info)
     return {"models": results}
 
@@ -315,9 +319,9 @@ async def spec_decode_stats() -> dict[str, Any]:
 @router.get("/prefill-progress")
 async def prefill_progress() -> dict[str, Any]:
     """Prefill progress tracking."""
-    from ...yunshu_engine.prefill_progress import PrefillProgressTracker
-    tracker = PrefillProgressTracker.get_instance()
-    if tracker is None:
+    from yunshu_engine.prefill_progress import get_prefill_tracker
+    tracker = get_prefill_tracker()
+    if tracker is None or tracker.active_count == 0:
         return {"active": False}
     return {"active": True, "requests": tracker.get_all_progress()}
 

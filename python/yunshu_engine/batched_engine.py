@@ -147,6 +147,9 @@ class BatchedEngine:
         self._ngram_proposer = None  # NgramProposer, created on demand
         self._ngram_stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
 
+        # Adaptive speculative decode controller (opt-in via YUNSHU_ADAPTIVE_SPEC=1)
+        self._adaptive_spec = None
+
         # SpecPrefill config (opt-in via YUNSHU_SPEC_PREFILL env var)
         self._spec_prefill_enabled = False
         self._spec_prefill_threshold = 8192
@@ -406,6 +409,7 @@ class BatchedEngine:
             self._kv_prefix_cache.clear()
         self._spec_decoder = None
         self._ngram_proposer = None
+        self._adaptive_spec = None
         self._warm_prompts = None
         self._thinking_store = None
         self._model = None
@@ -704,6 +708,17 @@ class BatchedEngine:
             think_start_token = None
             _in_thinking = False
             _thinking_tokens: list[int] = []
+
+            # Prefill progress tracking for the fast path
+            _prefill_req_id = f"fp-{id(_run)}-{int(time.monotonic()*1e6)}"
+            _prefill_tracker = None
+            try:
+                from .prefill_progress import get_prefill_tracker
+                _prefill_tracker = get_prefill_tracker()
+                _prefill_tracker.update(_prefill_req_id, 0, prompt_tokens, self.model_name or "default")
+            except Exception:
+                _prefill_tracker = None
+
             if thinking_budget is not None or enable_thinking:
                 try:
                     think_end_token = tokenizer.encode("</think")[-1]
@@ -813,6 +828,12 @@ class BatchedEngine:
                         if first:
                             ttft_s = time.perf_counter() - gen_t0
                             first = False
+                            # Prefill complete — remove from progress tracker
+                            if _prefill_tracker is not None:
+                                _prefill_tracker.update(
+                                    _prefill_req_id, prompt_tokens, prompt_tokens,
+                                    self.model_name or "default",
+                                )
                             _last_tok_time = time.perf_counter()
                         else:
                             # ITL tracking
@@ -1230,6 +1251,18 @@ class BatchedEngine:
             n_tok = 0
             thinking_tokens_used = 0
             think_end_token = None
+            _first_token = True
+
+            # Prefill progress tracking for streaming fast path
+            _prefill_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
+            _prefill_tracker = None
+            try:
+                from .prefill_progress import get_prefill_tracker
+                _prefill_tracker = get_prefill_tracker()
+                _prefill_tracker.update(_prefill_req_id, 0, prompt_tokens, self.model_name or "default")
+            except Exception:
+                _prefill_tracker = None
+
             if thinking_budget is not None:
                 try:
                     think_end_token = tokenizer.encode("</think")[-1]
@@ -1253,6 +1286,14 @@ class BatchedEngine:
                 ):
                     detokenizer.add_token(token)
                     n_tok += 1
+                    # Prefill complete on first token — remove from progress tracker
+                    if _first_token:
+                        _first_token = False
+                        if _prefill_tracker is not None:
+                            _prefill_tracker.update(
+                                _prefill_req_id, prompt_tokens, prompt_tokens,
+                                self.model_name or "default",
+                            )
                     new_text = detokenizer.last_segment
                     stop_hit = token in stop_ids
                     suffix_hit = False
@@ -1279,6 +1320,9 @@ class BatchedEngine:
                     _put((remaining, n_tok, False))
                 _put(("", n_tok, True))
                 mx.synchronize()
+                # Clean up prefill progress entry (may persist if first token wasn't reached)
+                if _prefill_tracker is not None:
+                    _prefill_tracker.remove(_prefill_req_id)
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
@@ -1474,6 +1518,11 @@ class BatchedEngine:
             from .spec_proposer import NgramSpecProposer
             self._spec_proposer = NgramSpecProposer(NgramConfig(max_n=max_n, k=k))
             logger.info(f"N-gram proposer initialized: max_n={max_n}, k={k}")
+
+        # Adaptive spec controller (requires N-gram proposer active)
+        if self._ngram_proposer is not None:
+            from .adaptive_spec import AdaptiveSpecController
+            self._adaptive_spec = AdaptiveSpecController.from_env()
 
         # SpecPrefill for long prompts (requires YUNSHU_SPEC_PREFILL=1)
         if os.environ.get("YUNSHU_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
@@ -1764,7 +1813,9 @@ class BatchedEngine:
                 remaining = max_tokens - 1
                 while remaining > 0:
                     # Propose K draft tokens via N-gram
-                    draft_ids = proposer.propose(all_token_ids)
+                    # Use adaptive K if controller is active, else use proposer default
+                    _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
+                    draft_ids = proposer.propose(all_token_ids)[:(_adaptive_k or len(all_token_ids))]
                     n_draft = min(len(draft_ids), remaining)
 
                     if n_draft == 0:
@@ -1829,6 +1880,10 @@ class BatchedEngine:
                             break  # Stop verifying rest of drafts
 
                     self._ngram_stats["accepted"] += accepted
+
+                    # Feed back to adaptive spec controller
+                    if self._adaptive_spec is not None:
+                        self._adaptive_spec.record_step(n_draft, accepted)
 
             # Cache KV state
             if self._kv_quant_bits is not None:
@@ -1937,7 +1992,10 @@ class BatchedEngine:
                 # Decode with N-gram lookahead
                 remaining = max_tokens - 1
                 while remaining > 0:
+                    _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
                     draft_ids = proposer.propose(all_token_ids)
+                    if _adaptive_k is not None:
+                        draft_ids = draft_ids[:_adaptive_k]
                     n_draft = min(len(draft_ids), remaining)
 
                     if n_draft == 0:
@@ -2000,6 +2058,8 @@ class BatchedEngine:
                             break
 
                     self._ngram_stats["accepted"] += accepted
+                    if self._adaptive_spec is not None:
+                        self._adaptive_spec.record_step(n_draft, accepted)
                     if stopped:
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
@@ -2108,6 +2168,8 @@ class BatchedEngine:
             stats = {"model": self.model_name, "loaded": self._loaded}
         if self._thinking_store is not None:
             stats["thinking_segment_store"] = self._thinking_store.get_stats()
+        if self._adaptive_spec is not None:
+            stats["adaptive_spec"] = self._adaptive_spec.get_stats()
         return stats
 
     def get_kv_cache_stats(self) -> dict:
