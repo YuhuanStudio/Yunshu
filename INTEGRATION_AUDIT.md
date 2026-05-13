@@ -96,7 +96,7 @@
 ### 待處理
 
 - ~~`grammar` 參數 — Gateway 接收但 SamplingParams 不支持語法約束生成~~ ✅ 已實現 (GRAMMAR) — grammar 參數 → json_schema 約束
-- `n > 1` streaming — 僅支持 n=1
+- ~~`n > 1` streaming — 僅支持 n=1~~ ✅ 已實現 (N-STREAM) — _stream_response_multi 支持多選項串流
 
 ### 已修復 (2026-05-13 第二批)
 
@@ -196,6 +196,15 @@
 | LID | Language Identification — Unicode 字元偵測 + 詞彙匹配 14 語言 | §19.6 | ✅ 已實現 |
 | IMG-VAR | `/v1/images/variations` — 圖片變體生成端點 | OpenAI §20.3 | ✅ 已實現 |
 | IMG-EDIT | `/v1/images/edits` — 圖片編輯端點 (圖片 + 提示) | OpenAI §20.3 | ✅ 已實現 |
+
+### 新增功能 (2026-05-13 第十二批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| N-STREAM | n>1 串流支持 — `_stream_response_multi` 按序生成 N 個選項，正確 choice.index 交織 | §3.3 | ✅ 已實現 |
+| CANCEL | 生成取消 — `POST /v1/cancel` + `GET /v1/active-generations`，RequestTracker 追蹤活躍請求 | §20.3 | ✅ 已實現 |
+| VPIPE | VoicePipeline STT→LLM→TTS 端到端管線 — process() + process_stream()，`/audio/voice-pipeline` 端點 | §19.6 | ✅ 已實現 |
+| IMG-SIZE | 圖片尺寸驗證 — 64–2048，必須為 64 的倍數 | §20.3 | ✅ 已實現 |
 
 ### 跨項目學習進度
 
@@ -1285,7 +1294,7 @@ oMLX 有完整的 STSEngine 支持:
 | STS (Speech-to-Speech) | ❌ |
 | VAD (語音活動偵測) | ✅ EnergyVAD + WebRTCVAD (VAD) |
 | LID (語言識別) | ✅ lid.py — 14 語言偵測 (LID) |
-| VoicePipeline (STT→LLM→TTS 端到端) | ❌ |
+| VoicePipeline (STT→LLM→TTS 端到端) | ✅ voice_pipeline.py + /audio/voice-pipeline (VPIPE) |
 | 原生 streaming (`stream=True`, `streaming_interval`) | ❌ |
 | Voice cloning (`ref_audio`, `ref_text`) | ✅ TTSRequest params (TTS-EXT) |
 
@@ -1328,8 +1337,8 @@ vllm-omni 支持: **25+ 擴散架構**
 | TeaCache | ❌ | — | ✅ |
 | 多模型支持 | ❌ | ✅ 7+ 模型 | ✅ 25+ 模型 |
 | 中間預覽 (streaming) | ❌ (只有進度 %) | ✅ 回調系統 | — |
-| 取消生成 | ❌ | — | — |
-| 尺寸驗證 | ❌ | ✅ | ✅ |
+| 取消生成 | ✅ POST /v1/cancel (CANCEL) | — | — |
+| 尺寸驗證 | ✅ 64–2048, 64 倍數 (IMG-SIZE) | ✅ | ✅ |
 | OOM 保護 | ❌ | ✅ | ✅ |
 | `/v1/images/edits` | ✅ (IMG-EDIT) | — | — |
 | `/v1/images/variations` | ✅ (IMG-VAR) | — | — |
