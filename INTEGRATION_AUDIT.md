@@ -1662,4 +1662,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復 + 連續批處理已實現 (VLMAsyncEngineCore)，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，視頻理解已實現 (VLM frame extraction)，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現，LoRA gateway 透傳已實現，圖像預覽串流已實現 (preview_interval)。剩餘缺口：STS 引擎（需指定模型）、視頻生成、img2img/inpainting、圖像 LoRA。測試套件 3301 passed, 13 skipped。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復 + 連續批處理已實現 (VLMAsyncEngineCore)，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，視頻理解已實現 (VLM frame extraction)，Realtime token-level 音頻串流已實現，MCP client 已實現，TTS 原生串流已實現，LoRA gateway 透傳已實現 + 圖像 LoRA，圖像預覽串流已實現 (preview_interval)，Grammar 約束支持 regex/choice/CFG，分離式 P/D 端點，VLM request 字段完善。剩餘缺口：STS 引擎（需指定模型）、視頻生成、inpainting、多圖像模型支持。測試套件 3445 passed, 13 skipped。
