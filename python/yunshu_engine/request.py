@@ -157,6 +157,9 @@ class Request:
 
     # VLM fields (oMLX pattern)
     rope_deltas: float = 0.0  # mRoPE position delta for multi-modal models (Qwen3 Omni, etc.)
+    vlm_inputs_embeds: Any | None = None  # Precomputed vision embeddings from VLM encoder
+    vlm_extra_kwargs: dict | None = None  # Extra kwargs for VLM-specific generation
+    vlm_image_hash: str | None = None  # Content hash of input images for feature cache lookup
 
     # Prefix cache fields
     prompt_cache: Any = None
@@ -165,6 +168,7 @@ class Request:
 
     # Multimodal content
     images: list[Any] | None = None
+    videos: list[Any] | None = None  # Video input paths/frames for VLM understanding
 
     # Timing (for ServerMetrics integration)
     prefill_start: float = 0.0

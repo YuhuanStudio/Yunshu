@@ -261,6 +261,9 @@ class VLMEngine:
         image_paths.extend(video_frames)
         self._enable_thinking = enable_thinking
 
+        # Compute image hash for vision feature cache lookup
+        image_hash = self._compute_image_hash(image_paths) if image_paths else None
+
         def _generate_sync():
             if seed is not None:
                 mx.random.seed(seed)
@@ -350,6 +353,9 @@ class VLMEngine:
         image_paths.extend(video_frames)
         has_images = bool(image_paths) and self._has_vision and self._is_vlm
         has_audio = bool(audio_paths) and self._is_vlm
+
+        # Compute image hash for vision feature cache lookup
+        _image_hash = self._compute_image_hash(image_paths) if image_paths else None
 
         def _stream_sync():
             try:
@@ -1010,6 +1016,25 @@ class VLMEngine:
                 )
                 paths = paths[:1]
         return paths
+
+    # ── Image Hash ──
+
+    def _compute_image_hash(self, image_paths: list[str]) -> str | None:
+        """Compute a content hash for image paths (vision feature cache key)."""
+        if not image_paths:
+            return None
+        import hashlib
+        h = hashlib.sha256()
+        for path in image_paths:
+            h.update(path.encode())
+            try:
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        for chunk in iter(lambda: f.read(8192), b""):
+                            h.update(chunk)
+            except Exception:
+                pass
+        return h.hexdigest()[:16]
 
     # ── Audio Extraction ──
 

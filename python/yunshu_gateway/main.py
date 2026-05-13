@@ -214,6 +214,7 @@ def create_app() -> FastAPI:
     from .routers import responses as responses_mod
     from .routers import cancel as cancel_mod
     from .routers import ocr as ocr_mod
+    from .routers import disaggregate
     app.include_router(chat.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(responses_mod.router, prefix="/v1")
@@ -231,6 +232,7 @@ def create_app() -> FastAPI:
     app.include_router(profiling.router, prefix="/v1")
     app.include_router(realtime.router)
     app.include_router(bench.router)
+    app.include_router(disaggregate.router)
     app.include_router(sleep_mod.router)
 
     # Routes — L1 Gateway Monitoring (system, models, requests, prometheus)
