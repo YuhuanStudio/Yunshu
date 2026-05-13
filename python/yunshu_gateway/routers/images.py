@@ -181,7 +181,7 @@ async def create_image_variation(req: ImageVariationsRequest) -> JSONResponse:
     import base64
 
     try:
-        image_bytes = base64.b64decode(req.image)
+        image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
@@ -257,7 +257,7 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
     import base64
 
     try:
-        image_bytes = base64.b64decode(req.image)
+        image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
@@ -334,7 +334,7 @@ async def create_image_inpaint(req: ImageInpaintRequest) -> JSONResponse:
     the unmasked region is preserved from the original image.
     """
     try:
-        image_bytes = base64.b64decode(req.image)
+        image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
@@ -385,4 +385,154 @@ async def create_image_inpaint(req: ImageInpaintRequest) -> JSONResponse:
     except Exception as e:
         logger.error(f"Image inpaint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Image inpainting failed")
+
+
+class ImageControlNetRequest(BaseModel):
+    prompt: str = Field(description="Text prompt for generation")
+    image: str = Field(description="Base64-encoded conditioning image (edges, depth map, etc.)")
+    condition_type: str = Field(default="canny", description="Conditioning type: canny, depth, raw")
+    model: str = "Z-Image-Turbo-MLX-4bit"
+    n: int = 1
+    size: str = "1024x1024"
+    response_format: str = "b64_json"
+    num_inference_steps: int = 4
+    seed: Optional[int] = None
+    controlnet_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Conditioning strength")
+    canny_low: int = Field(default=100, ge=0, le=255, description="Canny lower threshold")
+    canny_high: int = Field(default=200, ge=0, le=255, description="Canny upper threshold")
+
+
+@router.post("/images/controlnet")
+async def create_image_controlnet(req: ImageControlNetRequest) -> JSONResponse:
+    """Generate an image with ControlNet spatial conditioning.
+
+    Accepts a conditioning image (edge map, depth map, etc.) and a text prompt.
+    The conditioning image guides the spatial structure of the generated output.
+    """
+    try:
+        image_bytes = base64.b64decode(req.image, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image data")
+
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Model manager not initialized")
+
+    from yunshu_engine.image_engine import ImageGenEngine
+
+    img_engine = None
+    for entry in manager.list_entries():
+        if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
+            img_engine = entry.engine
+            break
+
+    if img_engine is None:
+        raise HTTPException(status_code=404, detail="No image generation model available")
+
+    try:
+        width, height = map(int, req.size.split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+
+    try:
+        data = []
+        for i in range(req.n):
+            seed = (req.seed + i) if req.seed is not None else None
+            png = await img_engine.generate_controlled(
+                prompt=req.prompt,
+                condition_image=image_bytes,
+                condition_type=req.condition_type,
+                width=width,
+                height=height,
+                num_inference_steps=req.num_inference_steps,
+                seed=seed,
+                controlnet_strength=req.controlnet_strength,
+                canny_low=req.canny_low,
+                canny_high=req.canny_high,
+            )
+            b64 = base64.b64encode(png).decode("ascii")
+            if req.response_format == "b64_json":
+                data.append({"b64_json": b64})
+            else:
+                data.append({"url": f"data:image/png;base64,{b64}"})
+
+        return JSONResponse({
+            "created": int(time.time()),
+            "data": data,
+        })
+    except Exception as e:
+        logger.error(f"ControlNet gen error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="ControlNet generation failed")
+
+
+class ImageDepthGuidedRequest(BaseModel):
+    prompt: str = Field(description="Text prompt for generation")
+    depth_image: str = Field(description="Base64-encoded depth visualization image")
+    model: str = "Z-Image-Turbo-MLX-4bit"
+    n: int = 1
+    size: str = "1024x1024"
+    response_format: str = "b64_json"
+    num_inference_steps: int = 4
+    seed: Optional[int] = None
+    depth_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Depth conditioning strength")
+
+
+@router.post("/images/depth-guided")
+async def create_image_depth_guided(req: ImageDepthGuidedRequest) -> JSONResponse:
+    """Generate a depth-guided image using a depth map for spatial control.
+
+    The depth map provides structural guidance — areas with similar depth values
+    will maintain spatial coherence in the generated image.
+    """
+    try:
+        depth_bytes = base64.b64decode(req.depth_image, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 depth image data")
+
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Model manager not initialized")
+
+    from yunshu_engine.image_engine import ImageGenEngine
+
+    img_engine = None
+    for entry in manager.list_entries():
+        if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
+            img_engine = entry.engine
+            break
+
+    if img_engine is None:
+        raise HTTPException(status_code=404, detail="No image generation model available")
+
+    try:
+        width, height = map(int, req.size.split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+
+    try:
+        data = []
+        for i in range(req.n):
+            seed = (req.seed + i) if req.seed is not None else None
+            png = await img_engine.generate_depth_guided(
+                prompt=req.prompt,
+                depth_image=depth_bytes,
+                width=width,
+                height=height,
+                num_inference_steps=req.num_inference_steps,
+                seed=seed,
+                depth_strength=req.depth_strength,
+            )
+            b64 = base64.b64encode(png).decode("ascii")
+            if req.response_format == "b64_json":
+                data.append({"b64_json": b64})
+            else:
+                data.append({"url": f"data:image/png;base64,{b64}"})
+
+        return JSONResponse({
+            "created": int(time.time()),
+            "data": data,
+        })
+    except Exception as e:
+        logger.error(f"Depth-guided gen error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Depth-guided generation failed")
 

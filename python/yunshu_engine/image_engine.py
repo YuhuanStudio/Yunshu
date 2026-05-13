@@ -1982,6 +1982,313 @@ class ImageGenEngine:
             "running": self._running,
         }
 
+    def _run_controlled_pipeline(
+        self,
+        prompt: str,
+        condition_image_data: bytes,
+        condition_type: str,
+        width: int,
+        height: int,
+        num_steps: int,
+        seed: int,
+        controlnet_strength: float,
+        canny_low: int,
+        canny_high: int,
+    ) -> bytes:
+        """Run ControlNet-conditioned generation.
+
+        Applies spatial conditioning (canny edges, depth map, etc.) during
+        the denoising loop using a ControlNetBlock to inject conditioning signals.
+        """
+        from .controlnet_engine import (
+            ConditioningPreprocessor,
+            ControlNetBlock,
+            ControlNetConfig,
+        )
+
+        # 1. Pre-process conditioning image → latent conditioning
+        condition_result = ConditioningPreprocessor.image_to_condition_latents(
+            image_data=condition_image_data,
+            vae=self._vae,
+            width=width,
+            height=height,
+            condition_type=condition_type,
+            canny_low=canny_low,
+            canny_high=canny_high,
+        )
+        condition_latents = condition_result.condition_latents
+
+        # 2. Create ControlNet block
+        cn_config = ControlNetConfig(
+            condition_type=condition_type,
+            controlnet_strength=controlnet_strength,
+        )
+        cn_block = ControlNetBlock(cn_config)
+
+        # 3. Tokenize prompt
+        tokenizer = self._tokenizer
+        formatted = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
+        tokens = tokenizer(
+            [formatted],
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="np",
+        )
+        input_ids = mx.array(tokens["input_ids"])
+        attention_mask = mx.array(tokens["attention_mask"])
+
+        # 4. Text encoding
+        cap_feats = self._text_encoder(input_ids, attention_mask)
+        num_valid = int(mx.sum(attention_mask[0]).item())
+        cap_feats = cap_feats[0, :num_valid, :]
+        mx.eval(cap_feats)
+
+        # 5. Prepare noise latents
+        latent_h = height // 8
+        latent_w = width // 8
+        latents = mx.random.normal(
+            shape=[16, 1, latent_h, latent_w],
+            key=mx.random.key(seed),
+        ).astype(mx.float16)
+
+        # 6. Compute sigma schedule
+        sigmas = _compute_sigmas(num_steps, width, height)
+
+        # 7. Conditioned denoising loop
+        for t in range(num_steps):
+            # Inject conditioning at each step
+            latents = cn_block.inject_condition(
+                latents, condition_latents, t, num_steps,
+            )
+
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
+
+            noise_pred = self._transformer(
+                x=latents,
+                timestep=timestep,
+                sigmas=sigmas,
+                cap_feats=cap_feats,
+            )
+
+            dt = sigmas[t + 1] - sigmas[t]
+            latents = latents + noise_pred * dt
+            mx.eval(latents)
+
+        # 8. VAE decode
+        if width * height > 1024 * 1024:
+            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
+        else:
+            image = self._vae.decode(latents)
+        mx.eval(image)
+
+        return self._to_png(image)
+
+    async def generate_controlled(
+        self,
+        prompt: str,
+        condition_image: bytes,
+        condition_type: str = "canny",
+        width: int = 1024,
+        height: int = 1024,
+        num_inference_steps: int = 4,
+        seed: int | None = None,
+        controlnet_strength: float = 1.0,
+        canny_low: int = 100,
+        canny_high: int = 200,
+    ) -> bytes:
+        """Generate an image with ControlNet spatial conditioning.
+
+        Args:
+            prompt: Text prompt.
+            condition_image: Conditioning image bytes (edges, depth map, etc.).
+            condition_type: Type of conditioning (canny, depth, raw).
+            width: Output width.
+            height: Output height.
+            num_inference_steps: Denoising steps.
+            seed: Random seed.
+            controlnet_strength: Conditioning strength (0.0–1.0).
+            canny_low: Canny lower threshold.
+            canny_high: Canny upper threshold.
+
+        Returns:
+            PNG bytes of the generated image.
+        """
+        if self._transformer is None:
+            raise RuntimeError("Engine not started")
+
+        def _controlled_sync() -> bytes:
+            return self._run_controlled_pipeline(
+                prompt=prompt,
+                condition_image_data=condition_image,
+                condition_type=condition_type,
+                width=width,
+                height=height,
+                num_steps=num_inference_steps,
+                seed=seed if seed is not None else 42,
+                controlnet_strength=controlnet_strength,
+                canny_low=canny_low,
+                canny_high=canny_high,
+            )
+
+        t0 = time.monotonic()
+        loop = asyncio.get_running_loop()
+        png_bytes = await loop.run_in_executor(self._executor, _controlled_sync)
+        elapsed = time.monotonic() - t0
+        logger.info(f"ControlNet gen: {elapsed:.2f}s, type={condition_type}, prompt='{prompt[:50]}...'")
+        return png_bytes
+
+    def _run_depth_guided_pipeline(
+        self,
+        prompt: str,
+        depth_image_data: bytes,
+        width: int,
+        height: int,
+        num_steps: int,
+        seed: int,
+        depth_strength: float,
+    ) -> bytes:
+        """Run depth-guided generation.
+
+        Encodes depth map as additional latent channels and uses it
+        to guide the denoising process.
+        """
+        from .controlnet_engine import DepthGuider
+
+        # 1. Prepare depth latents
+        depth_latents = DepthGuider.prepare_depth_latents(
+            depth_image=depth_image_data,
+            vae=self._vae,
+            width=width,
+            height=height,
+        )
+
+        # 2. Scale depth by strength
+        if depth_strength != 1.0:
+            depth_latents = depth_latents * depth_strength
+
+        # 3. Tokenize prompt
+        tokenizer = self._tokenizer
+        formatted = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
+        tokens = tokenizer(
+            [formatted],
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="np",
+        )
+        input_ids = mx.array(tokens["input_ids"])
+        attention_mask = mx.array(tokens["attention_mask"])
+
+        # 4. Text encoding
+        cap_feats = self._text_encoder(input_ids, attention_mask)
+        num_valid = int(mx.sum(attention_mask[0]).item())
+        cap_feats = cap_feats[0, :num_valid, :]
+        mx.eval(cap_feats)
+
+        # 5. Prepare noise latents
+        latent_h = height // 8
+        latent_w = width // 8
+        latents = mx.random.normal(
+            shape=[16, 1, latent_h, latent_w],
+            key=mx.random.key(seed),
+        ).astype(mx.float16)
+
+        # 6. Add depth conditioning as a bias to latents
+        if depth_latents.ndim == 3:
+            depth_4d = depth_latents[:, np.newaxis, :, :]
+        else:
+            depth_4d = depth_latents
+
+        # 7. Compute sigma schedule
+        sigmas = _compute_sigmas(num_steps, width, height)
+
+        # 8. Depth-conditioned denoising loop
+        for t in range(num_steps):
+            # Blend depth conditioning into latents at each step
+            step_frac = t / max(num_steps, 1)
+            depth_weight = depth_strength * (1.0 - step_frac) * 0.1
+            conditioned = latents + depth_4d * depth_weight
+
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
+
+            noise_pred = self._transformer(
+                x=conditioned,
+                timestep=timestep,
+                sigmas=sigmas,
+                cap_feats=cap_feats,
+            )
+
+            dt = sigmas[t + 1] - sigmas[t]
+            latents = latents + noise_pred * dt
+            mx.eval(latents)
+
+        # 9. VAE decode
+        if width * height > 1024 * 1024:
+            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
+        else:
+            image = self._vae.decode(latents)
+        mx.eval(image)
+
+        return self._to_png(image)
+
+    async def generate_depth_guided(
+        self,
+        prompt: str,
+        depth_image: bytes,
+        width: int = 1024,
+        height: int = 1024,
+        num_inference_steps: int = 4,
+        seed: int | None = None,
+        depth_strength: float = 1.0,
+    ) -> bytes:
+        """Generate a depth-guided image.
+
+        Args:
+            prompt: Text prompt.
+            depth_image: Depth visualization image bytes.
+            width: Output width.
+            height: Output height.
+            num_inference_steps: Denoising steps.
+            seed: Random seed.
+            depth_strength: Depth conditioning strength (0.0–1.0).
+
+        Returns:
+            PNG bytes of the generated image.
+        """
+        if self._transformer is None:
+            raise RuntimeError("Engine not started")
+
+        def _depth_sync() -> bytes:
+            return self._run_depth_guided_pipeline(
+                prompt=prompt,
+                depth_image_data=depth_image,
+                width=width,
+                height=height,
+                num_steps=num_inference_steps,
+                seed=seed if seed is not None else 42,
+                depth_strength=depth_strength,
+            )
+
+        t0 = time.monotonic()
+        loop = asyncio.get_running_loop()
+        png_bytes = await loop.run_in_executor(self._executor, _depth_sync)
+        elapsed = time.monotonic() - t0
+        logger.info(f"Depth-guided gen: {elapsed:.2f}s, prompt='{prompt[:50]}...'")
+        return png_bytes
+
     def load_lora_adapter(self, adapter_path: str, rank: int = 8, scale: float = 20.0) -> bool:
         """Load a LoRA adapter into the image transformer.
 
