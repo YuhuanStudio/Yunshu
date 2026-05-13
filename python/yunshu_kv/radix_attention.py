@@ -38,6 +38,10 @@ class RadixNode:
     ref_count: int = 0
     # Last access time for LRU eviction
     last_access_time: float = 0.0
+    # Access count for LFU eviction
+    access_count: int = 0
+    # Creation time for FIFO eviction
+    creation_time: float = 0.0
 
     @property
     def num_tokens(self) -> int:
@@ -87,10 +91,11 @@ class RadixTree:
     - evict(n_bytes) → freed blocks
     """
 
-    def __init__(self) -> None:
+    def __init__(self, eviction_strategy: str = "lru") -> None:
         self.root = RadixNode()
         self._total_nodes = 0
         self._total_ref_count = 0
+        self._eviction_strategy = eviction_strategy  # lru, lfu, fifo
 
     @property
     def total_nodes(self) -> int:
@@ -228,11 +233,14 @@ class RadixTree:
             return node
 
         # Create a single new node for all new tokens
+        now = _now()
         new_node = RadixNode(
             token_ids=list(token_ids),
             blocks=list(blocks),
             block_hashes=list(block_hashes),
             parent=node,
+            creation_time=now,
+            last_access_time=now,
         )
         node.children[token_ids[0]] = new_node
         self._total_nodes += 1
@@ -240,10 +248,12 @@ class RadixTree:
 
     def inc_ref(self, node: RadixNode) -> None:
         """Increment reference count from node to root."""
+        now = _now()
         current = node
         while current is not None:
             current.ref_count += 1
-            current.last_access_time = _now()
+            current.last_access_time = now
+            current.access_count += 1
             current = current.parent
         self._total_ref_count += 1
 
@@ -256,7 +266,12 @@ class RadixTree:
         self._total_ref_count -= 1
 
     def evict(self, n_nodes: int) -> list[KVBlock]:
-        """Evict the least-recently-used leaf nodes with ref_count == 0.
+        """Evict leaf nodes with ref_count == 0 using configured strategy.
+
+        Strategies:
+        - lru (default): least recently used — evict oldest last_access_time
+        - lfu: least frequently used — evict lowest access_count
+        - fifo: first in first out — evict oldest creation_time
 
         After eviction, merges parent nodes that end up with a single child
         and ref_count == 0 (post-split compaction).
@@ -269,8 +284,13 @@ class RadixTree:
 
         # Collect all evictable leaves (ref_count == 0, not root)
         leaves = self._collect_evictable_leaves()
-        # Sort by access time (oldest first)
-        leaves.sort(key=lambda n: n.last_access_time)
+        # Sort by chosen strategy
+        if self._eviction_strategy == "lfu":
+            leaves.sort(key=lambda n: n.access_count)
+        elif self._eviction_strategy == "fifo":
+            leaves.sort(key=lambda n: n.creation_time)
+        else:  # lru (default)
+            leaves.sort(key=lambda n: n.last_access_time)
 
         for leaf in leaves:
             if evicted >= n_nodes:

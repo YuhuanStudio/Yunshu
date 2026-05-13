@@ -188,6 +188,15 @@
 |------|------|------|------|
 | CLASSIFY | `/v1/classify` 端點 — 零樣本文本分類 (嵌入 + 餘弦相似度 + softmax) | vLLM §12.5 | ✅ 已實現 |
 
+### 新增功能 (2026-05-13 第十一批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| RADIX-EVICT | RadixTree 多淘汰策略 — LRU (默認) / LFU / FIFO，可配置 | SGLang §14.2 | ✅ 已實現 |
+| LID | Language Identification — Unicode 字元偵測 + 詞彙匹配 14 語言 | §19.6 | ✅ 已實現 |
+| IMG-VAR | `/v1/images/variations` — 圖片變體生成端點 | OpenAI §20.3 | ✅ 已實現 |
+| IMG-EDIT | `/v1/images/edits` — 圖片編輯端點 (圖片 + 提示) | OpenAI §20.3 | ✅ 已實現 |
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -987,7 +996,7 @@ SGLang 的 RadixCache (828 行) 是**生產級基數樹**:
 Yunshu 的 RadixTree (radix_attention.py, 365 行):
 - 基本基數樹結構存在
 - **但從未被任何引擎代碼 import — 完全是死代碼**
-- 缺少多淘汰策略、KV 池整合、spec decode 整合
+- ~~缺少多淘汰策略~~ ✅ LRU/LFU/FIFO 三策略已實現 (RADIX-EVICT)
 
 ### 14.3 SGLang 的性能優化 (Yunshu 可學習)
 
@@ -1275,7 +1284,7 @@ oMLX 有完整的 STSEngine 支持:
 |---------------|------------|
 | STS (Speech-to-Speech) | ❌ |
 | VAD (語音活動偵測) | ✅ EnergyVAD + WebRTCVAD (VAD) |
-| LID (語言識別) | ❌ |
+| LID (語言識別) | ✅ lid.py — 14 語言偵測 (LID) |
 | VoicePipeline (STT→LLM→TTS 端到端) | ❌ |
 | 原生 streaming (`stream=True`, `streaming_interval`) | ❌ |
 | Voice cloning (`ref_audio`, `ref_text`) | ✅ TTSRequest params (TTS-EXT) |
@@ -1322,8 +1331,8 @@ vllm-omni 支持: **25+ 擴散架構**
 | 取消生成 | ❌ | — | — |
 | 尺寸驗證 | ❌ | ✅ | ✅ |
 | OOM 保護 | ❌ | ✅ | ✅ |
-| `/v1/images/edits` | ❌ | — | — |
-| `/v1/images/variations` | ❌ | — | — |
+| `/v1/images/edits` | ✅ (IMG-EDIT) | — | — |
+| `/v1/images/variations` | ✅ (IMG-VAR) | — | — |
 
 ### 20.4 視頻生成完全缺失
 
