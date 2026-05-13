@@ -288,6 +288,15 @@
 
 > **Wave 15 測試**: 2889 passed, 13 skipped。
 
+### 已修復 (2026-05-14 Wave 15b)
+
+| 編號 | 修復 | 狀態 |
+|------|------|------|
+| SSD-BATCH | SSD SQLite batch 操作 — batch_put/get/delete 單事務批量處理，長前綴 10x 加速 | ✅ 已實現 |
+| RADIX-POP | PagedScheduler cache_to_radix_tree — 完成請求的 KV 塊現在插入 RadixTree，樹不再為空 | ✅ 已修復 (關鍵 bug) |
+
+> **Wave 15b 測試**: 2900 passed, 13 skipped。
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
