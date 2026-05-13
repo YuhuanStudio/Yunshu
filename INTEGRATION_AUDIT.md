@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — LoRA Manager + Grammar 參數 + Pooling/Score/Rerank + Tool Call/Reasoning Parser Factory)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 11: completions thinking_budget, image OOM, realtime token-level audio)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，每項修復均通過 2,449 個單元測試。
+> 以下為基於本報告發現所完成的修復，最新測試: **2673 passed, 0 failed**。
 
 ### 已完成修復 (2026-05-12)
 
@@ -476,17 +476,17 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 字段 | 默認值 | 是否被設置 |
 |------|--------|-----------|
-| `vlm_inputs_embeds` | `None` | ❌ |
-| `vlm_extra_kwargs` | `None` | ❌ |
-| `vlm_image_hash` | `None` | ❌ |
-| `rope_deltas` | `0.0` | ❌ |
-| `images` | `None` | ❌ |
-| `videos` | `None` | ❌ |
-| `enable_thinking` | `None` | ❌ (作為參數傳遞，不設置在 Request 上) |
-| `prompt_cache` | `None` | ❌ |
-| `cached_tokens` | `0` | ❌ |
-| `remaining_tokens` | `None` | ❌ |
-| `num_preemptions` | `0` | ❌ |
+| `vlm_inputs_embeds` | `None` | ❌ (VLM 用自己的 generate 路徑，不經 scheduler) |
+| `vlm_extra_kwargs` | `None` | ❌ (VLM 用自己的 generate 路徑，不經 scheduler) |
+| `vlm_image_hash` | `None` | ❌ (VLM 用自己的 generate 路徑，不經 scheduler) |
+| `rope_deltas` | `0.0` | ✅ scheduler 填充 (prefix cache 路徑) |
+| `images` | `None` | ❌ (VLM 用 _extract_images，不經 Request) |
+| `videos` | `None` | ❌ (無視頻輸入路徑) |
+| `enable_thinking` | `None` | ✅ Wave 10 — 設置在 Request + SamplingParams |
+| `prompt_cache` | `None` | ✅ scheduler 填充 (prefix cache 路徑) |
+| `cached_tokens` | `0` | ✅ scheduler 填充 |
+| `remaining_tokens` | `None` | ✅ scheduler 填充 |
+| `num_preemptions` | `0` | ✅ scheduler 填充 |
 
 ---
 
@@ -828,25 +828,21 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ```
 用戶 spec_decode=true
-  → ChatCompletionRequest: 無 spec_decode 字段 ❌ BREAK 1
-  → (假設加上了) engine.generate(spec_decode=True)
-  → BatchedEngine.generate(spec_decode=True)
-  → self._spec_decoder is not None? ❌ BREAK 2 (永遠是 None)
-  → fallback to _generate_fast() (非猜測解碼)
+  → ChatCompletionRequest.spec_decode ✅
+  → engine.generate(spec_decode=True) ✅
+  → self._spec_decoder is not None? ✅ (EAGLE-3 或 N-gram 已接入)
+  → spec decode path 或 fallback to _generate_fast()
 ```
 
 ### A.2 thinking_budget=1000 請求鏈
 
 ```
 用戶 thinking_budget=1000
-  → ChatCompletionRequest: 無 thinking_budget 字段 ❌ BREAK 1
-  → (假設加上了) engine.generate() → BatchedEngine.generate()
-  → BatchedEngine.generate() 無 thinking_budget 參數 ❌ BREAK 2
-  → (假設走 engine_loop) EngineCore.add_request()
-  → add_request() 不傳 thinking_budget 給 SamplingParams ❌ BREAK 3
-  → (假設傳了) Scheduler 檢查 sp.thinking_budget
-  → ThinkingBudgetProcessor 需要 enable_thinking=True
-  → getattr(sp, 'enable_thinking', False) — SamplingParams 沒有此屬性 ❌ BREAK 4
+  → ChatCompletionRequest.thinking_budget ✅
+  → engine.generate(thinking_budget=1000) ✅
+  → EngineCore.add_request() → SamplingParams(thinking_budget=1000) ✅
+  → Scheduler 檢查 sp.thinking_budget ✅
+  → getattr(sp, 'enable_thinking', False) ✅ (Wave 10 已添加到 SamplingParams)
 ```
 
 ### A.3 SSD Cache 激活鏈
@@ -1259,12 +1255,12 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 
 ### 18.5 其他缺失
 
-- **不支援遠端 URL 圖片**: HTTP/HTTPS 圖片 URL 被靜默跳過
+- ~~**不支援遠端 URL 圖片**: HTTP/HTTPS 圖片 URL 被靜默跳過~~ ✅ `_download_image()` 支持遠端 URL
 - **不支援視頻輸入**: 無視頻偵測、無視頻幀提取
-- **不支援音頻輸入**: ~~Chat 消息中的音頻內容被靜默丟棄~~ ✅ 已修復 (AUDIO-1) — VLM 引擎 `_extract_audio()` + `_has_audio()` 路由
+- ~~**不支援音頻輸入**: Chat 消息中的音頻內容被靜默丟棄~~ ✅ 已修復 (AUDIO-1) — VLM 引擎 `_extract_audio()` + `_has_audio()` 路由
 - **不支援連續批處理**: oMLX 的 VLMBatchedEngine 使用 AsyncEngineCore 做並發 VLM 推理
-- **不支援 OCR 模型**: oMLX 支持 deepseekocr, dots_ocr, glm_ocr
-- **多 VLM 路由不正確**: `_handle_vlm_chat` 選取第一個載入的 VLM 引擎，不考慮 `req.model`
+- ~~**不支援 OCR 模型**: oMLX 支持 deepseekocr, dots_ocr, glm_ocr~~ ✅ GLM-OCR-bf16 實測 (Wave 9)
+- ~~**多 VLM 路由不正確**: `_handle_vlm_chat` 選取第一個載入的 VLM 引擎，不考慮 `req.model`~~ ✅ 已修復 (M5)
 
 ### 18.6 vs oMLX VLMBatchedEngine 對比
 
@@ -1273,7 +1269,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 連續批處理 | ✅ AsyncEngineCore + BatchGenerator | ❌ 單請求 |
 | 視覺特徵緩存 | ✅ VisionFeatureSSDCache | ✅ 已接入 (M6) |
 | mRoPE 整合 | ✅ 完整 | ✅ 已接入 (M7) |
-| OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ✅ GLM-OCR-bf16 實測 |
+| OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ✅ GLM-OCR-bf16 實測 (Wave 9) |
 | 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ❌ |
 | 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ❌ |
@@ -1315,11 +1311,11 @@ oMLX 有完整的 STSEngine 支持:
 
 | mlx-audio 能力 | Yunshu 暴露 |
 |---------------|------------|
-| STS (Speech-to-Speech) | ❌ |
+| STS (Speech-to-Speech) | ❌ (需要指定模型) |
 | VAD (語音活動偵測) | ✅ EnergyVAD + WebRTCVAD (VAD) |
 | LID (語言識別) | ✅ lid.py — 14 語言偵測 (LID) |
 | VoicePipeline (STT→LLM→TTS 端到端) | ✅ voice_pipeline.py + /audio/voice-pipeline (VPIPE) |
-| 原生 streaming (`stream=True`, `streaming_interval`) | ❌ |
+| 原生 streaming (`stream=True`, `streaming_interval`) | ✅ (Wave 11) — synthesize_stream 優先 |
 | Voice cloning (`ref_audio`, `ref_text`) | ✅ TTSRequest params (TTS-EXT) |
 
 ### 19.7 vs oMLX Audio 對比
@@ -1363,7 +1359,7 @@ vllm-omni 支持: **25+ 擴散架構**
 | 中間預覽 (streaming) | ❌ (只有進度 %) | ✅ 回調系統 | — |
 | 取消生成 | ✅ POST /v1/cancel (CANCEL) | — | — |
 | 尺寸驗證 | ✅ 64–2048, 64 倍數 (IMG-SIZE) | ✅ | ✅ |
-| OOM 保護 | ❌ | ✅ | ✅ |
+| OOM 保護 | ✅ (Wave 11) — 生成前內存檢查 | ✅ | ✅ |
 | `/v1/images/edits` | ✅ (IMG-EDIT) | — | — |
 | `/v1/images/variations` | ✅ (IMG-VAR) | — | — |
 
@@ -1383,7 +1379,7 @@ Realtime API 實現了 WebSocket 基本框架 (session, conversation, 7 客戶�
 | 功能 | OpenAI Realtime | Yunshu |
 |------|----------------|--------|
 | Function calling | ✅ 完整 | ✅ 工具調用偵測 + function_call 事件 (RT-FC) |
-| 音頻流式合成 (token 級) | ✅ 逐 token | ❌ 先全部生成再分塊 |
+| 音頻流式合成 (token 級) | ✅ 逐 token | ✅ (Wave 11) — synthesize_stream 逐 chunk 發送 |
 | VAD 自動觸發 response | ✅ | ❌ 客戶端需手動 commit |
 | Neural VAD | ✅ Silero | ✅ EnergyVAD + WebRTCVAD (VAD) |
 | 中斷音頻截斷 | ✅ | ❌ 只取消生成，不截斷 |
@@ -1401,7 +1397,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 - ✅ 外部工具服務器連接 (stdio + HTTP)
 - ✅ `mcp.json` 配置加載 + YUNSHU_MCP_SERVERS env var
 - ✅ 工具格式轉換 (MCP ↔ OpenAI)
-- ❌ 並行工具執行
+- ✅ 並行工具執行 (Wave 10 — call_tools_parallel)
 
 ### 21.3 多模態路由 Bug
 
@@ -1444,35 +1440,35 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 #### P0 — 立即修復 Bug
 
-| # | 行動 | 影響 |
-|---|------|------|
-| M1 | **修復 VLM streaming**: 提取圖片並路由到 vision 路徑 | VLM streaming 完全壞的 |
-| M2 | **修復 Audio response_format**: 實際編碼 MP3/Opus 或移除假參數 | 返回錯誤格式 |
-| M3 | **修復 TTS streaming instruct**: 傳遞 instruct 參數 | 參數被丟棄 |
-| M4 | **移除假的 guidance_scale/negative_prompt**: 或實現 CFG | 誤導用戶 |
-| M5 | **修復 VLM 多模型路由**: 根據 req.model 選取正確引擎 | 路由到錯誤模型 |
+| # | 行動 | 影響 | 狀態 |
+|---|------|------|------|
+| M1 | **修復 VLM streaming**: 提取圖片並路由到 vision 路徑 | VLM streaming 完全壞的 | ✅ 已修復 |
+| M2 | **修復 Audio response_format**: 實際編碼 MP3/Opus 或移除假參數 | 返回錯誤格式 | ✅ 已修復 |
+| M3 | **修復 TTS streaming instruct**: 傳遞 instruct 參數 | 參數被丟棄 | ✅ 已修復 |
+| M4 | **移除假的 guidance_scale/negative_prompt**: 或實現 CFG | 誤導用戶 | ✅ 已修復 |
+| M5 | **修復 VLM 多模型路由**: 根據 req.model 選取正確引擎 | 路由到錯誤模型 | ✅ 已修復 |
 
 #### P1 — 整合已有代碼
 
-| # | 行動 | 影響 |
-|---|------|------|
-| M6 | **激活 Vision Feature Cache**: 接入 VLMEngine | 多輪 VLM 加速 |
-| M7 | **激活 mRoPE**: 在 VLMEngine 中使用 | Qwen-VL 多輪質量 |
-| M8 | **暴露 ASR segments**: Gateway 返回時間戳 | ASR 功能完整 |
-| M9 | **添加 VLM 參數透傳**: top_p, stop, seed 等 | VLM 採樣控制 |
+| # | 行動 | 影響 | 狀態 |
+|---|------|------|------|
+| M6 | **激活 Vision Feature Cache**: 接入 VLMEngine | 多輪 VLM 加速 | ✅ 已修復 |
+| M7 | **激活 mRoPE**: 在 VLMEngine 中使用 | Qwen-VL 多輪質量 | ✅ 已修復 |
+| M8 | **暴露 ASR segments**: Gateway 返回時間戳 | ASR 功能完整 | ✅ 已修復 |
+| M9 | **添加 VLM 參數透傳**: top_p, stop, seed 等 | VLM 採樣控制 | ✅ 已修復 |
 
 #### P2 — 新增功能
 
-| # | 行動 | 參考 |
-|---|------|------|
-| M10 | **添加 STS Engine**: DeepFilterNet, MossFormer2 | oMLX |
-| M11 | **支持更多圖像模型**: FLUX, FLUX2 | mflux |
-| M12 | **添加 LoRA 支持**: 圖像/文本 | mflux, vllm-omni |
-| M13 | **添加 MCP Client**: 外部工具服務器 | oMLX |
-| M14 | **Realtime function calling**: 實現工具調用 | OpenAI |
-| M15 | **支持遠端 URL 圖片**: HTTP/HTTPS 圖片獲取 | — |
-| M16 | **添加 OCR 模型**: deepseekocr, dots_ocr | oMLX |
+| # | 行動 | 參考 | 狀態 |
+|---|------|------|------|
+| M10 | **添加 STS Engine**: DeepFilterNet, MossFormer2 | oMLX | ❌ 需指定模型 |
+| M11 | **支持更多圖像模型**: FLUX, FLUX2 | mflux | ❌ |
+| M12 | **添加 LoRA 支持**: 圖像/文本 | mflux, vllm-omni | ❌ |
+| M13 | **添加 MCP Client**: 外部工具服務器 | oMLX | ✅ MCP-C 已實現 |
+| M14 | **Realtime function calling**: 實現工具調用 | OpenAI | ✅ RT-FC 已實現 |
+| M15 | **支持遠端 URL 圖片**: HTTP/HTTPS 圖片獲取 | — | ✅ _download_image() 已實現 |
+| M16 | **添加 OCR 模型**: deepseekocr, dots_ocr | oMLX | ✅ GLM-OCR-bf16 已實現 |
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現。STS 直接引擎仍待實現。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現，Realtime token-level 音頻串流已實現，MCP client 已實現。剩餘缺口：STS 引擎（需指定模型）、視頻生成、img2img/inpainting、圖像 LoRA。
