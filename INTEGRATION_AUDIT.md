@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — Wave 11: completions thinking_budget, image OOM, realtime token-level audio)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 13: fast path params, reasoning_effort, WebUI Completions/Tokenize)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **2653 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **2667 passed, 13 skipped**。
 
 ### 已完成修復 (2026-05-12)
 
@@ -243,6 +243,22 @@
 | SCH-ITL | Scheduler ITL 追蹤 — _process_responses 逐 token 記錄延遲，ServerMetrics 直方圖 | §14.3 (C2/ITL-1) | ✅ 已實現 |
 
 > **Wave 12 測試**: 2653 passed, 13 skipped。
+
+### 新增功能 (2026-05-14 Wave 13)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| FP-FPL | 快速路徑 frequency/presence penalty — 正確的 token 計數懲罰 (非僅最後一個 token) | §4.3 | ✅ 已實現 |
+| FP-LB | 快速路徑 logit_bias — token ID 偏置處理器 | §4.3 | ✅ 已實現 |
+| FP-XTC | 串流快速路徑 xtc_probability/xtc_threshold — 採樣器支持 | §4.3 | ✅ 已實現 |
+| FP-TB | 串流快速路徑 thinking_budget — 思考 token 上限強制執行 | §4.3 | ✅ 已實現 |
+| RE | reasoning_effort 參數 — low→2048, medium→8192, high→32768 thinking_budget 自動映射 | §3.1 | ✅ 已實現 |
+| RE-CP | Completions 路由器 reasoning_effort + xtc_* 字段 | §3.2 | ✅ 已實現 |
+| WEB-COMP | WebUI Completions 頁面 — 串流/非串流，全部參數，模型選擇 | §8.4 | ✅ 已實現 |
+| WEB-TOK | WebUI Tokenize 頁面 — tokenize/detokenize/count 三標籤 | §8.4 | ✅ 已實現 |
+| DTOK-FIX | Detokenize 端點修正 — 使用 DetokenizeRequest body 替代 query params | §8.4 | ✅ 已修復 |
+
+> **Wave 13 測試**: 2667 passed, 13 skipped。
 
 ### 跨項目學習進度
 
@@ -475,13 +491,18 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 字段 | 快速路徑 | 引擎循環 |
 |------|----------|----------|
-| `stop_token_ids` | ❌ | ✅ SamplingParams |
+| `stop_token_ids` | ✅ 直接接收 (FP-FPL) | ✅ SamplingParams |
 | `logprobs` | ✅ 直接接收 | ✅ SamplingParams |
 | `top_logprobs` | ✅ 直接接收 | ✅ SamplingParams |
 | `seed` | ✅ 直接接收 | ✅ SamplingParams |
-| `priority` | ❌ | ✅ SamplingParams (僅排序) |
+| `priority` | ❌ (僅排序，單請求無意義) | ✅ SamplingParams (僅排序) |
 | `thinking_budget` | ✅ 直接接收 | ✅ SamplingParams |
-| `reasoning_effort` | ❌ | ✅ SamplingParams |
+| `reasoning_effort` | ✅ 自動映射 → thinking_budget (RE) | ✅ SamplingParams |
+| `frequency_penalty` | ✅ 正確計數懲罰 (FP-FPL) | ✅ SamplingParams |
+| `presence_penalty` | ✅ 正確計數懲罰 (FP-FPL) | ✅ SamplingParams |
+| `logit_bias` | ✅ 偏置處理器 (FP-LB) | ✅ SamplingParams |
+| `xtc_probability` | ✅ (FP-XTC) | ✅ SamplingParams |
+| `xtc_threshold` | ✅ (FP-XTC) | ✅ SamplingParams |
 | `grammar` | ✅ | ✅ grammar 參數 → json_schema 約束 (GRAMMAR) |
 
 ### 4.4 Request 永遠不會被填充的字段
@@ -669,11 +690,11 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | Tool Calling | ✅ 完整支持 | ❌ |
 | Logprobs | ✅ 完整支持 | ✅ chat 頁面 checkbox + 折疊顯示 |
 | Embeddings | ✅ Gateway endpoint | ✅ embeddings 頁面 (P3-6) |
-| Completions | ✅ Gateway endpoint | ❌ 無頁面 |
+| Completions | ✅ Gateway endpoint | ✅ Completions 頁面 (WEB-COMP) |
 | MCP | ✅ Gateway endpoint | ❌ |
 | Mesh 拓撲 | ✅ API endpoint | ❌ |
 | 批處理推理 | ✅ Gateway endpoint | ❌ |
-| Tokenize | ✅ Gateway endpoint | ❌ |
+| Tokenize | ✅ Gateway endpoint | ✅ Tokenize 頁面 (WEB-TOK) |
 | 延遲百分位數 | ✅ 數據存在 | ✅ monitoring 頁面 (P3-5) |
 | 預填充進度 | ✅ 實時追蹤 | ❌ |
 | TTS 流式 | ✅ SSE endpoint | ❌ |
