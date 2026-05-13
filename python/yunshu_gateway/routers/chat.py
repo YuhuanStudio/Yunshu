@@ -13,6 +13,7 @@ Supports:
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -36,6 +37,8 @@ from ..streaming import (
     run_with_disconnect_guard,
 )
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
@@ -563,6 +566,18 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
     if req.stream:
+        if req.n > 1:
+            return StreamingResponse(
+                _stream_response_multi(
+                    engine, messages, req, completion_id, request,
+                    is_batched=is_batched, json_schema=json_schema,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         return StreamingResponse(
             _stream_response(
                 engine, messages, req, completion_id, request,
@@ -841,6 +856,161 @@ async def _stream_vlm_response(
         http_request=request,
     ):
         yield event.encode("utf-8")
+
+
+async def _stream_response_multi(
+    engine,
+    messages: list[dict],
+    req: ChatCompletionRequest,
+    completion_id: str,
+    request: Request,
+    is_batched: bool = False,
+    json_schema: dict | str | None = None,
+) -> AsyncIterator[bytes]:
+    """n>1 streaming: generate each choice sequentially, emit with correct index.
+
+    On single-GPU systems parallel generation would serialize anyway, so we
+    run choices one after another and interleave their SSE events.
+    Each choice gets its own streaming loop with its `index` set correctly.
+    """
+    from yunshu_engine.request_tracker import get_request_tracker
+    tracker = get_request_tracker()
+    gen = tracker.register(completion_id, req.model)
+    include_usage = (
+        req.stream_options is not None and req.stream_options.include_usage
+    )
+    total_prompt_tok = 0
+    total_completion_tok = 0
+
+    async def _token_source():
+        nonlocal total_prompt_tok, total_completion_tok
+        for choice_idx in range(req.n):
+            if gen.cancel_event.is_set():
+                yield _format_choice_chunk(
+                    completion_id, req.model, choice_idx, "", "cancelled",
+                )
+                break
+            first_chunk_for_choice = True
+            choice_completion_tok = 0
+
+            if is_batched:
+                stream = engine.stream_chat(
+                    messages=messages,
+                    max_tokens=req.max_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    min_p=req.min_p,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=req.logit_bias,
+                    stop=req.stop,
+                    seed=(req.seed + choice_idx) if req.seed is not None else None,
+                    enable_thinking=req.enable_thinking,
+                    json_schema=json_schema,
+                )
+                async for output in stream:
+                    if gen.cancel_event.is_set():
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx, "", "cancelled",
+                        )
+                        return
+                    if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                        total_prompt_tok = output.prompt_tokens
+                    token_text = output.new_text
+                    if token_text:
+                        choice_completion_tok += 1
+                    yield _format_choice_chunk(
+                        completion_id, req.model, choice_idx,
+                        token_text, output.finish_reason,
+                        include_role=first_chunk_for_choice,
+                    )
+                    first_chunk_for_choice = False
+            else:
+                stream = engine.generate_stream(
+                    prompt=messages,
+                    max_tokens=req.max_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    min_p=req.min_p,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=req.logit_bias,
+                    stop=req.stop,
+                    seed=(req.seed + choice_idx) if req.seed is not None else None,
+                    enable_thinking=req.enable_thinking,
+                )
+                async for output in stream:
+                    if gen.cancel_event.is_set():
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx, "", "cancelled",
+                        )
+                        return
+                    if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
+                        total_prompt_tok = output.prompt_token_count
+                    token_text = getattr(output, 'token_text', '')
+                    if token_text:
+                        choice_completion_tok += 1
+                    yield _format_choice_chunk(
+                        completion_id, req.model, choice_idx,
+                        token_text, getattr(output, 'finish_reason', None),
+                        include_role=first_chunk_for_choice,
+                    )
+                    first_chunk_for_choice = False
+
+            total_completion_tok += choice_completion_tok
+
+            # Emit finish for this choice if not already sent
+            yield _format_choice_chunk(
+                completion_id, req.model, choice_idx,
+                "", "stop",
+            )
+
+        if include_usage:
+            yield format_openai_usage_chunk(
+                completion_id=completion_id,
+                model=req.model,
+                prompt_tokens=total_prompt_tok,
+                completion_tokens=total_completion_tok,
+            )
+        yield format_openai_done()
+
+    async for event in with_sse_keepalive(
+        _token_source(),
+        http_request=request,
+    ):
+        yield event.encode("utf-8")
+    tracker.unregister(completion_id)
+
+
+def _format_choice_chunk(
+    completion_id: str,
+    model: str,
+    index: int,
+    delta_content: str,
+    finish_reason: Optional[str],
+    include_role: bool = False,
+) -> str:
+    """Format an SSE chunk for a specific choice index."""
+    delta: dict[str, Any] = {}
+    if include_role:
+        delta["role"] = "assistant"
+    delta["content"] = delta_content
+    chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": index,
+            "delta": delta,
+            "finish_reason": finish_reason,
+        }],
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
 async def _stream_response(

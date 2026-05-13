@@ -75,6 +75,18 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
     except (ValueError, AttributeError):
         width, height = 1024, 1024
 
+    # Validate dimensions: multiples of 64, within 64–2048
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
+
     images_data = []
     for i in range(req.n):
         try:

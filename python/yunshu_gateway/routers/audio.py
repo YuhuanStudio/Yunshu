@@ -284,3 +284,76 @@ async def list_voices() -> dict:
         "object": "list",
         "data": [{"id": v, "object": "voice"} for v in AVAILABLE_VOICES],
     }
+
+
+class VoicePipelineRequest(BaseModel):
+    """Request for the STT → LLM → TTS pipeline."""
+    file: UploadFile = File(...)
+    llm_model: str = ""
+    voice: str | None = None
+    speed: float = 1.0
+    llm_temperature: float = 0.7
+    llm_max_tokens: int = 256
+    system_prompt: str = "You are a helpful voice assistant. Keep responses concise."
+    stream: bool = False
+
+
+@router.post("/audio/voice-pipeline")
+async def voice_pipeline(
+    file: UploadFile = File(...),
+    llm_model: str = Form(""),
+    voice: Optional[str] = Form(None),
+    speed: float = Form(1.0),
+    llm_temperature: float = Form(0.7),
+    llm_max_tokens: int = Form(256),
+    system_prompt: str = Form("You are a helpful voice assistant. Keep responses concise."),
+    stream: bool = Form(False),
+):
+    """STT → LLM → TTS end-to-end voice pipeline.
+
+    Accepts audio input, transcribes it, generates an LLM response,
+    and synthesizes the response as audio.
+    """
+    from yunshu_engine.voice_pipeline import VoicePipeline, VoicePipelineConfig
+
+    audio_data = await file.read()
+    if len(audio_data) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file too large (max 25MB)")
+
+    # Write to temp file for ASR
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(audio_data)
+        tmp_path = tmp.name
+
+    config = VoicePipelineConfig(
+        llm_model=llm_model,
+        tts_voice=voice,
+        tts_speed=speed,
+        llm_temperature=llm_temperature,
+        llm_max_tokens=llm_max_tokens,
+        system_prompt=system_prompt,
+    )
+    pipeline = VoicePipeline(config)
+
+    try:
+        if stream:
+            async def _event_stream():
+                async for event in pipeline.process_stream(tmp_path):
+                    yield f"data: {json.dumps({'stage': event.stage, 'data': event.data if isinstance(event.data, str) else ''})}\n\n"
+
+            return StreamingResponse(
+                _event_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        result = await pipeline.process(tmp_path)
+        return {
+            "text": result.get("text", ""),
+            "audio": base64.b64encode(result.get("audio", b"")).decode("ascii") if result.get("audio") else None,
+            "transcription": result.get("transcription", {}),
+        }
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    finally:
+        os.unlink(tmp_path)
