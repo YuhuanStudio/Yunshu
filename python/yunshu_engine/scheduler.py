@@ -215,6 +215,17 @@ class Scheduler:
         )
         logger.info("BatchGenerator initialized")
 
+    def shutdown(self) -> None:
+        """Shutdown scheduler and release BatchGenerator resources."""
+        if self._batch_gen is not None:
+            if hasattr(self._batch_gen, 'close'):
+                try:
+                    self._batch_gen.close()
+                except Exception:
+                    pass
+            self._batch_gen = None
+        logger.info("Scheduler shutdown complete")
+
     def set_server_metrics(self, metrics: Any) -> None:
         self._server_metrics = metrics
 
