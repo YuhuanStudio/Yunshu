@@ -201,15 +201,22 @@ async def create_image_variation(req: ImageVariationsRequest) -> JSONResponse:
         raise HTTPException(status_code=404, detail="No image generation model available")
 
     try:
+        width, height = map(int, req.size.split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+
+    try:
         # Generate variation using the input image as conditioning
         images = []
         for i in range(req.n):
             seed = (req.seed + i) if req.seed is not None else None
             result = await img_engine.generate(
-                prompt="",  # Variation: no text prompt, image-conditioned
+                prompt="",
                 num_inference_steps=req.num_inference_steps,
                 seed=seed,
                 image=image_bytes,
+                width=width,
+                height=height,
             )
             if isinstance(result, list):
                 images.extend(result)
@@ -270,6 +277,11 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
         raise HTTPException(status_code=404, detail="No image generation model available")
 
     try:
+        width, height = map(int, req.size.split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+
+    try:
         images = []
         for i in range(req.n):
             seed = (req.seed + i) if req.seed is not None else None
@@ -278,6 +290,8 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
                 num_inference_steps=req.num_inference_steps,
                 seed=seed,
                 image=image_bytes,
+                width=width,
+                height=height,
             )
             if isinstance(result, list):
                 images.extend(result)

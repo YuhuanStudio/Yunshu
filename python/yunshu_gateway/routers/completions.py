@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..engine import get_engine, get_engine_for_model, get_model_manager
+from .chat import _apply_lora_adapter, _release_lora_adapter
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_chunk, format_openai_done, format_openai_usage_chunk
@@ -55,6 +56,7 @@ class CompletionRequest(BaseModel):
     reasoning_effort: Optional[str] = None
     xtc_probability: float = 0.0
     xtc_threshold: float = 0.0
+    lora_adapter: Optional[str] = None
 
 
 @router.post("/completions", response_model=None)
@@ -107,82 +109,86 @@ async def create_completion(req: CompletionRequest, request: Request):
     from yunshu_engine.batched_engine import BatchedEngine
     is_batched = isinstance(engine, BatchedEngine)
 
-    if is_batched:
-        result = await engine.generate(
-            prompt=prompt,
-            max_tokens=req.max_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            top_k=req.top_k,
-            min_p=req.min_p,
-            repetition_penalty=req.repetition_penalty,
-            frequency_penalty=req.frequency_penalty,
-            presence_penalty=req.presence_penalty,
-            logit_bias=req.logit_bias,
-            stop=req.stop,
-            stop_token_ids=req.stop_token_ids,
-            seed=req.seed,
-            spec_decode=req.spec_decode,
-            enable_thinking=req.enable_thinking,
-            thinking_budget=req.thinking_budget,
-            json_schema=json_schema,
-            reasoning_effort=req.reasoning_effort,
-            xtc_probability=req.xtc_probability,
-            xtc_threshold=req.xtc_threshold,
-        )
-        text = result.text
-        prompt_tokens = result.prompt_tokens
-        completion_tokens = result.completion_tokens
-        finish_reason = result.finish_reason
-        logprobs_data = None
-    else:
-        state = await engine.generate(
-            prompt=prompt,
-            max_tokens=req.max_tokens,
-            temperature=req.temperature,
-            top_p=req.top_p,
-            top_k=req.top_k,
-            min_p=req.min_p,
-            repetition_penalty=req.repetition_penalty,
-            frequency_penalty=req.frequency_penalty,
-            presence_penalty=req.presence_penalty,
-            logit_bias=req.logit_bias,
-            stop=req.stop,
-            stop_token_ids=req.stop_token_ids,
-            seed=req.seed,
-            enable_thinking=req.enable_thinking,
-            thinking_budget=req.thinking_budget,
-        )
-        text = state.generated_text
-        prompt_tokens = state.prompt_token_count
-        completion_tokens = state.completion_token_count
-        finish_reason = state.finish_reason or "stop"
-        logprobs_data = None
-        if req.logprobs > 0:
-            logprobs_data = _format_logprobs(
-                state, getattr(engine, '_tokenizer', None), req.logprobs
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    try:
+        if is_batched:
+            result = await engine.generate(
+                prompt=prompt,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                top_k=req.top_k,
+                min_p=req.min_p,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                stop=req.stop,
+                stop_token_ids=req.stop_token_ids,
+                seed=req.seed,
+                spec_decode=req.spec_decode,
+                enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+                json_schema=json_schema,
+                reasoning_effort=req.reasoning_effort,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
             )
+            text = result.text
+            prompt_tokens = result.prompt_tokens
+            completion_tokens = result.completion_tokens
+            finish_reason = result.finish_reason
+            logprobs_data = None
+        else:
+            state = await engine.generate(
+                prompt=prompt,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                top_p=req.top_p,
+                top_k=req.top_k,
+                min_p=req.min_p,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                stop=req.stop,
+                stop_token_ids=req.stop_token_ids,
+                seed=req.seed,
+                enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+            )
+            text = state.generated_text
+            prompt_tokens = state.prompt_token_count
+            completion_tokens = state.completion_token_count
+            finish_reason = state.finish_reason or "stop"
+            logprobs_data = None
+            if req.logprobs > 0:
+                logprobs_data = _format_logprobs(
+                    state, getattr(engine, '_tokenizer', None), req.logprobs
+                )
 
-    if req.echo:
-        text = prompt + text
+        if req.echo:
+            text = prompt + text
 
-    return JSONResponse({
-        "id": completion_id,
-        "object": "text_completion",
-        "created": int(time.time()),
-        "model": req.model,
-        "choices": [{
-            "index": 0,
-            "text": text,
-            "finish_reason": finish_reason,
-            **({"logprobs": logprobs_data} if logprobs_data else {}),
-        }],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
-    })
+        return JSONResponse({
+            "id": completion_id,
+            "object": "text_completion",
+            "created": int(time.time()),
+            "model": req.model,
+            "choices": [{
+                "index": 0,
+                "text": text,
+                "finish_reason": finish_reason,
+                **({"logprobs": logprobs_data} if logprobs_data else {}),
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        })
+    finally:
+        _release_lora_adapter(engine, loaded_adapter)
 
 
 async def _stream_completion(
@@ -275,11 +281,15 @@ async def _stream_completion(
 
         yield format_openai_done()
 
-    async for event in with_sse_keepalive(
-        _token_source(),
-        http_request=request,
-    ):
-        yield event.encode("utf-8")
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    try:
+        async for event in with_sse_keepalive(
+            _token_source(),
+            http_request=request,
+        ):
+            yield event.encode("utf-8")
+    finally:
+        _release_lora_adapter(engine, loaded_adapter)
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:

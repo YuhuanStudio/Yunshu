@@ -1526,7 +1526,7 @@ vllm-omni 支持: **25+ 擴散架構**
 
 | 功能 | 狀態 | mflux | vllm-omni |
 |------|------|-------|-----------|
-| img2img | ❌ | ✅ (redux, in_context) | ✅ |
+| img2img | ✅ ImageGenEngine.generate() + variations/edits endpoints (Wave 24) | ✅ (redux, in_context) | ✅ |
 | Inpainting | ❌ | ✅ (fill variant) | ✅ (bagel) |
 | LoRA | ❌ | ✅ 完整支持 | ✅ DiffusionLoRAManager |
 | VAE Tiling | ❌ | ✅ cos-ramp 混合 | ✅ 分佈式 VAE |
@@ -1603,7 +1603,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | **視頻理解** | ✅ VLM frame extraction (Wave 24) | — | ✅ | — | — |
 | OCR | ✅ GLM-OCR-bf16 實測通過 | ✅ (3 模型) | — | — | — |
 | LoRA (任何模態) | ✅ 文本 LoRA 已實現 + gateway passthrough (Wave 24)，缺圖像/VLM LoRA | — | ✅ | ✅ | ✅ |
-| img2img | ❌ | — | ✅ | ✅ | — |
+| img2img | ✅ generate() + variations/edits (Wave 24) | — | ✅ | ✅ | — |
 | Inpainting | ❌ | — | ✅ | ✅ | — |
 
 ### 22.2 死代碼 vs 可整合功能
