@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from ..engine import get_engine, get_model_manager
+from .chat import _apply_lora_adapter, _release_lora_adapter
 from ..streaming import (
     ThinkingParser,
     format_anthropic_chunk,
@@ -78,6 +79,7 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: Optional[dict] = None
     tools: Optional[list[AnthropicTool]] = None
     tool_choice: Optional[dict | str] = None
+    lora_adapter: Optional[str] = None
 
 
 # ── Content block helpers ──
@@ -303,10 +305,13 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         )
 
     # Non-streaming
-    if is_batched:
-        return await _non_stream_batched(engine, messages, req, stop)
-
-    return await _non_stream_legacy(engine, messages, req, stop)
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    try:
+        if is_batched:
+            return await _non_stream_batched(engine, messages, req, stop)
+        return await _non_stream_legacy(engine, messages, req, stop)
+    finally:
+        _release_lora_adapter(engine, loaded_adapter)
 
 
 async def _resolve_engine(model_id: str):
@@ -604,13 +609,17 @@ async def _stream_anthropic(
         }
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
 
-    async for event in with_sse_keepalive(
-        _token_source(),
-        http_request=request,
-    ):
-        yield event.encode("utf-8") if isinstance(event, str) else event
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    try:
+        async for event in with_sse_keepalive(
+            _token_source(),
+            http_request=request,
+        ):
+            yield event.encode("utf-8") if isinstance(event, str) else event
 
-    yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".encode("utf-8")
+        yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".encode("utf-8")
+    finally:
+        _release_lora_adapter(engine, loaded_adapter)
 
     _record_metrics(input_tokens, output_tokens)
 
