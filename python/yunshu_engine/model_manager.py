@@ -39,6 +39,7 @@ class ModelType(Enum):
     TTS = auto()
     ASR = auto()
     IMAGE_GEN = auto()
+    OCR = auto()
 
 
 # mlx-lm's MODEL_REMAPPING (subset we need to replicate for probing)
@@ -165,6 +166,8 @@ def _detect_model_type(model_path: str) -> ModelType:
             return ModelType.TTS
         if "asr" in name_lower or "whisper" in name_lower:
             return ModelType.ASR
+        if "ocr" in name_lower:
+            return ModelType.OCR
         return ModelType.LLM
 
     # Supported by mlx-lm or mlx-vlm, no vision indicators → standard LLM
@@ -203,11 +206,13 @@ class ModelManager:
         kv_reserve_ratio: float = 0.25,
         settle_timeout_s: float = 5.0,
         ttl_seconds: Optional[float] = None,
+        max_models: int = 0,
     ) -> None:
         self.max_memory_bytes = max_memory_bytes  # None = unlimited
         self.kv_reserve_ratio = kv_reserve_ratio
         self.settle_timeout_s = settle_timeout_s
         self.ttl_seconds = ttl_seconds
+        self.max_models = max_models  # 0 = unlimited
 
         self._entries: dict[str, ModelEntry] = {}
         self._current_memory_bytes: int = 0
@@ -284,6 +289,9 @@ class ModelManager:
                 kv_headroom = 0 if entry.model_type in (ModelType.TTS, ModelType.ASR) else int(required * self.kv_reserve_ratio)
                 total_needed = required + kv_headroom
                 await self._ensure_memory_available(total_needed)
+
+            # Check max_models limit
+            await self._ensure_model_slot_available()
 
             # Load using the appropriate engine type
             entry.is_loading = True
@@ -437,6 +445,21 @@ class ModelManager:
                 )
             await self.unload_model(victim.model_id)
 
+    async def _ensure_model_slot_available(self) -> None:
+        """Evict LRU models until under max_models limit."""
+        if self.max_models <= 0:
+            return
+
+        loaded_count = sum(1 for e in self._entries.values() if e.is_loaded)
+        while loaded_count >= self.max_models:
+            victim = self._find_lru_victim()
+            if victim is None:
+                raise MemoryError(
+                    f"Cannot free model slot: max_models={self.max_models} reached"
+                )
+            await self.unload_model(victim.model_id)
+            loaded_count -= 1
+
     def _find_lru_victim(self) -> Optional[ModelEntry]:
         """Find the least-recently-used non-pinned, loaded model.
 
@@ -466,6 +489,11 @@ class ModelManager:
             return min(victims, key=lambda e: e.last_access)
 
         return min(safe_victims, key=lambda e: e.last_access)
+
+    @property
+    def loaded_count(self) -> int:
+        """Number of currently loaded models."""
+        return sum(1 for e in self._entries.values() if e.is_loaded)
 
     def list_models(self) -> list[dict]:
         """Return status of all registered models."""

@@ -29,6 +29,31 @@ MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 AVAILABLE_VOICES = ["alloy", "chelsie", "ethan", "aiden"]
 
 
+async def _extract_audio_from_video(video_path: str) -> str:
+    """Extract audio track from a video file using ffmpeg.
+
+    Returns path to a temporary WAV file. Caller is responsible for cleanup.
+    """
+    import subprocess
+    fd, audio_path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
+            "-ar", "16000", "-ac", "1", "-y", audio_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg extraction failed with code {proc.returncode}")
+    except FileNotFoundError:
+        raise HTTPException(status_code=501, detail="ffmpeg not installed — cannot extract audio from video")
+
+    return audio_path
+
+
 def _split_text_segments(text: str, max_chars: int = 300) -> list[str]:
     """Split text into segments at sentence/phrase boundaries.
 
@@ -299,20 +324,27 @@ async def create_transcription(
             detail=f"Audio file too large: {len(content)} bytes (max {MAX_AUDIO_UPLOAD_BYTES})",
         )
 
-    # Whitelist safe audio extensions
-    _SAFE_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".webm", ".aac"}
+    # Whitelist safe audio + video extensions
+    _SAFE_AUDIO = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".webm", ".aac"}
+    _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".ts", ".mts"}
     raw_suffix = os.path.splitext(file.filename or "audio.wav")[1].lower()
-    suffix = raw_suffix if raw_suffix in _SAFE_EXTENSIONS else ".wav"
 
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    fd, tmp_path = tempfile.mkstemp(suffix=raw_suffix if raw_suffix in _SAFE_AUDIO | _VIDEO_EXTENSIONS else ".wav")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
 
+        # If video file, extract audio track via ffmpeg
+        asr_path = tmp_path
+        if raw_suffix in _VIDEO_EXTENSIONS:
+            asr_path = await _extract_audio_from_video(tmp_path)
+
         result = await asr_engine.transcribe(
-            audio_path=tmp_path,
+            audio_path=asr_path,
             language=language,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"ASR transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Audio transcription failed")
@@ -321,6 +353,12 @@ async def create_transcription(
             os.unlink(tmp_path)
         except OSError:
             pass
+        # Clean up extracted audio if it was a video
+        if asr_path != tmp_path:
+            try:
+                os.unlink(asr_path)
+            except OSError:
+                pass
 
     resp = {
         "text": result.get("text", ""),

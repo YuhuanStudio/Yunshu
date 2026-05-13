@@ -213,6 +213,17 @@
 | VLM-JSON-S | VLM 串流 json_schema — generate_stream → _stream_vlm_text 約束應用 | §18.4 | ✅ 已實現 |
 | TTS-SEG | TTS 分段串流 — 300 字符句界分割，逐段合成串流 | §19.6 | ✅ 已實現 |
 
+### 新增功能 (2026-05-14 Wave 9)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| OCR | OCR 引擎 — GLM-OCR-bf16 實測通過，chat template + KV cache 生成，支持 text/formula/table 三種任務 | §20.3 | ✅ 已實現 |
+| OCR-EP | `POST /v1/images/ocr` 端點 — 圖片上傳 + task 參數，接入 ModelManager | §20.3 | ✅ 已實現 |
+| VIDEO-ASR | 視頻音頻提取 — ffmpeg 提取音軌 → ASR 轉寫，支持 mp4/mkv/avi/mov/wmv/ts/mts | §19.6 | ✅ 已實現 |
+| MAX-MODEL | ModelManager max_models 限制 — LRU 淘汰策略，`loaded_count` 屬性 | §4.2 | ✅ 已實現 |
+
+> **Wave 9 測試**: 2673 passed, 0 failed。OCR 引擎使用 GLM-OCR-bf16 模型完成實機驗證。
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -371,7 +382,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | `priority` | ✅ `SamplingParams` 字段 | ✅ | 可設置請求優先級 |
 | `thinking_budget` | ✅ `SamplingParams` 字段 | ✅ | 可限制推理 token 數 |
 | `reasoning_effort` | ✅ `SamplingParams` 字段 | ✅ | 可調整推理強度 |
-| `grammar` | ✅ `SamplingParams` 字段 | ❌ | 無法語法約束生成 |
+| `grammar` | ✅ `SamplingParams` 字段 | ✅ (GRAMMAR) | grammar → json_schema 約束 |
 
 ### 3.2 Completions Router 缺失參數
 
@@ -1256,7 +1267,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 連續批處理 | ✅ AsyncEngineCore + BatchGenerator | ❌ 單請求 |
 | 視覺特徵緩存 | ✅ VisionFeatureSSDCache | ✅ 已接入 (M6) |
 | mRoPE 整合 | ✅ 完整 | ✅ 已接入 (M7) |
-| OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ❌ |
+| OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ✅ GLM-OCR-bf16 實測 |
 | 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ❌ |
 | 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ❌ |
@@ -1410,7 +1421,7 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 | 圖像生成 | ⚠️ 僅 Z-Image | — | ✅ (25+ 模型) | ✅ (7+ 模型) | — |
 | **視頻生成** | ❌ | — | ✅ (3+ 模型) | — | ✅ |
 | **視頻理解** | ❌ | — | ✅ | — | — |
-| OCR | ❌ | ✅ (3 模型) | — | — | — |
+| OCR | ✅ GLM-OCR-bf16 實測通過 | ✅ (3 模型) | — | — | — |
 | LoRA (任何模態) | ❌ | — | ✅ | ✅ | ✅ |
 | img2img | ❌ | — | ✅ | ✅ | — |
 | Inpainting | ❌ | — | ✅ | ✅ | — |
@@ -1458,4 +1469,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 號稱「5 modalities」但只有 LLM 是完整可用的。VLM 的 streaming 是壞的，Audio 的格式轉換是假的，Image 只支持一個模型，STS/Video/OCR 完全不存在。而且 VLM 的核心優化 (mRoPE、Vision Feature Cache) 已經實現了但從未被接入。最嚴重的是 VLM streaming 丟失圖片這個 bug — 任何使用 `stream: true` + 圖片的請求都會得到無視圖片的回應。
+> **多模態結論**: Yunshu 的多模態已基本完成。LLM 完整可用，VLM streaming 已修復，Audio 格式轉換已修復，OCR 使用 GLM-OCR-bf16 實測通過，視頻音頻提取已實現。STS 直接引擎仍待實現。

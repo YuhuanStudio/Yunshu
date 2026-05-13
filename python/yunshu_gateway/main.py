@@ -213,6 +213,7 @@ def create_app() -> FastAPI:
     from .routers import sleep as sleep_mod
     from .routers import responses as responses_mod
     from .routers import cancel as cancel_mod
+    from .routers import ocr as ocr_mod
     app.include_router(chat.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(responses_mod.router, prefix="/v1")
@@ -226,6 +227,7 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(scoring.router, prefix="/v1")
     app.include_router(cancel_mod.router, prefix="/v1")
+    app.include_router(ocr_mod.router)
     app.include_router(profiling.router, prefix="/v1")
     app.include_router(realtime.router)
     app.include_router(bench.router)
