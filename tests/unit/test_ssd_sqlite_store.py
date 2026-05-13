@@ -411,3 +411,72 @@ class TestSSDKVCacheBackendSelection:
             cache.close()
         finally:
             os.environ.pop("YUNSHU_SSD_BACKEND", None)
+
+
+class TestBatchOperations:
+    """Tests for batch_put, batch_get, batch_delete."""
+
+    def test_batch_put_inserts_all(self, store):
+        entries = [
+            (f"batch_{i}", f"/tmp/block_{i}.bin", 64 * (i + 1), 4096 * (i + 1))
+            for i in range(10)
+        ]
+        inserted = store.batch_put(entries)
+        assert inserted == 10
+        for i in range(10):
+            result = store.get(f"batch_{i}")
+            assert result is not None
+            assert result["num_tokens"] == 64 * (i + 1)
+
+    def test_batch_put_upsert(self, store):
+        store.put("upsert_a", "/tmp/old.bin", 32, 2048)
+        entries = [("upsert_a", "/tmp/new.bin", 64, 4096)]
+        store.batch_put(entries)
+        result = store.get("upsert_a")
+        assert result["num_tokens"] == 64
+        assert result["block_path"] == "/tmp/new.bin"
+
+    def test_batch_put_empty(self, store):
+        assert store.batch_put([]) == 0
+
+    def test_batch_get_returns_all(self, populated_store):
+        results = populated_store.batch_get(["hash_a", "hash_b", "hash_c"])
+        assert len(results) == 3
+        assert all(r is not None for r in results)
+        assert results[0]["block_hash"] == "hash_a"
+        assert results[1]["block_hash"] == "hash_b"
+        assert results[2]["block_hash"] == "hash_c"
+
+    def test_batch_get_missing_returns_none(self, populated_store):
+        results = populated_store.batch_get(["hash_a", "nonexistent", "hash_c"])
+        assert len(results) == 3
+        assert results[0] is not None
+        assert results[1] is None
+        assert results[2] is not None
+
+    def test_batch_get_empty(self, store):
+        assert store.batch_get([]) == []
+
+    def test_batch_delete_removes_all(self, populated_store):
+        deleted = populated_store.batch_delete(["hash_a", "hash_b"])
+        assert deleted == 2
+        assert populated_store.get("hash_a") is None
+        assert populated_store.get("hash_b") is None
+        assert populated_store.get("hash_c") is not None
+
+    def test_batch_delete_partial(self, populated_store):
+        deleted = populated_store.batch_delete(["hash_a", "nonexistent"])
+        assert deleted == 1
+
+    def test_batch_delete_empty(self, populated_store):
+        assert populated_store.batch_delete([]) == 0
+
+    def test_batch_operations_consistency(self, store):
+        """Batch put then batch get returns consistent results."""
+        entries = [(f"h{i}", f"/p{i}", i * 16, i * 1024) for i in range(50)]
+        store.batch_put(entries)
+        hashes = [f"h{i}" for i in range(50)]
+        results = store.batch_get(hashes)
+        assert all(r is not None for r in results)
+        total_tokens = sum(r["num_tokens"] for r in results if r)
+        assert total_tokens == sum(i * 16 for i in range(50))

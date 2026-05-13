@@ -225,6 +225,104 @@ class SSDSQLiteStore:
                 logger.debug("SSDSQLiteStore.touch failed for %s", block_hash[:16], exc_info=True)
                 return False
 
+    def batch_put(
+        self,
+        entries: list[tuple[str, str, int, int]],
+    ) -> int:
+        """Insert or update multiple block entries in a single transaction.
+
+        Args:
+            entries: List of (block_hash, block_path, num_tokens, size_bytes) tuples.
+
+        Returns:
+            Number of entries successfully inserted/updated.
+        """
+        if self._conn is None or not entries:
+            return 0
+        now = time.time()
+        inserted = 0
+        with self._lock:
+            try:
+                self._conn.executemany(
+                    """
+                    INSERT INTO kv_entries
+                        (block_hash, block_path, num_tokens, created_at,
+                         last_accessed, access_count, size_bytes)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                    ON CONFLICT(block_hash) DO UPDATE SET
+                        block_path = excluded.block_path,
+                        num_tokens = excluded.num_tokens,
+                        size_bytes = excluded.size_bytes,
+                        last_accessed = excluded.last_accessed
+                    """,
+                    [(h, p, n, now, now, s) for h, p, n, s in entries],
+                )
+                self._conn.commit()
+                inserted = len(entries)
+            except Exception:
+                logger.debug("SSDSQLiteStore.batch_put failed (%d entries)", len(entries), exc_info=True)
+        return inserted
+
+    def batch_get(self, block_hashes: list[str]) -> list[Optional[dict]]:
+        """Look up multiple blocks by hash in a single query.
+
+        Args:
+            block_hashes: List of hex-encoded block hashes.
+
+        Returns:
+            List of dicts (same order as input). Missing entries are None.
+        """
+        if self._conn is None or not block_hashes:
+            return [None] * len(block_hashes)
+        with self._lock:
+            try:
+                placeholders = ",".join("?" * len(block_hashes))
+                rows = self._conn.execute(
+                    f"""
+                    SELECT block_hash, block_path, num_tokens, created_at,
+                           last_accessed, access_count, size_bytes
+                    FROM kv_entries WHERE block_hash IN ({placeholders})
+                    """,
+                    block_hashes,
+                ).fetchall()
+            except Exception:
+                logger.debug("SSDSQLiteStore.batch_get failed (%d hashes)", len(block_hashes), exc_info=True)
+                return [None] * len(block_hashes)
+        # Build lookup by hash
+        lookup: dict[str, dict] = {}
+        for r in rows:
+            lookup[r[0]] = {
+                "block_hash": r[0],
+                "block_path": r[1],
+                "num_tokens": r[2],
+                "created_at": r[3],
+                "last_accessed": r[4],
+                "access_count": r[5],
+                "size_bytes": r[6],
+            }
+        return [lookup.get(h) for h in block_hashes]
+
+    def batch_delete(self, block_hashes: list[str]) -> int:
+        """Delete multiple block entries in a single transaction.
+
+        Returns:
+            Number of entries deleted.
+        """
+        if self._conn is None or not block_hashes:
+            return 0
+        with self._lock:
+            try:
+                placeholders = ",".join("?" * len(block_hashes))
+                cursor = self._conn.execute(
+                    f"DELETE FROM kv_entries WHERE block_hash IN ({placeholders})",
+                    block_hashes,
+                )
+                self._conn.commit()
+                return cursor.rowcount
+            except Exception:
+                logger.debug("SSDSQLiteStore.batch_delete failed (%d hashes)", len(block_hashes), exc_info=True)
+                return 0
+
     def list_all(self) -> list[dict]:
         """Return all block entries as a list of dicts (oldest first by created_at)."""
         if self._conn is None:
