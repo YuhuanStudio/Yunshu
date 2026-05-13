@@ -219,6 +219,10 @@ class RadixTree:
     ) -> RadixNode:
         """Insert a new prefix path into the tree.
 
+        If an existing child shares a prefix with the new tokens, the child
+        is split at the divergence point to enable proper prefix sharing
+        (SGLang RadixCache pattern).
+
         Args:
             token_ids: Tokens for this path.
             blocks: KV blocks corresponding to these tokens.
@@ -233,7 +237,45 @@ class RadixTree:
         if not token_ids:
             return node
 
-        # Create a single new node for all new tokens
+        # Check if a child with the same first token already exists
+        first_token = token_ids[0]
+        existing = node.children.get(first_token)
+
+        if existing is not None:
+            # Find the shared prefix length between existing child and new tokens
+            match_len = 0
+            for i in range(min(len(existing.token_ids), len(token_ids))):
+                if existing.token_ids[i] != token_ids[i]:
+                    break
+                match_len += 1
+
+            if match_len == 0:
+                # No shared prefix (shouldn't happen since first_token matched)
+                pass
+            elif match_len < len(existing.token_ids):
+                # Partial overlap: split existing child at match point
+                split_node = self._split_node(node, existing, match_len)
+                # split_node now holds the shared prefix
+                # Recurse: insert remaining new tokens as child of split_node
+                remaining_new = token_ids[match_len:]
+                remaining_blocks = blocks[match_len:] if len(blocks) > match_len else []
+                remaining_hashes = block_hashes[match_len:] if len(block_hashes) > match_len else []
+                return self.insert(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
+            else:
+                # New tokens are a prefix of or equal to existing child
+                if len(token_ids) == len(existing.token_ids):
+                    # Exact match — update existing node
+                    if blocks:
+                        existing.blocks = list(blocks)
+                    if block_hashes:
+                        existing.block_hashes = list(block_hashes)
+                    return existing
+                else:
+                    # New is shorter — split existing at len(token_ids)
+                    split_node = self._split_node(node, existing, len(token_ids))
+                    return split_node
+
+        # No existing child: create a new leaf node
         now = _now()
         new_node = RadixNode(
             token_ids=list(token_ids),
@@ -243,7 +285,7 @@ class RadixTree:
             creation_time=now,
             last_access_time=now,
         )
-        node.children[token_ids[0]] = new_node
+        node.children[first_token] = new_node
         self._total_nodes += 1
         return new_node
 

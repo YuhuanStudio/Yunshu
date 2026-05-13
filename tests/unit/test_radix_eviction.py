@@ -27,21 +27,26 @@ class TestRadixTreeEvictionStrategies:
 
     def test_lru_eviction_order(self):
         tree, nodes = self._make_tree_with_leaves("lru")
+        # 4 nodes total: [1,2] + [3] + [4] + [5,6]
+        assert tree.total_nodes == 4
         freed = tree.evict(1)
         assert len(freed) == 0  # No blocks in these nodes
-        assert tree.total_nodes == 2  # One evicted
+        assert tree.total_nodes == 3  # One evicted, [1,2] merged with surviving child
 
     def test_lfu_eviction_order(self):
         tree, nodes = self._make_tree_with_leaves("lfu")
-        # LFU: node with access_count=1 (node[0]) should be evicted first
+        assert tree.total_nodes == 4
+        # LFU: node with access_count=1 should be evicted first
         freed = tree.evict(1)
-        assert tree.total_nodes == 2
+        # After eviction, merge compacts the tree
+        assert tree.total_nodes == 2  # [1,2,4] (merged) + [5,6]
 
     def test_fifo_eviction_order(self):
         tree, nodes = self._make_tree_with_leaves("fifo")
+        assert tree.total_nodes == 4
         # FIFO: node with earliest creation_time (node[2], creation_time=50) evicted first
         freed = tree.evict(1)
-        assert tree.total_nodes == 2
+        assert tree.total_nodes == 3
 
     def test_default_is_lru(self):
         from yunshu_kv.radix_attention import RadixTree
