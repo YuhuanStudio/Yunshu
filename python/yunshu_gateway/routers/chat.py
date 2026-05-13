@@ -140,6 +140,7 @@ class ChatCompletionRequest(BaseModel):
     priority: int = Field(default=0, ge=0, le=100)
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
     xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    grammar: Optional[dict] = None  # {"type": "json", "schema": {...}} or {"type": "regex", "pattern": "..."}
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -148,14 +149,26 @@ class ChatCompletionRequest(BaseModel):
         return self
 
 
-def _parse_response_format(response_format: dict | None) -> dict | str | None:
-    """Parse OpenAI response_format parameter into a json_schema for SamplingParams.
+def _parse_response_format(response_format: dict | None, grammar: dict | None = None) -> dict | str | None:
+    """Parse OpenAI response_format and grammar parameters into json_schema.
 
     Supports:
     - {"type": "json_object"} → generic object schema
     - {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}} → specific schema
+    - grammar: {"type": "json", "schema": {...}} → specific schema
+    - grammar: {"type": "json"} → generic JSON constraint
     - None → no constraint
     """
+    # grammar takes priority when it specifies a schema
+    if grammar is not None:
+        gtype = grammar.get("type")
+        if gtype == "json":
+            schema = grammar.get("schema")
+            if schema:
+                return schema
+            return "json_object"
+        # regex/context-free grammar not yet supported
+
     if response_format is None:
         return None
 
@@ -514,7 +527,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
         messages = _inject_tool_system_prompt(messages, req.tools, req.tool_choice, req.parallel_tool_calls)
 
     # Parse response_format for structured output (JSON schema)
-    json_schema = _parse_response_format(req.response_format)
+    json_schema = _parse_response_format(req.response_format, req.grammar)
 
     # Context window validation (oMLX pattern)
     # Estimate prompt tokens for validation before generation

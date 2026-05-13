@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — Pooling/Score/Rerank + Tool Call/Reasoning Parser Factory + Per-Model Settings)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-13 — LoRA Manager + Grammar 參數 + Pooling/Score/Rerank + Tool Call/Reasoning Parser Factory)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -149,6 +149,14 @@
 | RPARSER | Reasoning Parser Factory — Qwen3/DeepSeek/GLM/Harmony/Gemma 5 家族自動偵測 | oMLX §13.2 | ✅ 已實現 |
 | TCPARSER | Tool Call Parser Factory — 9 格式 (Hermes/QwenXML/Mistral/ChatML/DeepSeek/Anthropic/Gemini/DirectJSON/CodeBlock) + 模型自動路由 | oMLX §13.2 | ✅ 已實現 |
 | PM-SET | Per-Model Settings 接入 BatchedEngine — model_settings.json + env var 覆蓋 + 自動應用 | oMLX §13.4 | ✅ 已實現 |
+
+### 新增功能 (2026-05-13 第六批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| LORA | LoRA Adapter Manager — 動態載入/卸載/合併，max_loras 約束，LRU 淘汰，auto-discover | vLLM §12.2 | ✅ 已實現 |
+| LORA-API | LoRA Admin API — 5 個端點: list/load/unload/merge/register adapters | vLLM §12.5 | ✅ 已實現 |
+| GRAMMAR | grammar 參數接入 Gateway — json_schema 約束通過 grammar 參數也可觸發 | vLLM §12.2 | ✅ 已實現 |
 
 ### 跨項目學習進度
 
@@ -390,7 +398,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | `priority` | ❌ | ✅ SamplingParams (僅排序) |
 | `thinking_budget` | ✅ 直接接收 | ✅ SamplingParams |
 | `reasoning_effort` | ❌ | ✅ SamplingParams |
-| `grammar` | ❌ | ❌ 僅 json_schema.py (未接入快速路徑) |
+| `grammar` | ✅ | ✅ grammar 參數 → json_schema 約束 (GRAMMAR) |
 
 ### 4.4 Request 永遠不會被填充的字段
 
@@ -804,7 +812,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,543 個測試全數通過 (565s→24s)。
+> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,557 個測試全數通過 (565s→24s)。
 
 ---
 
@@ -831,7 +839,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 編碼器-解碼器 | 完整 EncoderCacheManager | 無 | 不支持 |
 | 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema 約束採樣器 + VLM 接入 | 僅缺 xgrammar 後端 |
 | 遠程 KV 傳輸 | KVConnectorFactory, 異步 load/store | 無 | 無分離式預填充 |
-| LoRA 調度 | max_loras 約束, LoRA 緩存 | 無 | 完全缺失 |
+| LoRA 調度 | max_loras 約束, LoRA 緩存 | ✅ LoRAAdapterManager + LRU + auto-discover + merge | 已實現 (LORA) |
 | Mamba/混合模型 | 塊對齊緩存分割 | 無 | 不處理混合注意力/SSM |
 
 ### 12.3 KV Cache 對比
@@ -863,7 +871,7 @@ vLLM 有而 Yunshu 沒有的 endpoint:
 - ~~`/sleep`, `/wake_up` — 3 級休眠/喚醒~~ ✅ 已實現 (SLEEP)
 - `/start_profile`, `/stop_profile` — 性能分析
 - ~~`/reset_prefix_cache` — 緩存管理~~ ✅ 已有 `/api/v1/admin/cache/clear`
-- 動態 LoRA 加載/卸載
+- ~~動態 LoRA 加載/卸載~~ ✅ 已實現 (LORA/LORA-API)
 - 分離式 serving (P/D render + generate)
 
 Yunshu 有而 vLLM 沒有的:
@@ -986,7 +994,7 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 | G3 | Paged KV cache 與 mlx-lm 原生 cache types 不連接 | ✅ **已修復** | mlx_cache + model_cache_config 已接入 |
 | G4 | 無漸進式 KV 量化 (僅在生成結束後量化) | ✅ **已修復** (C6) | 每 256 tokens 量化 |
 | G5 | 無 quantization config 傳遞給 load() | **中** | 無法覆蓋量化參數 |
-| G6 | 無 LoRA 適配器支持 | **低** | 缺少微調模型服務能力 |
+| G6 | ~~無 LoRA 適配器支持~~ | **低** | ✅ 已實現 (LORA) — LoRAAdapterManager + Admin API |
 | G7 | ~~無 XTC 採樣支持~~ | **低** | ✅ 已實現 (XTC) |
 | G8 | Streaming 路徑跳過 `detokenizer.finalize()` | ✅ **已修復** | 所有 streaming 路徑已加 finalize() |
 | G9 | ThinkingParser 與 mlx-lm 的 thinking 檢測重複 | **低** | 兩個獨立解析器可能不一致 |

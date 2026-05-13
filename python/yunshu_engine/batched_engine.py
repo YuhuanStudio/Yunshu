@@ -186,6 +186,9 @@ class BatchedEngine:
         # Per-model settings (loaded from model_settings.json + env vars)
         self._settings = None
 
+        # LoRA adapter manager (vLLM pattern)
+        self._lora_manager = None
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -243,6 +246,9 @@ class BatchedEngine:
         # Initialize speculative decoding if model supports it (Phase 4)
         self._init_spec_decode()
 
+        # Initialize LoRA adapter manager
+        self._init_lora()
+
         # Warm prompt prefill: pre-populate KV cache with common system prompts
         await self._warm_prompt_prefill()
 
@@ -293,6 +299,29 @@ class BatchedEngine:
 
     def get_settings(self):
         return self._settings
+
+    def _init_lora(self):
+        """Initialize LoRA adapter manager after model load."""
+        max_loras = int(os.environ.get("YUNSHU_MAX_LORAS", "4"))
+        from .lora_manager import LoRAAdapterManager
+        self._lora_manager = LoRAAdapterManager(max_loras=max_loras)
+        self._lora_manager.set_base_model(self._model)
+
+        # Auto-discover adapters in model directory
+        model_path = ""
+        config = getattr(self._model, 'config', None)
+        if config is not None:
+            if isinstance(config, dict):
+                model_path = config.get("_name_or_path", "")
+            else:
+                model_path = getattr(config, '_name_or_path', "")
+        if model_path:
+            discovered = self._lora_manager.discover_adapters(model_path)
+            if discovered:
+                logger.info(f"Discovered {len(discovered)} LoRA adapters: {discovered}")
+
+    def get_lora_manager(self):
+        return self._lora_manager
 
     async def _ensure_engine_core(self):
         """Lazy-create EngineCore only when continuous batching is needed."""

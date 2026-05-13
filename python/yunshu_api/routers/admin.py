@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 from ..schemas.models import (
     AuthTokenCreate,
@@ -675,3 +676,105 @@ async def get_queue_stats(_=Depends(require_permission("can_view_system"))):
     if manager is None:
         return {"enabled": False, "stats": None}
     return {"enabled": True, "stats": manager.get_stats()}
+
+
+# ── LoRA Adapter Management ──
+
+
+class LoRALoadRequest(BaseModel):
+    model_id: str
+    adapter_id: str
+
+
+class LoRAMergeRequest(BaseModel):
+    model_id: str
+    adapter_id: str
+
+
+class LoRARegisterRequest(BaseModel):
+    model_id: str
+    adapter_id: str
+    adapter_path: str
+
+
+@router.get("/models/{model_id}/adapters")
+async def list_lora_adapters(model_id: str, _=Depends(require_permission("can_view_admin"))):
+    """List LoRA adapters for a model."""
+    engine = _get_engine_for_model(model_id)
+    if engine is None:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is None:
+        return {"enabled": False, "adapters": []}
+    return {"enabled": True, **lora_mgr.get_stats()}
+
+
+@router.post("/models/{model_id}/adapters/load")
+async def load_lora_adapter(model_id: str, req: LoRALoadRequest, _=Depends(require_permission("can_manage_models"))):
+    """Load a LoRA adapter for a model."""
+    engine = _get_engine_for_model(model_id)
+    if engine is None:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is None:
+        raise HTTPException(status_code=400, detail="LoRA not supported for this model")
+    success = lora_mgr.load_adapter(req.adapter_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Failed to load adapter '{req.adapter_id}'")
+    return {"status": "loaded", "adapter_id": req.adapter_id}
+
+
+@router.post("/models/{model_id}/adapters/unload")
+async def unload_lora_adapter(model_id: str, req: LoRALoadRequest, _=Depends(require_permission("can_manage_models"))):
+    """Unload a LoRA adapter from a model."""
+    engine = _get_engine_for_model(model_id)
+    if engine is None:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is None:
+        raise HTTPException(status_code=400, detail="LoRA not supported for this model")
+    success = lora_mgr.unload_adapter(req.adapter_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Failed to unload adapter '{req.adapter_id}'")
+    return {"status": "unloaded", "adapter_id": req.adapter_id}
+
+
+@router.post("/models/{model_id}/adapters/merge")
+async def merge_lora_adapter(model_id: str, req: LoRAMergeRequest, _=Depends(require_permission("can_manage_models"))):
+    """Merge a LoRA adapter permanently into the base model."""
+    engine = _get_engine_for_model(model_id)
+    if engine is None:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is None:
+        raise HTTPException(status_code=400, detail="LoRA not supported for this model")
+    success = lora_mgr.merge_adapter(req.adapter_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Failed to merge adapter '{req.adapter_id}'")
+    return {"status": "merged", "adapter_id": req.adapter_id}
+
+
+@router.post("/models/{model_id}/adapters/register")
+async def register_lora_adapter(model_id: str, req: LoRARegisterRequest, _=Depends(require_permission("can_manage_models"))):
+    """Register a LoRA adapter path for a model."""
+    engine = _get_engine_for_model(model_id)
+    if engine is None:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not loaded")
+    lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
+    if lora_mgr is None:
+        raise HTTPException(status_code=400, detail="LoRA not supported for this model")
+    lora_mgr.register_adapter(req.adapter_id, req.adapter_path)
+    return {"status": "registered", "adapter_id": req.adapter_id}
+
+
+def _get_engine_for_model(model_id: str):
+    from yunshu_gateway.engine import get_engine, get_model_manager
+    manager = get_model_manager()
+    if manager is not None:
+        entry = manager.get_entry(model_id)
+        if entry is not None and entry.is_loaded and entry.engine is not None:
+            return entry.engine
+    engine = get_engine()
+    if engine and engine.is_loaded:
+        return engine
+    return None
