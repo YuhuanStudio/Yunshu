@@ -40,6 +40,7 @@ class ModelType(Enum):
     ASR = auto()
     IMAGE_GEN = auto()
     OCR = auto()
+    STS = auto()
 
 
 # mlx-lm's MODEL_REMAPPING (subset we need to replicate for probing)
@@ -121,11 +122,13 @@ def _detect_model_type(model_path: str) -> ModelType:
     if model_type in ("qwen3_tts", "kokoro", "chatterbox"):
         return ModelType.TTS
 
-    # Keyword-based ASR/TTS fallback
+    # Keyword-based ASR/TTS/STS fallback
     if any(k in model_type for k in ("tts", "voice", "speech_synthes")):
         return ModelType.TTS
     if any(k in model_type for k in ("whisper", "asr", "speech_to_text")):
         return ModelType.ASR
+    if any(k in model_type for k in ("sts", "speech_to_speech", "deepfilter", "mossformer", "voice_conversion")):
+        return ModelType.STS
 
     # Try mlx-lm — if it can import the model_type, it's supported
     remapped = _MODEL_TYPE_REMAP.get(model_type, model_type)
@@ -168,6 +171,8 @@ def _detect_model_type(model_path: str) -> ModelType:
             return ModelType.ASR
         if "ocr" in name_lower:
             return ModelType.OCR
+        if "sts" in name_lower or "speech_to_speech" in name_lower:
+            return ModelType.STS
         return ModelType.LLM
 
     # Supported by mlx-lm or mlx-vlm, no vision indicators → standard LLM
@@ -359,6 +364,12 @@ class ModelManager:
             from .image_engine import ImageGenEngine
             engine = ImageGenEngine(entry.model_path, config)
             await engine.start()
+            return engine
+
+        elif entry.model_type == ModelType.STS:
+            from .sts_engine import STSEngine
+            engine = STSEngine(entry.model_path)
+            engine.start()
             return engine
 
         else:

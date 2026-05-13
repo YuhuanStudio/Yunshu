@@ -451,3 +451,86 @@ async def voice_pipeline(
         raise HTTPException(status_code=503, detail=str(e))
     finally:
         os.unlink(tmp_path)
+
+
+# ── STS (Speech-to-Speech) Endpoints ──
+
+
+class STSEnhanceRequest(BaseModel):
+    audio: str = Field(description="Base64-encoded audio data (WAV format)")
+    method: Optional[str] = None  # spectral_gating, deep_filter, minimal
+    noise_floor_db: Optional[float] = None
+
+
+class STSSeparateRequest(BaseModel):
+    audio: str = Field(description="Base64-encoded audio data (WAV format)")
+    source_text: Optional[str] = None  # Text description of source to isolate
+    method: Optional[str] = None
+
+
+class STSTransformRequest(BaseModel):
+    audio: str = Field(description="Base64-encoded audio data (WAV format)")
+    pitch_shift: Optional[float] = None  # Semitones
+    formant_ratio: Optional[float] = None  # Formant frequency ratio
+
+
+@router.post("/audio/speech-to-speech/enhance")
+async def sts_enhance(req: STSEnhanceRequest, request: Request):
+    """Enhance audio quality — noise reduction and dereverberation."""
+    from yunshu_engine.sts_engine import STSEngine
+    engine = _get_sts_engine(request)
+    audio_bytes = base64.b64decode(req.audio)
+    result = await engine.enhance(
+        audio_bytes, method=req.method, noise_floor_db=req.noise_floor_db,
+    )
+    return {
+        "audio": base64.b64encode(result.audio_data).decode("ascii"),
+        "sample_rate": result.sample_rate,
+        "method": result.method,
+        "metadata": result.metadata,
+    }
+
+
+@router.post("/audio/speech-to-speech/separate")
+async def sts_separate(req: STSSeparateRequest, request: Request):
+    """Separate audio sources — isolate specific sounds."""
+    from yunshu_engine.sts_engine import STSEngine
+    engine = _get_sts_engine(request)
+    audio_bytes = base64.b64decode(req.audio)
+    result = await engine.separate(
+        audio_bytes, source_text=req.source_text, method=req.method,
+    )
+    return {
+        "audio": base64.b64encode(result.audio_data).decode("ascii"),
+        "sample_rate": result.sample_rate,
+        "method": result.method,
+        "metadata": result.metadata,
+    }
+
+
+@router.post("/audio/speech-to-speech/transform")
+async def sts_transform(req: STSTransformRequest, request: Request):
+    """Transform voice characteristics — pitch shifting, formant modification."""
+    from yunshu_engine.sts_engine import STSEngine
+    engine = _get_sts_engine(request)
+    audio_bytes = base64.b64decode(req.audio)
+    result = await engine.transform(
+        audio_bytes, pitch_shift=req.pitch_shift, formant_ratio=req.formant_ratio,
+    )
+    return {
+        "audio": base64.b64encode(result.audio_data).decode("ascii"),
+        "sample_rate": result.sample_rate,
+        "method": result.method,
+        "metadata": result.metadata,
+    }
+
+
+def _get_sts_engine(request: Request):
+    """Get or create the STS engine."""
+    from yunshu_engine.sts_engine import STSEngine
+    sts = getattr(request.app.state, "sts_engine", None)
+    if sts is None:
+        sts = STSEngine()
+        sts.start()
+        request.app.state.sts_engine = sts
+    return sts
