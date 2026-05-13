@@ -18,6 +18,7 @@ This is the engine that ModelManager and the gateway routers use.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import contextmanager
@@ -496,6 +497,7 @@ class BatchedEngine:
                 thinking_budget=thinking_budget,
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
             )
 
         # Engine loop path: continuous batching with scheduler overhead
@@ -559,6 +561,7 @@ class BatchedEngine:
         timeout_seconds: float = 300.0,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        json_schema: dict | str | None = None,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -612,6 +615,19 @@ class BatchedEngine:
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
         )
+
+        # JSON Schema constraint: wrap sampler with ConstrainedSampler
+        if json_schema is not None:
+            try:
+                from .json_schema import JsonSchemaConstraint, ConstrainedSampler
+                if isinstance(json_schema, str):
+                    schema = json.loads(json_schema)
+                else:
+                    schema = json_schema
+                constraint = JsonSchemaConstraint(schema)
+                sampler = ConstrainedSampler(sampler, constraint, tokenizer)
+            except Exception:
+                logger.warning("JSON schema constraint setup failed, falling back to unconstrained", exc_info=True)
 
         logits_processors = []
         if repetition_penalty != 1.0:
@@ -963,6 +979,7 @@ class BatchedEngine:
                 thinking_budget=thinking_budget,
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
             ):
                 yield output
             return
@@ -1026,6 +1043,7 @@ class BatchedEngine:
         thinking_budget: int | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        json_schema: dict | str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue."""
         from mlx_lm.generate import generate_step
@@ -1064,6 +1082,16 @@ class BatchedEngine:
             temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0,
             min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
         )
+
+        # JSON Schema constraint for streaming fast path
+        if json_schema is not None:
+            try:
+                from .json_schema import JsonSchemaConstraint, ConstrainedSampler
+                schema = json.loads(json_schema) if isinstance(json_schema, str) else json_schema
+                constraint = JsonSchemaConstraint(schema)
+                sampler = ConstrainedSampler(sampler, constraint, tokenizer)
+            except Exception:
+                logger.warning("JSON schema constraint setup failed in streaming", exc_info=True)
 
         # Build logits processors for penalty/bias params
         logits_processors = []
