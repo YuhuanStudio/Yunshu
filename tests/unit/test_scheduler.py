@@ -118,6 +118,8 @@ class TestMakeSamplerRepetitionPenalty:
 
     def test_repetition_penalty_modifies_logits(self, scheduler):
         """Verify the repetition penalty actually modifies logits for repeated tokens."""
+        import mlx.core as mx
+        mx.clear_cache()
         sp = SamplingParams(
             repetition_penalty=2.0,
             temperature=1.0,
