@@ -1346,14 +1346,14 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 | # | 行動 | 來源 | 影響 |
 |---|------|------|------|
 | C8 | **啟用 RadixTree**: 接入調度器，替換平面 KVPrefixCache | SGLang | ✅ 已接入 PagedScheduler (Wave 23 驗證) |
-| C9 | **索引共享**: 存儲 KV 池索引而非張量副本 | SGLang, vllm-mlx | 零拷貝 cache |
+| C9 | **索引共享**: 存儲 KV 池索引而非張量副本 | SGLang, vllm-mlx | ✅ BlockTable + ref_count + COW (Wave 23 驗證) |
 | C10 | **批量猜測驗證**: 一次 forward 驗證所有 K 個 draft tokens | SGLang, vLLM | 可能 2x spec decode 吞吐 |
-| C11 | **啟用 paged KV 默認**: enable_paged_kv=True | vLLM, SGLang | 分頁 KV 是 radix tree 前提 |
+| C11 | **啟用 paged KV 默認**: enable_paged_kv=True | vLLM, SGLang | ✅ enable_paged_kv=True by default |
 | C12 | **記憶體壓力淘汰**: 動態記憶體壓力驅動 cache 淘汰 | vllm-mlx | ✅ 已實現 (Wave 23) |
 | C13 | **SQLite SSD 元數據**: 替代 JSON 索引 | vllm-mlx | ✅ 崩潰一致性 (ssd_sqlite_store.py) |
-| C14 | **request retraction**: 暫時驅逐 decode 為 prefill 騰位 | SGLang | SLO 合規 |
+| C14 | **request retraction**: 暫時驅逐 decode 為 prefill 騰位 | SGLang | ✅ enable_retraction=True by default |
 | C15 | **15+ Tool Call Parsers**: 支持更多模型格式 | vllm-mlx | ✅ 已實現 (Wave 23) |
-| C16 | **`insert_segments()` 使用**: 批處理路徑支持 prefix cache | mlx-lm | 批處理多輪加速 |
+| C16 | **`insert_segments()` 使用**: 批處理路徑支持 prefix cache | mlx-lm | ✅ Scheduler._schedule_waiting 已接入 (Wave 23 驗證) |
 
 ### 已完成 (2026-05-14 Wave 15)
 
