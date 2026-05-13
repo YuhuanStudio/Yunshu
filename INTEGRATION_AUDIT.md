@@ -206,6 +206,13 @@
 | VPIPE | VoicePipeline STT→LLM→TTS 端到端管線 — process() + process_stream()，`/audio/voice-pipeline` 端點 | §19.6 | ✅ 已實現 |
 | IMG-SIZE | 圖片尺寸驗證 — 64–2048，必須為 64 的倍數 | §20.3 | ✅ 已實現 |
 
+### 新增功能 (2026-05-13 第十三批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| VLM-JSON-S | VLM 串流 json_schema — generate_stream → _stream_vlm_text 約束應用 | §18.4 | ✅ 已實現 |
+| TTS-SEG | TTS 分段串流 — 300 字符句界分割，逐段合成串流 | §19.6 | ✅ 已實現 |
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -1251,7 +1258,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | mRoPE 整合 | ✅ 完整 | ✅ 已接入 (M7) |
 | OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ❌ |
 | 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ❌ |
-| 工具調用 (VLM) | ✅ | ❌ |
+| 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ❌ |
 | SpecPrefill (VLM) | ✅ draft model | ❌ |
 | 視覺編碼策略 | 3 種 (encode_image, qwen, llava) | 1 種 (mlx_vlm 黑盒) |
