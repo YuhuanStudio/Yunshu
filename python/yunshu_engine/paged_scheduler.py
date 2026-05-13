@@ -123,6 +123,11 @@ class PagedScheduler(Scheduler):
                         all_tokens = prompt_ids + output_ids
                         if all_tokens:
                             self._kv_manager.cache_completed_blocks(table, all_tokens)
+                            # Insert completed blocks into RadixTree for O(k) prefix matching
+                            blocks = table.get_blocks()
+                            hashes = [b.block_hash for b in blocks if b.block_hash is not None]
+                            if hashes:
+                                self._kv_manager.cache_to_radix_tree(all_tokens, blocks, hashes)
                     self._kv_manager.free_request(table)
             else:
                 req = self.running.get(req_id)
