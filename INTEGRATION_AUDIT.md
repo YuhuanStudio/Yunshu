@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 24: VLM continuous batching, gateway LoRA passthrough, video understanding, image preview streaming)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 25: grammar constraint backend, disaggregated P/D, thinking segment streaming, VLM request fields, CLI path fixes)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,19 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3301 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3445 passed, 13 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 25)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Grammar 約束後端 | RegexConstraint, ChoiceConstraint, LarkGrammarConstraint + ConstraintFactory，gateway 支持regex/choice/cfg grammar type | 33 tests (`test_grammar_constraint.py`) |
+| ThinkingSegment streaming | 思考段 KV 存儲接入 streaming fast path，_store_thinking_segment() helper | 現有測試全數通過 |
+| 分離式 P/D 端點 | /v1/prefill, /v1/decode, /v1/cache-handles 端點，P/D disaggregation pattern | 16 tests (`test_disaggregate.py`) |
+| VLM Request 字段 | Request 添加 vlm_inputs_embeds, vlm_extra_kwargs, vlm_image_hash, videos 字段 | 現有測試全數通過 |
+| VLM Image Hash | vlm_engine._compute_image_hash() 計算圖片內容hash用於視覺特徵緩存 | 現有測試全數通過 |
+| CLI 路徑修復 | admin discover → /admin/models/discover, config → /admin/config/engine (PATCH) | — |
+| prompt_progress_callback | ✅ 已驗證三路徑均已接入 (non-streaming fast, streaming fast, scheduler) | — |
 
 ### 已完成修復 (2026-05-14 Wave 24)
 
@@ -640,12 +652,12 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 字段 | 默認值 | 是否被設置 |
 |------|--------|-----------|
-| `vlm_inputs_embeds` | `None` | ❌ (VLM 用自己的 generate 路徑，不經 scheduler) |
-| `vlm_extra_kwargs` | `None` | ❌ (VLM 用自己的 generate 路徑，不經 scheduler) |
-| `vlm_image_hash` | `None` | ❌ (VLM 用自己的 generate 路徑，不經 scheduler) |
+| `vlm_inputs_embeds` | `None` | ✅ 字段已添加 (Wave 25) — VLM 預計算視覺嵌入 |
+| `vlm_extra_kwargs` | `None` | ✅ 字段已添加 (Wave 25) — VLM 特定生成參數 |
+| `vlm_image_hash` | `None` | ✅ 字段已添加 + VLM engine 計算 (Wave 25) — 視覺特徵緩存鍵 |
 | `rope_deltas` | `0.0` | ✅ scheduler 填充 (prefix cache 路徑) |
 | `images` | `None` | ❌ (VLM 用 _extract_images，不經 Request) |
-| `videos` | `None` | ❌ (無視頻輸入路徑) |
+| `videos` | `None` | ✅ 字段已添加 (Wave 25) — VLM engine _extract_video_frames 提取 |
 | `enable_thinking` | `None` | ✅ Wave 10 — 設置在 Request + SamplingParams |
 | `prompt_cache` | `None` | ✅ scheduler 填充 (prefix cache 路徑) |
 | `cached_tokens` | `0` | ✅ scheduler 填充 |
@@ -703,7 +715,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | **mlx_cache.py** | **WIRED** ✅ | CacheType 偵測被 model_cache_config 使用 |
 | **model_cache_config.py** | **WIRED** ✅ | Cache config 偵測已接入 BatchedEngine |
 | **boundary_snapshot.py** | **WIRED** ✅ | 已接入 PagedScheduler (YUNSHU_SSD_CACHE_DIR) |
-| thinking_segment.py | WIRED** | 被 scheduler import 但管線中不觸發 |
+| thinking_segment.py | WIRED** ✅ | 被 scheduler + batched_engine (fast + streaming fast) 使用 |
 
 ### 5.5 yunshu_sdk (客戶端 SDK)
 
@@ -1110,7 +1122,7 @@ vLLM 有而 Yunshu 沒有的 endpoint:
 - ~~`/start_profile`, `/stop_profile` — 性能分析~~ ✅ 已實現 (PROF)
 - ~~`/reset_prefix_cache` — 緩存管理~~ ✅ 已有 `/api/v1/admin/cache/clear`
 - ~~動態 LoRA 加載/卸載~~ ✅ 已實現 (LORA/LORA-API)
-- 分離式 serving (P/D render + generate)
+- ~~分離式 serving (P/D render + generate)~~ ✅ 已實現 (Wave 25) — `/v1/prefill` + `/v1/decode` 端點
 
 Yunshu 有而 vLLM 沒有的:
 - `/v1/audio/*` — TTS/ASR
@@ -1137,7 +1149,7 @@ Yunshu 有而 vLLM 沒有的:
 
 | 功能 | 說明 | 價值 |
 |------|------|------|
-| **Grammar Compiler (xgrammar)** | 結構化輸出，支持 JSON Schema, regex, context-free grammar | ⚠️ json_schema 約束已實現，缺 xgrammar 後端 |
+| **Grammar Compiler (xgrammar)** | 結構化輸出，支持 JSON Schema, regex, context-free grammar | ✅ json_schema + regex + choice + CFG 約束 (grammar_constraint.py) |
 | **Model Profiles & Templates** | ~~模型配置文件和全局模板~~ ✅ 自適應硬件默認 + load_model_settings 集成 | 運維必需 |
 | **TurboQuant KV Cache** | ~~修補注意力層的混合精度 KV~~ ✅ 三層混合精度 FP16/INT8/INT4 (TURBO-Q) | 性能提升 |
 | **Harmony/gpt_oss Adapter** | ~~GPT-OSS 消息格式適配~~ ✅ HarmonyMessageAdapter (MSG-ADPT) | 模型兼容 |
@@ -1249,7 +1261,7 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 | `maybe_quantize_kv_cache()` 每步 | ✅ 漸進式量化 | ✅ (C6) 每 256 tokens |
 | `make_logits_processors()` | ✅ 正確的重複/頻率懲罰 | ✅ (C1) |
 | `save_prompt_cache()` / `load_prompt_cache()` | ✅ KV 序列化 | ✅ 有自己的序列化 |
-| `prompt_progress_callback` | ✅ 預填充進度回調 | ⚠️ 已接入 Scheduler 但僅在 engine loop 路徑觸發 |
+| `prompt_progress_callback` | ✅ 預填充進度回調 | ✅ 已接入三路徑: scheduler, non-streaming fast, streaming fast (Wave 25) |
 | XTC 採樣 | ✅ Exclude Top Tokens | ✅ (XTC) |
 | LoRA 合併 | ✅ 適配器支持 | ✅ (LORA) |
 

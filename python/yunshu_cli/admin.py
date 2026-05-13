@@ -55,7 +55,7 @@ def models_discover(
     """Discover models on disk."""
     import httpx
     try:
-        resp = httpx.get(f"{url}/api/v1/admin/discovery", timeout=5)
+        resp = httpx.get(f"{url}/api/v1/admin/models/discover", timeout=5)
         data = resp.json()
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
@@ -243,14 +243,14 @@ def admin_config(
             console.print("[red]Format: --set key=value[/]")
             raise typer.Exit(1)
         try:
-            resp = httpx.put(f"{url}/api/v1/admin/config", json={"key": k, "value": v}, timeout=5)
+            resp = httpx.patch(f"{url}/api/v1/admin/config/engine", json={"key": k, "value": v}, timeout=5)
             console.print(f"[green]{resp.json().get('message', 'Updated')}[/]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/]")
         return
 
     try:
-        resp = httpx.get(f"{url}/api/v1/admin/config", timeout=5)
+        resp = httpx.get(f"{url}/api/v1/admin/config/engine", timeout=5)
         data = resp.json()
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
