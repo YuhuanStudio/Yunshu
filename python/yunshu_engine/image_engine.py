@@ -23,6 +23,7 @@ Weight format (andrevp/Z-Image-Turbo-MLX-4bit):
 from __future__ import annotations
 
 import asyncio
+import base64
 import gc
 import io
 import glob
@@ -669,13 +670,14 @@ class VAEDecoder(nn.Module):
 
 
 class VAE:
-    """VAE wrapper with scaling constants."""
+    """VAE wrapper with scaling constants and optional encoder."""
 
     scaling_factor = 0.3611
     shift_factor = 0.1159
 
-    def __init__(self, decoder: VAEDecoder):
+    def __init__(self, decoder: VAEDecoder, encoder: VAEEncoder | None = None):
         self.decoder = decoder
+        self.encoder = encoder
 
     def decode(self, latents: mx.array) -> mx.array:
         # latents shape: (C, F, H, W) or (C, H, W)
@@ -692,6 +694,122 @@ class VAE:
             scaled = mx.expand_dims(scaled, axis=0)
         decoded = self.decoder(scaled)
         return decoded
+
+    def encode(self, image: mx.array) -> mx.array:
+        """Encode image to latent space using the VAE encoder.
+
+        Args:
+            image: (1, 3, H, W) float image in [-1, 1].
+
+        Returns:
+            latents: (16, H/8, W/8) scaled latent representation.
+        """
+        if self.encoder is None:
+            raise RuntimeError("VAE encoder not loaded")
+        mean, logvar = self.encoder(image)
+        # Sample from the posterior: z = mean + std * noise
+        std = mx.exp(0.5 * logvar)
+        noise = mx.random.normal(shape=mean.shape, dtype=mean.dtype)
+        z = mean + std * noise
+        # Scale latents: (scaling_factor * (z - shift_factor))
+        z = self.scaling_factor * (z - self.shift_factor)
+        # Remove batch dim → (16, H/8, W/8)
+        return z[0]
+
+    def encode_deterministic(self, image: mx.array) -> mx.array:
+        """Encode image to latents deterministically (use mean only, no sampling).
+
+        Args:
+            image: (1, 3, H, W) float image in [-1, 1].
+
+        Returns:
+            latents: (16, H/8, W/8) scaled latent representation.
+        """
+        if self.encoder is None:
+            raise RuntimeError("VAE encoder not loaded")
+        mean, _logvar = self.encoder(image)
+        z = self.scaling_factor * (mean - self.shift_factor)
+        return z[0]
+
+
+# ── VAE Encoder ──
+
+
+class _DownSampler(nn.Module):
+    """Strided 2x downsampler: pad + Conv2d(stride=2)."""
+
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv = nn.Conv2d(channels, channels, kernel_size=3, stride=2, padding=0)
+
+    def __call__(self, x):
+        x = mx.pad(x, ((0, 0), (0, 0), (0, 1), (0, 1)))
+        xw = x.transpose(0, 2, 3, 1)
+        out = self.conv(xw)
+        return out.transpose(0, 3, 1, 2)
+
+
+class _DownEncoderBlock(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, num_layers: int = 2, add_downsample: bool = True):
+        super().__init__()
+        self.resnets = []
+        for i in range(num_layers):
+            use_sc = (i == 0) and (in_ch != out_ch)
+            self.resnets.append(_ResnetBlock2D(
+                in_ch if i == 0 else out_ch, out_ch, use_conv_shortcut=use_sc,
+            ))
+        self.downsamplers = [_DownSampler(out_ch)] if add_downsample else None
+
+    def __call__(self, x):
+        for resnet in self.resnets:
+            x = resnet(x)
+        if self.downsamplers is not None:
+            for ds in self.downsamplers:
+                x = ds(x)
+        return x
+
+
+class VAEEncoder(nn.Module):
+    """Z-Image VAE encoder: ConvIn → 4 DownBlocks → MidBlock → ConvOut.
+
+    Outputs 32 channels (2 × 16 latent), split into mean and logvar for
+    the KL posterior.  8x spatial downsample (3 stride-2 convs).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.conv_in = nn.Conv2d(3, 128, kernel_size=3, stride=1, padding=1)
+        self.down_blocks = [
+            _DownEncoderBlock(128, 128, 2, add_downsample=True),
+            _DownEncoderBlock(128, 256, 2, add_downsample=True),
+            _DownEncoderBlock(256, 512, 2, add_downsample=True),
+            _DownEncoderBlock(512, 512, 2, add_downsample=False),
+        ]
+        self.mid_block = _UNetMidBlock(512)
+        self.conv_norm_out = nn.GroupNorm(32, 512, eps=1e-6, affine=True, pytorch_compatible=True)
+        self.conv_out = nn.Conv2d(512, 32, kernel_size=3, stride=1, padding=1)
+
+    def __call__(self, x: mx.array) -> tuple[mx.array, mx.array]:
+        """Encode image → (mean, logvar) in latent space.
+
+        Args:
+            x: (B, 3, H, W) float image in [-1, 1].
+
+        Returns:
+            mean: (B, 16, H/8, W/8)
+            logvar: (B, 16, H/8, W/8)
+        """
+        x = x.transpose(0, 2, 3, 1)
+        h = self.conv_in(x).transpose(0, 3, 1, 2)
+        for block in self.down_blocks:
+            h = block(h)
+        h = self.mid_block(h)
+        h = self.conv_norm_out(h.transpose(0, 2, 3, 1))
+        h = nn.silu(h)
+        h = self.conv_out(h).transpose(0, 3, 1, 2)
+        # Split 32-ch output into mean + logvar (each 16 ch)
+        mean, logvar = mx.split(h, 2, axis=1)
+        return mean, logvar
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -858,18 +976,19 @@ def _remap_transformer_weights(raw: dict) -> list[tuple[str, mx.array]]:
     return pairs
 
 
-def _remap_vae_weights(raw: dict) -> list[tuple[str, mx.array]]:
-    """Remap VAE weights.
+def _remap_vae_weights(raw: dict, component: str = "decoder") -> list[tuple[str, mx.array]]:
+    """Remap VAE weights for decoder or encoder.
 
     VAE safetensors weights are in PyTorch OIHW format: (out, in, kH, kW)
     MLX Conv2d expects OHWI format: (out, kH, kW, in)
     So conv weights need transpose: (0, 2, 3, 1)
     """
-    decoder_weights = []
+    result = []
+    prefix = f"{component}."
     for key, val in raw.items():
-        if not key.startswith("decoder."):
+        if not key.startswith(prefix):
             continue
-        local_key = key[len("decoder."):]
+        local_key = key[len(prefix):]
         # Flatten to_out.0.* → to_out.*
         if ".to_out.0." in local_key:
             local_key = local_key.replace(".to_out.0.", ".to_out.")
@@ -884,9 +1003,9 @@ def _remap_vae_weights(raw: dict) -> list[tuple[str, mx.array]]:
         )
         if is_conv_weight:
             val = val.transpose(0, 2, 3, 1)
-        decoder_weights.append((local_key, val))
+        result.append((local_key, val))
 
-    return decoder_weights
+    return result
 
 
 def _quantize_model(model, quant_config: dict, weight_keys: set[str] | None = None):
@@ -1061,14 +1180,20 @@ class ImageGenEngine:
         self._transformer = transformer
         logger.info(f"Transformer loaded: {len(tf_weights)} tensors")
 
-        # 3. VAE Decoder (no quantization per quantize_config.json)
-        logger.info("Loading VAE decoder...")
+        # 3. VAE Decoder + Encoder (no quantization per quantize_config.json)
+        logger.info("Loading VAE decoder + encoder...")
         vae_decoder = VAEDecoder()
         vae_weights = _load_component_weights(model_path, "vae")
-        _load_weights_into(vae_decoder, _remap_vae_weights(vae_weights))
+        _load_weights_into(vae_decoder, _remap_vae_weights(vae_weights, "decoder"))
         vae_decoder.eval()
-        self._vae = VAE(vae_decoder)
-        logger.info(f"VAE loaded: {len(vae_weights)} tensors")
+
+        # Load VAE encoder (present in Z-Image safetensors as encoder.* keys)
+        vae_encoder = VAEEncoder()
+        _load_weights_into(vae_encoder, _remap_vae_weights(vae_weights, "encoder"))
+        vae_encoder.eval()
+
+        self._vae = VAE(vae_decoder, vae_encoder)
+        logger.info(f"VAE loaded (decoder + encoder): {len(vae_weights)} tensors")
 
         # 4. Tokenizer
         from transformers import AutoTokenizer
@@ -1418,6 +1543,222 @@ class ImageGenEngine:
 
         # 7. Convert to PNG
         return self._to_png(image)
+
+    def _load_image_to_tensor(self, image_data: bytes) -> tuple[mx.array, int, int]:
+        """Load image bytes → (1, 3, H, W) float tensor in [-1, 1].
+
+        Accepts PNG or JPEG bytes.
+        """
+        from PIL import Image as PILImage
+        pil = PILImage.open(io.BytesIO(image_data)).convert("RGB")
+        w, h = pil.size
+        arr = np.array(pil, dtype=np.float32) / 255.0  # (H, W, 3)
+        arr = (arr - 0.5) / 0.5  # normalize to [-1, 1]
+        arr = arr.transpose(2, 0, 1)  # (3, H, W)
+        tensor = mx.array(arr[np.newaxis, :, :, :])  # (1, 3, H, W)
+        return tensor, h, w
+
+    def _run_inpaint_pipeline(
+        self,
+        prompt: str,
+        image_data: bytes,
+        mask_data: bytes | None,
+        mask_base64: str | None,
+        width: int,
+        height: int,
+        num_steps: int,
+        seed: int,
+        denoise_strength: float = 1.0,
+    ) -> bytes:
+        """Run inpainting: fill masked regions of an image guided by prompt.
+
+        Pipeline:
+        1. Load image → pixel tensor → encode to latents (VAE encoder)
+        2. Load/create mask → downsample to latent resolution
+        3. Create noise latents; blend: masked_latents = (1-mask)*known_latents + mask*noise
+        4. Denoise with mask-aware blending at each step
+        5. VAE decode → image
+
+        Args:
+            prompt: Text prompt for inpainting.
+            image_data: Source image bytes (PNG/JPEG).
+            mask_data: Mask image bytes (white=inpainted, black=kept). Optional.
+            mask_base64: Base64-encoded mask. Used if mask_data is None.
+            width: Output width.
+            height: Output height.
+            num_steps: Denoising steps.
+            seed: Random seed.
+            denoise_strength: How much to re-denoise masked region (1.0=full).
+        """
+        # 1. Load and encode source image
+        image_tensor, img_h, img_w = self._load_image_to_tensor(image_data)
+        # Resize to target dimensions if needed
+        if img_h != height or img_w != width:
+            from PIL import Image as PILImage
+            pil = PILImage.open(io.BytesIO(image_data)).convert("RGB").resize(
+                (width, height), PILImage.LANCZOS
+            )
+            arr = np.array(pil, dtype=np.float32) / 255.0
+            arr = (arr - 0.5) / 0.5
+            arr = arr.transpose(2, 0, 1)[np.newaxis, :, :, :]
+            image_tensor = mx.array(arr)
+
+        known_latents = self._vae.encode_deterministic(image_tensor)
+        mx.eval(known_latents)
+
+        latent_h = height // 8
+        latent_w = width // 8
+
+        # 2. Create mask tensor
+        if mask_data is not None:
+            mask_tensor = self._load_mask(mask_data, latent_h, latent_w)
+        elif mask_base64 is not None:
+            mask_bytes = base64.b64decode(mask_base64)
+            mask_tensor = self._load_mask(mask_bytes, latent_h, latent_w)
+        else:
+            # No mask → full image inpainting (entire canvas)
+            mask_tensor = mx.ones((1, 1, latent_h, latent_w), dtype=mx.float16)
+
+        # Add frame dimension for transformer: (16, 1, H/8, W/8)
+        known_latents_4d = known_latents[:, np.newaxis, :, :]  # (16, 1, H/8, W/8)
+        mask_4d = mask_tensor  # (1, 1, H/8, W/8)
+
+        # 3. Prepare noise latents
+        noise = mx.random.normal(
+            shape=[16, 1, latent_h, latent_w],
+            key=mx.random.key(seed),
+        ).astype(mx.float16)
+
+        # Apply denoise strength: interpolate between known latents and noise
+        # At strength=1.0, masked region starts from pure noise
+        # At strength<1.0, masked region starts from partially noised known latents
+        if denoise_strength < 1.0:
+            # Blend noise and known latents for masked region
+            init_noise = (1 - denoise_strength) * known_latents_4d + denoise_strength * noise
+            latents = (1 - mask_4d) * known_latents_4d + mask_4d * init_noise
+        else:
+            latents = (1 - mask_4d) * known_latents_4d + mask_4d * noise
+
+        mx.eval(latents)
+
+        # 4. Tokenize prompt
+        tokenizer = self._tokenizer
+        formatted = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
+        tokens = tokenizer(
+            [formatted],
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="np",
+        )
+        input_ids = mx.array(tokens["input_ids"])
+        attention_mask = mx.array(tokens["attention_mask"])
+
+        # 5. Text encoding
+        cap_feats = self._text_encoder(input_ids, attention_mask)
+        num_valid = int(mx.sum(attention_mask[0]).item())
+        cap_feats = cap_feats[0, :num_valid, :]
+        mx.eval(cap_feats)
+
+        # 6. Compute sigma schedule
+        sigmas = _compute_sigmas(num_steps, width, height)
+
+        # 7. Masked denoising loop
+        for t in range(num_steps):
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
+
+            noise_pred = self._transformer(
+                x=latents,
+                timestep=timestep,
+                sigmas=sigmas,
+                cap_feats=cap_feats,
+            )
+
+            # Euler step
+            dt = sigmas[t + 1] - sigmas[t]
+            denoised = latents + noise_pred * dt
+
+            # Blend: keep known regions from original latents,
+            # take denoised output for masked regions
+            latents = (1 - mask_4d) * known_latents_4d + mask_4d * denoised
+            mx.eval(latents)
+
+        # 8. VAE decode
+        image = self._vae.decode(latents)
+        mx.eval(image)
+
+        return self._to_png(image)
+
+    def _load_mask(self, mask_data: bytes, latent_h: int, latent_w: int) -> mx.array:
+        """Load mask image → (1, 1, H/8, W/8) float tensor.
+
+        White pixels (value > 127) → 1.0 (inpainted region)
+        Black pixels → 0.0 (preserved region)
+        """
+        from PIL import Image as PILImage
+        pil = PILImage.open(io.BytesIO(mask_data)).convert("L")
+        pil = pil.resize((latent_w, latent_h), PILImage.NEAREST)
+        arr = np.array(pil, dtype=np.float32) / 255.0
+        # Threshold: any pixel > 0.5 is masked (to inpaint)
+        arr = (arr > 0.5).astype(np.float32)
+        return mx.array(arr[np.newaxis, np.newaxis, :, :]).astype(mx.float16)
+
+    async def inpaint(
+        self,
+        prompt: str,
+        image: bytes,
+        mask: bytes | None = None,
+        mask_base64: str | None = None,
+        width: int = 1024,
+        height: int = 1024,
+        num_inference_steps: int = 4,
+        seed: int | None = None,
+        denoise_strength: float = 1.0,
+    ) -> bytes:
+        """Inpaint masked regions of an image guided by a text prompt.
+
+        Args:
+            prompt: Text description of what to fill in.
+            image: Source image bytes (PNG/JPEG).
+            mask: Mask image bytes (white=fill, black=keep). Optional.
+            mask_base64: Base64-encoded mask. Optional, used if mask bytes not provided.
+            width: Output width.
+            height: Output height.
+            num_inference_steps: Number of denoising steps.
+            seed: Random seed.
+            denoise_strength: How much to re-denoise (1.0=full, 0.5=partial).
+
+        Returns:
+            PNG bytes of the inpainted image.
+        """
+        if self._transformer is None:
+            raise RuntimeError("Engine not started")
+
+        def _inpaint_sync() -> bytes:
+            return self._run_inpaint_pipeline(
+                prompt=prompt,
+                image_data=image,
+                mask_data=mask,
+                mask_base64=mask_base64,
+                width=width,
+                height=height,
+                num_steps=num_inference_steps,
+                seed=seed if seed is not None else 42,
+                denoise_strength=denoise_strength,
+            )
+
+        t0 = time.monotonic()
+        loop = asyncio.get_running_loop()
+        png_bytes = await loop.run_in_executor(self._executor, _inpaint_sync)
+        elapsed = time.monotonic() - t0
+        logger.info(f"Inpaint: {elapsed:.2f}s, prompt='{prompt[:50]}...'")
+        return png_bytes
 
     @staticmethod
     def _to_png(image: mx.array) -> bytes:

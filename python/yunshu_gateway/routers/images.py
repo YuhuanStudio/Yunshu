@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..engine import get_model_manager
 
@@ -310,4 +310,79 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
     except Exception as e:
         logger.error(f"Image edit error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Image edit failed")
+
+
+class ImageInpaintRequest(BaseModel):
+    image: str = Field(description="Base64-encoded source image (PNG/JPEG)")
+    prompt: str = Field(description="Text description of what to fill in the masked region")
+    mask: Optional[str] = Field(default=None, description="Base64-encoded mask image (white=fill, black=keep)")
+    model: str = "Z-Image-Turbo-MLX-4bit"
+    n: int = 1
+    size: str = "1024x1024"
+    response_format: str = "b64_json"
+    num_inference_steps: int = 4
+    seed: Optional[int] = None
+    denoise_strength: float = Field(default=1.0, ge=0.0, le=1.0, description="How much to re-denoise (1.0=full)")
+
+
+@router.post("/images/inpaint")
+async def create_image_inpaint(req: ImageInpaintRequest) -> JSONResponse:
+    """Inpaint masked regions of an image using a text prompt.
+
+    Accepts a source image and a mask (white=fill, black=preserve).
+    The masked region is re-generated guided by the text prompt while
+    the unmasked region is preserved from the original image.
+    """
+    try:
+        image_bytes = base64.b64decode(req.image)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 image data")
+
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="Model manager not initialized")
+
+    from yunshu_engine.image_engine import ImageGenEngine
+
+    img_engine = None
+    for entry in manager.list_entries():
+        if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
+            img_engine = entry.engine
+            break
+
+    if img_engine is None:
+        raise HTTPException(status_code=404, detail="No image generation model available")
+
+    try:
+        width, height = map(int, req.size.split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+
+    try:
+        data = []
+        for i in range(req.n):
+            seed = (req.seed + i) if req.seed is not None else None
+            png = await img_engine.inpaint(
+                prompt=req.prompt,
+                image=image_bytes,
+                mask_base64=req.mask,
+                width=width,
+                height=height,
+                num_inference_steps=req.num_inference_steps,
+                seed=seed,
+                denoise_strength=req.denoise_strength,
+            )
+            b64 = base64.b64encode(png).decode("ascii")
+            if req.response_format == "b64_json":
+                data.append({"b64_json": b64})
+            else:
+                data.append({"url": f"data:image/png;base64,{b64}"})
+
+        return JSONResponse({
+            "created": int(time.time()),
+            "data": data,
+        })
+    except Exception as e:
+        logger.error(f"Image inpaint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Image inpainting failed")
 
