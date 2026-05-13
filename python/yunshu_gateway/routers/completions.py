@@ -47,6 +47,8 @@ class CompletionRequest(BaseModel):
     echo: bool = False
     logprobs: int = 0
     seed: Optional[int] = None
+    spec_decode: bool = False
+    enable_thinking: Optional[bool] = None
 
 
 @router.post("/completions", response_model=None)
@@ -102,6 +104,8 @@ async def create_completion(req: CompletionRequest, request: Request):
             logit_bias=req.logit_bias,
             stop=req.stop,
             seed=req.seed,
+            spec_decode=req.spec_decode,
+            enable_thinking=req.enable_thinking,
         )
         text = result.text
         prompt_tokens = result.prompt_tokens
