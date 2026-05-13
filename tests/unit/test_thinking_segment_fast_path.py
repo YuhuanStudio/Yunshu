@@ -30,6 +30,7 @@ class TestThinkingSegmentSubstoreInit:
         eng.model_name = "test"
         eng._loaded = True
         eng._thinking_store = None
+        eng._adaptive_spec = None
         stats = eng.get_stats()
         assert "thinking_segment_store" not in stats
 
