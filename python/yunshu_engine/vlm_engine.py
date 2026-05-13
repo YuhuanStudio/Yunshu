@@ -251,7 +251,9 @@ class VLMEngine:
             input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
             if self._is_vlm:
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop)
+                freq_p = kwargs.get('frequency_penalty', 0.0)
+                pres_p = kwargs.get('presence_penalty', 0.0)
+                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p)
 
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
@@ -303,6 +305,7 @@ class VLMEngine:
         seed: int | None = None,
         stop: list[str] | None = None,
         enable_thinking: bool | None = None,
+        repetition_penalty: float = 1.0,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation: yields RequestOutput per token."""
@@ -334,7 +337,9 @@ class VLMEngine:
                 input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
                 if self._is_vlm:
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop)
+                    freq_p = kwargs.get('frequency_penalty', 0.0)
+                    pres_p = kwargs.get('presence_penalty', 0.0)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop, repetition_penalty, freq_p, pres_p)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -511,6 +516,9 @@ class VLMEngine:
         top_p: float,
         top_k: int = 0,
         stop: list[str] | None = None,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -526,6 +534,8 @@ class VLMEngine:
         cache = make_prompt_cache(lm)
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
+
+        has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0
 
         # Build stop IDs from string sequences
         stop_ids = set(eos_ids)
@@ -552,6 +562,20 @@ class VLMEngine:
             for _ in range(max_tokens - 1):
                 output = lm(current[None], cache=cache)
                 logits = output.logits[:, -1, :]
+
+                if has_penalty:
+                    if repetition_penalty != 1.0:
+                        ctx = tokens[-20:]
+                        sel = logits[..., ctx]
+                        sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
+                        logits[..., ctx] = sel
+                    if frequency_penalty != 0.0:
+                        tid = tokens[-1]
+                        logits[..., tid] -= frequency_penalty
+                    if presence_penalty != 0.0:
+                        tid = tokens[-1]
+                        logits[..., tid] -= presence_penalty
+
                 current = sampler(logits)
                 mx.eval(current)
                 tokens.append(current.item())
@@ -653,6 +677,9 @@ class VLMEngine:
         queue: asyncio.Queue,
         top_k: int = 0,
         stop: list[str] | None = None,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -667,6 +694,7 @@ class VLMEngine:
         cache = make_prompt_cache(lm)
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         eos_ids = self._get_eos_ids()
+        has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0
 
         # Build stop IDs
         stop_ids = set(eos_ids)
@@ -718,9 +746,23 @@ class VLMEngine:
         if finish_reason:
             return
 
+        tokens_list = []
         for _ in range(max_tokens - 1):
             output = lm(current[None], cache=cache)
             logits = output.logits[:, -1, :]
+
+            if has_penalty:
+                tokens_list.append(current.item())
+                if repetition_penalty != 1.0:
+                    ctx = tokens_list[-20:]
+                    sel = logits[..., ctx]
+                    sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
+                    logits[..., ctx] = sel
+                if frequency_penalty != 0.0:
+                    logits[..., tokens_list[-1]] -= frequency_penalty
+                if presence_penalty != 0.0:
+                    logits[..., tokens_list[-1]] -= presence_penalty
+
             current = sampler(logits)
             mx.eval(current)
             token_count += 1

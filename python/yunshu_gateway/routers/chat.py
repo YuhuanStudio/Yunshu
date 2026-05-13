@@ -709,6 +709,13 @@ async def _handle_vlm_chat(
         max_tokens=req.max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
+        top_k=req.top_k,
+        seed=req.seed,
+        repetition_penalty=req.repetition_penalty,
+        stop=req.stop,
+        enable_thinking=req.enable_thinking,
+        frequency_penalty=req.frequency_penalty,
+        presence_penalty=req.presence_penalty,
     )
 
     content = result.get("text", "")
@@ -751,6 +758,13 @@ async def _stream_vlm_response(
             max_tokens=req.max_tokens,
             temperature=req.temperature,
             top_p=req.top_p,
+            top_k=req.top_k,
+            seed=req.seed,
+            repetition_penalty=req.repetition_penalty,
+            stop=req.stop,
+            enable_thinking=req.enable_thinking,
+            frequency_penalty=req.frequency_penalty,
+            presence_penalty=req.presence_penalty,
         ):
             yield format_openai_chunk(
                 completion_id=completion_id,
