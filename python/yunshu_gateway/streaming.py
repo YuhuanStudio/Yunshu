@@ -538,6 +538,34 @@ def clean_tool_call_markup(text: str) -> str:
     return text.strip()
 
 
+# Model-aware tool call extraction using ToolCallParser (C15)
+_tool_call_parsers: dict[str, Any] = {}
+
+
+def extract_tool_calls_model_aware(text: str, model_name: str = "") -> list[dict]:
+    """Extract tool calls using model-aware format detection (C15).
+
+    Falls back to extract_tool_calls_v2 for formats not covered
+    by the ToolCallParser module.
+    """
+    if not text:
+        return []
+
+    # Get or create parser for this model
+    parser = _tool_call_parsers.get(model_name)
+    if parser is None:
+        from yunshu_engine.tool_call_parsers import ToolCallParser
+        parser = ToolCallParser(model_name=model_name)
+        _tool_call_parsers[model_name] = parser
+
+    results = parser.parse(text)
+    if results:
+        return [{"name": r.name, "arguments": r.arguments} for r in results]
+
+    # Fall back to v2 parser
+    return extract_tool_calls_v2(text)
+
+
 # ── Context Window Validation ──
 
 
