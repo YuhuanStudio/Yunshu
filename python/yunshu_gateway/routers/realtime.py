@@ -539,12 +539,10 @@ class RealtimeSession:
     async def _synthesize_audio_response(
         self, text: str, response_id: str, item_id: str,
     ) -> None:
-        """Synthesize text to audio and stream audio deltas in 20ms chunks.
+        """Synthesize text to audio and stream audio deltas as they're produced.
 
-        Instead of sending the entire audio buffer at once, splits the TTS
-        output into 20ms PCM chunks (960 bytes at 24kHz 16-bit mono) and
-        sends each as a response.audio.delta event with base64-encoded PCM.
-        Sends response.audio.done when all chunks are sent.
+        Uses synthesize_stream() for token-level audio output when available,
+        falling back to synthesize() with 20ms chunking.
         """
         try:
             from ..engine import get_model_manager
@@ -552,41 +550,66 @@ class RealtimeSession:
             if manager is None:
                 return
 
+            import base64
+
             for entry in manager.list_entries():
                 if entry.is_loaded and hasattr(entry.engine, 'synthesize'):
-                    result = await entry.engine.synthesize(
-                        text, voice=self.session.voice,
-                    )
-                    audio_data = getattr(result, 'audio', None)
-                    if audio_data is None:
-                        audio_data = result.get('audio') if isinstance(result, dict) else None
-                    if audio_data is not None:
-                        import base64
-                        raw_audio = audio_data if isinstance(audio_data, bytes) else bytes(audio_data)
+                    engine = entry.engine
 
-                        # Stream in 20ms chunks
-                        chunk_size = self._AUDIO_CHUNK_BYTES
-                        offset = 0
-                        while offset < len(raw_audio):
-                            chunk = raw_audio[offset:offset + chunk_size]
-                            chunk_b64 = base64.b64encode(chunk).decode()
-                            await self.send_event(_event(
-                                RealtimeEvent.RESPONSE_AUDIO_DELTA,
-                                response_id=response_id,
-                                item_id=item_id,
-                                output_index=0,
-                                content_index=0,
-                                delta=chunk_b64,
-                            ))
-                            offset += chunk_size
+                    # Prefer streaming synthesis for token-level audio
+                    if hasattr(engine, 'synthesize_stream'):
+                        async for chunk in engine.synthesize_stream(
+                            text, voice=self.session.voice,
+                        ):
+                            if chunk.get("is_final"):
+                                continue
+                            audio = chunk.get("audio", b"")
+                            if not audio:
+                                continue
+                            # Stream in 20ms sub-chunks if the audio chunk is large
+                            offset = 0
+                            while offset < len(audio):
+                                sub = audio[offset:offset + self._AUDIO_CHUNK_BYTES]
+                                chunk_b64 = base64.b64encode(sub).decode()
+                                await self.send_event(_event(
+                                    RealtimeEvent.RESPONSE_AUDIO_DELTA,
+                                    response_id=response_id,
+                                    item_id=item_id,
+                                    output_index=0,
+                                    content_index=0,
+                                    delta=chunk_b64,
+                                ))
+                                offset += self._AUDIO_CHUNK_BYTES
+                    else:
+                        result = await engine.synthesize(
+                            text, voice=self.session.voice,
+                        )
+                        audio_data = getattr(result, 'audio', None)
+                        if audio_data is None:
+                            audio_data = result.get('audio') if isinstance(result, dict) else None
+                        if audio_data is not None:
+                            raw_audio = audio_data if isinstance(audio_data, bytes) else bytes(audio_data)
+                            offset = 0
+                            while offset < len(raw_audio):
+                                chunk = raw_audio[offset:offset + self._AUDIO_CHUNK_BYTES]
+                                chunk_b64 = base64.b64encode(chunk).decode()
+                                await self.send_event(_event(
+                                    RealtimeEvent.RESPONSE_AUDIO_DELTA,
+                                    response_id=response_id,
+                                    item_id=item_id,
+                                    output_index=0,
+                                    content_index=0,
+                                    delta=chunk_b64,
+                                ))
+                                offset += self._AUDIO_CHUNK_BYTES
 
-                        await self.send_event(_event(
-                            RealtimeEvent.RESPONSE_AUDIO_DONE,
-                            response_id=response_id,
-                            item_id=item_id,
-                            output_index=0,
-                            content_index=0,
-                        ))
+                    await self.send_event(_event(
+                        RealtimeEvent.RESPONSE_AUDIO_DONE,
+                        response_id=response_id,
+                        item_id=item_id,
+                        output_index=0,
+                        content_index=0,
+                    ))
                     break
         except Exception as e:
             logger.error(f"TTS error in realtime session: {e}")

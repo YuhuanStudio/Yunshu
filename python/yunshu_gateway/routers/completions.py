@@ -50,6 +50,7 @@ class CompletionRequest(BaseModel):
     seed: Optional[int] = None
     spec_decode: bool = False
     enable_thinking: Optional[bool] = None
+    thinking_budget: Optional[int] = None
     response_format: Optional[dict] = None
 
 
@@ -120,6 +121,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             seed=req.seed,
             spec_decode=req.spec_decode,
             enable_thinking=req.enable_thinking,
+            thinking_budget=req.thinking_budget,
             json_schema=json_schema,
         )
         text = result.text
@@ -143,6 +145,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             stop_token_ids=req.stop_token_ids,
             seed=req.seed,
             enable_thinking=req.enable_thinking,
+            thinking_budget=req.thinking_budget,
         )
         text = state.generated_text
         prompt_tokens = state.prompt_token_count
@@ -213,6 +216,7 @@ async def _stream_completion(
                 stop_token_ids=req.stop_token_ids,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
                 json_schema=json_schema,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
@@ -239,6 +243,7 @@ async def _stream_completion(
                 logit_bias=req.logit_bias,
                 stop=req.stop,
                 seed=req.seed,
+                thinking_budget=req.thinking_budget,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count

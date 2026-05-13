@@ -1110,6 +1110,26 @@ class ImageGenEngine:
         if self._transformer is None:
             raise RuntimeError("Engine not started")
 
+        # Memory estimate: latent 16×H/8×W/8×2 bytes + transformer activations
+        est_bytes = width * height * 2 * 16  # conservative estimate
+        try:
+            import mlx.core as mx
+            active = mx.get_active_memory()
+            total_uma = 0
+            import subprocess
+            r = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+            )
+            total_uma = int(r.stdout.strip())
+            if total_uma > 0 and (active + est_bytes) > total_uma * 0.9:
+                raise MemoryError(
+                    f"Insufficient GPU memory for {width}x{height} image "
+                    f"(need ~{est_bytes // 1024 // 1024}MB, "
+                    f"available ~{(total_uma - active) // 1024 // 1024}MB)"
+                )
+        except (OSError, ValueError):
+            pass
+
         t0 = time.monotonic()
 
         def _generate_sync() -> bytes:
@@ -1121,8 +1141,11 @@ class ImageGenEngine:
                 seed=seed if seed is not None else 42,
             )
 
-        loop = asyncio.get_running_loop()
-        png_bytes = await loop.run_in_executor(self._executor, _generate_sync)
+        try:
+            loop = asyncio.get_running_loop()
+            png_bytes = await loop.run_in_executor(self._executor, _generate_sync)
+        except MemoryError as e:
+            raise MemoryError(f"GPU OOM during image generation: {e}") from e
 
         elapsed = time.monotonic() - t0
         logger.info(f"Image gen: {elapsed:.2f}s, {len(png_bytes)} bytes, prompt='{prompt[:50]}...'")

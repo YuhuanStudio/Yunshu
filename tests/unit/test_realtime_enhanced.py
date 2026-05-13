@@ -119,28 +119,36 @@ class TestChunkedAudio:
 
     @pytest.mark.asyncio
     async def test_audio_chunked_streaming(self):
-        """Audio response should be split into 20ms chunks."""
+        """Audio response should be split into 20ms chunks via synthesize_stream."""
         ws = MagicMock()
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        # Create mock TTS result (4800 bytes = 5 chunks of 960)
-        audio_data = bytes(range(240)) * 20  # 4800 bytes
+        # Create mock TTS chunks (4800 bytes in 5 chunks of 960)
+        audio_chunks = [
+            {"audio": bytes(range(240)) * 4, "is_final": False},  # 960 bytes
+            {"audio": bytes(range(240)) * 4, "is_final": False},
+            {"audio": bytes(range(240)) * 4, "is_final": False},
+            {"audio": bytes(range(240)) * 4, "is_final": False},
+            {"audio": bytes(range(240)) * 4, "is_final": False},
+            {"audio": b"", "is_final": True},
+        ]
+
+        async def _mock_stream(*args, **kwargs):
+            for chunk in audio_chunks:
+                yield chunk
 
         mock_manager = MagicMock()
         mock_entry = MagicMock()
         mock_entry.is_loaded = True
-        mock_entry.engine.synthesize = AsyncMock(return_value={"audio": audio_data})
+        mock_entry.engine.synthesize_stream = _mock_stream
         mock_manager.list_entries.return_value = [mock_entry]
 
         with patch.object(yunshu_gateway.engine, "get_model_manager", return_value=mock_manager):
             await session._synthesize_audio_response("test text", "resp_1", "item_1")
 
-        # Should have sent response.audio.delta events + 1 response.audio.done
         calls = ws.send_json.call_args_list
         event_types = [c[0][0]["type"] for c in calls]
-
-        # 4800 bytes / 960 per chunk = 5 chunks + 1 done event
         assert event_types.count(RealtimeEvent.RESPONSE_AUDIO_DELTA) == 5
         assert event_types.count(RealtimeEvent.RESPONSE_AUDIO_DONE) == 1
 
@@ -152,12 +160,19 @@ class TestChunkedAudio:
         session = RealtimeSession(ws)
 
         # 1000 bytes → 1 full chunk (960) + 1 partial chunk (40)
-        audio_data = b"\x00" * 1000
+        audio_chunks = [
+            {"audio": b"\x00" * 1000, "is_final": False},
+            {"audio": b"", "is_final": True},
+        ]
+
+        async def _mock_stream(*args, **kwargs):
+            for chunk in audio_chunks:
+                yield chunk
 
         mock_manager = MagicMock()
         mock_entry = MagicMock()
         mock_entry.is_loaded = True
-        mock_entry.engine.synthesize = AsyncMock(return_value={"audio": audio_data})
+        mock_entry.engine.synthesize_stream = _mock_stream
         mock_manager.list_entries.return_value = [mock_entry]
 
         with patch.object(yunshu_gateway.engine, "get_model_manager", return_value=mock_manager):

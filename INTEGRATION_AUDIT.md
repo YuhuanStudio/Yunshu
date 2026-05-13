@@ -224,6 +224,9 @@
 | THINK | enable_thinking 傳遞完整 — SamplingParams + Request + engine_core.add_request + scheduler | §4.4 | ✅ 已實現 |
 | MCP-PAR | MCP 並行工具執行 — call_tools_parallel() 使用 asyncio.gather | §21.2 | ✅ 已實現 |
 | TTS-NATIVE | TTS 原生串流 — 優先使用 model.stream_generate() (chatterbox_turbo, pocket_tts) | §19.6 | ✅ 已實現 |
+| COMP-TB | Completions router thinking_budget — 參數 + 傳遞到 generate/stream_generate | §3.2 | ✅ 已實現 |
+| IMG-OOM | Image engine OOM 保護 — 生成前內存檢查 + MemoryError 捕獲 | §20.3 | ✅ 已實現 |
+| RT-AUDIO | Realtime token-level audio streaming — synthesize_stream 優先，逐 chunk 發送 | §21.1 | ✅ 已實現 |
 
 > **Wave 9 測試**: 2673 passed, 0 failed。OCR 引擎使用 GLM-OCR-bf16 模型完成實機驗證。
 
