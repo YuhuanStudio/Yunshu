@@ -97,9 +97,20 @@
 
 - `grammar` 參數 — Gateway 接收但 SamplingParams 不支持語法約束生成
 - `n > 1` streaming — 僅支持 n=1
-- BatchGenerator `close()` 未在 Scheduler 路徑調用
-- 無請求級超時
-- OOM 錯誤被報告為 "context_length_exceeded"
+
+### 已修復 (2026-05-13 第二批)
+
+| 編號 | 修復 | 狀態 |
+|------|------|------|
+| OOM-1 | OOM 錯誤返回 `memory_limit` finish_reason (非誤導性的 `context_length_exceeded`) | ✅ 已修復 |
+| OOM-2 | 快速路徑 + 串流路徑捕獲 MLX MemoryError/RuntimeError(oom) | ✅ 已修復 |
+| TMO-1 | 請求級超時: `_generate_fast` 每 32 tokens 檢查超時 (默認 300s) | ✅ 已修復 |
+| TMO-2 | 串流 queue 超時從 300s 降至 120s | ✅ 已修復 |
+| DP-1 | DataParallelRouter 接入 MeshManager (discovery/timeout callbacks) | ✅ 已修復 |
+| BG-CLOSE | BatchGenerator `close()` 在 Scheduler.shutdown() 路徑調用 | ✅ 已修復 |
+| TENANT | tenant.py → deprecated wrapper，tenant_store 成為唯一實現 | ✅ 已修復 |
+| DRAIN | Gateway drain timeout 可配置 (YUNSHU_DRAIN_TIMEOUT env var) | ✅ 已修復 |
+| TEST-1 | 測試套件 565s→23s (24x 加速)，e2e_gateway 540s→0.5s | ✅ 已修復 |
 
 ### 跨項目學習進度
 
@@ -138,7 +149,7 @@
 | 指標 | 數值 |
 |------|------|
 | 引擎模塊總數 | 46 |
-| **完全死亡 (DEAD)** | **7 個** — 零管線調用者 (原 15 個，8 個已接入) |
+| **完全死亡 (DEAD)** | **6 個** — 零管線調用者 (原 15 個，9 個已接入/刪除) |
 | 部分接入 (PARTIAL) | 0 個 (SSD 子路徑已啟用) |
 | 已接入 (WIRED) | 38 個 |
 | Gateway 缺失的引擎參數 | 0 個 (全部已暴露) |
@@ -328,18 +339,20 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | 12 | **記憶體守衛預檢** | batched_engine.py | ✅ 記憶體壓力淘汰已接入 (C12) |
 | 13 | **Legacy Engine 所有功能** | engine.py | Gateway 從不創建 Engine 實例 |
 
-### 4.3 SamplingParams 永遠不會被填充的字段
+### 4.3 SamplingParams / 快速路徑參數狀態
 
-| 字段 | 默認值 | 是否被設置 |
-|------|--------|-----------|
-| `stop_token_ids` | `[]` | ❌ |
-| `logprobs` | `False` | ❌ (在 SamplingParams 中) |
-| `top_logprobs` | `None` | ❌ |
-| `seed` | `None` | ❌ |
-| `priority` | `0` | ❌ |
-| `thinking_budget` | `None` | ❌ |
-| `reasoning_effort` | `None` | ❌ |
-| `grammar` | `None` | ❌ |
+快速路徑 (`_generate_fast`) 直接接收參數，不通過 SamplingParams:
+
+| 字段 | 快速路徑 | 引擎循環 |
+|------|----------|----------|
+| `stop_token_ids` | ❌ | ✅ SamplingParams |
+| `logprobs` | ✅ 直接接收 | ✅ SamplingParams |
+| `top_logprobs` | ✅ 直接接收 | ✅ SamplingParams |
+| `seed` | ✅ 直接接收 | ✅ SamplingParams |
+| `priority` | ❌ | ✅ SamplingParams (僅排序) |
+| `thinking_budget` | ✅ 直接接收 | ✅ SamplingParams |
+| `reasoning_effort` | ❌ | ✅ SamplingParams |
+| `grammar` | ❌ | ❌ 僅 json_schema.py (未接入快速路徑) |
 
 ### 4.4 Request 永遠不會被填充的字段
 
@@ -389,19 +402,19 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | node.py, topology.py | WIRED | 被 manager 使用 |
 | discovery.py | ✅ **WIRED** | `start_discovery()` 在 `YUNSHU_MESH_DISCOVERY=1` 時自動啟動 |
 | heartbeat.py | ✅ **WIRED** | 通過 discovery 整合，在 manager.start() 時啟動 |
-| pipeline.py | PARTIAL | pipeline parallel 實現存在但未被使用 |
-| data_parallel.py | DEAD | DataParallelRouter 零外部調用者 |
+| pipeline.py | **WIRED** ✅ | setup_pipeline 被 mesh API router 調用 |
+| data_parallel.py | ✅ **WIRED** | DataParallelRouter 接入 MeshManager (DP-1) |
 
 ### 5.4 yunshu_kv (L5 KV 層級)
 
-**狀態: PARTIAL** — 14 個文件中只有熱層被連接
+**狀態: WIRED** — 所有 KV 層級模塊均已接入管線
 
 | 模塊 | 狀態 | 說明 |
 |------|------|------|
 | block.py, block_table.py, hash.py | WIRED | 被 KVCacheManager 使用 |
 | manager.py | WIRED | 被 engine_core.py 實例化 |
 | compression.py | WIRED | 量化/解量化 |
-| warm_tier.py | PARTIAL | 創建了但不確定是否真正使用 |
+| warm_tier.py | **WIRED** ✅ | KVCacheManager 創建、demote/promote/contains 完整路徑 |
 | **radix_attention.py** | **WIRED** ✅ | RadixTree 已接入 KVCacheManager (C8) |
 | **tiered.py** | **WIRED** ✅ | TieredKVCacheManager 接入 EngineCore (YUNSHU_SSD_CACHE_DIR) |
 | **serialization.py** | **WIRED** ✅ | save/load_prefix 已被 KVCacheManager 使用 |
@@ -580,8 +593,8 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 - **`except Exception: pass` 已全部替換為 `logger.debug(..., exc_info=True)`** (P2-6, 21 文件)
 - 關鍵位置: context window 驗證 (chat.py)、VLM engine 解析 (chat.py)、模型註冊 (main.py) — 已加日誌
-- OOM 錯誤被報告為 "context_length_exceeded" — 誤導用戶
-- 無請求級超時 — 客戶端可請求無限長生成
+- ✅ OOM 錯誤正確返回 `memory_limit` finish_reason (OOM-1)
+- ✅ 請求級超時: 每 32 tokens 檢查 (默認 300s)，串流 queue 超時 120s (TMO-1/2)
 
 ### 9.4 記憶體洩漏
 
@@ -605,9 +618,9 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 | 聲稱 | 實際 | 嚴重度 |
 |------|------|--------|
-| "Metal kernels: fa3, mla, nsa" | 這些內核不存在 | HIGH |
-| "Metal kernels in metal/" | .metal 文件已廢棄，運行時用 inline JIT | HIGH |
-| BatchGenerator.insert() 簽名 | 遺漏 caches, all_tokens, logits_processors | MEDIUM |
+| ~~"Metal kernels: fa3, mla, nsa"~~ | ✅ 已修正為 paged_attention, sdpa, sgmv, kivi_quant, gemv | ~~HIGH~~ |
+| "Metal kernels in metal/" | .metal 文件已廢棄，運行時用 inline JIT | MEDIUM |
+| BatchGenerator.insert() 簽名 | ✅ 已更新 (P4-4) | ~~MEDIUM~~ |
 | Response 字段列表 | 遺漏 match_sequence | LOW |
 
 ### 10.2 README 不符
@@ -751,9 +764,9 @@ ngram_proposer.py 存在
 |------|--------|---------|
 | 引擎 DEAD 模塊 | 7 | ~4,200 |
 | 引擎管線內死功能 | 5 | ~800 |
-| yunshu_kv DEAD 模塊 | 0 | 0 (全部已接入) |
+| yunshu_kv DEAD 模塊 | 0 | 0 (全部已接入，含 warm_tier) |
 | yunshu_control DEAD 模塊 | 1 (tenant.py 冗餘) | ~200 |
-| yunshu_mesh DEAD 模塊 | 3 | 558 |
+| yunshu_mesh DEAD 模塊 | 1 | 558 |
 | 死測試文件 | 7 | ~1,200 |
 | **合計** | **~23** | **~6,958** |
 

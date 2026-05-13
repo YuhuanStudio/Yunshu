@@ -298,6 +298,7 @@ class BatchedEngine:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
@@ -363,6 +364,7 @@ class BatchedEngine:
                 min_p=min_p,
                 repetition_penalty=repetition_penalty,
                 stop=stop,
+                stop_token_ids=stop_token_ids,
                 seed=seed,
                 enable_thinking=enable_thinking,
                 logprobs=logprobs,
@@ -415,6 +417,7 @@ class BatchedEngine:
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         enable_thinking: bool | None = None,
         logprobs: bool = False,
@@ -463,6 +466,8 @@ class BatchedEngine:
                     stop_ids.add(ids[0])
                 else:
                     stop_suffixes.append(s)
+        if stop_token_ids:
+            stop_ids.update(stop_token_ids)
 
         sampler = make_sampler(
             temp=temperature,
@@ -721,6 +726,7 @@ class BatchedEngine:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         json_schema: dict | str | None = None,
         spec_decode: bool = False,
@@ -768,8 +774,8 @@ class BatchedEngine:
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 logit_bias=logit_bias,
-                stop=stop, seed=seed,
-                enable_thinking=enable_thinking,
+                stop=stop, stop_token_ids=stop_token_ids,
+                seed=seed, enable_thinking=enable_thinking,
             ):
                 yield output
             return
@@ -824,6 +830,7 @@ class BatchedEngine:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         enable_thinking: bool | None = None,
     ) -> AsyncIterator[GenerationOutput]:
@@ -857,6 +864,8 @@ class BatchedEngine:
                     stop_ids.add(ids[0])
                 else:
                     stop_suffixes.append(s)
+        if stop_token_ids:
+            stop_ids.update(stop_token_ids)
 
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
 

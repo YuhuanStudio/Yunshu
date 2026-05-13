@@ -382,6 +382,7 @@ async def _build_multi_choice(
                 json_schema=json_schema,
                 spec_decode=req.spec_decode,
                 thinking_budget=req.thinking_budget,
+                stop_token_ids=req.stop_token_ids,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -402,6 +403,7 @@ async def _build_multi_choice(
                 stop=req.stop,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                stop_token_ids=req.stop_token_ids,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -570,6 +572,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 logprobs=req.logprobs,
                 spec_decode=req.spec_decode,
                 thinking_budget=req.thinking_budget,
+                stop_token_ids=req.stop_token_ids,
             )
             raw_text = result.text
             prompt_tok = result.prompt_tokens
@@ -595,6 +598,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 stop=req.stop,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                stop_token_ids=req.stop_token_ids,
             )
             raw_text = state.generated_text
             prompt_tok = state.prompt_token_count

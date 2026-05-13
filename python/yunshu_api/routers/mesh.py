@@ -78,3 +78,24 @@ async def test_collective(request: Request):
 
     results = manager.collective.run_benchmark()
     return {"status": "ok", "results": results}
+
+
+@router.get("/dp/stats")
+async def dp_routing_stats(request: Request):
+    """Get data-parallel routing statistics."""
+    manager = _get_mesh_manager(request)
+    if manager.dp_router is None:
+        return {"status": "disabled", "message": "No data-parallel router configured"}
+    return manager.dp_router.get_stats()
+
+
+@router.post("/dp/select")
+async def dp_select_node(request: Request):
+    """Select the best node for the next request."""
+    manager = _get_mesh_manager(request)
+    if manager.dp_router is None:
+        raise HTTPException(status_code=400, detail="Data-parallel routing not configured")
+    node_id = manager.dp_router.select_node()
+    if node_id is None:
+        raise HTTPException(status_code=503, detail="No available nodes")
+    return {"node_id": node_id}
