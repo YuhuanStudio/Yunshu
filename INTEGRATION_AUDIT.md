@@ -271,8 +271,10 @@
 | WEB-MCP | WebUI MCP Client 頁面 — Servers/Tools/Execute 三標籤 | §8.4 | ✅ 已實現 |
 | WEB-BATCH | WebUI Batch Inference 頁面 — Submit/Results + CSV 導出 | §8.4 | ✅ 已實現 |
 | WEB-TOOL | WebUI Chat Tool Calling — 工具 JSON 輸入 + tool_calls 串流捕獲 | §8.4 | ✅ 已實現 |
+| RADIX-SPLIT | RadixTree insert() 節點分裂修復 — 正確處理重疊前綴 | SGLang §14.2 | ✅ 已修復 (關鍵 bug) |
+| C13 | SSD KV cache SQLite 元數據 — WAL 模式崩潰一致性 | vllm-mlx | ✅ 已實現 |
 
-> **Wave 14 測試**: 2762 passed, 13 skipped。
+> **Wave 14 測試**: 2807 passed, 13 skipped。
 
 ### 跨項目學習進度
 
@@ -291,7 +293,7 @@
 | C10 | 批量猜測驗證 | ✅ 已完成 |
 | C11 | 啟用 paged KV 默認 | ✅ 已完成 |
 | C12 | 記憶體壓力淘汰 | ✅ 已完成 |
-| C13 | SQLite SSD 元數據 | ✅ 已完成 |
+| C13 | SQLite SSD 元數據 | ✅ 已完成 (WAL 模式 + 崩潰恢復) |
 | C14 | request retraction | ✅ 已完成 |
 | C15 | 7 格式 Tool Call Parsers | ✅ 已完成 |
 | C16 | insert_segments() 批處理路徑 | ✅ 已完成 |
@@ -1196,8 +1198,8 @@ vllm-mlx 是與 Yunshu 解決**完全相同問題**的項目: 在 Apple Silicon 
 
 | 方面 | vllm-mlx | Yunshu |
 |------|----------|--------|
-| SSD cache 元數據 | **SQLite** (原子操作, 崩潰一致) | JSON 索引文件 |
-| 記憶體感知淘汰 | psutil 實時記憶體壓力淘汰 | 靜態 kv_cache_ratio |
+| SSD cache 元數據 | **SQLite** (原子操作, 崩潰一致) | ✅ SSDSQLiteStore WAL 模式 (C13) |
+| 記憶體感知淘汰 | psutil 實時記憶體壓力淘汰 | ✅ 動態記憶體壓力淘汰 (C12) |
 | Tool call parsers | **15+ 解析器** (OpenAI, Anthropic, Gemini, Qwen, DeepSeek...) | ✅ 9 格式 Tool Call Parser Factory (TCPARSER) |
 | Reasoning parsers | **多個** (Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony) | ✅ Reasoning Parser Factory 5 家族 (RPARSER) |
 | MoE top-k | 減少激活專家, +7-16% Qwen3-30B | ✅ moe_optimization.py (MOE) |
