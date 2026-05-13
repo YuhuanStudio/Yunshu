@@ -498,7 +498,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
 
     # Route to VLM/Omni engine if images or audio are present
     if has_images or has_audio:
-        return await _handle_vlm_chat(req, messages, request)
+        json_schema = _parse_response_format(req.response_format, req.grammar)
+        return await _handle_vlm_chat(req, messages, request, json_schema=json_schema)
 
     # Check if the target model is a VLM/Omni (route through VLM handler)
     from yunshu_engine.vlm_engine import VLMEngine
@@ -506,7 +507,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     if manager is not None:
         entry = manager.get_entry(req.model)
         if entry is not None and entry.model_type.name == "VLM":
-            return await _handle_vlm_chat(req, messages, request)
+            json_schema = _parse_response_format(req.response_format, req.grammar)
+            return await _handle_vlm_chat(req, messages, request, json_schema=json_schema)
 
     # Standard LLM chat
     engine = get_engine()
@@ -688,6 +690,7 @@ async def _handle_vlm_chat(
     req: ChatCompletionRequest,
     messages: list[dict],
     request: Request,
+    json_schema: dict | str | None = None,
 ) -> StreamingResponse | JSONResponse:
     """Handle chat completion via VLM engine (streaming + non-streaming)."""
     from yunshu_engine.vlm_engine import VLMEngine
@@ -744,7 +747,7 @@ async def _handle_vlm_chat(
 
     if req.stream:
         return StreamingResponse(
-            _stream_vlm_response(vlm_engine, messages, req, completion_id, request),
+            _stream_vlm_response(vlm_engine, messages, req, completion_id, request, json_schema=json_schema),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -752,7 +755,7 @@ async def _handle_vlm_chat(
             },
         )
 
-    result = await vlm_engine.generate(
+    gen_kwargs: dict[str, Any] = dict(
         messages=messages,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
@@ -766,6 +769,9 @@ async def _handle_vlm_chat(
         presence_penalty=req.presence_penalty,
         logit_bias=req.logit_bias,
     )
+    if json_schema:
+        gen_kwargs["json_schema"] = json_schema
+    result = await vlm_engine.generate(**gen_kwargs)
 
     content = result.get("text", "")
     tok = getattr(vlm_engine, '_tokenizer', None)
@@ -821,12 +827,13 @@ async def _stream_vlm_response(
     req: ChatCompletionRequest,
     completion_id: str,
     request: Request,
+    json_schema: dict | str | None = None,
 ) -> AsyncIterator[bytes]:
     """SSE streaming for VLM engine (oMLX with_sse_keepalive pattern)."""
 
     async def _token_source():
         first_chunk = True
-        async for output in vlm_engine.generate_stream(
+        stream_kwargs: dict[str, Any] = dict(
             messages=messages,
             max_tokens=req.max_tokens,
             temperature=req.temperature,
@@ -839,7 +846,10 @@ async def _stream_vlm_response(
             frequency_penalty=req.frequency_penalty,
             presence_penalty=req.presence_penalty,
             logit_bias=req.logit_bias,
-        ):
+        )
+        if json_schema:
+            stream_kwargs["json_schema"] = json_schema
+        async for output in vlm_engine.generate_stream(**stream_kwargs):
             yield format_openai_chunk(
                 completion_id=completion_id,
                 model=req.model,

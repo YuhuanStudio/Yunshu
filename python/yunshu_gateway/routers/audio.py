@@ -29,6 +29,53 @@ MAX_AUDIO_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 AVAILABLE_VOICES = ["alloy", "chelsie", "ethan", "aiden"]
 
 
+def _split_text_segments(text: str, max_chars: int = 300) -> list[str]:
+    """Split text into segments at sentence/phrase boundaries.
+
+    Prefers splitting at sentence-ending punctuation (.!?) or commas.
+    Falls back to word boundaries, then to hard split.
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    segments = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chars:
+            segments.append(remaining)
+            break
+
+        # Look for sentence boundary within max_chars
+        split_pos = -1
+        for i in range(min(len(remaining), max_chars), max_chars // 2, -1):
+            if i < len(remaining) and remaining[i - 1] in '.!?。！？':
+                split_pos = i
+                break
+
+        # Fall back to comma or semicolon
+        if split_pos == -1:
+            for i in range(min(len(remaining), max_chars), max_chars // 2, -1):
+                if i < len(remaining) and remaining[i - 1] in ',;，、':
+                    split_pos = i
+                    break
+
+        # Fall back to word/space boundary
+        if split_pos == -1:
+            for i in range(min(len(remaining), max_chars), max_chars // 2, -1):
+                if i < len(remaining) and remaining[i - 1] in ' \t\n':
+                    split_pos = i
+                    break
+
+        # Hard split as last resort
+        if split_pos == -1:
+            split_pos = max_chars
+
+        segments.append(remaining[:split_pos])
+        remaining = remaining[split_pos:].lstrip()
+
+    return segments
+
+
 # ── TTS (Text-to-Speech) ──
 
 
@@ -172,18 +219,27 @@ async def stream_speech(req: TTSRequest, request: Request):
             stream_instruct = voice_defaults.get(req.voice.lower(),
                 f"A clear {req.voice} voice with natural intonation")
 
-        async for chunk in tts_engine.synthesize_stream(
-            text=req.input,
-            voice=req.voice,
-            speed=req.speed,
-            temperature=req.temperature,
-            instruct=stream_instruct,
-        ):
-            if chunk.get("is_final"):
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                break
-            pcm_b64 = base64.b64encode(chunk["audio"]).decode("ascii")
-            yield f"data: {json.dumps({'type': 'audio', 'audio': pcm_b64, 'text': chunk.get('text', '')})}\n\n"
+        # Split long text into segments for progressive synthesis (oMLX pattern)
+        text = req.input
+        if len(text) > req.segment_size:
+            segments = _split_text_segments(text, req.segment_size)
+        else:
+            segments = [text]
+
+        for seg_idx, segment in enumerate(segments):
+            async for chunk in tts_engine.synthesize_stream(
+                text=segment,
+                voice=req.voice,
+                speed=req.speed,
+                temperature=req.temperature,
+                instruct=stream_instruct,
+            ):
+                if chunk.get("is_final"):
+                    if seg_idx == len(segments) - 1:
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                    continue
+                pcm_b64 = base64.b64encode(chunk["audio"]).decode("ascii")
+                yield f"data: {json.dumps({'type': 'audio', 'audio': pcm_b64, 'text': chunk.get('text', ''), 'segment': seg_idx})}\n\n"
 
     return StreamingResponse(
         _audio_stream(),
