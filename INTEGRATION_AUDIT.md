@@ -239,6 +239,8 @@
 | RT-CLEAR | input_audio_buffer.clear — 丟棄音頻緩衝區 + 重置 VAD 狀態 | OpenAI Realtime | ✅ 已實現 |
 | RT-G711 | G.711 μ-law/A-law 解碼 — 輸入音頻自動轉換為 PCM16 | §21.1 (RT-AF) | ✅ 已實現 |
 | VLM-MIMG | VLM 多圖片驗證 — SINGLE_IMAGE_ONLY_MODELS 自動截斷超過一張圖片的輸入 | oMLX §18.6 | ✅ 已實現 |
+| EC-AUTO | EngineCore 自動啟動 — 不再延遲載入，start() 時即初始化連續批處理管線 | §4.2 | ✅ 已實現 |
+| SCH-ITL | Scheduler ITL 追蹤 — _process_responses 逐 token 記錄延遲，ServerMetrics 直方圖 | §14.3 (C2/ITL-1) | ✅ 已實現 |
 
 > **Wave 12 測試**: 2653 passed, 13 skipped。
 
@@ -454,7 +456,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | # | 功能 | 所在模塊 | 為何不觸發 |
 |---|------|----------|-----------|
 | 1 | **猜測解碼 (EAGLE-3)** | batched_engine.py | `_spec_decoder` 永遠是 `None` — 沒有加載 draft model |
-| 2 | **連續批處理管線** | engine_core.py | `use_engine_loop` 默認 `False`，沒有任何 router 設為 `True` |
+| 2 | **連續批處理管線** | engine_core.py | ⚠️ EngineCore 已自動啟動 (EC-AUTO)，但 Gateway 仍默認 `use_engine_loop=False` |
 | 3 | **PagedAttention** | paged_scheduler.py | ✅ `enable_paged_kv` 默認 `True` (C11) |
 | 4 | **請求搶佔/收縮** | scheduler.py | ✅ request retraction 已接入 (C14) |
 | 5 | **混合分塊預填充** | scheduler.py | `enable_hybrid_prefill` 默認 `False` |
@@ -1089,7 +1091,7 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 | `maybe_quantize_kv_cache()` 每步 | ✅ 漸進式量化 | ✅ (C6) 每 256 tokens |
 | `make_logits_processors()` | ✅ 正確的重複/頻率懲罰 | ✅ (C1) |
 | `save_prompt_cache()` / `load_prompt_cache()` | ✅ KV 序列化 | ✅ 有自己的序列化 |
-| `prompt_progress_callback` | ✅ 預填充進度回調 | ❌ |
+| `prompt_progress_callback` | ✅ 預填充進度回調 | ⚠️ 已接入 Scheduler 但僅在 engine loop 路徑觸發 |
 | XTC 採樣 | ✅ Exclude Top Tokens | ✅ (XTC) |
 | LoRA 合併 | ✅ 適配器支持 | ✅ (LORA) |
 
