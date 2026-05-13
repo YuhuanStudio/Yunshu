@@ -22,11 +22,12 @@ import copy
 import gc
 import logging
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
 
+from .priority_queue import RequestPriorityQueue, make_waiting_queue
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentConfig
 
@@ -131,7 +132,7 @@ class Scheduler:
         self.model_id: str = config.model_name if config else ""
 
         # Request queues (vLLM pattern)
-        self.waiting: deque[Request] = deque()
+        self.waiting: RequestPriorityQueue[Request] = make_waiting_queue(self.config.policy)
         self.running: dict[str, Request] = {}
         self.requests: dict[str, Request] = {}
         self.finished_ids: set[str] = set()
@@ -268,7 +269,7 @@ class Scheduler:
         self.requests[request.request_id] = request
         import time as _time
         request._submit_time = _time.monotonic()
-        self.waiting.append(request)
+        self.waiting.push(request, priority=request.sampling_params.priority)
 
     def abort_request(self, request_id: str) -> bool:
         """Thread-safe abort (deferred to next step, oMLX pattern)."""
@@ -379,7 +380,7 @@ class Scheduler:
         timeout = self.config.request_timeout_seconds
         to_insert = []
         while self.waiting:
-            req = self.waiting.popleft()
+            req = self.waiting.pop()
             if req.request_id in self._pending_abort_ids:
                 self._pending_abort_ids.discard(req.request_id)
                 continue
@@ -391,12 +392,7 @@ class Scheduler:
                 continue
             to_insert.append(req)
 
-        # Sort by priority if using PRIORITY policy (oMLX pattern)
-        if self.config.policy == SchedulingPolicy.PRIORITY:
-            to_insert.sort(
-                key=lambda r: getattr(r.sampling_params, 'priority', 0),
-                reverse=True,
-            )
+        # No need to sort — the heap maintains order (FCFS or PRIORITY)
 
         # Respect max_num_seqs limit — with preemption under PRIORITY policy
         active_count = len(self.running)
@@ -438,7 +434,7 @@ class Scheduler:
             to_insert = to_insert[:available_slots]
             # Put overflow back at front of waiting queue
             for req in reversed(overflow):
-                self.waiting.appendleft(req)
+                self.waiting.push_front(req, priority=req.sampling_params.priority)
 
         # Generation memory guard: defer scheduling under memory pressure
         if self.config.memory_guard_enabled and active_count > 0 and to_insert:
@@ -455,7 +451,7 @@ class Scheduler:
                         f"({active_mem / 1024**3:.1f}GB active > {soft_limit / 1024**3:.1f}GB soft limit)"
                     )
                     for req in reversed(to_insert):
-                        self.waiting.appendleft(req)
+                        self.waiting.push_front(req, priority=req.sampling_params.priority)
                     to_insert = []
             except Exception:
                 pass  # Memory guard is best-effort
@@ -743,7 +739,7 @@ class Scheduler:
         request.batch_uid = None
         request.num_preemptions += 1
 
-        self.waiting.appendleft(request)
+        self.waiting.push_front(request, priority=request.sampling_params.priority)
 
         logger.info(
             f"Preempted request {request.request_id} "

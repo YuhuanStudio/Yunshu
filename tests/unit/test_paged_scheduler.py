@@ -185,7 +185,7 @@ class TestPagedSchedulerRequests:
         scheduler.add_request(req)
 
         # Move to running (simulates _schedule_waiting)
-        scheduler.waiting.popleft()
+        scheduler.waiting.pop()
         scheduler.running["test-1"] = req
         req.status = RequestStatus.RUNNING
 

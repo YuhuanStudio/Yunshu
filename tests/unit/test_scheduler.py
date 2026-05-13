@@ -208,7 +208,7 @@ class TestQueueDepthLimit:
         scheduler = Scheduler.__new__(Scheduler)
         scheduler.config = config
         scheduler.requests = {}
-        scheduler.waiting = type('deque', (), {'append': lambda s, x: None, '__len__': lambda s: 2})()
+        scheduler.waiting = type('FakeQueue', (), {'push': lambda s, x, **kw: None, '__len__': lambda s: 2})()
         scheduler.running = {}
         scheduler._pending_abort_ids = set()
 
