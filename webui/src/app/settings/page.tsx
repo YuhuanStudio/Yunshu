@@ -95,20 +95,22 @@ export default function SettingsPage() {
     {
       label: "OpenAI SDK",
       lang: "python",
-      code: `from openai import OpenAI\nclient = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
+      code: `from openai import OpenAI\nclient = OpenAI(base_url="${baseUrl}/v1", api_key="unused")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
     },
     {
       label: "Yunshu SDK",
       lang: "python",
-      code: `from yunshu_sdk import YunshuClient\nclient = YunshuClient("http://localhost:8000")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
+      code: `from yunshu_sdk import YunshuClient\nclient = YunshuClient("${baseUrl}")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
     },
   ];
 
+  const baseUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:8000";
+
   const endpoints = [
-    { label: "Gateway", url: "http://localhost:8000" },
-    { label: "OpenAI API", url: "http://localhost:8000/v1" },
-    { label: "Health", url: "http://localhost:8000/health" },
-    { label: "Admin API", url: "http://localhost:8000/api/v1" },
+    { label: "Gateway", url: baseUrl },
+    { label: "OpenAI API", url: `${baseUrl}/v1` },
+    { label: "Health", url: `${baseUrl}/health` },
+    { label: "Admin API", url: `${baseUrl}/api/v1` },
   ];
 
   return (

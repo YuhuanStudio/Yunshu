@@ -21,7 +21,10 @@ interface WsMessage {
 }
 
 export default function RealtimePage() {
-  const [url, setUrl] = useState("ws://localhost:8000/realtime");
+  const defaultWsUrl = typeof window !== "undefined"
+    ? `ws://${window.location.host}/realtime`
+    : "ws://localhost:8000/realtime";
+  const [url, setUrl] = useState(defaultWsUrl);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [messages, setMessages] = useState<WsMessage[]>([]);
