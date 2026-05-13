@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **2636 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **2653 passed, 13 skipped**。
 
 ### 已完成修復 (2026-05-12)
 
@@ -229,6 +229,18 @@
 | RT-AUDIO | Realtime token-level audio streaming — synthesize_stream 優先，逐 chunk 發送 | §21.1 | ✅ 已實現 |
 
 > **Wave 9 測試**: 2636 passed, 13 skipped。OCR 引擎使用 GLM-OCR-bf16 模型完成實機驗證。
+
+### 新增功能 (2026-05-13 Wave 12)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| RT-VAD-AUTO | VAD 自動觸發 response — speech_stopped 後自動 commit + create response (OpenAI 行為) | §21.1 | ✅ 已實現 |
+| RT-TRUNC | Audio truncation — response.cancel 發送 RESPONSE_AUDIO_DONE 截斷播放 | §21.1 | ✅ 已實現 |
+| RT-CLEAR | input_audio_buffer.clear — 丟棄音頻緩衝區 + 重置 VAD 狀態 | OpenAI Realtime | ✅ 已實現 |
+| RT-G711 | G.711 μ-law/A-law 解碼 — 輸入音頻自動轉換為 PCM16 | §21.1 (RT-AF) | ✅ 已實現 |
+| VLM-MIMG | VLM 多圖片驗證 — SINGLE_IMAGE_ONLY_MODELS 自動截斷超過一張圖片的輸入 | oMLX §18.6 | ✅ 已實現 |
+
+> **Wave 12 測試**: 2653 passed, 13 skipped。
 
 ### 跨項目學習進度
 
@@ -1272,7 +1284,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 視覺特徵緩存 | ✅ VisionFeatureSSDCache | ✅ 已接入 (M6) |
 | mRoPE 整合 | ✅ 完整 | ✅ 已接入 (M7) |
 | OCR 模型 | ✅ deepseekocr, dots_ocr, glm_ocr | ✅ GLM-OCR-bf16 實測 (Wave 9) |
-| 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ❌ |
+| 多圖驗證 | ✅ SINGLE_IMAGE_ONLY_MODELS | ✅ (Wave 12) — 自動截斷多圖輸入 |
 | 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ❌ |
 | SpecPrefill (VLM) | ✅ draft model | ❌ |
@@ -1382,9 +1394,9 @@ Realtime API 實現了 WebSocket 基本框架 (session, conversation, 7 客戶�
 |------|----------------|--------|
 | Function calling | ✅ 完整 | ✅ 工具調用偵測 + function_call 事件 (RT-FC) |
 | 音頻流式合成 (token 級) | ✅ 逐 token | ✅ (Wave 11) — synthesize_stream 逐 chunk 發送 |
-| VAD 自動觸發 response | ✅ | ❌ 客戶端需手動 commit |
+| VAD 自動觸發 response | ✅ | ✅ (Wave 12) — speech_stopped 後自動 commit + create response |
 | Neural VAD | ✅ Silero | ✅ EnergyVAD + WebRTCVAD (VAD) |
-| 中斷音頻截斷 | ✅ | ❌ 只取消生成，不截斷 |
+| 中斷音頻截斷 | ✅ | ✅ (Wave 12) — response.cancel 發送 RESPONSE_AUDIO_DONE |
 | response.create with instructions | ✅ | ✅ instructions 支持已實現 (RT-INS) |
 | 音頻格式協商 | ✅ | ✅ pcm16/g711_ulaw/g711_alaw 驗證 (RT-AF) |
 

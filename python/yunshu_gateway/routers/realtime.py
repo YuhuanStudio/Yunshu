@@ -47,6 +47,8 @@ class RealtimeEvent:
     INPUT_AUDIO_BUFFER_COMMITTED = "input_audio_buffer.committed"
     INPUT_AUDIO_BUFFER_SPEECH_STARTED = "input_audio_buffer.speech_started"
     INPUT_AUDIO_BUFFER_SPEECH_STOPPED = "input_audio_buffer.speech_stopped"
+    RESPONSE_AUDIO_TRANSCRIPT_DONE = "response.audio_transcript.done"
+    CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED = "conversation.item.input_audio_transcription.completed"
     ERROR = "error"
 
 
@@ -164,6 +166,70 @@ class RealtimeSession:
 
     # Audio chunk duration for streaming: 20ms at 24kHz, 16-bit mono = 960 bytes
     _AUDIO_CHUNK_BYTES = 960
+
+    # G.711 μ-law decoding table (8-bit → 16-bit linear PCM)
+    _ULAW_TABLE: list[int] | None = None
+    # G.711 A-law decoding table (8-bit → 16-bit linear PCM)
+    _ALAW_TABLE: list[int] | None = None
+
+    @classmethod
+    def _get_ulaw_table(cls) -> list[int]:
+        if cls._ULAW_TABLE is None:
+            cls._ULAW_TABLE = cls._build_ulaw_table()
+        return cls._ULAW_TABLE
+
+    @classmethod
+    def _get_alaw_table(cls) -> list[int]:
+        if cls._ALAW_TABLE is None:
+            cls._ALAW_TABLE = cls._build_alaw_table()
+        return cls._ALAW_TABLE
+
+    @staticmethod
+    def _build_ulaw_table() -> list[int]:
+        """Build μ-law to linear PCM decoding table (ITU-T G.711)."""
+        table = [0] * 256
+        for i in range(256):
+            # Invert all bits (μ-law is transmitted complemented)
+            val = ~i & 0xFF
+            sign = (val & 0x80) >> 7
+            exponent = (val >> 4) & 0x07
+            mantissa = val & 0x0F
+            linear = (mantissa << 3 | 0x84) << exponent
+            linear -= 0x84
+            if sign == 0:
+                linear = -linear
+            table[i] = max(-32768, min(32767, linear))
+        return table
+
+    @staticmethod
+    def _build_alaw_table() -> list[int]:
+        """Build A-law to linear PCM decoding table (ITU-T G.711)."""
+        table = [0] * 256
+        for i in range(256):
+            val = i ^ 0x55  # A-law is XOR'd with 0x55
+            sign = (val & 0x80) >> 7
+            exponent = (val >> 4) & 0x07
+            mantissa = val & 0x0F
+            if exponent == 0:
+                linear = (mantissa << 4) + 8
+            else:
+                linear = (mantissa << 4 | 0x100) << (exponent - 1)
+            if sign == 0:
+                linear = -linear
+            table[i] = max(-32768, min(32767, linear))
+        return table
+
+    def _decode_g711_ulaw(self, data: bytes) -> bytes:
+        """Decode G.711 μ-law audio to 16-bit PCM."""
+        import struct
+        table = self._get_ulaw_table()
+        return struct.pack(f"<{len(data)}h", *[table[b] for b in data])
+
+    def _decode_g711_alaw(self, data: bytes) -> bytes:
+        """Decode G.711 A-law audio to 16-bit PCM."""
+        import struct
+        table = self._get_alaw_table()
+        return struct.pack(f"<{len(data)}h", *[table[b] for b in data])
 
     def __init__(self, ws: WebSocket):
         self.ws = ws
@@ -346,6 +412,8 @@ class RealtimeSession:
         self._active_response = asyncio.create_task(
             self._generate_response(response_id, item_id, modalities, response_config)
         )
+        self._active_response._response_id = response_id
+        self._active_response._item_id = item_id
 
     async def _generate_response(
         self,
@@ -532,9 +600,21 @@ class RealtimeSession:
             self._active_response = None
 
     async def _handle_response_cancel(self, event: dict) -> None:
-        """Handle response.cancel — abort current generation."""
+        """Handle response.cancel — abort current generation with audio truncation.
+
+        Cancels the active response task. If audio was being streamed,
+        sends response.audio.done to signal the client to truncate playback.
+        """
         if self._active_response and not self._active_response.done():
             self._active_response.cancel()
+            # Signal audio truncation so client stops playback immediately
+            await self.send_event(_event(
+                RealtimeEvent.RESPONSE_AUDIO_DONE,
+                response_id=getattr(self._active_response, '_response_id', ''),
+                item_id=getattr(self._active_response, '_item_id', ''),
+                output_index=0,
+                content_index=0,
+            ))
 
     async def _synthesize_audio_response(
         self, text: str, response_id: str, item_id: str,
@@ -618,6 +698,7 @@ class RealtimeSession:
         """Handle input_audio_buffer.append — receive audio chunk.
 
         Accumulates base64-encoded audio data in the session's audio buffer.
+        If the negotiated format is g711_ulaw or g711_alaw, decodes to PCM16 first.
         If server-side VAD is enabled, runs energy-based VAD on each chunk
         to detect speech start/stop events.
         """
@@ -626,6 +707,14 @@ class RealtimeSession:
             return
         import base64
         chunk = base64.b64decode(audio_b64)
+
+        # Decode g711 to PCM16 if needed (VAD and ASR expect PCM)
+        fmt = self.session.input_audio_format
+        if fmt == "g711_ulaw":
+            chunk = self._decode_g711_ulaw(chunk)
+        elif fmt == "g711_alaw":
+            chunk = self._decode_g711_alaw(chunk)
+
         self._audio_buffer.extend(chunk)
 
         # Server-side VAD: energy-based detection
@@ -685,6 +774,8 @@ class RealtimeSession:
                         RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STOPPED,
                         audio_end_ms=len(self._audio_buffer) // 48,
                     ))
+                    # Auto-commit and trigger response (OpenAI behavior with server_vad)
+                    await self._auto_commit_and_respond()
             else:
                 self._vad_silence_start = None
 
@@ -747,6 +838,24 @@ class RealtimeSession:
 
         self._audio_buffer = bytearray()
 
+    async def _handle_input_audio_buffer_clear(self, event: dict) -> None:
+        """Handle input_audio_buffer.clear — discard audio buffer without processing."""
+        self._audio_buffer = bytearray()
+        self._vad_speaking = False
+        self._vad_silence_start = None
+
+    async def _auto_commit_and_respond(self) -> None:
+        """Auto-commit audio buffer and trigger response (server_vad mode).
+
+        Called when VAD detects speech has ended. Commits the accumulated audio
+        buffer (transcribes via ASR), then creates a response automatically.
+        Matches OpenAI Realtime API behavior when turn_detection type is server_vad.
+        """
+        await self._handle_input_audio_buffer_commit({"type": "input_audio_buffer.commit"})
+        # Only create response if no active response is running
+        if self._active_response is None or self._active_response.done():
+            await self._handle_response_create({"type": "response.create", "response": {}})
+
     def _build_messages(self) -> list[dict]:
         """Build messages list from conversation items."""
         messages = []
@@ -799,6 +908,7 @@ _EVENT_HANDLERS = {
     "response.cancel": RealtimeSession._handle_response_cancel,
     "input_audio_buffer.append": RealtimeSession._handle_input_audio_buffer_append,
     "input_audio_buffer.commit": RealtimeSession._handle_input_audio_buffer_commit,
+    "input_audio_buffer.clear": RealtimeSession._handle_input_audio_buffer_clear,
 }
 
 

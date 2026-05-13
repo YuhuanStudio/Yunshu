@@ -469,3 +469,270 @@ class TestInputAudioBufferWithVAD:
         # Buffer should accumulate but no VAD events
         assert len(session._audio_buffer) > 0
         ws.send_json.assert_not_called()
+
+
+class TestVADAutoTrigger:
+    """Test VAD auto-trigger: speech_stopped → commit + response.create."""
+
+    @pytest.mark.asyncio
+    async def test_speech_stopped_auto_commits(self):
+        """After speech_stopped, _auto_commit_and_respond should be called."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+        session.session.turn_detection = {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "silence_duration_ms": 0,
+        }
+        session._auto_commit_and_respond = AsyncMock()
+
+        speech_chunk = struct.pack("<480h", *([20000] * 480))
+        await session._run_vad(speech_chunk)
+        assert session._vad_speaking is True
+
+        silence_chunk = struct.pack("<480h", *([0] * 480))
+        await session._run_vad(silence_chunk)
+        # First silence chunk starts tracking
+        assert session._vad_speaking is True
+
+        await session._run_vad(silence_chunk)
+        # Second silence chunk triggers stop with silence_duration_ms=0
+        assert session._vad_speaking is False
+        session._auto_commit_and_respond.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_commit_calls_commit_and_create(self):
+        """_auto_commit_and_respond should commit audio and create response."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+
+        # Mock the handlers
+        session._handle_input_audio_buffer_commit = AsyncMock()
+        session._handle_response_create = AsyncMock()
+
+        await session._auto_commit_and_respond()
+
+        session._handle_input_audio_buffer_commit.assert_called_once()
+        session._handle_response_create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_commit_skips_if_response_active(self):
+        """Should not create response if one is already running."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+
+        session._handle_input_audio_buffer_commit = AsyncMock()
+        session._handle_response_create = AsyncMock()
+
+        # Simulate active response
+        active_task = asyncio.create_task(asyncio.sleep(10))
+        session._active_response = active_task
+
+        await session._auto_commit_and_respond()
+
+        session._handle_input_audio_buffer_commit.assert_called_once()
+        session._handle_response_create.assert_not_called()
+
+        active_task.cancel()
+
+
+class TestResponseCancelTruncation:
+    """Test response.cancel sends audio truncation event."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_sends_audio_done(self):
+        """response.cancel should send RESPONSE_AUDIO_DONE for truncation."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+
+        # Create a cancellable task
+        async def _slow():
+            await asyncio.sleep(100)
+        task = asyncio.create_task(_slow())
+        task._response_id = "resp_test123"
+        task._item_id = "item_test456"
+        session._active_response = task
+
+        await session._handle_response_cancel({"type": "response.cancel"})
+
+        # Should have sent audio done event
+        calls = ws.send_json.call_args_list
+        event_types = [c[0][0]["type"] for c in calls]
+        assert "response.audio.done" in event_types
+
+        task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_cancel_no_event_without_active_response(self):
+        """response.cancel should do nothing if no active response."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+
+        await session._handle_response_cancel({"type": "response.cancel"})
+
+        ws.send_json.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_attrs_propagated(self):
+        """Task should have _response_id and _item_id attributes."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+
+        # Simulate _handle_response_create setting up the task
+        await session._handle_response_create({
+            "type": "response.create",
+            "response": {"modalities": ["text"]},
+        })
+
+        assert session._active_response is not None
+        assert hasattr(session._active_response, '_response_id')
+        assert hasattr(session._active_response, '_item_id')
+        assert session._active_response._response_id.startswith("resp_")
+        assert session._active_response._item_id.startswith("item_")
+
+        # Cancel to clean up
+        session._active_response.cancel()
+
+
+class TestInputAudioBufferClear:
+    """Test input_audio_buffer.clear event."""
+
+    @pytest.mark.asyncio
+    async def test_clear_empties_buffer(self):
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+        session._audio_buffer = bytearray(b"\x00" * 100)
+
+        await session._handle_input_audio_buffer_clear({"type": "input_audio_buffer.clear"})
+
+        assert len(session._audio_buffer) == 0
+
+    @pytest.mark.asyncio
+    async def test_clear_resets_vad_state(self):
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+        session._vad_speaking = True
+        session._vad_silence_start = 123.456
+        session._audio_buffer = bytearray(b"\x00" * 100)
+
+        await session._handle_input_audio_buffer_clear({"type": "input_audio_buffer.clear"})
+
+        assert session._vad_speaking is False
+        assert session._vad_silence_start is None
+        assert len(session._audio_buffer) == 0
+
+
+class TestG711Decode:
+    """Test G.711 μ-law and A-law decoding."""
+
+    def test_ulaw_decode_silence(self):
+        """μ-law value 0xFF (silence) should decode to ~0."""
+        ws = MagicMock()
+        session = RealtimeSession(ws)
+        result = session._decode_g711_ulaw(bytes([0xFF, 0xFF]))
+        import struct
+        samples = struct.unpack("<2h", result)
+        # μ-law silence byte decodes to near-zero
+        assert abs(samples[0]) < 100
+        assert abs(samples[1]) < 100
+
+    def test_alaw_decode_silence(self):
+        """A-law value 0xD5 (silence) should decode to ~0."""
+        ws = MagicMock()
+        session = RealtimeSession(ws)
+        result = session._decode_g711_alaw(bytes([0xD5, 0xD5]))
+        import struct
+        samples = struct.unpack("<2h", result)
+        assert abs(samples[0]) < 100
+        assert abs(samples[1]) < 100
+
+    def test_ulaw_decode_produces_pcm16(self):
+        """μ-law decode should produce 2 bytes per input byte (16-bit PCM)."""
+        ws = MagicMock()
+        session = RealtimeSession(ws)
+        result = session._decode_g711_ulaw(bytes(range(256)))
+        assert len(result) == 512  # 256 * 2
+
+    def test_alaw_decode_produces_pcm16(self):
+        """A-law decode should produce 2 bytes per input byte (16-bit PCM)."""
+        ws = MagicMock()
+        session = RealtimeSession(ws)
+        result = session._decode_g711_alaw(bytes(range(256)))
+        assert len(result) == 512
+
+    def test_ulaw_table_cached(self):
+        """Table should be built once and cached on the class."""
+        t1 = RealtimeSession._get_ulaw_table()
+        t2 = RealtimeSession._get_ulaw_table()
+        assert t1 is t2
+
+    def test_alaw_table_cached(self):
+        """Table should be built once and cached on the class."""
+        t1 = RealtimeSession._get_alaw_table()
+        t2 = RealtimeSession._get_alaw_table()
+        assert t1 is t2
+
+
+class TestAudioFormatNegotiation:
+    """Test audio format decoding in input_audio_buffer.append."""
+
+    @pytest.mark.asyncio
+    async def test_ulaw_format_decoded(self):
+        """When input_audio_format is g711_ulaw, audio should be decoded to PCM."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+        session.session.input_audio_format = "g711_ulaw"
+        session._run_vad = AsyncMock()
+
+        # Send μ-law encoded audio
+        audio_b64 = base64.b64encode(bytes([0xFF] * 10)).decode()
+        await session._handle_input_audio_buffer_append({
+            "type": "input_audio_buffer.append",
+            "audio": audio_b64,
+        })
+
+        # Buffer should have decoded PCM (20 bytes from 10 μ-law bytes)
+        assert len(session._audio_buffer) == 20
+
+    @pytest.mark.asyncio
+    async def test_alaw_format_decoded(self):
+        """When input_audio_format is g711_alaw, audio should be decoded to PCM."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+        session.session.input_audio_format = "g711_alaw"
+        session._run_vad = AsyncMock()
+
+        audio_b64 = base64.b64encode(bytes([0xD5] * 10)).decode()
+        await session._handle_input_audio_buffer_append({
+            "type": "input_audio_buffer.append",
+            "audio": audio_b64,
+        })
+
+        assert len(session._audio_buffer) == 20
+
+    @pytest.mark.asyncio
+    async def test_pcm16_format_passthrough(self):
+        """When input_audio_format is pcm16, audio should pass through unchanged."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+        session.session.input_audio_format = "pcm16"
+        session._run_vad = AsyncMock()
+
+        audio_b64 = base64.b64encode(b"\x00" * 100).decode()
+        await session._handle_input_audio_buffer_append({
+            "type": "input_audio_buffer.append",
+            "audio": audio_b64,
+        })
+
+        assert len(session._audio_buffer) == 100

@@ -66,6 +66,21 @@ def _is_mlx_vlm_model(model) -> bool:
     return type(model).__module__.startswith("mlx_vlm.models.")
 
 
+# Models that only support a single image input
+SINGLE_IMAGE_ONLY_MODELS = frozenset({
+    "glm_ocr",
+    "phi3_v",
+    "phi3.5_v",
+    "florence2",
+    "moondream1",
+    "moondream2",
+    "minicpmv",
+    "minicpmv2",
+    "llava_llama3",
+    "paligemma",
+})
+
+
 class VLMEngine:
     """Vision-Language Model engine with dual mlx-lm/mlx-vlm support.
 
@@ -967,6 +982,15 @@ class VLMEngine:
                             paths.append(await self._download_image(url))
                         elif os.path.exists(url):
                             paths.append(url)
+        # Validate: some models only support single image input
+        if len(paths) > 1 and self._config:
+            model_type = self._config.get("model_type", "")
+            if model_type in SINGLE_IMAGE_ONLY_MODELS:
+                logger.warning(
+                    f"Model type '{model_type}' only supports single image, "
+                    f"got {len(paths)} — using first image only"
+                )
+                paths = paths[:1]
         return paths
 
     # ── Audio Extraction ──
