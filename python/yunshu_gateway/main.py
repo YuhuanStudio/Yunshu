@@ -118,10 +118,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Graceful shutdown with request draining
     _shutting_down = True
 
-    # Wait for active requests to drain (up to 30s)
+    # Wait for active requests to drain (configurable via env, default 30s)
+    drain_timeout = float(os.environ.get("YUNSHU_DRAIN_TIMEOUT", "30"))
     if _active_requests > 0 and _drain_event is not None:
         try:
-            await asyncio.wait_for(_drain_event.wait(), timeout=30.0)
+            await asyncio.wait_for(_drain_event.wait(), timeout=drain_timeout)
         except asyncio.TimeoutError:
             pass
 

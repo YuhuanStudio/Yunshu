@@ -394,7 +394,7 @@ class BatchedEngine:
         # Map engine_core finish_reason to OpenAI-compatible finish_reason
         finish_reason = result.finish_reason
         if finish_reason == "memory_exceeded":
-            finish_reason = "context_length_exceeded"
+            finish_reason = "memory_limit"
 
         return GenerationOutput(
             text=_clean_special_tokens(result.output_text),
@@ -420,6 +420,7 @@ class BatchedEngine:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
+        timeout_seconds: float = 300.0,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -574,6 +575,8 @@ class BatchedEngine:
                         ids_to_prefill = ids
 
             if not spec_prefill_done:
+                _timeout_deadline = gen_t0 + timeout_seconds
+                _timeout_check_interval = 32
                 with _wired_limit_ctx(model):
                     for token, logits in generate_step(
                         ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
@@ -583,6 +586,11 @@ class BatchedEngine:
                             ttft_s = time.perf_counter() - gen_t0
                             first = False
                         tokens.append(token)
+                        # Request-level timeout: check every N tokens
+                        if len(tokens) % _timeout_check_interval == 0:
+                            if time.perf_counter() > _timeout_deadline:
+                                logger.warning(f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
+                                break
                         # Thinking budget enforcement: cap thinking tokens
                         if thinking_budget is not None and enable_thinking:
                             thinking_tokens_used += 1
@@ -635,7 +643,26 @@ class BatchedEngine:
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-        tokens, output_text, token_logprobs, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+        try:
+            tokens, output_text, token_logprobs, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+        except MemoryError:
+            logger.warning("OOM during generation — returning memory_limit finish reason")
+            return GenerationOutput(
+                finished=True,
+                finish_reason="memory_limit",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+            )
+        except RuntimeError as e:
+            if "memory" in str(e).lower() or "out of" in str(e).lower():
+                logger.warning(f"MLX OOM during generation: {e}")
+                return GenerationOutput(
+                    finished=True,
+                    finish_reason="memory_limit",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
+                )
+            raise
 
         # Decode token strings for logprobs
         lp_result = None
@@ -763,7 +790,7 @@ class BatchedEngine:
                 cleaned = _clean_special_tokens(output.new_text)
                 finish_reason = output.finish_reason
                 if finish_reason == "memory_exceeded":
-                    finish_reason = "context_length_exceeded"
+                    finish_reason = "memory_limit"
                 gen_output = GenerationOutput(
                     text=_clean_special_tokens(output.output_text),
                     new_text=cleaned,
@@ -869,6 +896,20 @@ class BatchedEngine:
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         def _run():
+            try:
+                _run_inner()
+            except (MemoryError, RuntimeError) as e:
+                if isinstance(e, MemoryError) or "memory" in str(e).lower():
+                    logger.warning(f"OOM during streaming: {e}")
+                    _put(e)
+                else:
+                    _put(e)
+            except Exception as e:
+                _put(e)
+            finally:
+                _put(_sentinel)
+
+        def _run_inner():
             import mlx.core as mx
             from mlx_lm.models.cache import make_prompt_cache
             ids = mx.array(input_ids)
@@ -911,7 +952,6 @@ class BatchedEngine:
                     _put((remaining, n_tok, False))
                 _put(("", n_tok, True))
                 mx.synchronize()
-            _put(_sentinel)
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
@@ -922,10 +962,24 @@ class BatchedEngine:
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(_q.get(), timeout=300)
+                    item = await asyncio.wait_for(_q.get(), timeout=120)
                 except asyncio.TimeoutError:
+                    logger.warning("Streaming fast path timeout: no token for 120s")
                     break
                 if item is _sentinel:
+                    break
+                if isinstance(item, BaseException):
+                    err_msg = str(item).lower()
+                    is_oom = isinstance(item, MemoryError) or "memory" in err_msg
+                    if is_oom and accumulated:
+                        yield GenerationOutput(
+                            text=_clean_special_tokens(accumulated),
+                            new_text="",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=n_tok,
+                            finished=True,
+                            finish_reason="memory_limit",
+                        )
                     break
                 new_text, tok_count, done = item
                 accumulated += new_text
@@ -1642,8 +1696,9 @@ class BatchedEngine:
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(_q.get(), timeout=300)
+                    item = await asyncio.wait_for(_q.get(), timeout=120)
                 except asyncio.TimeoutError:
+                    logger.warning("N-gram streaming timeout: no token for 120s")
                     break
                 if item is _sentinel:
                     break
@@ -1767,7 +1822,7 @@ class BatchedEngine:
     ) -> GenerationOutput | None:
         """Run memory guard preflight check. Returns None if OK.
 
-        Returns a GenerationOutput with finish_reason="context_length_exceeded"
+        Returns a GenerationOutput with finish_reason="memory_limit"
         if the memory guard rejects the request.
         """
         guard = getattr(self._engine_core, '_memory_guard', None)
@@ -1790,7 +1845,7 @@ class BatchedEngine:
         if not ok:
             return GenerationOutput(
                 finished=True,
-                finish_reason="context_length_exceeded",
+                finish_reason="memory_limit",
                 prompt_tokens=num_prompt_tokens,
                 completion_tokens=0,
             )

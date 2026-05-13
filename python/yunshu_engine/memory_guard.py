@@ -12,7 +12,7 @@ Architecture:
 
   BatchedEngine.generate() / stream_generate()
     → MemoryGuard preflight before submitting to EngineCore
-    → return GenerationOutput with finish_reason="context_length_exceeded" on rejection
+    → return GenerationOutput with finish_reason="memory_limit" on rejection
 """
 from __future__ import annotations
 

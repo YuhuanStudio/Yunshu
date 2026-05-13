@@ -27,6 +27,14 @@ def _disable_auth(request):
         os.environ["YUNSHU_AUTH_DISABLED"] = old
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _fast_drain():
+    """Zero drain timeout for all tests — avoids 30s wait on app teardown."""
+    os.environ["YUNSHU_DRAIN_TIMEOUT"] = "0"
+    yield
+    os.environ.pop("YUNSHU_DRAIN_TIMEOUT", None)
+
+
 @pytest.fixture
 def mock_engine():
     """A minimal mock Engine that simulates a loaded+running state."""

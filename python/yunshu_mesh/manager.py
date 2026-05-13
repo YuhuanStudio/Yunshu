@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import mlx.core as mx
 
@@ -43,6 +43,7 @@ class MeshManager:
         self._topology = MeshTopology()
         self._collective = CollectiveOps(backend=backend)
         self._pipeline: Optional[PipelineParallel] = None
+        self._dp_router: Optional[Any] = None
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
 
@@ -74,6 +75,11 @@ class MeshManager:
     @property
     def pipeline(self) -> Optional[PipelineParallel]:
         return self._pipeline
+
+    @property
+    def dp_router(self):
+        """Get the DataParallelRouter for request routing."""
+        return self._dp_router
 
     def initialize(
         self,
@@ -114,6 +120,10 @@ class MeshManager:
 
         self._topology.topo_type = topology_type
         logger.info(f"Topology: {topology_type.value}, size={self._topology.size}")
+
+        # 4. Setup data-parallel router for multi-node request distribution
+        if self._topology.size > 1:
+            self._setup_data_parallel()
 
         return True
 
@@ -190,7 +200,17 @@ class MeshManager:
             "nodes": len(self._topology.nodes),
             "local_node": self._local_node.to_dict() if self._local_node else None,
             "pipeline": self._pipeline.to_dict() if self._pipeline else None,
+            "data_parallel": self._dp_router.get_stats() if self._dp_router else None,
         }
+
+    def _setup_data_parallel(self) -> None:
+        """Setup data-parallel router for multi-node deployments."""
+        from .data_parallel import DataParallelRouter
+        strategy = os.environ.get("YUNSHU_DP_STRATEGY", "least_loaded")
+        self._dp_router = DataParallelRouter(strategy=strategy)
+        for n in self._topology.nodes:
+            self._dp_router.add_node(n.node_id, n.rank)
+        logger.info(f"Data-parallel router initialized: {strategy}, {len(self._topology.nodes)} nodes")
 
     # ── Discovery & Heartbeat Integration ──
 
@@ -261,18 +281,26 @@ class MeshManager:
     def _on_peer_discovered(self, node: MeshNode) -> None:
         """Callback: new peer discovered."""
         rank = self._topology.add_node(node)
+        if self._dp_router:
+            self._dp_router.add_node(node.node_id, rank)
         logger.info(f"Peer discovered: {node.hostname} rank={rank}")
 
     def _on_peer_lost(self, node: MeshNode) -> None:
         """Callback: peer disappeared."""
         self._topology.remove_node(node.node_id)
+        if self._dp_router:
+            self._dp_router.remove_node(node.node_id)
         logger.info(f"Peer lost: {node.hostname}")
 
     def _on_node_timeout(self, node: MeshNode) -> None:
         """Callback: heartbeat timeout."""
         self.handle_node_failure(node.node_id)
+        if self._dp_router:
+            self._dp_router.mark_unavailable(node.node_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
         node.state = MeshNodeState.READY
+        if self._dp_router:
+            self._dp_router.mark_available(node.node_id)
         logger.info(f"Node recovered: {node.hostname}")

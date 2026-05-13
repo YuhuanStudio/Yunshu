@@ -4,6 +4,7 @@ Tests the full HTTP request → SSE response pipeline without a real model.
 """
 
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,20 +81,34 @@ def _make_engine():
     return eng
 
 
-@pytest.fixture
-def _reset_engine():
-    """Reset module-level engine state between tests."""
+@pytest.fixture(autouse=True)
+def _env_fast_drain(monkeypatch):
+    """Set fast drain timeout and no model loading for all tests."""
+    monkeypatch.setenv("YUNSHU_DRAIN_TIMEOUT", "0")
+    monkeypatch.delenv("DEFAULT_MODEL", raising=False)
+    monkeypatch.delenv("YUNSHU_MULTI_MODEL", raising=False)
+
+
+@pytest.fixture(scope="module")
+def _reset_engine_module():
+    """Reset module-level engine state once per module."""
     old = engine_mod._engine
     engine_mod._engine = None
     yield
     engine_mod._engine = old
 
 
-class TestE2EGateway:
-    @pytest.fixture(autouse=True)
-    def _reset(self, _reset_engine):
-        pass
+@pytest.fixture(scope="module")
+def app_client(_reset_engine_module):
+    """Shared app + client for the entire test module."""
+    os.environ["YUNSHU_DRAIN_TIMEOUT"] = "0"
+    app = create_app()
+    with TestClient(app) as client:
+        yield client
+    os.environ.pop("YUNSHU_DRAIN_TIMEOUT", None)
 
+
+class TestE2EGateway:
     def test_health_with_engine(self):
         """Health endpoint shows engine loaded."""
         engine_mod._engine = _make_engine()
@@ -173,118 +188,102 @@ class TestE2EGateway:
             )
             assert resp.status_code == 404
 
-    def test_mcp_initialize(self):
+    def test_mcp_initialize(self, app_client):
         """MCP initialize endpoint returns capabilities."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "initialize",
-                    "id": 1,
-                },
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["result"]["protocolVersion"] == "2024-11-05"
+        resp = app_client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "id": 1,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["result"]["protocolVersion"] == "2024-11-05"
 
-    def test_mcp_tools_list(self):
+    def test_mcp_tools_list(self, app_client):
         """MCP tools/list returns available tools."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "tools/list",
-                    "id": 2,
-                },
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            tools = data["result"]["tools"]
-            assert len(tools) >= 3
-            names = [t["name"] for t in tools]
-            assert "generate" in names
+        resp = app_client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/list",
+                "id": 2,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        tools = data["result"]["tools"]
+        assert len(tools) >= 3
+        names = [t["name"] for t in tools]
+        assert "generate" in names
 
-    def test_mcp_unknown_method(self):
+    def test_mcp_unknown_method(self, app_client):
         """MCP unknown method returns error."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/mcp",
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "nonexistent",
-                    "id": 3,
-                },
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "error" in data
+        resp = app_client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "nonexistent",
+                "id": 3,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "error" in data
 
-    def test_mcp_invalid_jsonrpc(self):
+    def test_mcp_invalid_jsonrpc(self, app_client):
         """MCP with wrong jsonrpc version returns error."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/mcp",
-                json={
-                    "jsonrpc": "1.0",
-                    "method": "initialize",
-                    "id": 1,
-                },
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "error" in data
+        resp = app_client.post(
+            "/v1/mcp",
+            json={
+                "jsonrpc": "1.0",
+                "method": "initialize",
+                "id": 1,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "error" in data
 
-    def test_embeddings_no_model_404(self):
+    def test_embeddings_no_model_404(self, app_client):
         """Embeddings endpoint returns 404 without model."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/embeddings",
-                json={
-                    "model": "nonexistent",
-                    "input": "hello",
-                },
-            )
-            assert resp.status_code == 404
+        resp = app_client.post(
+            "/v1/embeddings",
+            json={
+                "model": "nonexistent",
+                "input": "hello",
+            },
+        )
+        assert resp.status_code == 404
 
-    def test_batch_empty_400(self):
+    def test_batch_empty_400(self, app_client):
         """Batch endpoint returns 400 for empty batch."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/batch",
-                json={"requests": []},
-            )
-            assert resp.status_code == 400
+        resp = app_client.post(
+            "/v1/batch",
+            json={"requests": []},
+        )
+        assert resp.status_code == 400
 
-    def test_batch_too_large_400(self):
+    def test_batch_too_large_400(self, app_client):
         """Batch endpoint returns 400 for too large batch."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.post(
-                "/v1/batch",
-                json={
-                    "requests": [
-                        {"custom_id": f"r{i}", "body": {"model": "test"}}
-                        for i in range(101)
-                    ]
-                },
-            )
-            assert resp.status_code == 400
+        resp = app_client.post(
+            "/v1/batch",
+            json={
+                "requests": [
+                    {"custom_id": f"r{i}", "body": {"model": "test"}}
+                    for i in range(101)
+                ]
+            },
+        )
+        assert resp.status_code == 400
 
-    def test_metrics_endpoint(self):
+    def test_metrics_endpoint(self, app_client):
         """Metrics endpoint returns Prometheus format."""
-        app = create_app()
-        with TestClient(app) as client:
-            resp = client.get("/metrics")
-            assert resp.status_code == 200
-            assert "yunshu_" in resp.text
+        resp = app_client.get("/metrics")
+        assert resp.status_code == 200
+        assert "yunshu_" in resp.text
 
     def test_models_detail(self):
         """Get model by ID returns model info."""
