@@ -1443,3 +1443,71 @@ class ImageGenEngine:
             "loaded": self.is_loaded,
             "running": self._running,
         }
+
+    def load_lora_adapter(self, adapter_path: str, rank: int = 8, scale: float = 20.0) -> bool:
+        """Load a LoRA adapter into the image transformer.
+
+        The adapter's config should specify which layers to apply LoRA to.
+        Typical targets: attention Q/V projections in the DiT transformer.
+        """
+        if self._transformer is None:
+            logger.error("Cannot load LoRA: transformer not loaded")
+            return False
+
+        import json
+        from pathlib import Path
+
+        adapter_dir = Path(adapter_path)
+        config_path = adapter_dir / "adapter_config.json"
+
+        if not config_path.exists():
+            logger.error(f"No adapter_config.json in {adapter_path}")
+            return False
+
+        with open(config_path) as f:
+            config = json.load(f)
+
+        lora_params = config.get("lora_parameters", {})
+        _rank = lora_params.get("rank", rank)
+        _scale = lora_params.get("scale", scale)
+        num_layers = config.get("num_layers", 16)
+
+        try:
+            from mlx_lm.tuner.lora import LoRALinear
+            import mlx.nn as nn
+
+            applied = 0
+            for name, module in self._transformer.named_modules():
+                if not isinstance(module, nn.Linear):
+                    continue
+                if applied >= num_layers:
+                    break
+                # Apply to Q and V projections (standard LoRA targets)
+                if any(k in name for k in ("q_proj", "v_proj", "qkv")):
+                    lora_layer = LoRALinear(
+                        module.in_features,
+                        module.out_features,
+                        rank=_rank,
+                        scale=_scale,
+                    )
+                    lora_layer.linear = module
+                    # Set the LoRA layer on the parent module
+                    parts = name.rsplit(".", 1)
+                    if len(parts) == 2:
+                        parent = self._transformer
+                        for part in parts[0].split("."):
+                            parent = getattr(parent, part)
+                        setattr(parent, parts[1], lora_layer)
+                    applied += 1
+
+            # Load adapter weights
+            weights_path = adapter_dir / "adapters.safetensors"
+            if weights_path.exists():
+                self._transformer.load_weights(str(weights_path), strict=False)
+
+            mx.eval(self._transformer.parameters())
+            logger.info(f"LoRA adapter loaded: {adapter_path}, {applied} layers")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load LoRA adapter: {e}", exc_info=True)
+            return False

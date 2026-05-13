@@ -515,7 +515,7 @@
 
 | 模塊 | 行數 | 測試文件 | 說明 |
 |------|------|----------|------|
-| adaptive_batch.py | 276 | test_adaptive_batch.py | 自適應批處理，零調用 |
+| ~~adaptive_batch.py~~ | ~~276~~ | test_adaptive_batch.py | ~~自適應批處理，零調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore |
 | ane_embedding.py | 953 | test_ane_embedding.py | ANE 嵌入，僅 bench 腳本 |
 | benchmark.py | 472 | test_benchmark.py | 基準測試框架，僅 scripts/ |
 | bfcl_eval.py | 1,127 | 無 | BFCL 評估，零調用 |
@@ -525,11 +525,11 @@
 | mtp_patch.py | 259 | 無 | MTP 模型補丁 |
 | n_confirmed_patch.py | 316 | test_n_confirmed_patch.py | n_confirmed 驗證補丁 |
 | roofline.py | 749 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
-| telemetry.py | 196 | test_telemetry.py | 遙測系統 |
+| ~~telemetry.py~~ | ~~196~~ | test_telemetry.py | ~~遙測系統~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore |
 
-**合計: 5,605 行死代碼 + 10 個測試文件**
+**合計: 5,133 行死代碼 + 8 個測試文件** (原 5,605 行 + 10 個測試文件，adaptive_batch 和 telemetry 已 WIRED)
 
-已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine)。已刪除: settings.py。
+已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore)。已刪除: settings.py。
 
 ---
 
@@ -1528,7 +1528,7 @@ vllm-omni 支持: **25+ 擴散架構**
 |------|------|-------|-----------|
 | img2img | ✅ ImageGenEngine.generate() + variations/edits endpoints (Wave 24) | ✅ (redux, in_context) | ✅ |
 | Inpainting | ❌ | ✅ (fill variant) | ✅ (bagel) |
-| LoRA | ❌ | ✅ 完整支持 | ✅ DiffusionLoRAManager |
+| LoRA | ✅ ImageGenEngine.load_lora_adapter() (Wave 24) | ✅ 完整支持 | ✅ DiffusionLoRAManager |
 | VAE Tiling | ❌ | ✅ cos-ramp 混合 | ✅ 分佈式 VAE |
 | ControlNet | ❌ | ✅ | — |
 | Depth-guided | ❌ | ✅ | — |
