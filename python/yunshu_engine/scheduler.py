@@ -470,7 +470,7 @@ class Scheduler:
 
                 sp = req.sampling_params
                 sampler = self._make_sampler(sp)
-                sm = self._make_state_machine(sp.stop)
+                sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # ── Thinking-segment KV lookup before prefill (§3.6 / Δ-6) ──
                 # Check for reusable thinking KV segments from prior turns in
@@ -825,7 +825,7 @@ class Scheduler:
             try:
                 sp = req.sampling_params
                 sampler = self._make_sampler(sp)
-                sm = self._make_state_machine(sp.stop)
+                sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 uids = self._batch_gen.insert(
                     prompts=[chunk],
@@ -1180,7 +1180,7 @@ class Scheduler:
 
         return sampler
 
-    def _make_state_machine(self, stop: list[str] | None = None):
+    def _make_state_machine(self, stop: list[str] | None = None, stop_token_ids: list[int] | None = None):
         from mlx_lm.generate import SequenceStateMachine
 
         eos_ids = list(self.tokenizer.eos_token_ids) if hasattr(self.tokenizer, 'eos_token_ids') else []
@@ -1188,6 +1188,10 @@ class Scheduler:
         for w in (stop or []):
             t = tuple(self.tokenizer.encode(w, add_special_tokens=False))
             common_stops.append((t, None))
+        # Add raw stop token IDs (e.g., from stop_token_ids parameter)
+        for tid in (stop_token_ids or []):
+            if ((tid,), None) not in common_stops:
+                common_stops.append(((tid,), None))
 
         transitions = {"normal": list(common_stops)}
 

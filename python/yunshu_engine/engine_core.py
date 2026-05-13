@@ -295,9 +295,14 @@ class EngineCore:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
         request_id: str | None = None,
         enable_thinking: bool | None = None,
         json_schema: dict | str | None = None,
+        thinking_budget: int | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
         **kwargs,
     ) -> str:
         """Add a generation request. Returns request_id for streaming/abort.
@@ -360,9 +365,13 @@ class EngineCore:
             presence_penalty=presence_penalty,
             logit_bias=logit_bias,
             stop=stop or [],
+            stop_token_ids=stop_token_ids or [],
+            seed=seed,
             json_schema=json_schema,
             enable_thinking=enable_thinking,
-            thinking_budget=kwargs.get('thinking_budget'),
+            thinking_budget=thinking_budget,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
         )
 
         request = Request(

@@ -500,9 +500,13 @@ class BatchedEngine:
             presence_penalty=presence_penalty,
             logit_bias=logit_bias,
             stop=stop,
+            stop_token_ids=stop_token_ids,
             seed=seed,
             json_schema=json_schema,
             enable_thinking=enable_thinking,
+            thinking_budget=thinking_budget,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
         )
 
         if result is None:
@@ -925,7 +929,8 @@ class BatchedEngine:
             top_p=top_p, top_k=top_k, min_p=min_p,
             repetition_penalty=repetition_penalty, frequency_penalty=frequency_penalty,
             presence_penalty=presence_penalty, logit_bias=logit_bias,
-            stop=stop, seed=seed, json_schema=json_schema,
+            stop=stop, stop_token_ids=stop_token_ids,
+            seed=seed, json_schema=json_schema,
             enable_thinking=enable_thinking,
         )
 
