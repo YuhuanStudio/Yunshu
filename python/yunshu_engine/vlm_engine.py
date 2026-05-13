@@ -227,6 +227,7 @@ class VLMEngine:
         seed: int | None = None,
         repetition_penalty: float = 1.0,
         stop: list[str] | None = None,
+        enable_thinking: bool | None = None,
         **kwargs,
     ) -> dict[str, Any]:
         """Non-streaming generation. Supports image input for VLM models."""
@@ -237,6 +238,7 @@ class VLMEngine:
         t0 = time.monotonic()
         self._active_count += 1
         image_paths = await self._extract_images(messages)
+        self._enable_thinking = enable_thinking
 
         def _generate_sync():
             if seed is not None:
@@ -300,12 +302,15 @@ class VLMEngine:
         top_k: int = 0,
         seed: int | None = None,
         stop: list[str] | None = None,
+        enable_thinking: bool | None = None,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation: yields RequestOutput per token."""
         messages = prompt or messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+
+        self._enable_thinking = enable_thinking
 
         import uuid
         req_id = f"vlm-{uuid.uuid4().hex[:8]}"
@@ -429,8 +434,11 @@ class VLMEngine:
         from mlx_vlm.generate import generate as vlm_generate
 
         vlm_messages = self._build_vlm_messages(messages)
+        tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+        if getattr(self, '_enable_thinking', None) is not None:
+            tpl_kwargs["enable_thinking"] = self._enable_thinking
         prompt = self._processor.apply_chat_template(
-            vlm_messages, tokenize=False, add_generation_prompt=True,
+            vlm_messages, **tpl_kwargs,
         )
 
         # Check vision feature cache
@@ -569,8 +577,11 @@ class VLMEngine:
         from mlx_lm.sample_utils import make_sampler
 
         vlm_messages = self._build_vlm_messages(messages)
+        tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+        if getattr(self, '_enable_thinking', None) is not None:
+            tpl_kwargs["enable_thinking"] = self._enable_thinking
         prompt = self._processor.apply_chat_template(
-            vlm_messages, tokenize=False, add_generation_prompt=True,
+            vlm_messages, **tpl_kwargs,
         )
 
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
@@ -782,9 +793,10 @@ class VLMEngine:
                         "role": msg.get("role", "user"),
                         "content": self._extract_text(msg.get("content", "")),
                     })
-                text = self._tokenizer.apply_chat_template(
-                    clean, tokenize=False, add_generation_prompt=True,
-                )
+                tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+                if getattr(self, '_enable_thinking', None) is not None:
+                    tpl_kwargs["enable_thinking"] = self._enable_thinking
+                text = self._tokenizer.apply_chat_template(clean, **tpl_kwargs)
                 if text:
                     return text
             except Exception:
