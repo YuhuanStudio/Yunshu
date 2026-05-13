@@ -158,6 +158,13 @@
 | LORA-API | LoRA Admin API — 5 個端點: list/load/unload/merge/register adapters | vLLM §12.5 | ✅ 已實現 |
 | GRAMMAR | grammar 參數接入 Gateway — json_schema 約束通過 grammar 參數也可觸發 | vLLM §12.2 | ✅ 已實現 |
 
+### 新增功能 (2026-05-13 第七批)
+
+| 編號 | 功能 | 來源 | 狀態 |
+|------|------|------|------|
+| MOE | MoE top-k 優化 — 動態調整激活專家數 +7-16% 吞吐 | oMLX §13.2 | ✅ 已實現 |
+| QUANT | 量化配置覆蓋 — YUNSHU_QUANT_CONFIG env var 傳遞至 load() | G5 | ✅ 已修復 |
+
 ### 跨項目學習進度
 
 | 編號 | 修復 | 狀態 |
@@ -812,7 +819,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,557 個測試全數通過 (565s→24s)。
+> **結論 (2026-05-13 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。測試套件 2,563 個測試全數通過 (565s→24s)。
 
 ---
 
@@ -993,7 +1000,7 @@ mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分�
 | G2 | BatchGenerator `close()` 未在 Scheduler 路徑調用 | ✅ **已修復** (BG-CLOSE) | scheduler.shutdown() 調用 close() |
 | G3 | Paged KV cache 與 mlx-lm 原生 cache types 不連接 | ✅ **已修復** | mlx_cache + model_cache_config 已接入 |
 | G4 | 無漸進式 KV 量化 (僅在生成結束後量化) | ✅ **已修復** (C6) | 每 256 tokens 量化 |
-| G5 | 無 quantization config 傳遞給 load() | **中** | 無法覆蓋量化參數 |
+| G5 | ~~無 quantization config 傳遞給 load()~~ | **中** | ✅ 已修復 (QUANT) — YUNSHU_QUANT_CONFIG env var |
 | G6 | ~~無 LoRA 適配器支持~~ | **低** | ✅ 已實現 (LORA) — LoRAAdapterManager + Admin API |
 | G7 | ~~無 XTC 採樣支持~~ | **低** | ✅ 已實現 (XTC) |
 | G8 | Streaming 路徑跳過 `detokenizer.finalize()` | ✅ **已修復** | 所有 streaming 路徑已加 finalize() |
@@ -1077,7 +1084,7 @@ vllm-mlx 是與 Yunshu 解決**完全相同問題**的項目: 在 Apple Silicon 
 | 記憶體感知淘汰 | psutil 實時記憶體壓力淘汰 | 靜態 kv_cache_ratio |
 | Tool call parsers | **15+ 解析器** (OpenAI, Anthropic, Gemini, Qwen, DeepSeek...) | tool_call_streamer.py (有限) |
 | Reasoning parsers | **多個** (Qwen3, DeepSeek-R1, Gemma4, GLM4, Harmony) | thinking_budget.py (單一) |
-| MoE top-k | 減少激活專家, +7-16% Qwen3-30B | 不支持 |
+| MoE top-k | 減少激活專家, +7-16% Qwen3-30B | ✅ moe_optimization.py (MOE) |
 | Warm prompts | 啟動預加熱, **1.3-2.25x TTFT** | 不支持 |
 | SpecPrefill query extractors | 多架構 (Qwen3.5, LLaMA, Nemotron-H) | 錯誤方法 (key magnitude) |
 

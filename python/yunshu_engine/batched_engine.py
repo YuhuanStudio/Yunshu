@@ -206,7 +206,12 @@ class BatchedEngine:
         # Load model on MLX executor thread (non-blocking)
         def _load():
             from mlx_lm.utils import load as load_model
-            return load_model(self.model_name)
+            kwargs = {}
+            # Check for quantization override from env or settings
+            qconfig = os.environ.get("YUNSHU_QUANT_CONFIG")
+            if qconfig:
+                kwargs["quantization"] = qconfig
+            return load_model(self.model_name, **kwargs)
 
         def _warmup():
             import mlx.core as mx
@@ -296,6 +301,11 @@ class BatchedEngine:
                 )
         if s.enable_thinking is not None:
             self.enable_thinking = s.enable_thinking
+        if s.moe_top_k > 0 and self._model is not None:
+            from .moe_optimization import apply_moe_top_k
+            result = apply_moe_top_k(self._model, s.moe_top_k)
+            if result["patched_layers"] > 0:
+                logger.info(f"MoE top-k applied: {result}")
 
     def get_settings(self):
         return self._settings

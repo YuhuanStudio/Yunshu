@@ -91,6 +91,13 @@ class ModelSettings:
     stream_keepalive_interval: float = 15.0
     stream_chunk_timeout: float = 30.0
 
+    # ── MoE optimization ──
+    moe_top_k: int = 0  # 0 = use model default, >0 = override expert count
+
+    # ── LoRA ──
+    lora_enabled: bool = False
+    max_loras: int = 4
+
     # ── SSD cache ──
     ssd_cache_enabled: bool = False
     ssd_cache_dir: str = "~/.cache/yunshu/kv-ssd"
