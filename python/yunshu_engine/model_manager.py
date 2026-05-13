@@ -41,6 +41,7 @@ class ModelType(Enum):
     IMAGE_GEN = auto()
     OCR = auto()
     STS = auto()
+    VIDEO = auto()
 
 
 # mlx-lm's MODEL_REMAPPING (subset we need to replicate for probing)
@@ -87,6 +88,8 @@ def _detect_model_type(model_path: str) -> ModelType:
             return ModelType.VLM
         if "image" in name_lower or "flux" in name_lower or "z-image" in name_lower:
             return ModelType.IMAGE_GEN
+        if any(k in name_lower for k in ("wan", "ltx", "video")):
+            return ModelType.VIDEO
         return ModelType.LLM
 
     try:
@@ -129,6 +132,8 @@ def _detect_model_type(model_path: str) -> ModelType:
         return ModelType.ASR
     if any(k in model_type for k in ("sts", "speech_to_speech", "deepfilter", "mossformer", "voice_conversion")):
         return ModelType.STS
+    if any(k in model_type for k in ("wan", "ltx", "video", "text_to_video", "image_to_video")):
+        return ModelType.VIDEO
 
     # Try mlx-lm — if it can import the model_type, it's supported
     remapped = _MODEL_TYPE_REMAP.get(model_type, model_type)
@@ -173,6 +178,8 @@ def _detect_model_type(model_path: str) -> ModelType:
             return ModelType.OCR
         if "sts" in name_lower or "speech_to_speech" in name_lower:
             return ModelType.STS
+        if any(k in name_lower for k in ("wan", "ltx", "video")):
+            return ModelType.VIDEO
         return ModelType.LLM
 
     # Supported by mlx-lm or mlx-vlm, no vision indicators → standard LLM
@@ -369,6 +376,12 @@ class ModelManager:
         elif entry.model_type == ModelType.STS:
             from .sts_engine import STSEngine
             engine = STSEngine(entry.model_path)
+            engine.start()
+            return engine
+
+        elif entry.model_type == ModelType.VIDEO:
+            from .video_engine import VideoEngine
+            engine = VideoEngine(entry.model_path)
             engine.start()
             return engine
 

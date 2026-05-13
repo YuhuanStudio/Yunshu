@@ -233,6 +233,9 @@ def create_app() -> FastAPI:
     app.include_router(realtime.router)
     app.include_router(bench.router)
     app.include_router(disaggregate.router)
+
+    from .routers import video as video_mod
+    app.include_router(video_mod.router, prefix="/v1")
     app.include_router(sleep_mod.router)
 
     # Routes — L1 Gateway Monitoring (system, models, requests, prometheus)
