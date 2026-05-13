@@ -814,3 +814,49 @@ def _get_engine_for_model(model_id: str):
     if engine and engine.is_loaded:
         return engine
     return None
+
+
+# ── System Info (SDK endpoint) ──
+
+
+@router.get("/info")
+async def get_system_info(_=Depends(require_permission("can_view_admin"))):
+    """Get system information: version, loaded models, uptime, memory."""
+    import time as _time
+    from yunshu_gateway.engine import get_engine, get_model_manager
+    info = {
+        "version": "0.1.0",
+        "uptime_s": round(_time.monotonic(), 1),
+        "loaded_models": [],
+        "memory": {},
+    }
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            info["loaded_models"].append({
+                "model_id": entry.model_id,
+                "model_path": entry.model_path,
+                "is_loaded": entry.is_loaded,
+                "engine_type": entry.engine_type,
+            })
+        info["memory"] = manager.memory_usage()
+    engine = get_engine()
+    if engine and engine.is_loaded:
+        info["current_model"] = engine.model_name
+    return info
+
+
+@router.get("/config/scheduler")
+async def get_scheduler_config(_=Depends(require_permission("can_view_admin"))):
+    """Get scheduler configuration."""
+    from yunshu_gateway.engine import get_engine
+    engine = get_engine()
+    if engine is None:
+        return {"enabled": False}
+    stats = getattr(engine, 'get_stats', lambda: {})()
+    return {
+        "enabled": True,
+        "max_batch_size": stats.get("max_batch_size", 1),
+        "max_num_seqs": stats.get("max_num_seqs", 1),
+        "use_engine_loop": stats.get("use_engine_loop", False),
+    }
