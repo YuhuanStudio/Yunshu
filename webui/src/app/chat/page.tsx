@@ -39,6 +39,7 @@ interface Message {
   thinking?: boolean;
   tokens?: number;
   latencyMs?: number;
+  logprobs?: { tokens: string[]; token_logprobs: number[] };
   streaming?: boolean;
 }
 
@@ -94,6 +95,8 @@ export default function ChatPage() {
   const [showSidebar, setShowSidebar] = useState(true);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [jsonMode, setJsonMode] = useState(false);
+  const [specDecode, setSpecDecode] = useState(false);
+  const [showLogprobs, setShowLogprobs] = useState(false);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -297,6 +300,8 @@ export default function ChatPage() {
         stream: true,
         enable_thinking: enableThinking || undefined,
         thinking_budget: enableThinking && thinkingBudget > 0 ? thinkingBudget : undefined,
+        spec_decode: specDecode || undefined,
+        logprobs: showLogprobs || undefined,
       };
       if (jsonMode) {
         payload.response_format = { type: "json_object" };
@@ -356,6 +361,18 @@ export default function ChatPage() {
                 const usage = chunk.usage;
                 if (usage?.completion_tokens) {
                   last.tokens = usage.completion_tokens;
+                }
+
+                // Capture logprobs from streaming chunks
+                const lp = chunk.choices?.[0]?.logprobs;
+                if (lp?.tokens && lp.tokens.length > 0) {
+                  if (!last.logprobs) {
+                    last.logprobs = { tokens: [], token_logprobs: [] };
+                  }
+                  last.logprobs.tokens.push(...lp.tokens);
+                  if (lp.token_logprobs) {
+                    last.logprobs.token_logprobs.push(...lp.token_logprobs);
+                  }
                 }
 
                 return { ...c, messages: updated, updatedAt: Date.now() };
@@ -652,6 +669,32 @@ export default function ChatPage() {
             </label>
           </div>
 
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="specDecode"
+              checked={specDecode}
+              onChange={(e) => setSpecDecode(e.target.checked)}
+              className="rounded"
+            />
+            <label htmlFor="specDecode" className="text-sm">
+              Speculative Decode
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="showLogprobs"
+              checked={showLogprobs}
+              onChange={(e) => setShowLogprobs(e.target.checked)}
+              className="rounded"
+            />
+            <label htmlFor="showLogprobs" className="text-sm">
+              Show Logprobs
+            </label>
+          </div>
+
           <div>
             <label className="text-sm text-[var(--color-text-secondary)] block mb-1">
               System Prompt
@@ -886,6 +929,20 @@ function MessageBubble({ msg }: { msg: Message }) {
               <span className="text-xs text-[var(--color-text-secondary)]">
                 {msg.tokens} tokens
               </span>
+            )}
+            {msg.logprobs && msg.logprobs.tokens.length > 0 && (
+              <details className="text-xs text-[var(--color-text-secondary)]">
+                <summary className="cursor-pointer hover:text-[var(--color-text-primary)]">
+                  Logprobs ({msg.logprobs.tokens.length} tokens)
+                </summary>
+                <div className="mt-1 max-h-32 overflow-y-auto font-mono text-[10px] leading-relaxed">
+                  {msg.logprobs.tokens.map((tok, i) => (
+                    <span key={i} title={`logprob: ${msg.logprobs!.token_logprobs[i]?.toFixed(4) ?? "N/A"}`}>
+                      {tok}{" "}
+                    </span>
+                  ))}
+                </div>
+              </details>
             )}
             <button
               onClick={copyContent}
