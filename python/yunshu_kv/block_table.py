@@ -61,10 +61,13 @@ class BlockTable:
         """Create a copy of this block table for prefix sharing.
 
         The physical blocks are shared (not copied). The caller must
-        increment ref counts via BlockPool.touch().
+        increment ref counts via BlockPool.touch(). When a forked request
+        needs to write into a shared block, the caller must use
+        BlockPool.cow_block_in_table() to clone it first (COW semantics).
         """
         new_table = BlockTable(self.block_size)
         new_table._blocks = list(self._blocks)
+        new_table.total_tokens = self.total_tokens
         return new_table
 
     def clear(self) -> list[KVBlock]:

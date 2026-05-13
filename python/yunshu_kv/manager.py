@@ -274,7 +274,24 @@ class KVCacheManager:
             self._radix_tree.dec_ref(node)
 
     def allocate_block_for_decode(self, table: BlockTable) -> KVBlock:
-        """Allocate one more block when decode fills the current block."""
+        """Allocate one more block when decode fills the current block.
+
+        Before allocating, performs COW on the last block if it's shared
+        (ref_count > 1 from prefix cache). This ensures that KV data
+        written during decode doesn't corrupt other requests sharing the
+        same prefix block.
+        """
+        # COW the last block if shared — the decode may write into it
+        # during the transition from partial → full → new block
+        blocks = table.get_blocks()
+        if blocks:
+            last = blocks[-1]
+            if last.ref_count > 1:
+                self.block_pool.cow_block_in_table(
+                    table, len(blocks) - 1,
+                    self._key_cache, self._value_cache,
+                )
+
         block = self.block_pool.allocate(1)[0]
         table.append_block(block)
         return block
@@ -407,6 +424,7 @@ class KVCacheManager:
             "total_lookups": self._total_lookups,
             "total_hits": self._total_hits,
             "hit_rate": round(self.hit_rate, 4),
+            **self.block_pool.cow_stats,
         }
         warm_stats = self._warm_tier.get_stats() if self._warm_tier is not None else None
         return {

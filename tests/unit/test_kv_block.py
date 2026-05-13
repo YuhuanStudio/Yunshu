@@ -162,3 +162,108 @@ class TestBlockPool:
         pool.cache_block(blocks[0], 0xBEEF)
         pool.reset_prefix_cache()
         assert pool.lookup_hash(0xBEEF) is None
+
+
+class TestBlockPoolCOW:
+    """Tests for copy-on-write (COW) in BlockPool."""
+
+    def test_cow_noop_for_exclusive_block(self):
+        """COW on a block with ref_count == 1 returns the same block."""
+        pool = BlockPool(num_blocks=10, block_size=4)
+        blocks = pool.allocate(1)
+        assert blocks[0].ref_count == 1
+
+        result = pool.cow_block(blocks[0])
+        assert result is blocks[0]
+        assert pool.cow_stats["cow_clones"] == 0
+
+    def test_cow_clones_shared_block(self):
+        """COW on a block with ref_count > 1 allocates a new block."""
+        pool = BlockPool(num_blocks=10, block_size=4)
+        blocks = pool.allocate(1)
+
+        # Simulate sharing: touch the block (ref_count → 2)
+        pool.touch(blocks[0])
+        assert blocks[0].ref_count == 2
+
+        result = pool.cow_block(blocks[0])
+        assert result is not blocks[0]
+        assert result.ref_count == 1
+        assert blocks[0].ref_count == 1
+        assert pool.cow_stats["cow_clones"] == 1
+        assert pool.get_free_block_count() == 7  # 9 - 1 (original alloc) - 1 (cow)
+
+    def test_cow_shared_block_freed_when_zero(self):
+        """COW decrements original ref_count; last sharer gets it exclusive."""
+        pool = BlockPool(num_blocks=10, block_size=4)
+        blocks = pool.allocate(1)
+
+        # Three shares (ref_count → 3): requests A, B, and C all share this block
+        pool.touch(blocks[0])
+        pool.touch(blocks[0])
+        assert blocks[0].ref_count == 3
+
+        # First COW (request A detaches): ref_count → 2
+        result1 = pool.cow_block(blocks[0])
+        assert result1 is not blocks[0]
+        assert result1.ref_count == 1
+        assert blocks[0].ref_count == 2
+
+        # Second COW (request B detaches): ref_count → 1
+        result2 = pool.cow_block(blocks[0])
+        assert result2 is not blocks[0]
+        assert blocks[0].ref_count == 1
+
+        # Third COW (request C is the last sharer): no-op, returns original
+        result3 = pool.cow_block(blocks[0])
+        assert result3 is blocks[0]  # Exclusive already, no clone needed
+        assert blocks[0].ref_count == 1
+
+        # Free the last sharer → ref_count → 0, block goes back to free pool
+        pool.free([blocks[0]])
+        assert blocks[0].ref_count == 0
+        assert pool.cow_stats["cow_clones"] == 2
+
+    def test_cow_raises_when_exhausted(self):
+        """COW raises ValueError when no free blocks available."""
+        pool = BlockPool(num_blocks=3, block_size=4)
+        # 1 null + 2 free
+        blocks = pool.allocate(2)
+        pool.touch(blocks[0])
+        assert pool.get_free_block_count() == 0
+
+        with pytest.raises(ValueError, match="COW failed"):
+            pool.cow_block(blocks[0])
+
+    def test_cow_in_table_replaces_entry(self):
+        """cow_block_in_table updates the BlockTable entry."""
+        from yunshu_kv.block_table import BlockTable
+
+        pool = BlockPool(num_blocks=10, block_size=4)
+        blocks = pool.allocate(2)
+        pool.touch(blocks[0])  # ref_count → 2
+
+        table = BlockTable(block_size=4)
+        table.append_block(blocks[0])
+        table.append_block(blocks[1])
+
+        # COW the first block in the table
+        new_block = pool.cow_block_in_table(table, 0)
+        assert new_block is not blocks[0]
+        assert table.get_block(0) is new_block
+        assert table.get_block(1) is blocks[1]  # Unchanged
+        assert new_block.ref_count == 1
+
+    def test_cow_in_table_noop_for_exclusive(self):
+        """cow_block_in_table is a no-op for exclusive blocks."""
+        from yunshu_kv.block_table import BlockTable
+
+        pool = BlockPool(num_blocks=10, block_size=4)
+        blocks = pool.allocate(1)
+
+        table = BlockTable(block_size=4)
+        table.append_block(blocks[0])
+
+        result = pool.cow_block_in_table(table, 0)
+        assert result is blocks[0]
+        assert pool.cow_stats["cow_clones"] == 0

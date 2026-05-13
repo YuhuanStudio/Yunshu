@@ -111,6 +111,8 @@ class BlockPool:
     - Free blocks are tracked in a doubly-linked list for O(1) LRU eviction.
     - Cached (full) blocks are indexed by hash for prefix deduplication.
     - Reference counting enables safe sharing across requests.
+    - Copy-on-write (COW): shared blocks are transparently cloned on write
+      to prevent corruption between requests sharing a prefix.
     """
 
     def __init__(
@@ -133,6 +135,9 @@ class BlockPool:
 
         # Hash → block mapping for prefix caching
         self._hash_to_block: dict[int, KVBlock] = {}
+
+        # COW statistics
+        self._cow_clones: int = 0
 
     def get_free_block_count(self) -> int:
         return self.free_queue.num_free_blocks
@@ -204,3 +209,93 @@ class BlockPool:
         self._hash_to_block.clear()
         for block in self.blocks:
             block.reset_hash()
+
+    # ── Copy-on-Write (COW) ─────────────────────────────────────────
+
+    def cow_block(self, block: KVBlock) -> KVBlock:
+        """Copy-on-write: clone a shared block for exclusive access.
+
+        When a block's ref_count > 1 (shared by multiple requests via
+        prefix cache), mutating its KV data would corrupt other sharers.
+        COW allocates a fresh block, copies metadata, and decrements the
+        original's ref_count — leaving the caller with an exclusive block.
+
+        For blocks with ref_count == 1, this is a no-op (returns the same
+        block since the caller already has exclusive access).
+
+        Args:
+            block: The block to potentially clone.
+
+        Returns:
+            An exclusive (ref_count == 1) block. May be the same block
+            if it wasn't shared.
+
+        Raises:
+            ValueError: If no free blocks are available for cloning.
+        """
+        if block.ref_count <= 1:
+            return block
+
+        if self.free_queue.num_free_blocks == 0:
+            raise ValueError(
+                "COW failed: no free blocks available for cloning"
+            )
+
+        # Allocate a fresh block
+        new_block = self.free_queue.popleft()
+        new_block.ref_count = 1
+
+        # Decrement original's ref_count (we're detaching from it)
+        block.ref_count -= 1
+        if block.ref_count == 0 and not block.is_null:
+            self.free_queue.append(block)
+
+        self._cow_clones += 1
+        return new_block
+
+    def cow_block_in_table(
+        self,
+        table: Any,
+        logical_idx: int,
+        key_cache: Any = None,
+        value_cache: Any = None,
+    ) -> KVBlock:
+        """COW a block within a BlockTable, copying KV data if available.
+
+        After COW, the table entry at `logical_idx` points to the new
+        exclusive block. If KV cache tensors are provided, the KV data
+        from the original block is copied to the new block's slot.
+
+        Args:
+            table: BlockTable containing the block to COW.
+            logical_idx: Logical index within the table.
+            key_cache: Key cache tensor array (shape [num_blocks, ...]).
+            value_cache: Value cache tensor array (shape [num_blocks, ...]).
+
+        Returns:
+            The new exclusive block.
+        """
+        old_block = table.get_block(logical_idx)
+        new_block = self.cow_block(old_block)
+
+        if new_block is not old_block:
+            # Copy KV data from old block to new block's slot
+            if key_cache is not None and value_cache is not None:
+                try:
+                    import mlx.core as mx
+                    mx.eval(key_cache[new_block.block_id])
+                    key_cache[new_block.block_id] = key_cache[old_block.block_id]
+                    value_cache[new_block.block_id] = value_cache[old_block.block_id]
+                except Exception:
+                    pass
+            # Update the table entry
+            table._blocks[logical_idx] = new_block
+
+        return new_block
+
+    @property
+    def cow_stats(self) -> dict:
+        """Return COW statistics."""
+        return {
+            "cow_clones": self._cow_clones,
+        }
