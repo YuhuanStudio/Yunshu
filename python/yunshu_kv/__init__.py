@@ -8,6 +8,7 @@ from .manager import KVCacheConfig, KVCacheManager, compute_num_blocks
 from .radix_attention import RadixNode, RadixTree
 from .serialization import KVCacheSerializer
 from .tiered import TieredKVCacheManager, SSDCacheStore, BackgroundSSDFlush
+from .ssd_sqlite_store import SSDSQLiteStore
 from .warm_tier import KVTierConfig, KVWarmTier
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "KVTierConfig",
     "KVWarmTier",
     "RadixNode",
+    "SSDSQLiteStore",
     "RadixTree",
     "SSDCacheStore",
     "TierConfig",

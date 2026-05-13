@@ -7,12 +7,18 @@ Studied from oMLX's PagedSSDCacheManager, adapted for Yunshu:
 - LRU eviction from hot → SSD, SSD → delete
 - Block-level hashing integration with KVPrefixCache
 - Dynamic disk budget awareness
+- SQLite-backed metadata for crash consistency (C13 audit item)
+
+Backend selection via YUNSHU_SSD_BACKEND env var:
+  "sqlite" (default) — crash-consistent WAL-mode SQLite (yunshu_kv.SSDSQLiteStore)
+  "json" — legacy JSON index (backward compat, no crash safety)
 
 Architecture:
   KVPrefixCache
     → SSDKVCache (this module)
       → hot_cache: OrderedDict[bytes, list] (recent blocks in RAM)
       → _index: dict[bytes, _BlockMeta] (all known blocks, on disk or hot)
+      → _sqlite_store: SSDSQLiteStore (crash-consistent metadata, when backend=sqlite)
       → _write_queue: Queue (background writer thread)
 
 Thread safety:
@@ -186,6 +192,7 @@ class SSDKVCache:
         max_size_bytes: int = 10 * 1024 ** 3,  # 10 GB default
         hot_cache_size: int = 100,
         writer_queue_size: int = 64,
+        backend: str | None = None,
     ):
         self._cache_dir = Path(os.path.expanduser(cache_dir))
         self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -204,9 +211,28 @@ class SSDKVCache:
         # On-disk index: block_hash_hex → _BlockMeta
         self._index: dict[str, _BlockMeta] = {}
 
-        # SQLite persistent index for crash-consistent metadata (C13 pattern)
-        self._sqlite_path = self._cache_dir / "index.db"
-        self._db = self._init_sqlite_index()
+        # Backend selection: "sqlite" (default, crash-consistent) or "json" (legacy)
+        self._backend = (
+            backend
+            or os.environ.get("YUNSHU_SSD_BACKEND", "sqlite")
+        ).lower()
+        if self._backend not in ("sqlite", "json"):
+            logger.warning("Unknown YUNSHU_SSD_BACKEND=%r, falling back to sqlite", self._backend)
+            self._backend = "sqlite"
+
+        # SQLite metadata store for crash consistency (C13)
+        self._sqlite_store: SSDSQLiteStore | None = None
+        self._db = None  # kept for backward compat alias
+        if self._backend == "sqlite":
+            from yunshu_kv.ssd_sqlite_store import SSDSQLiteStore
+            db_path = self._cache_dir / "index.db"
+            self._sqlite_store = SSDSQLiteStore(db_path)
+            # Attempt JSON → SQLite migration for backward compat
+            json_index_path = self._cache_dir / "index.json"
+            if json_index_path.exists() and db_path.exists():
+                migrated = self._sqlite_store.import_json_index(json_index_path)
+                if migrated > 0:
+                    logger.info("SSD KV cache: migrated %d entries from JSON to SQLite", migrated)
 
         # Background writer
         self._write_queue: list[tuple] = []
@@ -291,16 +317,18 @@ class SSDKVCache:
         self._write_queue.clear()
 
     def _recover_index(self) -> None:
-        """Recover block index from SQLite or scan cache directory."""
-        # Try SQLite first (fast, crash-consistent)
-        if self._db is not None:
+        """Recover block index from SQLite store, or scan cache directory."""
+        # Try SQLite store first (fast, crash-consistent)
+        if self._sqlite_store is not None:
             try:
-                count = self._recover_from_sqlite()
+                # Run recovery to clean up orphaned entries
+                self._sqlite_store.recover()
+                count = self._recover_from_sqlite_store()
                 if count > 0:
-                    logger.info(f"SSD KV cache: recovered {count} blocks from SQLite index")
+                    logger.info(f"SSD KV cache: recovered {count} blocks from SQLite store")
                     return
             except Exception:
-                logger.debug("SQLite index recovery failed, falling back to scan", exc_info=True)
+                logger.debug("SQLite store recovery failed, falling back to scan", exc_info=True)
 
         # Fallback: scan safetensors headers
         count = 0
@@ -325,91 +353,49 @@ class SSDKVCache:
                         created_at=float(meta.get("created_at", "0")),
                         file_size=f.stat().st_size,
                     )
+                    # Populate SQLite store if available (migration from file scan)
+                    if self._sqlite_store is not None:
+                        self._sqlite_store.put(
+                            block_hash_hex, str(f),
+                            int(meta.get("token_count", "0")),
+                            f.stat().st_size,
+                        )
                     count += 1
                 except Exception:
                     pass
         if count > 0:
             logger.info(f"SSD KV cache: recovered {count} blocks from disk scan")
 
-    def _init_sqlite_index(self):
-        """Initialize SQLite database for persistent block metadata."""
-        try:
-            import sqlite3
-            db = sqlite3.connect(str(self._sqlite_path), check_same_thread=False)
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=NORMAL")
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS kv_blocks (
-                    block_hash TEXT PRIMARY KEY,
-                    file_path TEXT NOT NULL,
-                    token_count INTEGER NOT NULL,
-                    model_name TEXT NOT NULL DEFAULT '',
-                    created_at REAL NOT NULL,
-                    file_size INTEGER NOT NULL DEFAULT 0,
-                    last_accessed REAL NOT NULL DEFAULT 0
-                )
-            """)
-            db.execute("CREATE INDEX IF NOT EXISTS idx_model ON kv_blocks(model_name)")
-            db.execute("CREATE INDEX IF NOT EXISTS idx_accessed ON kv_blocks(last_accessed)")
-            db.commit()
-            return db
-        except Exception:
-            logger.debug("SQLite index not available, using in-memory only", exc_info=True)
-            return None
-
-    def _recover_from_sqlite(self) -> int:
-        """Recover block metadata from SQLite index."""
-        import sqlite3
-        rows = self._db.execute(
-            "SELECT block_hash, file_path, token_count, model_name, "
-            "created_at, file_size, last_accessed FROM kv_blocks"
-        ).fetchall()
+    def _recover_from_sqlite_store(self) -> int:
+        """Recover block metadata from SSDSQLiteStore."""
+        entries = self._sqlite_store.list_all()
         count = 0
-        for row in rows:
-            bh_hex, fpath, tok_count, model, created, fsize, accessed = row
-            # Verify file still exists (orphan cleanup)
-            if not Path(fpath).exists():
-                self._db.execute("DELETE FROM kv_blocks WHERE block_hash = ?", (bh_hex,))
-                continue
+        for entry in entries:
+            bh_hex = entry["block_hash"]
+            fpath = entry["block_path"]
             self._index[bh_hex] = _BlockMeta(
                 block_hash=bytes.fromhex(bh_hex),
                 file_path=fpath,
-                token_count=tok_count,
-                model_name=model,
-                created_at=created,
-                file_size=fsize,
-                last_accessed=accessed,
+                token_count=entry["num_tokens"],
+                model_name="",  # model_name not in SSDSQLiteStore schema
+                created_at=entry["created_at"],
+                file_size=entry["size_bytes"],
+                last_accessed=entry["last_accessed"],
             )
             count += 1
-        if count > 0:
-            self._db.commit()
         return count
 
     def _sqlite_upsert(self, hex_hash: str, meta: _BlockMeta) -> None:
-        """Insert or update a block entry in SQLite."""
-        if self._db is None:
-            return
-        try:
-            self._db.execute(
-                "INSERT OR REPLACE INTO kv_blocks "
-                "(block_hash, file_path, token_count, model_name, created_at, file_size, last_accessed) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (hex_hash, meta.file_path, meta.token_count, meta.model_name,
-                 meta.created_at, meta.file_size, meta.last_accessed),
+        """Insert or update a block entry in the metadata store."""
+        if self._sqlite_store is not None:
+            self._sqlite_store.put(
+                hex_hash, meta.file_path, meta.token_count, meta.file_size,
             )
-            self._db.commit()
-        except Exception:
-            logger.debug("SQLite upsert failed", exc_info=True)
 
     def _sqlite_delete(self, hex_hash: str) -> None:
-        """Delete a block entry from SQLite."""
-        if self._db is None:
-            return
-        try:
-            self._db.execute("DELETE FROM kv_blocks WHERE block_hash = ?", (hex_hash,))
-            self._db.commit()
-        except Exception:
-            logger.debug("SQLite delete failed", exc_info=True)
+        """Delete a block entry from the metadata store."""
+        if self._sqlite_store is not None:
+            self._sqlite_store.delete(hex_hash)
 
     def _block_path(self, block_hash: bytes) -> str:
         """Get file path for a block hash."""
@@ -602,11 +588,12 @@ class SSDKVCache:
             self._hot_cache.clear()
             paths = [m.file_path for m in self._index.values()]
             self._index.clear()
-            # Clear SQLite index
-            if self._db is not None:
+            # Clear SQLite store
+            if self._sqlite_store is not None:
+                # Delete all entries individually for correctness
                 try:
-                    self._db.execute("DELETE FROM kv_blocks")
-                    self._db.commit()
+                    for entry in self._sqlite_store.list_all():
+                        self._sqlite_store.delete(entry["block_hash"])
                 except Exception:
                     pass
 
@@ -684,5 +671,8 @@ class SSDKVCache:
     def close(self) -> None:
         """Flush and stop the background writer."""
         self._flush_writer()
+        # Close SQLite store
+        if self._sqlite_store is not None:
+            self._sqlite_store.close()
         # Ensure thread reference is cleared
         self._writer_thread = None
