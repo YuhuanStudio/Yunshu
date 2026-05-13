@@ -44,6 +44,7 @@ class CompletionRequest(BaseModel):
     stream: bool = False
     stream_options: Optional[StreamOptions] = None
     stop: Optional[list[str]] = None
+    stop_token_ids: Optional[list[int]] = None
     echo: bool = False
     logprobs: int = 0
     seed: Optional[int] = None
@@ -103,6 +104,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             presence_penalty=req.presence_penalty,
             logit_bias=req.logit_bias,
             stop=req.stop,
+            stop_token_ids=req.stop_token_ids,
             seed=req.seed,
             spec_decode=req.spec_decode,
             enable_thinking=req.enable_thinking,
@@ -125,6 +127,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             presence_penalty=req.presence_penalty,
             logit_bias=req.logit_bias,
             stop=req.stop,
+            stop_token_ids=req.stop_token_ids,
             seed=req.seed,
         )
         text = state.generated_text
@@ -193,6 +196,7 @@ async def _stream_completion(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
+                stop_token_ids=req.stop_token_ids,
                 seed=req.seed,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
