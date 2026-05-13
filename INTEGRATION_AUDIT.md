@@ -791,7 +791,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 進程模型 | 多進程 (ZMQ IPC) | 單進程 (asyncio) | Yunshu 無法跨 GPU 擴展 |
 | 調度-執行 | 獨立進程 + 非阻塞 future | asyncio + 單 GPU 線程 | MLX 執行阻塞事件循環 |
 | 流水線並行 | Batch queue + 異步 overlap | 無 | 無調度/執行重疊 |
-| 數據並行 | DPEngineCoreProc + all-reduce | yunshu_mesh/ 存在但未接入 | 模塊存在但不在服務路徑 |
+| 數據並行 | DPEngineCoreProc + all-reduce | DataParallelRouter 接入 MeshManager (DP-1) | 管線已接入，但尚未在生產請求路徑中使用 |
 | 休眠/喚醒 | 3 級休眠 (L0:暫停 L1:卸載權重 L2:丟棄 GPU) | 無 | 無節能或權重卸載 |
 | 優雅關閉 | 3 狀態機 (RUNNING/REQUESTED/SHUTTING_DOWN) | 基本 _shutting_down 標誌 | 較不健壯 |
 
@@ -815,8 +815,8 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 多組 KV cache | 不同注意力類型不同規格 (full, SW, MLA, mamba) | 單一注意力類型 | 不支持混合模型 |
 | COW (copy-on-write) | 塊級 COW + 引用計數在調度器 | COW 在 KVPrefixCache 但不在分頁系統 | 分頁塊池缺 COW |
 | KV 卸載框架 | 完整 OffloadingManager + GPU/CPU specs | 無正式框架 | 有分層但無異步協議 |
-| **Radix tree 前綴匹配** | 無 (平面 hash) | RadixTree 存在 | **Yunshu 優勢** — 但未使用 |
-| **SSD 持久化** | 非內建 | SSDCacheStore 存在 | **Yunshu 優勢** — 但未啟用 |
+| **Radix tree 前綴匹配** | 無 (平面 hash) | RadixTree 已接入 KVCacheManager (C8) | **Yunshu 優勢** — ✅ 已啟用 |
+| **SSD 持久化** | 非內建 | SSDCacheStore 接入 KVPrefixCache (YUNSHU_SSD_CACHE) | **Yunshu 優勢** — ✅ 已啟用 |
 | **思考段 KV 重用** | 無 | ThinkingSegmentSubstore 存在 | **Yunshu 優勢** — 但未觸發 |
 
 ### 12.4 猜測解碼對比
