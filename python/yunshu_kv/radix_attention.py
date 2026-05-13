@@ -96,6 +96,7 @@ class RadixTree:
         self._total_nodes = 0
         self._total_ref_count = 0
         self._eviction_strategy = eviction_strategy  # lru, lfu, fifo
+        self._eviction_stats = {"lru": 0, "lfu": 0, "fifo": 0, "total_freed_blocks": 0}
 
     @property
     def total_nodes(self) -> int:
@@ -311,6 +312,10 @@ class RadixTree:
             self._total_nodes -= 1
             evicted += 1
 
+        if evicted > 0:
+            self._eviction_stats[self._eviction_strategy] += evicted
+            self._eviction_stats["total_freed_blocks"] += len(freed_blocks)
+
         return freed_blocks
 
     def _try_merge(self, node: RadixNode) -> None:
@@ -376,6 +381,8 @@ class RadixTree:
             "total_blocks": total_blocks,
             "total_tokens": total_tokens,
             "total_ref_count": self._total_ref_count,
+            "eviction_strategy": self._eviction_strategy,
+            "eviction_stats": dict(self._eviction_stats),
         }
 
 

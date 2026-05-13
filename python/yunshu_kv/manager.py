@@ -412,6 +412,7 @@ class KVCacheManager:
         return {
             "hot": hot_stats,
             "warm": warm_stats,
+            "radix_tree": self._radix_tree.get_stats(),
         }
 
     # ── Serialization ─────────────────────────────────────────────
