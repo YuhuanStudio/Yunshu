@@ -21,6 +21,8 @@ import {
   VectorSquare,
   FileText,
   Hash,
+  Wrench,
+  Layers,
 } from "lucide-react";
 
 const navItems = [
@@ -35,6 +37,8 @@ const navItems = [
   { href: "/monitoring", label: "Monitoring", icon: Activity },
   { href: "/realtime", label: "Realtime", icon: Radio },
   { href: "/admin", label: "Admin", icon: Shield },
+  { href: "/mcp", label: "MCP", icon: Wrench },
+  { href: "/batch", label: "Batch", icon: Layers },
   { href: "/benchmarks", label: "Benchmarks", icon: Zap },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
