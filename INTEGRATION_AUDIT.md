@@ -309,7 +309,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | 預填充進度 | `prefill_progress.PrefillProgressTracker` | ✅ endpoint 已添加 |
 | 記憶體守衛 | `EngineCore._memory_guard` | ✅ `/gw/monitoring/memory-guard` |
 | SSD Cache 統計 | `SSDKVCache.get_stats()` | ✅ `/gw/monitoring/ssd-cache` |
-| 每模型指標 | `ServerMetrics._per_model` | 無獨立 endpoint |
+| 每模型指標 | `ServerMetrics._per_model` | ✅ `/gw/monitoring/per-model` |
 | 請求隊列統計 | `RequestQueueManager` | ✅ `/admin/queue/stats` |
 
 ---

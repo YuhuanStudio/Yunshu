@@ -338,3 +338,16 @@ async def ssd_cache_stats() -> dict[str, Any]:
 
     stats = getattr(ssd, 'get_stats', lambda: {})()
     return {"active": True, **stats}
+
+
+@router.get("/per-model")
+async def per_model_stats() -> dict[str, Any]:
+    """Per-model request statistics."""
+    from yunshu_engine.server_metrics import get_server_metrics
+    metrics = get_server_metrics()
+    model_ids = list(getattr(metrics, '_per_model', {}).keys())
+    result = {}
+    for mid in model_ids:
+        result[mid] = metrics.get_snapshot(model_id=mid)
+    result["_summary"] = metrics.get_snapshot()
+    return result
