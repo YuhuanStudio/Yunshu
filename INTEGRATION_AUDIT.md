@@ -1075,10 +1075,12 @@ SGLang 的 RadixCache (828 行) 是**生產級基數樹**:
 - **大gram 視圖**: EAGLE spec decode 整合
 - **Prometheus 淘汰指標**
 
-Yunshu 的 RadixTree (radix_attention.py, 365 行):
+Yunshu 的 RadixTree (radix_attention.py):
 - ✅ 已接入 KVCacheManager (C8) — 替代平面 hash prefix cache
 - ✅ LRU/LFU/FIFO 三淘汰策略 (RADIX-EVICT)
-- 缺少: 節點分裂、大gram 視圖、Prometheus 淘汰指標
+- ✅ 節點分裂 — insert() 自動偵測重疊前綴並分裂 (Wave 14 修復)
+- ✅ 後驅逐合併 — 單子節點自動合併減少樹深度
+- 缺少: 大gram 視圖 (EAGLE spec decode 整合)
 
 ### 14.3 SGLang 的性能優化 (Yunshu 可學習)
 
