@@ -23,6 +23,25 @@ class _FakeTokenizer:
     def encode(self, text):
         return list(range(len(text)))
 
+    @property
+    def detokenizer(self):
+        return _FakeDetokenizer()
+
+
+class _FakeDetokenizer:
+    def reset(self):
+        pass
+
+    def add_token(self, token_id):
+        pass
+
+    @property
+    def last_segment(self):
+        return ""
+
+    def finalize(self):
+        return ""
+
 
 class _FakeResponse:
     def __init__(self, uid, text, token, finish_reason=None):
@@ -87,25 +106,19 @@ def _env_fast_drain(monkeypatch):
     monkeypatch.setenv("YUNSHU_DRAIN_TIMEOUT", "0")
     monkeypatch.delenv("DEFAULT_MODEL", raising=False)
     monkeypatch.delenv("YUNSHU_MULTI_MODEL", raising=False)
-
-
-@pytest.fixture(scope="module")
-def _reset_engine_module():
-    """Reset module-level engine state once per module."""
-    old = engine_mod._engine
+    monkeypatch.delenv("YUNSHU_DATA_PARALLEL", raising=False)
+    # Reset engine state before each test to prevent cross-contamination
     engine_mod._engine = None
     yield
-    engine_mod._engine = old
+    engine_mod._engine = None
 
 
-@pytest.fixture(scope="module")
-def app_client(_reset_engine_module):
-    """Shared app + client for the entire test module."""
-    os.environ["YUNSHU_DRAIN_TIMEOUT"] = "0"
+@pytest.fixture
+def app_client():
+    """Create a fresh app + client for each test (no shared state)."""
     app = create_app()
     with TestClient(app) as client:
         yield client
-    os.environ.pop("YUNSHU_DRAIN_TIMEOUT", None)
 
 
 class TestE2EGateway:

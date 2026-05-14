@@ -244,6 +244,10 @@ class BatchedEngine:
         from .speculative_decoder import LookaheadReasoning
         self._lookahead_reasoning = LookaheadReasoning()
 
+        # Medusa speculative decoding (multi-head prediction on hidden state)
+        self._medusa_proposer = None  # MedusaProposer instance
+        self._medusa_strategy = None  # MedusaStrategy wrapper
+
         # SpecPrefill config (opt-in via YUNSHU_SPEC_PREFILL env var)
         self._spec_prefill_enabled = False
         self._spec_prefill_threshold = 8192
@@ -2108,6 +2112,33 @@ class BatchedEngine:
                 )
             except Exception as e:
                 logger.warning(f"MTP decoder init failed ({e})")
+
+        # Medusa path: add prediction heads on top of hidden state (no draft model)
+        # Enable via YUNSHU_MEDUSA=1 env var. Compatible with ngram via CompositeStrategy.
+        if os.environ.get("YUNSHU_MEDUSA", "").strip() in ("1", "true", "yes"):
+            try:
+                from .medusa_proposer import MedusaProposer, MedusaConfig
+                num_heads = int(os.environ.get("YUNSHU_MEDUSA_HEADS", "4"))
+                tree_size = int(os.environ.get("YUNSHU_MEDUSA_TREE_SIZE", "5"))
+                medusa_config = MedusaConfig(
+                    num_heads=num_heads,
+                    tree_size=tree_size,
+                    enabled=True,
+                )
+                self._medusa_proposer = MedusaProposer(medusa_config)
+                self._medusa_proposer.attach(self._model)
+                from .spec_interface import MedusaStrategy
+                self._medusa_strategy = MedusaStrategy(
+                    proposer=self._medusa_proposer,
+                    config=medusa_config,
+                )
+                self._spec_enabled = True
+                logger.info(
+                    f"Medusa proposer initialized: heads={num_heads}, "
+                    f"tree_size={tree_size}, attached={self._medusa_proposer.is_attached}"
+                )
+            except Exception as e:
+                logger.warning(f"Medusa proposer init failed ({e})")
 
         # Store config for on-demand decoder creation
         self._spec_config = spec_config

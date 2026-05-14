@@ -107,8 +107,24 @@ async def get_engine_for_model(model_id: str) -> Engine:
     Both expose generate(), generate_stream(), chat(), stream_chat().
     """
     # Data-parallel routing: if DP is configured, select a replica node
+    # The DPRouterMiddleware handles request lifecycle (start/end).
+    # Here we use the node already selected by the middleware (stored in
+    # per-request state) or fall back to selecting one ourselves.
     if _dp_router is not None and _dp_router.num_nodes > 0:
-        node_id = _dp_router.select_node()
+        node_id = None
+        # Check if middleware already selected a node for this request
+        try:
+            # Best-effort: try to get request-scoped node from context
+            from ..dp_middleware import get_dp_load_balancer
+            lb = get_dp_load_balancer()
+            if lb is not None:
+                node_id = lb.select_node(model_id=model_id)
+        except Exception:
+            pass
+
+        if node_id is None:
+            node_id = _dp_router.select_node()
+
         if node_id is not None:
             _dp_router.record_request_start(node_id)
             # In single-process mode, all DP nodes share the same engine

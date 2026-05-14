@@ -35,7 +35,18 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **4052 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **4290 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 32 — Memory-Proportional Allocation + Process Isolation + Medusa Proposer + Native Video Pipeline + DP Production Path)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Memory-proportional layer allocation | §16.2/§16.3 gap closed — LayerAllocator 4策略 (Equal/MemoryProportional/BandwidthAware/LatencyOptimal) + WaterFillingRebalancer，接入 pipeline.py | +51 tests |
+| Process isolation + fault tolerance | §16.2 gap closed — InferenceWorker 進程隔離 + WorkerSupervisor 自動重啟 + Circuit Breaker + 優雅降級，YUNSHU_PROCESS_ISOLATION=1 | +59 tests |
+| Medusa proposer | §12.4 gap closed — MedusaProposer 多頭預測 + 樹狀候選路徑 + MedusaStrategy 接入 SpecStrategyFactory，YUNSHU_MEDUSA=1 | +49 tests |
+| Native MLX video pipeline | §20.4 gap closed — WanVideoPipeline 原生 MLX 實現 + FlowMatchingScheduler + TemporalConv3D + VideoLoRAManager | +43 tests |
+| DP production path wiring | §12.1 gap closed — DPRouterMiddleware 接入 FastAPI + DPLoadBalancer 請求生命週期 + 健康檢查 + 追蹤 headers (X-DP-Node/X-DP-Latency)，YUNSHU_DATA_PARALLEL=1 | +36 tests |
+| e2e gateway test fix | 修復 test_dp_middleware ↔ test_e2e_gateway 跨測試狀態污染 — _dp_router cleanup + _FakeTokenizer.detokenizer + autouse 隔離 | — |
 
 ### 已完成修復 (2026-05-14 Wave 31 — TBO + GPU Rejection + Mamba Cache + Staged Pipeline + Diffusion Infra + Flaky Test Fixes + DFlash Completion)
 
@@ -1143,7 +1154,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。Wave 31: TBO (Two-Batch Overlap), GPU rejection sampling, Mamba/hybrid KV cache, staged multimodal pipeline, diffusion infrastructure, DFlash pipeline completion 全部實現。8 個 flaky tests 修復。測試套件 4052 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
+> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。Wave 32: memory-proportional allocation, process isolation, Medusa proposer, native video pipeline, DP production path 全部實現。測試套件 4290 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
 
 ---
 

@@ -348,6 +348,89 @@ class MTPStrategy(SpecStrategy):
         self._total_accepted_tokens = 0
 
 
+class MedusaStrategy(SpecStrategy):
+    """Wraps MedusaProposer as a SpecStrategy.
+
+    The Medusa strategy adds K prediction heads on top of the base model's
+    hidden state. Each head predicts a token at a different future position.
+    No separate draft model is needed.
+
+    Tree-based verification evaluates multiple candidate paths from the
+    top-K logits of each head, then verifies the best paths against the
+    target model.
+
+    Note: This strategy requires a model with Medusa heads attached via
+    MedusaProposer.attach(model). Returns empty proposals if not attached.
+    """
+
+    def __init__(self, proposer: Any = None, config: Any = None) -> None:
+        self._proposer = proposer
+        self._config = config
+        self._request_id: Optional[str] = None
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+
+    @property
+    def name(self) -> str:
+        return "medusa"
+
+    @property
+    def proposer(self) -> Any:
+        """Access the underlying MedusaProposer (may be None)."""
+        return self._proposer
+
+    def begin(self, request_id: str) -> None:
+        self._request_id = request_id
+
+    def draft(self, tokens: list[int], n: int) -> DraftProposal:
+        if self._proposer is None or not self._proposer.is_attached:
+            return DraftProposal(tokens=[], strategy_name=self.name)
+        # Medusa proposes via tree — actual tokens come from propose()
+        # which requires hidden_states (provided by the engine)
+        self._total_drafts += 1
+        num_heads = self._proposer.config.num_heads
+        draft_len = min(n, num_heads)
+        self._total_draft_tokens += draft_len
+        return DraftProposal(
+            tokens=[],  # Actual tokens filled by proposer.propose(hidden_states)
+            strategy_name=self.name,
+            metadata={"num_heads": num_heads, "draft_length": draft_len},
+        )
+
+    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+        self._total_accepted += 1
+        self._total_accepted_tokens += verified_up_to
+
+    def stats(self) -> dict:
+        result = {
+            "name": self.name,
+            "total_drafts": self._total_drafts,
+            "total_draft_tokens": self._total_draft_tokens,
+            "total_accepted": self._total_accepted,
+            "total_accepted_tokens": self._total_accepted_tokens,
+            "acceptance_rate": (
+                self._total_accepted_tokens / self._total_draft_tokens
+                if self._total_draft_tokens > 0 else 0.0
+            ),
+        }
+        if self._proposer is not None:
+            result["proposer_stats"] = self._proposer.get_stats()
+        return result
+
+    def end(self, request_id: str) -> None:
+        self._request_id = None
+
+    def reset(self) -> None:
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+        if self._proposer is not None:
+            self._proposer.reset_stats()
+
+
 class CompositeStrategy(SpecStrategy):
     """Combines multiple strategies: first non-empty draft wins.
 
@@ -435,6 +518,7 @@ class SpecStrategyFactory:
       - "ngram": NgramStrategy with optional mode ("lps" or "hashpool")
       - "cross_model": CrossModelStrategy (requires draft model)
       - "mtp": MTPStrategy (requires model with MTP heads)
+      - "medusa": MedusaStrategy (requires MedusaProposer with attached heads)
       - "composite": CompositeStrategy combining multiple strategies
 
     Usage:
@@ -470,12 +554,14 @@ class SpecStrategyFactory:
             return SpecStrategyFactory._create_cross_model(config)
         elif strategy_type == "mtp":
             return SpecStrategyFactory._create_mtp(config)
+        elif strategy_type == "medusa":
+            return SpecStrategyFactory._create_medusa(config)
         elif strategy_type == "composite":
             return SpecStrategyFactory._create_composite(config)
         else:
             raise ValueError(
                 f"Unknown spec strategy type: {strategy_type!r}. "
-                f"Supported: ngram, cross_model, mtp, composite"
+                f"Supported: ngram, cross_model, mtp, medusa, composite"
             )
 
     @staticmethod
@@ -510,6 +596,24 @@ class SpecStrategyFactory:
         return MTPStrategy(decoder=decoder, config=dec_config)
 
     @staticmethod
+    def _create_medusa(config: dict) -> MedusaStrategy:
+        from .medusa_proposer import MedusaConfig, MedusaProposer
+        proposer = config.get("proposer")
+        medusa_config = config.get("medusa_config")
+        if proposer is None:
+            # Create proposer from config params
+            kwargs = {}
+            if "num_heads" in config:
+                kwargs["num_heads"] = int(config["num_heads"])
+            if "tree_size" in config:
+                kwargs["tree_size"] = int(config["tree_size"])
+            if "top_k_per_head" in config:
+                kwargs["top_k_per_head"] = int(config["top_k_per_head"])
+            medusa_config = MedusaConfig(**kwargs)
+            proposer = MedusaProposer(medusa_config)
+        return MedusaStrategy(proposer=proposer, config=medusa_config)
+
+    @staticmethod
     def _create_composite(config: dict) -> CompositeStrategy:
         children_config = config.get("strategies")
         if not children_config or not isinstance(children_config, list):
@@ -541,4 +645,7 @@ class SpecStrategyFactory:
             cap = os.environ.get("YUNSHU_NGRAM_CAPACITY")
             if cap:
                 config["hashpool_capacity"] = int(cap)
+        elif strategy_type == "medusa":
+            config["num_heads"] = int(os.environ.get("YUNSHU_MEDUSA_HEADS", "4"))
+            config["tree_size"] = int(os.environ.get("YUNSHU_MEDUSA_TREE_SIZE", "5"))
         return SpecStrategyFactory.create(config)

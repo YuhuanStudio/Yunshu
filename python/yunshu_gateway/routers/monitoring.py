@@ -419,7 +419,19 @@ async def ssd_cache_stats() -> dict[str, Any]:
 
 @router.get("/data-parallel")
 async def data_parallel_stats() -> dict[str, Any]:
-    """DataParallelRouter statistics — load distribution across replicas."""
+    """DataParallelRouter statistics — load distribution across replicas.
+
+    When the DP middleware is active, includes health checking and per-node
+    latency histograms from DPLoadBalancer. Falls back to raw router stats.
+    """
+    try:
+        from ..dp_middleware import get_dp_load_balancer
+        lb = get_dp_load_balancer()
+        if lb is not None:
+            return lb.get_stats()
+    except Exception:
+        logger.debug("dp_middleware unavailable", exc_info=True)
+
     from ..engine import get_dp_router
 
     router = get_dp_router()

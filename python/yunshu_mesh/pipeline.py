@@ -22,6 +22,12 @@ from typing import Optional
 
 import mlx.core as mx
 
+from .layer_allocator import (
+    LayerAllocationStrategy,
+    LayerAllocator,
+    NodeProfile,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,22 +185,58 @@ class PipelineParallel:
         }
 
 
+def _build_node_profiles(
+    node_memory_gb: list[float],
+) -> list[NodeProfile]:
+    """Convert legacy node_memory_gb list to NodeProfile objects.
+
+    Preserves backward compatibility for callers that only provide memory info.
+    """
+    profiles = []
+    for i, mem_gb in enumerate(node_memory_gb):
+        profiles.append(NodeProfile(
+            node_id=f"node_{i}",
+            memory_bytes=int(mem_gb * (1024 ** 3)),
+            bandwidth_mbps=0.0,
+            latency_ms=0.0,
+            gpu_cores=0,
+        ))
+    return profiles
+
+
 def auto_partition_model(
     num_layers: int,
     num_nodes: int,
     node_memory_gb: list[float],
     model_memory_per_layer_gb: float,
+    strategy: LayerAllocationStrategy = LayerAllocationStrategy.MEMORY_PROPORTIONAL,
+    node_bandwidths_mbps: Optional[list[float]] = None,
+    node_latencies_ms: Optional[list[float]] = None,
+    node_gpu_cores: Optional[list[int]] = None,
 ) -> PipelineParallel:
-    """Auto-partition a model across nodes based on available memory.
+    """Auto-partition a model across nodes using intelligent layer allocation.
 
     Follows Megatron-LM's pipeline partitioning but accounts for
     Apple Silicon's UMA (memory is shared, not device-specific).
+
+    Now uses LayerAllocator with configurable strategies:
+    - EQUAL: simple equal split (legacy behavior)
+    - MEMORY_PROPORTIONAL: layers proportional to node memory (exo pattern)
+    - BANDWIDTH_AWARE: considers inter-node bandwidth (default)
+    - LATENCY_OPTIMAL: DP minimizing max stage latency (Parallax pattern)
+
+    Backward compatible: if only node_memory_gb is provided and no profiles
+    can be built, falls back to EQUAL.
 
     Args:
         num_layers: Total transformer layers.
         num_nodes: Number of available nodes.
         node_memory_gb: Memory available on each node (GB).
         model_memory_per_layer_gb: Memory per layer (GB).
+        strategy: Allocation strategy (default: MEMORY_PROPORTIONAL).
+        node_bandwidths_mbps: Optional inter-node bandwidth for each node.
+        node_latencies_ms: Optional inter-node latency for each node.
+        node_gpu_cores: Optional GPU core count for each node.
 
     Returns:
         PipelineParallel with optimal stage assignments.
@@ -208,30 +250,37 @@ def auto_partition_model(
             f"{total_available_gb:.1f} GB available across {num_nodes} nodes"
         )
 
-    # Distribute layers proportionally to memory
-    layer_allocations = []
-    remaining_layers = num_layers
+    # Build NodeProfile objects from available information
+    profiles = []
     for i, mem_gb in enumerate(node_memory_gb):
-        if i == num_nodes - 1:
-            # Last node gets all remaining layers
-            layer_allocations.append(remaining_layers)
-        else:
-            proportion = mem_gb / total_available_gb
-            alloc = max(1, int(num_layers * proportion))
-            alloc = min(alloc, remaining_layers - (num_nodes - i - 1))
-            layer_allocations.append(alloc)
-            remaining_layers -= alloc
+        bw = node_bandwidths_mbps[i] if node_bandwidths_mbps and i < len(node_bandwidths_mbps) else 0.0
+        lat = node_latencies_ms[i] if node_latencies_ms and i < len(node_latencies_ms) else 0.0
+        cores = node_gpu_cores[i] if node_gpu_cores and i < len(node_gpu_cores) else 0
+        profiles.append(NodeProfile(
+            node_id=f"node_{i}",
+            memory_bytes=int(mem_gb * (1024 ** 3)),
+            bandwidth_mbps=bw,
+            latency_ms=lat,
+            gpu_cores=cores,
+        ))
 
-    # Build stages from allocations
+    # Use LayerAllocator
+    allocator = LayerAllocator()
+    stage_allocs = allocator.allocate(num_layers, profiles, strategy)
+
+    # Build PipelineParallel from allocation results
     pp = PipelineParallel(num_layers, num_nodes)
     current = 0
-    for i, n_layers in enumerate(layer_allocations):
+    for i, sa in enumerate(stage_allocs):
+        if i >= num_nodes:
+            break
         pp._stages[i] = PipelineStage(
             stage_id=i,
-            start_layer=current,
-            end_layer=current + n_layers,
+            start_layer=sa.start_layer,
+            end_layer=sa.end_layer,
             rank=i,
         )
-        current += n_layers
+        pp._stages[i].is_last = (sa.end_layer == num_layers)
+        current = sa.end_layer
 
     return pp

@@ -182,6 +182,14 @@ def create_app() -> FastAPI:
 
     app.add_middleware(MetricsMiddleware)
 
+    # Data-parallel middleware: initialize when YUNSHU_DATA_PARALLEL=1
+    if os.environ.get("YUNSHU_DATA_PARALLEL", "").lower() in ("1", "true", "yes"):
+        from .dp_middleware import setup_data_parallel, DPRouterMiddleware
+
+        dp_lb = setup_data_parallel()
+        app.add_middleware(DPRouterMiddleware)
+        logger.info("DataParallel middleware registered (YUNSHU_DATA_PARALLEL=1)")
+
     # Sleep middleware: reject inference requests while sleeping
     @app.middleware("http")
     async def sleep_guard(request: Request, call_next):
