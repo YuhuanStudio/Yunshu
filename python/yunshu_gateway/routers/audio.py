@@ -7,6 +7,7 @@ Supports:
 - /audio/voices — list available TTS voices
 """
 
+import asyncio
 import base64
 import json
 import os

@@ -818,6 +818,9 @@ class EngineCore:
                 continue
 
             try:
+                import time as _time
+                _step_start = _time.monotonic()
+
                 # Wave 43: CompositionScheduler pre_step hooks (metrics, memory pressure)
                 if self._composition_scheduler is not None:
                     try:
@@ -880,6 +883,7 @@ class EngineCore:
                     # ── Wave 42: Lifecycle + budget + dedup cleanup ──
                     self._lifecycle_orchestrator.on_request_finished(rid)
                     self._budget_manager.remove(rid)
+                    self._memory_aware_scheduler.release_memory(rid)
                     if self._request_dedup is not None:
                         content_hash = self._dedup_hashes.pop(rid, None)
                         if content_hash:
@@ -900,20 +904,24 @@ class EngineCore:
                 # ── Wave 42: Profiler + auto-tuner + fairness ──
                 try:
                     batch_size = len(scheduler_output.outputs)
+                    _step_wall_ms = (_time.monotonic() - _step_start) * 1000
+                    _tokens_gen = sum(
+                        o.completion_tokens for o in scheduler_output.outputs if o.completion_tokens
+                    )
+                    _throughput = _tokens_gen / (_step_wall_ms / 1000) if _step_wall_ms > 0 else 0.0
                     from .auto_tuner import StepMetrics
                     step_metrics = StepMetrics(
                         batch_size=batch_size,
-                        tokens_generated=sum(
-                            o.completion_tokens for o in scheduler_output.outputs
-                        ),
-                        wall_time_ms=0.0,
+                        tokens_generated=_tokens_gen,
+                        wall_time_ms=_step_wall_ms,
+                        throughput_tok_s=_throughput,
                     )
                     self._profiler.record_step(step_metrics)
                     # Auto-tune every 100 steps
                     if self._profiler._total_steps % 100 == 0:
-                        tuning = self._auto_tuner.apply_tuning()
-                        if tuning:
-                            logger.debug(f"AutoTuner: {tuning}")
+                        tuning_decisions = self._auto_tuner.auto_tune()
+                        if tuning_decisions:
+                            logger.debug(f"AutoTuner applied: {[d.param_name for d in tuning_decisions]}")
                     # SLO checks
                     self._slo_monitor.check_slo("ttft", step_metrics.ttft_ms)
                     self._slo_monitor.check_slo("itl", step_metrics.itl_ms)

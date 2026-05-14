@@ -685,6 +685,7 @@ class Scheduler:
 
     def shutdown(self) -> None:
         """Shutdown scheduler and release BatchGenerator resources."""
+        self.deep_reset()
         if self._batch_gen is not None:
             if hasattr(self._batch_gen, 'close'):
                 try:
@@ -2519,9 +2520,6 @@ class Scheduler:
             )
         if self._draft_collector is not None:
             self._draft_collector = BatchedDraftCollection()
-
-    def shutdown(self) -> None:
-        self.deep_reset()
 
     def get_thinking_store(self) -> ThinkingSegmentSubstore:
         """Return the ThinkingSegmentSubstore for external access.

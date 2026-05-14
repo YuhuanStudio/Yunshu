@@ -798,6 +798,32 @@ class AutoTuner:
 
         return decisions
 
+    def auto_tune(self) -> list[TuningDecision]:
+        """Run one auto-tuning cycle using profiler recommendations.
+
+        Gets bottleneck analysis from the profiler and applies the
+        first recommended change. Returns the list of decisions made.
+        """
+        recommendations = self._proposer.get_recommendations()
+        if not recommendations:
+            return []
+
+        decisions: list[TuningDecision] = []
+        # Apply only the top recommendation per cycle
+        rec = recommendations[0]
+        param_name = rec.get("param", "")
+        direction = rec.get("action", "")
+        reason = rec.get("reason", "")
+
+        if param_name and direction in ("increase", "decrease"):
+            decision = self.apply_tuning(
+                param_name=param_name,
+                direction=direction,
+                reason=reason,
+            )
+            decisions.append(decision)
+        return decisions
+
     def get_tuning_history(self) -> list[dict[str, Any]]:
         """Return all tuning decisions and outcomes."""
         with self._lock:
