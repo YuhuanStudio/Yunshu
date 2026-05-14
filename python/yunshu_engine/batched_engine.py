@@ -514,9 +514,51 @@ class BatchedEngine:
         self._engine_core.scheduler.config.model_name = self.model_name
         # Wire prefix cache into scheduler for batch-path insert_segments (C16)
         self._engine_core.set_prefix_cache(self._kv_prefix_cache)
+        # Wire speculative decoding decoders into the scheduler
+        self._wire_spec_decoders_to_scheduler()
         await self._engine_core.start()
 
         logger.info(f"BatchedEngine started: {self.model_name}")
+
+    def _wire_spec_decoders_to_scheduler(self) -> None:
+        """Wire speculative decoding decoders into the scheduler's batch path.
+
+        Called after _ensure_engine_core() creates the scheduler and after
+        _init_spec_decode() has detected spec heads and created decoders.
+
+        Three paths:
+          1. Cross-model: SpeculativeDecoder → scheduler.set_spec_decoder()
+          2. MTP: MTPDecoder → scheduler.set_mtp_decoder()
+          3. N-gram: already handled by SchedulerConfig.ngram_spec_enabled
+
+        Also propagates N-gram proposer settings to the scheduler config
+        if BatchedEngine has one but the scheduler doesn't.
+        """
+        if self._engine_core is None:
+            return
+        scheduler = self._engine_core.scheduler
+
+        # Path 1: Cross-model speculative decoder (EAGLE-3 / external draft)
+        if self._spec_decoder is not None:
+            scheduler.set_spec_decoder(self._spec_decoder)
+            logger.info("Wired cross-model spec decoder into scheduler batch path")
+
+        # Path 2: MTP decoder (built-in multi-token prediction heads)
+        if self._mtp_decoder is not None:
+            scheduler.set_mtp_decoder(self._mtp_decoder)
+            logger.info("Wired MTP decoder into scheduler batch path")
+
+        # Path 3: Propagate N-gram proposer to scheduler if needed
+        # (BatchedEngine creates its own N-gram proposer, but the scheduler
+        # may not have one if ngram_spec_enabled was False in EngineCoreConfig)
+        if self._ngram_proposer is not None and scheduler._ngram_proposer is None:
+            scheduler.enable_ngram_spec(
+                min_n=self._ngram_proposer.config.min_n,
+                max_n=self._ngram_proposer.config.max_n,
+                k=self._ngram_proposer.config.k,
+                mode=self._ngram_proposer.config.mode,
+            )
+            logger.info("Wired N-gram proposer into scheduler batch path")
 
     async def stop(self) -> None:
         """Stop engine and release resources."""

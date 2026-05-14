@@ -19,17 +19,15 @@ Architecture:
 from __future__ import annotations
 
 import copy
-import gc
 import logging
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 from .priority_queue import RequestPriorityQueue, make_waiting_queue
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
-from .speculative_decoder import SpeculativeDecoder
+from .speculative_decoder import SpeculativeDecoder, DraftResult
 from .ngram_proposer import NgramProposer, NgramConfig
 from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentConfig
 
@@ -191,6 +189,10 @@ class Scheduler:
         # Speculative decoding (Phase 4: EAGLE-3 single-request path)
         self._spec_decoder: Any | None = None
         self._spec_head_info: Any | None = None  # SpecHeadInfo from detect_spec_heads()
+
+        # MTP decoder for batch-path speculative decoding (self-speculative,
+        # uses model's own prediction heads — no external draft model needed)
+        self._mtp_decoder: Any | None = None
 
         # N-gram speculative decoding (model-free, available in batch path)
         self._ngram_proposer: NgramProposer | None = None
@@ -374,8 +376,12 @@ class Scheduler:
                 self.config.enable_spec_decode
                 and isinstance(self._spec_decoder, SpeculativeDecoder)
             )
+            mtp_active = (
+                self.config.enable_spec_decode
+                and self._mtp_decoder is not None
+            )
             ngram_active = self._ngram_proposer is not None
-            if spec_decoder_active or ngram_active:
+            if spec_decoder_active or mtp_active or ngram_active:
                 self._verify_spec_drafts(outputs)
                 # Generate drafts for still-active requests
                 for req_id in list(self.running.keys()):
@@ -571,7 +577,7 @@ class Scheduler:
                     try:
                         import mlx.core as mx
                         ids_arr = mx.array(tokens_to_insert)
-                        cached_kv, _rem, matched = self._prefix_cache.get(ids_arr)
+                        cached_kv, _, matched = self._prefix_cache.get(ids_arr)
                         if cached_kv is not None and matched > 0:
                             remaining_tokens = tokens_to_insert[matched:]
                             if matched > 32:
@@ -1328,7 +1334,7 @@ class Scheduler:
         If detected and config.enable_spec_decode is True, creates a SpeculativeDecoder.
         The decoder is used for single-request speculative decoding in the serving path.
         """
-        from .speculative_decoder import detect_spec_heads, SpecHeadInfo
+        from .speculative_decoder import detect_spec_heads
 
         # Get model config
         model_config = {}
@@ -1371,6 +1377,36 @@ class Scheduler:
         """Return detected speculative decoding head info."""
         return self._spec_head_info
 
+    def set_spec_decoder(self, decoder: Any) -> None:
+        """Set the speculative decoder for the batch path.
+
+        Called by BatchedEngine/EngineCore after loading a draft model
+        and creating a SpeculativeDecoder. Once set, the scheduler's
+        step loop will generate and verify draft tokens each step.
+
+        Args:
+            decoder: A SpeculativeDecoder instance (cross-model draft),
+                     or an MTPStrategy/SpecStrategy instance.
+        """
+        self._spec_decoder = decoder
+        self.config.enable_spec_decode = True
+        logger.info(
+            f"Scheduler spec decoder set: type={type(decoder).__name__}"
+        )
+
+    def set_mtp_decoder(self, mtp_decoder: Any, config: Any = None) -> None:
+        """Set an MTP decoder for batch-path speculative decoding.
+
+        Args:
+            mtp_decoder: An MTPDecoder instance (from mtp_decoder.py).
+            config: Optional SpecDecodingConfig (draft_length used for K).
+        """
+        self._mtp_decoder = mtp_decoder
+        self.config.enable_spec_decode = True
+        logger.info(
+            f"Scheduler MTP decoder set: type={type(mtp_decoder).__name__}"
+        )
+
     def enable_ngram_spec(
         self,
         min_n: int = 1,
@@ -1399,11 +1435,12 @@ class Scheduler:
     def _try_spec_decode_draft(self, req: Request) -> None:
         """Generate K draft tokens for a request using the spec decoder.
 
-        Supports two spec decode backends:
+        Supports three spec decode backends:
         1. SpeculativeDecoder (cross-model draft model)
-        2. NgramProposer (model-free N-gram pattern matching)
+        2. MTPDecoder (self-speculative via built-in prediction heads)
+        3. NgramProposer (model-free N-gram pattern matching)
 
-        Both produce draft token IDs stored in ``self._spec_drafts[req.request_id]``
+        All produce draft token IDs stored in ``self._spec_drafts[req.request_id]``
         and verified on the next scheduler step against the target model output.
 
         Args:
@@ -1423,7 +1460,15 @@ class Scheduler:
             self._try_cross_model_draft(req)
             return
 
-        # Path 2: N-gram proposer (model-free)
+        # Path 2: MTP decoder (self-speculative, built-in prediction heads)
+        if (
+            self.config.enable_spec_decode
+            and self._mtp_decoder is not None
+        ):
+            self._try_mtp_draft(req)
+            return
+
+        # Path 3: N-gram proposer (model-free)
         if self._ngram_proposer is not None:
             self._try_ngram_draft(req)
 
@@ -1451,6 +1496,79 @@ class Scheduler:
 
         except Exception as e:
             logger.debug(f"Spec decode draft failed for {req.request_id}: {e}")
+
+    def _try_mtp_draft(self, req: Request) -> None:
+        """Generate draft token using the MTP decoder (self-speculative).
+
+        MTP uses the model's own multi-token prediction heads to propose one
+        draft token per step. The draft is verified on the next scheduler step
+        when the target model produces the actual next token.
+
+        Unlike cross-model spec decode, MTP requires no external draft model
+        and no separate KV cache. The MTP head shares the backbone's hidden
+        state. Draft generation runs on the MLX executor thread (GPU).
+
+        The actual MTP forward pass (model.mtp_forward) is only used in the
+        single-request path. For batch mode, we use a simpler heuristic:
+        propose the most likely next token from the last hidden state. If the
+        model supports n_confirmed, the verify step on the next batch step
+        handles acceptance/rejection with zero-cost rollback.
+        """
+        try:
+            mtp_decoder = self._mtp_decoder
+            if mtp_decoder is None:
+                return
+
+            # MTP proposes a single draft token per step from the last
+            # output token's hidden state. We need the model to run
+            # mtp_forward(last_hidden, last_token). However, in batch
+            # mode we don't have the hidden state readily available.
+            # Instead, we run a lightweight forward to get logits and
+            # take the greedy prediction as our draft.
+            import mlx.core as mx
+
+            last_tok = req.output_token_ids[-1]
+            input_ids = mx.array([[last_tok]])
+
+            # Use the MTP decoder's model for the draft proposal
+            model = mtp_decoder.model
+            inner = getattr(model, "language_model", model)
+
+            # Check if model has MTP forward capability
+            if hasattr(inner, "mtp_forward"):
+                # Run the backbone forward to get hidden state, then MTP head
+                out, hidden = model(
+                    input_ids,
+                    cache=None,  # No cache — just a forward for draft
+                    return_hidden=True,
+                )
+                mx.synchronize()
+                # MTP draft from hidden state
+                primary = int(mx.argmax(out[0, -1, :]).item())
+                draft = mtp_decoder._mtp_draft(hidden[:, -1:, :], primary)
+
+                draft_ids = [draft]
+            else:
+                # Fallback: greedy argmax from a single forward pass
+                out = model(input_ids)
+                if hasattr(out, 'logits'):
+                    out = out.logits
+                draft = int(mx.argmax(out[0, -1, :]).item())
+                draft_ids = [draft]
+
+            if draft_ids:
+                rid = req.request_id
+                self._spec_drafts[rid] = draft_ids
+                if rid not in self._spec_stats:
+                    self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "mtp"}
+                self._spec_stats[rid]["proposals"] += len(draft_ids)
+                self._spec_total_proposals += len(draft_ids)
+                logger.debug(
+                    f"MTP spec draft for {rid}: "
+                    f"{len(draft_ids)} tokens"
+                )
+        except Exception as e:
+            logger.debug(f"MTP spec draft failed for {req.request_id}: {e}")
 
     def _try_ngram_draft(self, req: Request) -> None:
         """Generate draft tokens using the N-gram proposer (model-free).
@@ -1486,17 +1604,14 @@ class Scheduler:
             logger.debug(f"N-gram spec draft failed for {req.request_id}: {e}")
 
     def _generate_draft_tokens(
-        self, req: Request, decoder: SpeculativeDecoder, K: int
+        self, req: Request, decoder: SpeculativeDecoder, _K: int = 0
     ) -> DraftResult | None:
-        """Generate K draft tokens using the draft model.
-
-        Handles MLX array construction and draft cache management.
-        Separated from _try_spec_decode_draft for testability.
+        """Generate draft tokens using the draft model.
 
         Args:
             req: The running request.
             decoder: The speculative decoder with draft model.
-            K: Number of draft tokens to generate.
+            _K: Unused (decoder knows its own draft_length).
 
         Returns:
             DraftResult with proposed tokens, or None on failure.
@@ -1596,8 +1711,7 @@ class Scheduler:
         _process_aborts() when a request is aborted.
         """
         self._spec_drafts.pop(req_id, None)
-        stats = self._spec_stats.pop(req_id, None)
-        # Aggregate final stats are already accumulated in _spec_total_*
+        self._spec_stats.pop(req_id, None)
 
     # ── End speculative decoding batch-path methods ──
 
@@ -1629,6 +1743,7 @@ class Scheduler:
         self._pending_prefill.clear()
         self._spec_decoder = None
         self._spec_head_info = None
+        self._mtp_decoder = None
         if self._ngram_proposer is not None:
             # Recreate ngram proposer (clears all learned patterns)
             self._ngram_proposer = NgramProposer(NgramConfig(
@@ -1680,6 +1795,7 @@ class Scheduler:
             self.config.enable_spec_decode
             and isinstance(self._spec_decoder, SpeculativeDecoder)
         )
+        stats["mtp_spec_enabled"] = self._mtp_decoder is not None
         stats["ngram_spec_enabled"] = self._ngram_proposer is not None
         stats["spec_proposals"] = self._spec_total_proposals
         stats["spec_accepted"] = self._spec_total_accepted
@@ -1693,6 +1809,18 @@ class Scheduler:
         stats["spec_pending_drafts"] = len(self._spec_drafts)
         if self._ngram_proposer is not None:
             stats["ngram_spec"] = self._ngram_proposer.get_stats()
+        if self._mtp_decoder is not None:
+            try:
+                s = self._mtp_decoder.stats
+                stats["mtp_spec"] = {
+                    "accepts": s.accepts,
+                    "rejects": s.rejects,
+                    "cooldowns": s.cooldowns,
+                    "tokens_generated": s.tokens_generated,
+                    "total_cycles": s.total_cycles,
+                }
+            except Exception:
+                logger.debug("MTP stats unavailable", exc_info=True)
         return stats
 
 
