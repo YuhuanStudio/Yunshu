@@ -256,7 +256,7 @@ class VisionFeatureCache:
                 if oldest.file_path.exists():
                     oldest.file_path.unlink()
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
 
     def _load_from_ssd(self, key: str) -> Optional[Any]:
         with self._ssd_lock:
@@ -305,7 +305,7 @@ class VisionFeatureCache:
                 if file_path.exists():
                     file_path.unlink()
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
             return None
 
     def _scan_existing_files(self) -> None:
@@ -396,7 +396,7 @@ class VisionFeatureCache:
                         if p is not None and p.exists():
                             p.unlink()
                     except Exception:
-                        pass
+                        logger.debug("failed", exc_info=True)
             finally:
                 with self._pending_lock:
                     self._pending_write_keys.discard(key)

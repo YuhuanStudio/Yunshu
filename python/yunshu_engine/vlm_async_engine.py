@@ -142,7 +142,7 @@ class VLMAsyncEngineCore:
                 try:
                     await state.output_queue.put(VLMStreamChunk(finish_reason="abort"))
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
                 state.finished_event.set()
 
         self._requests.clear()
@@ -230,7 +230,7 @@ class VLMAsyncEngineCore:
                     VLMStreamChunk(finish_reason="error")
                 )
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
         finally:
             state.done = True
             state.finished_event.set()
@@ -369,7 +369,7 @@ class VLMAsyncEngineCore:
                     VLMStreamChunk(finish_reason="abort")
                 )
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove request state."""

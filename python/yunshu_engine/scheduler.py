@@ -102,7 +102,7 @@ class _LogitsProcessorSampler:
             tid = token.item() if hasattr(token, 'item') else int(token)
             self._tokens.append(tid)
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
         return token
 
     def reset(self):
@@ -242,7 +242,7 @@ class Scheduler:
                 try:
                     self._batch_gen.close()
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
             self._batch_gen = None
         logger.info("Scheduler shutdown complete")
 
@@ -779,7 +779,7 @@ class Scheduler:
                 if matched > 0:
                     cached_prefix = matched
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
 
         request.status = RequestStatus.PREEMPTED
         # Preserve cached prefix tokens — only reset beyond cache boundary
@@ -1166,7 +1166,7 @@ class Scheduler:
                 mx.synchronize()
                 mx.clear_cache()
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
 
     def _maybe_evict_kv_cache(self) -> None:
         """Proactive memory pressure eviction (C12).
@@ -1194,7 +1194,7 @@ class Scheduler:
                             f"(usage {usage:.1%})"
                         )
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
     def _cleanup_finished(self) -> None:
         """Remove finished requests from running dict."""
@@ -1558,7 +1558,7 @@ class Scheduler:
             try:
                 self._batch_gen.close()
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
             self._batch_gen = None
         self.waiting.clear()
         self.running.clear()

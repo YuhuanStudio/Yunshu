@@ -43,7 +43,7 @@ def get_optimization_status() -> dict:
                 "peak_bytes": mx.get_peak_memory(),
             }
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
     flash_available = hasattr(mx, "fast") and hasattr(
         mx.fast, "scaled_dot_product_attention"

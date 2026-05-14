@@ -180,7 +180,7 @@ def detect_pipeline_type(model_path: str) -> PipelineType:
             if "qwen" in arch or "qwen" in model_type:
                 return PipelineType.QWEN_IMAGE
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
     # Default to Z-Image if it has the right directory structure
     if all((path / d).is_dir() for d in ("transformer", "vae", "text_encoder")):

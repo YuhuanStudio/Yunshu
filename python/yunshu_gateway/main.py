@@ -309,7 +309,7 @@ def create_app() -> FastAPI:
                 )
                 total_uma = int(r.stdout.strip())
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
             if total_uma > 0:
                 mem_pct = active / total_uma
                 checks["gpu_memory_ok"] = mem_pct < 0.95

@@ -64,7 +64,7 @@ async def sleep_server(req: SleepRequest, request: Request):
                     try:
                         await entry.engine.stop()
                     except Exception:
-                        pass
+                        logger.debug("failed", exc_info=True)
         logger.info("L2 sleep: all models and caches released")
 
     _sleep_level = level

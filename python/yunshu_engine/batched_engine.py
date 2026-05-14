@@ -51,7 +51,7 @@ def _wired_limit_ctx(model):
                 mx.synchronize()
                 mx.set_wired_limit(old_limit)
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
 
 
 @dataclass
@@ -124,7 +124,7 @@ def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store) -> 
             kv_data=None,
         )
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
 
 
 def _build_constrained_sampler(sampler, json_schema, tokenizer):
@@ -851,7 +851,7 @@ class BatchedEngine:
                     think_end_token = tokenizer.encode("</think")[-1]
                     think_start_token = tokenizer.encode("<think")[-1]
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             # Try KV prefix cache hit
             prefix_cache = self._kv_prefix_cache
@@ -1242,7 +1242,7 @@ class BatchedEngine:
                     try:
                         _tracker.unregister(_stream_req_id)
                     except Exception:
-                        pass
+                        logger.debug("failed", exc_info=True)
             return
 
         # Engine loop path: continuous batching with scheduler
@@ -1283,7 +1283,7 @@ class BatchedEngine:
                 try:
                     await self._engine_core.abort_request(request_id)
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
     async def _stream_generate_fast(
         self,
@@ -1434,7 +1434,7 @@ class BatchedEngine:
                     think_end_token = tokenizer.encode("</think")[-1]
                     think_start_token = tokenizer.encode("<think")[-1]
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
@@ -2467,7 +2467,7 @@ class BatchedEngine:
                 pm.set_gauge("mtp_acceptance_rate", s.accepts / s.total_cycles)
                 pm.set_gauge("mtp_total_cycles", s.total_cycles)
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
         return GenerationOutput(
             text=output_text,
@@ -2641,7 +2641,7 @@ class BatchedEngine:
             from yunshu_engine.message_adapter import adapt_messages
             messages = adapt_messages(messages, self.model_name)
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
         if tokenizer and hasattr(tokenizer, "apply_chat_template"):
             try:

@@ -175,7 +175,7 @@ class MCPServerConnection:
                 self._process.terminate()
                 await self._process.wait()
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
             self._process = None
         self._connected = False
         self.tools.clear()

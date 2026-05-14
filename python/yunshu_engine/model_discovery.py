@@ -124,7 +124,7 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
             with open(model_dir / "config.json") as f:
                 config_model_type = json.load(f).get("model_type", "")
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
         models[model_dir.name] = DiscoveredModel(
             model_id=model_dir.name,

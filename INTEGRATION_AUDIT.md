@@ -1149,7 +1149,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | N-gram(Python), EAGLE-3(代碼存在), MTP | 缺 GPU 加速 N-gram, Medusa, DFlash |
 | 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | 僅單請求 | **關鍵差距**: 批量無法受益 |
 | GPU 拒絕採樣 | GPU kernel | CPU 逐個驗證 | 慢得多 |
-| Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | 無整合 | 無法組合使用 |
+| Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | ✅ _grammar_filter_drafts() 預驗證 (Wave 28) | grammar-aware spec decode |
 | 調度器整合 | draft token IDs 每請求追蹤 | ✅ 已接入 scheduler step loop (Wave 15) | draft 生成 + 驗證 + 統計 |
 
 ### 12.5 API Server 對比

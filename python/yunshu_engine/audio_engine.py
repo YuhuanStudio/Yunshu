@@ -134,7 +134,7 @@ def list_voices() -> list[str]:
                 if engine is not None and hasattr(engine, "list_voices"):
                     return engine.list_voices()
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
 
     return list(DEFAULT_VOICES)
 
@@ -489,7 +489,7 @@ def _find_engine(engine_type: str):
             if engine_type == "tts" and isinstance(engine, TTSEngine):
                 return engine
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
     return None
 
 

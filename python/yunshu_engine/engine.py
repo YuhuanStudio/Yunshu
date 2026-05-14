@@ -353,7 +353,7 @@ class Engine:
             try:
                 self._batch_gen.close()
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
             self._batch_gen = None
 
         # Release model and tokenizer references (oMLX EngineCore.close pattern)
@@ -367,7 +367,7 @@ class Engine:
         try:
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
         logger.info("Engine stopped and GPU memory released")
 
@@ -643,7 +643,7 @@ class Engine:
                     from .mlx_executor import sync_and_clear_cache
                     await loop.run_in_executor(self._executor, sync_and_clear_cache)
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             # 6. Yield to event loop
             await asyncio.sleep(0)
@@ -763,7 +763,7 @@ class Engine:
                 try:
                     logprob = float(resp.logprobs[resp.token].item())
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             # Get state machine state
             current_state = getattr(resp, 'current_state', 'normal') or 'normal'
@@ -809,7 +809,7 @@ class Engine:
                             except asyncio.QueueFull:
                                 pass
                     except Exception:
-                        pass
+                        logger.debug("failed", exc_info=True)
 
                 state.finish_reason = finish_reason
                 state.phase = RequestPhase.FINISHED

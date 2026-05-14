@@ -56,7 +56,7 @@ def get_total_memory_bytes() -> int:
         )
         return int(r.stdout.strip())
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
     if HAS_MLX:
         try:
             if mx.metal.is_available():
@@ -64,7 +64,7 @@ def get_total_memory_bytes() -> int:
                 if "memory_size" in info:
                     return int(info["memory_size"])
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
     return DEFAULT_MEMORY_BYTES
 
 
@@ -81,7 +81,7 @@ def get_max_working_set_bytes() -> int:
                 if ws > 0:
                     return ws
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
     try:
         import psutil
         return int(psutil.virtual_memory().total * 0.75)
@@ -102,7 +102,7 @@ def get_gpu_core_count() -> Optional[int]:
                 if m:
                     return int(m.group(1))
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
     return None
 
 
@@ -112,7 +112,7 @@ def get_mlx_device_name() -> Optional[str]:
             if mx.metal.is_available():
                 return mx.device_info().get("device_name")
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
     return None
 
 
@@ -122,7 +122,7 @@ def get_os_version() -> str:
         if ver:
             return f"macOS {ver}"
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
     return "macOS"
 
 

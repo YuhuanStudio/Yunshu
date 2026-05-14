@@ -315,7 +315,7 @@ class VLMEngine:
                         if len(ids) == 1:
                             stop_ids.add(ids[0])
                     except Exception:
-                        pass
+                        logger.debug("failed", exc_info=True)
             if stop_token_ids:
                 stop_ids.update(stop_token_ids)
 
@@ -416,7 +416,7 @@ class VLMEngine:
                             if len(ids) == 1:
                                 stop_ids.add(ids[0])
                         except Exception:
-                            pass
+                            logger.debug("failed", exc_info=True)
 
                 has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
                 if has_detokenizer:
@@ -521,7 +521,7 @@ class VLMEngine:
             if cached_prefix is not None:
                 logger.debug(f"VLM prefix cache hit: {len(cached_prefix)} tokens")
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
         # Check vision feature cache
         cached_features = None
@@ -586,7 +586,7 @@ class VLMEngine:
                         mx.eval(features)
                         self._vision_cache.put(img_hash, self.model_name, features)
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
 
         return result.text if hasattr(result, 'text') else str(result)
 
@@ -641,7 +641,7 @@ class VLMEngine:
                     if len(ids) == 1:
                         stop_ids.add(ids[0])
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
         with mx.stream(generation_stream):
             # SpecPrefill: for long text prompts, use attention-based sparse
@@ -694,7 +694,7 @@ class VLMEngine:
                             from .json_schema import apply_json_constraint
                             logits = apply_json_constraint(logits, allowed)
                     except Exception:
-                        pass
+                        logger.debug("failed", exc_info=True)
 
                 current = sampler(logits)
                 mx.eval(current)
@@ -851,7 +851,7 @@ class VLMEngine:
                     else:
                         stop_suffixes.append(s)
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
         has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
         if has_detokenizer:
@@ -917,7 +917,7 @@ class VLMEngine:
                         from .json_schema import apply_json_constraint
                         logits = apply_json_constraint(logits, allowed)
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             current = sampler(logits)
             mx.eval(current)
@@ -1069,7 +1069,7 @@ class VLMEngine:
                         for chunk in iter(lambda: f.read(8192), b""):
                             h.update(chunk)
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
         return h.hexdigest()[:16]
 
     # ── Audio Extraction ──

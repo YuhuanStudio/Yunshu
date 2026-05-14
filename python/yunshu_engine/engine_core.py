@@ -279,7 +279,7 @@ class EngineCore:
             try:
                 collector.put(None)
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
         for event in self._finished_events.values():
             event.set()
 
@@ -298,7 +298,7 @@ class EngineCore:
         try:
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
         logger.info("EngineCore stopped")
 
@@ -606,7 +606,7 @@ class EngineCore:
                         mem_usage,
                     )
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             await asyncio.sleep(0)
 

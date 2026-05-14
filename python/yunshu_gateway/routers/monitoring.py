@@ -228,7 +228,7 @@ async def requests_stats(
         if hasattr(metrics, '_server_metrics') and metrics._server_metrics is not None:
             data["itl"] = metrics._server_metrics.get_itl_stats()
     except Exception:
-        pass
+        logger.debug("failed", exc_info=True)
 
     return data
 
@@ -258,7 +258,7 @@ async def prometheus_export() -> str:
                     if core and hasattr(core, '_memory_guard') and core._memory_guard:
                         sm = core._memory_guard._monitor if hasattr(core._memory_guard, '_monitor') else None
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
                 try:
                     from ..middleware.metrics import get_metrics
                     metrics = get_metrics()
@@ -267,7 +267,7 @@ async def prometheus_export() -> str:
                         pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0))
                         pm.set_gauge("itl_p99_ms", itl.get("itl_p99_ms", 0))
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
     return pm.generate()
 

@@ -313,7 +313,7 @@ class SSDKVCache:
                     except OSError:
                         pass
             except Exception:
-                pass
+                logger.debug("failed", exc_info=True)
         self._write_queue.clear()
 
     def _recover_index(self) -> None:
@@ -362,7 +362,7 @@ class SSDKVCache:
                         )
                     count += 1
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
         if count > 0:
             logger.info(f"SSD KV cache: recovered {count} blocks from disk scan")
 
@@ -595,7 +595,7 @@ class SSDKVCache:
                     for entry in self._sqlite_store.list_all():
                         self._sqlite_store.delete(entry["block_hash"])
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
         for p in paths:
             try:

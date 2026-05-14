@@ -65,7 +65,7 @@ def get_max_working_set_bytes() -> int:
             if hasattr(info, 'max_recommended_working_set_size'):
                 return int(info.max_recommended_working_set_size)
         except Exception:
-            pass
+            logger.debug("failed", exc_info=True)
 
     # Fallback: use 75% of system memory
     return int(get_system_memory() * 0.75)
@@ -182,7 +182,7 @@ class MemoryMonitor:
                     if hasattr(info, 'cache_memory'):
                         cache = int(info.cache_memory)
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
             available = max(0, total - active)
             util = (active / total * 100) if total > 0 else 0.0

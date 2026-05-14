@@ -59,7 +59,7 @@ async def extract_text_from_image(
                     if isinstance(engine, OCREngine):
                         ocr_engine = engine
                 except Exception:
-                    pass
+                    logger.debug("failed", exc_info=True)
 
         if ocr_engine is None:
             raise HTTPException(status_code=404, detail="No OCR engine available")
