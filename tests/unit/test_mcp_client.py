@@ -36,7 +36,7 @@ class TestMCPClientManager:
         mgr = MCPClientManager()
         with pytest.raises(KeyError):
             import asyncio
-            asyncio.get_event_loop().run_until_complete(mgr.call_tool("nonexistent", {}))
+            asyncio.run(mgr.call_tool("nonexistent", {}))
 
     def test_parse_config_file(self, tmp_path):
         from yunshu_engine.mcp_client import MCPClientManager
@@ -79,7 +79,7 @@ class TestMCPClientManager:
         mgr = MCPClientManager()
         # This is async, just test the config parsing
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(mgr.load_config())
+        result = asyncio.run(mgr.load_config())
         assert result == 0  # disabled, so 0 connected
 
 

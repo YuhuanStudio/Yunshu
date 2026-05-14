@@ -99,7 +99,7 @@ class TestCancelEndpoint:
         from yunshu_engine.request_tracker import get_request_tracker
         tracker = get_request_tracker()
         gen = tracker.register("test-cancel-1", "test")
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             cancel_generation(CancelRequest(request_id="test-cancel-1"))
         )
         assert result["status"] == "cancelled"
@@ -111,7 +111,7 @@ class TestCancelEndpoint:
         tracker = get_request_tracker()
         tracker.register("test-cancel-all-1")
         tracker.register("test-cancel-all-2")
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             cancel_generation(CancelRequest(cancel_all=True))
         )
         assert result["status"] == "cancelled"
@@ -123,7 +123,7 @@ class TestCancelEndpoint:
         from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 cancel_generation(CancelRequest(request_id="nonexistent"))
             )
         assert exc_info.value.status_code == 404
@@ -132,7 +132,7 @@ class TestCancelEndpoint:
         from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 cancel_generation(CancelRequest())
             )
         assert exc_info.value.status_code == 400

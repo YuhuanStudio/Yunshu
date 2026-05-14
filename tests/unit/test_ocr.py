@@ -32,7 +32,7 @@ class TestOCREngine:
         engine = OCREngine("/test/model")
         with pytest.raises(RuntimeError, match="not started"):
             import asyncio
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 engine.extract_text("/tmp/test.png")
             )
 

@@ -1472,14 +1472,31 @@ class ImageGenEngine:
 
         t0 = time.monotonic()
 
-        def _generate_sync() -> bytes:
-            return self._run_pipeline(
-                prompt=prompt,
-                width=width,
-                height=height,
-                num_steps=num_inference_steps,
-                seed=seed if seed is not None else 42,
-            )
+        # Use DFlash block diffusion if enabled and compatible
+        use_dflash = (
+            self._dflash is not None
+            and self._dflash.is_enabled
+            and self._dflash.is_compatible(self._transformer)
+        )
+
+        if use_dflash:
+            def _generate_sync() -> bytes:
+                return self._run_dflash_pipeline(
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    num_steps=num_inference_steps,
+                    seed=seed if seed is not None else 42,
+                )
+        else:
+            def _generate_sync() -> bytes:
+                return self._run_pipeline(
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    num_steps=num_inference_steps,
+                    seed=seed if seed is not None else 42,
+                )
 
         try:
             loop = asyncio.get_running_loop()
@@ -1687,6 +1704,171 @@ class ImageGenEngine:
             yield chunk
             if chunk.get("is_final"):
                 break
+
+    def _run_dflash_pipeline(
+        self,
+        prompt: str,
+        width: int,
+        height: int,
+        num_steps: int,
+        seed: int,
+    ) -> bytes:
+        """Run block diffusion pipeline using DFlash.
+
+        Implements the 2-stage block diffusion protocol:
+        1. Coarse stage: Generate a low-resolution block plan with fewer steps
+        2. Refinement stage: Refine each block with full steps and warm-start
+           from L1 cached coarse latents
+
+        The key acceleration comes from:
+        - Coarse blocks run at reduced resolution (block_size x block_size)
+        - L1 cache reuses coarse latents as warm-starts for refinement
+        - Block-level parallelism where memory allows
+        """
+        from .dflash import BlockPlan
+
+        dflash = self._dflash
+        config = dflash.config
+        overlap = config.overlap_margin if config.overlap_blocks else 0
+
+        # Create block plan for the image
+        block_plan = BlockPlan.create(
+            width, height, config.block_size, overlap=overlap,
+        )
+        logger.info(
+            f"DFlash pipeline: {width}x{height} → {block_plan.num_blocks} blocks "
+            f"(coarse={config.coarse_steps}, refine={config.refine_steps})"
+        )
+
+        # 1. Tokenize prompt (shared across all blocks)
+        tokenizer = self._tokenizer
+        formatted = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
+        tokens = tokenizer(
+            [formatted],
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="np",
+        )
+        input_ids = mx.array(tokens["input_ids"])
+        attention_mask = mx.array(tokens["attention_mask"])
+
+        # 2. Text encoding (shared across all blocks)
+        cap_feats = self._text_encoder(input_ids, attention_mask)
+        num_valid = int(mx.sum(attention_mask[0]).item())
+        cap_feats = cap_feats[0, :num_valid, :]
+        mx.eval(cap_feats)
+
+        # 3. Compute sigma schedules for coarse and refine stages
+        sigmas_coarse = _compute_sigmas(config.coarse_steps, width, height)
+        sigmas_refine = _compute_sigmas(config.refine_steps, width, height)
+
+        # 4. Stage 1: Coarse generation per block
+        coarse_latents = {}
+        for i, (bx, by, bx_end, by_end) in enumerate(block_plan.blocks):
+            block_key = f"coarse_{bx}_{by}"
+
+            # Check L1 cache for reusable coarse latent
+            cached = dflash._l1_cache.get(block_key)
+            if cached is not None:
+                coarse_latents[block_key] = cached
+                logger.debug(f"DFlash block ({bx},{by}): L1 cache hit (coarse)")
+                continue
+
+            # Generate initial noise for full image region but encode at block granularity
+            latent_h = height // 8
+            latent_w = width // 8
+            block_latents = mx.random.normal(
+                shape=[16, 1, latent_h, latent_w],
+                key=mx.random.key(seed + i),
+            ).astype(mx.float16)
+
+            # Coarse denoising: fewer steps on full latent space
+            for t in range(config.coarse_steps):
+                sigma_t = sigmas_coarse[t].reshape((1,))
+                timestep = mx.ones_like(sigma_t) - sigma_t
+                noise_pred = self._transformer(
+                    x=block_latents,
+                    timestep=timestep,
+                    sigmas=sigmas_coarse,
+                    cap_feats=cap_feats,
+                )
+                dt = sigmas_coarse[t + 1] - sigmas_coarse[t]
+                block_latents = block_latents + noise_pred * dt
+                mx.eval(block_latents)
+
+            coarse_latents[block_key] = block_latents
+            dflash._l1_cache.put(block_key, block_latents)
+            logger.debug(f"DFlash block ({bx},{by}): coarse done ({config.coarse_steps} steps)")
+
+        # 5. Stage 2: Refinement using coarse latents as warm start
+        # Use the coarse latent as the initial state and refine with full steps
+        # Pick the best coarse latent (last block covers the most context)
+        best_key = f"coarse_{block_plan.blocks[-1][0]}_{block_plan.blocks[-1][1]}"
+        latents = coarse_latents.get(best_key)
+        if latents is None:
+            # Fallback to first block's latent
+            first_key = f"coarse_{block_plan.blocks[0][0]}_{block_plan.blocks[0][1]}"
+            latents = coarse_latents[first_key]
+
+        if self._teacache is not None:
+            self._teacache.reset()
+
+        # Refinement denoising loop with full steps
+        for t in range(config.refine_steps):
+            sigma_t = sigmas_refine[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
+
+            if self._teacache is not None:
+                noise_pred = self._teacache.forward(
+                    self._transformer, latents, timestep, sigmas_refine, cap_feats,
+                )
+            else:
+                noise_pred = self._transformer(
+                    x=latents,
+                    timestep=timestep,
+                    sigmas=sigmas_refine,
+                    cap_feats=cap_feats,
+                )
+
+            dt = sigmas_refine[t + 1] - sigmas_refine[t]
+            latents = latents + noise_pred * dt
+            mx.eval(latents)
+            logger.debug(f"DFlash refine step {t+1}/{config.refine_steps}")
+
+        if self._teacache is not None:
+            tc_stats = self._teacache.get_stats()
+            logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
+                        f"{tc_stats['cache_misses']} misses, "
+                        f"hit_rate={tc_stats['hit_rate']:.1%}")
+
+        # 6. VAE decode
+        if width * height > 1024 * 1024:
+            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
+        else:
+            image = self._vae.decode(latents)
+        mx.eval(image)
+
+        # 7. Update DFlash stats
+        dflash._stats["total_generations"] += 1
+        dflash._stats["total_blocks_processed"] += block_plan.num_blocks
+        dflash._stats["l1_cache_saved_steps"] += sum(
+            1 for k in coarse_latents
+            if dflash._l1_cache.get(f"_saved_{k}") is not None
+        )
+
+        logger.info(
+            f"DFlash pipeline complete: {block_plan.num_blocks} blocks, "
+            f"coarse={config.coarse_steps} + refine={config.refine_steps} steps"
+        )
+
+        # 8. Convert to PNG
+        return self._to_png(image)
 
     def _run_pipeline(self, prompt, width, height, num_steps, seed) -> bytes:
         """Run the full diffusion pipeline synchronously."""
@@ -2006,11 +2188,14 @@ class ImageGenEngine:
         return buf.getvalue()
 
     def get_stats(self) -> dict:
-        return {
+        stats = {
             "model": self._model_path,
             "loaded": self.is_loaded,
             "running": self._running,
         }
+        if self._dflash is not None:
+            stats["dflash"] = self._dflash.get_stats()
+        return stats
 
     def _run_controlled_pipeline(
         self,

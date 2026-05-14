@@ -1834,11 +1834,18 @@ class Scheduler:
         Works with both cross-model and N-gram spec decode backends.
         For cross-model: also rolls back the draft model cache on rejection.
         For N-gram: only statistical tracking (no cache to manage).
+
+        When YUNSHU_GPU_REJECTION=1, uses MLX batched comparison to find
+        the first mismatch across all draft tokens for each request.
         """
         if not self._spec_drafts:
             return
 
         has_cross_model = isinstance(self._spec_decoder, SpeculativeDecoder)
+
+        # Check if GPU rejection is enabled for batch comparison
+        from .gpu_rejection import should_enable_gpu_rejection
+        use_gpu = should_enable_gpu_rejection()
 
         verified_ids = []
         for output in outputs:
@@ -1855,12 +1862,23 @@ class Scheduler:
             actual_tokens = req.output_token_ids
             n_compare = min(len(draft_ids), len(actual_tokens))
             recent_actual = actual_tokens[-n_compare:]
-            accepted = 0
-            for i, draft_tok in enumerate(draft_ids):
-                if i < len(recent_actual) and recent_actual[i] == draft_tok:
-                    accepted += 1
-                else:
-                    break
+
+            # GPU-accelerated batch comparison: find first mismatch via MLX
+            if use_gpu and n_compare > 0:
+                import mlx.core as mx
+                draft_arr = mx.array(draft_ids[:n_compare])
+                actual_arr = mx.array(recent_actual[:n_compare])
+                match_mask = draft_arr == actual_arr
+                # cumsum trick: count consecutive matches from the start
+                cum_mismatch = mx.cumsum((~match_mask).astype(mx.int32))
+                accepted = int(mx.sum(cum_mismatch == 0).item())
+            else:
+                accepted = 0
+                for i, draft_tok in enumerate(draft_ids):
+                    if i < len(recent_actual) and recent_actual[i] == draft_tok:
+                        accepted += 1
+                    else:
+                        break
 
             rejected = len(draft_ids) - accepted
 

@@ -232,6 +232,11 @@ class BatchedEngine:
         self._ngram_proposer = None  # NgramProposer, created on demand
         self._ngram_stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
 
+        # GPU-accelerated rejection sampling (opt-in via YUNSHU_GPU_REJECTION=1)
+        from .gpu_rejection import GPURejectionSampler, should_enable_gpu_rejection
+        self._gpu_rejection_sampler = GPURejectionSampler()
+        self._gpu_rejection_enabled = should_enable_gpu_rejection()
+
         # Adaptive speculative decode controller (opt-in via YUNSHU_ADAPTIVE_SPEC=1)
         self._adaptive_spec = None
 
@@ -2443,35 +2448,67 @@ class BatchedEngine:
                     if hasattr(batch_logits, 'logits'):
                         batch_logits = batch_logits.logits
 
-                    # Greedy verify: compare model's argmax at each position with draft
-                    for i in range(n_draft):
-                        model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
-                        draft_id = draft_ids[i]
+                    # GPU-accelerated rejection sampling when enabled
+                    if self._gpu_rejection_enabled:
+                        from .gpu_rejection import GPURejectionSampler as _GRS
+                        rej_result = self._gpu_rejection_sampler.verify_greedy(
+                            batch_logits[0, :n_draft], draft_ids[:n_draft]
+                        )
+                        accepted = rej_result.accepted_count
 
-                        if model_pick == draft_id:
-                            tokens.append(draft_id)
-                            all_token_ids.append(draft_id)
-                            accepted += 1
+                        # Append accepted tokens
+                        for i in range(accepted):
+                            tid = draft_ids[i]
+                            tokens.append(tid)
+                            all_token_ids.append(tid)
                             remaining -= 1
-                            if draft_id in stop_ids:
+                            if tid in stop_ids:
                                 tokens.pop()
                                 break
-                            detokenizer.add_token(draft_id)
+                            detokenizer.add_token(tid)
                             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                 break
-                        else:
-                            # Reject: resample from model's distribution at this position
-                            resampled = model_pick  # Use greedy pick (already computed)
-                            tokens.append(resampled)
-                            all_token_ids.append(resampled)
+
+                        # Resample at rejection point
+                        if accepted < n_draft and remaining > 0:
+                            bonus = _GRS.compute_bonus_token(batch_logits[0, :n_draft], accepted)
+                            tokens.append(bonus)
+                            all_token_ids.append(bonus)
                             remaining -= 1
-                            if resampled in stop_ids:
-                                tokens.pop()
-                                break
-                            detokenizer.add_token(resampled)
+                            if bonus not in stop_ids:
+                                detokenizer.add_token(bonus)
                             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                break
-                            break  # Stop verifying rest of drafts
+                                pass
+                    else:
+                        # CPU sequential fallback: compare model's argmax at each position with draft
+                        for i in range(n_draft):
+                            model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
+                            draft_id = draft_ids[i]
+
+                            if model_pick == draft_id:
+                                tokens.append(draft_id)
+                                all_token_ids.append(draft_id)
+                                accepted += 1
+                                remaining -= 1
+                                if draft_id in stop_ids:
+                                    tokens.pop()
+                                    break
+                                detokenizer.add_token(draft_id)
+                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    break
+                            else:
+                                # Reject: resample from model's distribution at this position
+                                resampled = model_pick
+                                tokens.append(resampled)
+                                all_token_ids.append(resampled)
+                                remaining -= 1
+                                if resampled in stop_ids:
+                                    tokens.pop()
+                                    break
+                                detokenizer.add_token(resampled)
+                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    break
+                                break  # Stop verifying rest of drafts
 
                     self._ngram_stats["accepted"] += accepted
 
@@ -2628,29 +2665,64 @@ class BatchedEngine:
                     if hasattr(batch_logits, 'logits'):
                         batch_logits = batch_logits.logits
 
-                    for i in range(n_draft):
-                        model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
-                        draft_id = draft_ids[i]
-                        is_accept = (model_pick == draft_id)
-                        accepted_id = draft_id if is_accept else model_pick
-                        tokens.append(accepted_id)
-                        all_token_ids.append(accepted_id)
-                        if is_accept:
-                            accepted += 1
-                        remaining -= 1
-                        n_tok += 1
-                        detokenizer.add_token(accepted_id)
-                        stop_hit = accepted_id in stop_ids
-                        suffix_hit = False
-                        if not stop_hit and stop_suffixes:
-                            suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                        _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
-                        if stop_hit or suffix_hit:
-                            stopped = True
-                        if not is_accept:
-                            stopped = True
-                        if stopped:
-                            break
+                    # GPU-accelerated rejection sampling when enabled
+                    if self._gpu_rejection_enabled:
+                        from .gpu_rejection import GPURejectionSampler as _GRS
+                        rej_result = self._gpu_rejection_sampler.verify_greedy(
+                            batch_logits[0, :n_draft], draft_ids[:n_draft]
+                        )
+                        accepted = rej_result.accepted_count
+
+                        for i in range(n_draft):
+                            if i < accepted:
+                                accepted_id = draft_ids[i]
+                            elif i == accepted:
+                                accepted_id = _GRS.compute_bonus_token(
+                                    batch_logits[0, :n_draft], accepted
+                                )
+                            else:
+                                break
+                            tokens.append(accepted_id)
+                            all_token_ids.append(accepted_id)
+                            remaining -= 1
+                            n_tok += 1
+                            detokenizer.add_token(accepted_id)
+                            stop_hit = accepted_id in stop_ids
+                            suffix_hit = False
+                            if not stop_hit and stop_suffixes:
+                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            if stop_hit or suffix_hit:
+                                stopped = True
+                            if i >= accepted:
+                                stopped = True
+                            if stopped:
+                                break
+                    else:
+                        # CPU sequential fallback
+                        for i in range(n_draft):
+                            model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
+                            draft_id = draft_ids[i]
+                            is_accept = (model_pick == draft_id)
+                            accepted_id = draft_id if is_accept else model_pick
+                            tokens.append(accepted_id)
+                            all_token_ids.append(accepted_id)
+                            if is_accept:
+                                accepted += 1
+                            remaining -= 1
+                            n_tok += 1
+                            detokenizer.add_token(accepted_id)
+                            stop_hit = accepted_id in stop_ids
+                            suffix_hit = False
+                            if not stop_hit and stop_suffixes:
+                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            if stop_hit or suffix_hit:
+                                stopped = True
+                            if not is_accept:
+                                stopped = True
+                            if stopped:
+                                break
 
                     self._ngram_stats["accepted"] += accepted
                     if self._adaptive_spec is not None:

@@ -35,7 +35,19 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3714 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **4052 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 31 — TBO + GPU Rejection + Mamba Cache + Staged Pipeline + Diffusion Infra + Flaky Test Fixes + DFlash Completion)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Two-Batch Overlap (TBO) | §14.1 gap closed — TwoBatchOverlapScheduler 雙緩衝區調度，GPU處理batch A時CPU準備batch B，自動回退順序模式，YUNSHU_TBO=1 啟用，接入 engine_core._engine_loop() | +58 tests |
+| GPU Rejection Sampling | §12.4 gap closed — GPURejectionSampler 使用 MLX 批量操作並行驗證 draft tokens，支持 greedy + stochastic 驗證，YUNSHU_GPU_REJECTION=1 啟用，接入 batched_engine + scheduler | +43 tests |
+| Mamba/Hybrid KV Cache | §12.2 gap closed — HybridKVCache 支持混合注意力/SSM/MLA/SlidingWindow 四種緩存類型，MambaSSMState 檢查點+壓縮，BlockAlignedCacheSplitter 層組邊界保護 | +62 tests |
+| Staged Multimodal Pipeline | §16.5 gap closed — MultimodalPipelineCoordinator 7階段管線，ModelPreprocessorRegistry 9模型家族自動偵測，並行階段執行+快取 | +47 tests |
+| Diffusion Pipeline Infra | §16.5 gap closed — DiffusionScheduler 5種排程算法+4種噪聲排程+CFG，DiffusionLoRAOffloader 優先級管理，DistributedDiffusionCoordinator 分佈式步驟分配 | +62 tests |
+| DFlash 管線完成 | §13.1 gap closed — image_engine._run_dflash_pipeline() 完整2階段區塊擴散：粗略生成+精細修復+L1快取+TeaCache整合 | existing tests |
+| Flaky test 修復 | 8個預存 flaky tests 全部修復：asyncio.get_event_loop() → asyncio.run() (request_tracker 4, mcp_client 2, ocr 1, video_engine 1) | — |
 
 ### 已完成修復 (2026-05-14 Wave 30 — Hybrid Prefill + Encoder Cache + VLM Prefix Reuse + Grammar Bitmask + KV Transfer + Metal Kernels + ANE Embeddings)
 
@@ -1131,7 +1143,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C23 + M1-M15 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。Wave 30: hybrid prefill, encoder cache, VLM prefix reuse, grammar bitmask, KV transfer, metal kernels, ANE embeddings 全部接入。測試套件 3714 個測試全數通過。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
+> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。Wave 31: TBO (Two-Batch Overlap), GPU rejection sampling, Mamba/hybrid KV cache, staged multimodal pipeline, diffusion infrastructure, DFlash pipeline completion 全部實現。8 個 flaky tests 修復。測試套件 4052 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
 
 ---
 
@@ -1159,13 +1171,13 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 結構化輸出 | Grammar bitmask, xgrammar/outlines/backends | json_schema + regex + choice + CFG 約束 + grammar_bitmask.py (xgrammar-style) | ✅ grammar_bitmask.py (YUNSHU_GRAMMAR_BITMASK=1) + 原有約束後端 |
 | 遠程 KV 傳輸 | KVConnectorFactory, 異步 load/store | ✅ kv_transfer.py — 遠程 KV block transfer + 壓縮 (LZ4/ZSTD) (Wave 30) | 已實現 |
 | LoRA 調度 | max_loras 約束, LoRA 緩存 | ✅ LoRAAdapterManager + LRU + auto-discover + merge | 已實現 (LORA) |
-| Mamba/混合模型 | 塊對齊緩存分割 | 無 | 不處理混合注意力/SSM |
+| Mamba/混合模型 | 塊對齊緩存分割 | ✅ HybridKVCache — 4種緩存類型 (Attention/MambaSSM/SlidingWindow/MLA) + 層組邊界保護 (Wave 31) | 混合模型基礎設施已就緒 |
 
 ### 12.3 KV Cache 對比
 
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
-| 多組 KV cache | 不同注意力類型不同規格 (full, SW, MLA, mamba) | 單一注意力類型 | 不支持混合模型 |
+| 多組 KV cache | 不同注意力類型不同規格 (full, SW, MLA, mamba) | ✅ HybridKVCache — 多池架構，按層路由 (Wave 31) | 混合模型支持 |
 | COW (copy-on-write) | 塊級 COW + 引用計數在調度器 | COW 在 BlockPool (cow_block) + 分頁系統 | ✅ 已實現 (COW) |
 | KV 卸載框架 | 完整 OffloadingManager + GPU/CPU specs | ✅ KV offloading framework — Threshold/LRU/Priority 策略 (Wave 30) | 已實現 |
 | **Radix tree 前綴匹配** | 無 (平面 hash) | RadixTree 已接入 KVCacheManager (C8) | **Yunshu 優勢** — ✅ 已啟用 |
@@ -1178,7 +1190,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 |------|------|--------|------|
 | Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | N-gram(Python), EAGLE-3(代碼存在), MTP | 缺 GPU 加速 N-gram, Medusa, DFlash |
 | 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | ✅ NgramProposer 批量路徑 (Wave 29) + cross-model 路徑 | N-gram 無 GPU 開銷; 缺 GPU 加速 N-gram |
-| GPU 拒絕採樣 | GPU kernel | CPU 逐個驗證 | 慢得多 |
+| GPU 拒絕採樣 | GPU kernel | ✅ GPURejectionSampler — MLX 批量 argmax + cumsum 並行驗證 (YUNSHU_GPU_REJECTION=1) (Wave 31) | GPU 批量驗證 |
 | Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | ✅ _grammar_filter_drafts() 預驗證 (Wave 28) | grammar-aware spec decode |
 | 調度器整合 | draft token IDs 每請求追蹤 | ✅ 已接入 scheduler step loop (Wave 15) | draft 生成 + 驗證 + 統計 |
 
@@ -1210,7 +1222,7 @@ Yunshu 有而 vLLM 沒有的:
 | 機制 | oMLX | Yunshu | 差距 |
 |------|------|--------|------|
 | **SpecPrefill** | 完整整合: BatchedEngine.start() 加載 draft, stream_chat() 計算 system_end, EngineCore.add_request() 傳播 | ✅ **WIRED** — attention capture 評分 + key magnitude 備用，接入 _generate_fast (P1-3) | 評分方法已修正 |
-| **DFlash Block Diffusion** | 獨立引擎 dflash.py, 3-4x 加速, 有自己的 L1/L2 緩存 | 無對等實現 | 完全缺失 |
+| **DFlash Block Diffusion** | 獨立引擎 dflash.py, 3-4x 加速, 有自己的 L1/L2 緩存 | ✅ DFlash 管線完成 — image_engine._run_dflash_pipeline() 2階段區塊擴散 + L1快取 + TeaCache (Wave 31) | 管線已接入 |
 | **Native MTP** | Monkey-patch mlx-lm, 模型專用補丁 (deepseek_v4, qwen35), 含 VLM MTP | mtp_patch.py 僅 scripts/ | 研究性質 |
 | **N-gram** | 調度器 logits processors | ✅ **WIRED** — BatchedEngine 雙路徑接入 (P1-2) | 已接入 |
 
@@ -1261,7 +1273,7 @@ Yunshu 有而 vLLM 沒有的:
 | 調度器模塊化 | **11+ mixin 類** (metrics, profiling, disaggregation, PP, DP, MLX overlap) | 單體類 + config flags |
 | 批次表示 | 3 級層次 (ScheduleBatch → ModelWorkerBatch → ForwardBatch) | mlx-lm BatchGenerator 內部處理 |
 | 通訊 | ZMQ PULL/USH | asyncio queues |
-| 重疊調度 | CPU/GPU 重疊 + Two-Batch Overlap (TBO) | **無** — 嚴格順序 |
+| 重疊調度 | CPU/GPU 重疊 + Two-Batch Overlap (TBO) | ✅ TBO (TwoBatchOverlapScheduler, YUNSHU_TBO=1) + CPU/GPU overlap (OverlapScheduler) |
 | 目標硬件 | NVIDIA (CUDA) + AMD (ROCm) | Apple Silicon (Metal/UMA) |
 
 ### 14.2 Radix Attention — SGLang 的核心優勢
@@ -1409,10 +1421,10 @@ vllm-mlx 是與 Yunshu 解決**完全相同問題**的項目: 在 Apple Silicon 
 vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_speech, glm_image, hunyuan_image3, mimo_audio, qwen2_5_omni, qwen3_omni, qwen3_tts...)。
 
 **Yunshu 的多模態差距**:
-- 無**階段式多模態管線** — vllm-omni 分離 text/image/audio 階段
+- ✅ **階段式多模態管線** — MultimodalPipelineCoordinator 7階段 + ModelPreprocessorRegistry 9模型家族 (Wave 31)
 - ✅ **多模態前綴緩存** — VisionFeatureCache 已接入 VLMEngine (C21/M6)
 - 無**模型特定預處理器** — Qwen3-Omni 音頻 token, CosyVoice 音素編碼等
-- 無**擴散管線基礎設施** — LoRA for diffusion, distributed diffusion, offloader
+- ✅ **擴散管線基礎設施** — DiffusionScheduler (5算法) + DiffusionLoRAOffloader + DistributedDiffusionCoordinator (Wave 31)
 
 ---
 

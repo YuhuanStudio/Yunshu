@@ -77,6 +77,13 @@ def __getattr__(name):
         "is_kv_transfer_enabled": ".kv_transfer",
         "create_transfer_client": ".kv_transfer",
         "create_transfer_server": ".kv_transfer",
+        # Mamba / Hybrid KV Cache (§12.2)
+        "CacheBlockType": ".mamba_cache",
+        "HybridKVCache": ".mamba_cache",
+        "MambaSSMState": ".mamba_cache",
+        "BlockAlignedCacheSplitter": ".mamba_cache",
+        "LayerGroup": ".mamba_cache",
+        "CachePoolStats": ".mamba_cache",
     }
     if name in _lazy:
         import importlib

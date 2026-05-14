@@ -341,7 +341,7 @@ class TestVideoEngineStats:
         engine = VideoEngine()
         engine.start()
         import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             engine.generate(
                 prompt="test stats",
                 width=64,
