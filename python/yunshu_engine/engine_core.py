@@ -317,6 +317,30 @@ class EngineCore:
         self._start_time: float | None = None
         self._wake_event: asyncio.Event | None = None  # Event-driven wake-up for idle loop
 
+        # ── Wave 43: Additional production wiring ──
+
+        # Forward batch hierarchy (ScheduleBatch → ForwardBatch → BatchResult)
+        from .forward_batch import ScheduleBatch, ForwardBatch, BatchResult, BatchComposer
+        self._batch_composer = BatchComposer()
+
+        # Memory-aware scheduler (admission control with memory budget)
+        from .memory_aware_scheduler import MemoryAwareScheduler
+        self._memory_aware_scheduler = MemoryAwareScheduler()
+
+        # Context window manager (4 truncation strategies for long prompts)
+        from .context_window import ContextWindowManager
+        self._context_window_mgr = ContextWindowManager()
+
+        # KV prefix compression (mean_pool/top_k/frequency_aware strategies)
+        from .kv_prefix_compression import KVPrefixCompressor, SlidingWindowKVManager
+        self._kv_compressor = KVPrefixCompressor()
+        self._sliding_window_mgr: SlidingWindowKVManager | None = None
+
+        # Batch sampler (vectorized batch sampling + logits processing + stop checking)
+        from .batch_sampler import BatchSampler, LogitsProcessorBatch, BatchStopChecker
+        self._batch_sampler = BatchSampler()
+        self._batch_stop_checker = BatchStopChecker()
+
         # Stats
         self._num_requests_processed: int = 0
 
@@ -945,6 +969,12 @@ class EngineCore:
             stats["request_dedup"] = self._request_dedup.get_stats()
         if self._composition_scheduler is not None:
             stats["composition_scheduler"] = self._composition_scheduler.get_stats()
+        # Wave 43: Additional module stats
+        stats["forward_batch"] = self._batch_composer.get_stats()
+        stats["memory_aware_scheduler"] = self._memory_aware_scheduler.get_stats().__dict__
+        stats["context_window"] = self._context_window_mgr.get_stats()
+        stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
+        stats["batch_sampler"] = self._batch_sampler.get_stats()
         return stats
 
     def _overlap_step(self) -> Any:

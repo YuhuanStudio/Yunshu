@@ -915,6 +915,35 @@ class BatchedEngine:
             if enable_thinking is None:
                 enable_thinking = True
 
+        # ── Wave 43: Context window truncation for long prompts ──
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            try:
+                if self._tokenizer and hasattr(self._tokenizer, 'encode'):
+                    text = self._messages_to_text(prompt, enable_thinking)
+                    token_count = len(self._tokenizer.encode(text))
+                    max_ctx = getattr(self._model, 'max_seq_len', None)
+                    if max_ctx is None:
+                        max_ctx = getattr(
+                            getattr(self._model, 'config', None), 'max_seq_len', None
+                        ) or getattr(
+                            getattr(self._model, 'args', None), 'max_seq_len', None
+                        )
+                    if max_ctx and token_count + max_tokens > max_ctx:
+                        from .context_window import ContextWindowManager
+                        ctx_mgr = ContextWindowManager()
+                        result = ctx_mgr.compute_truncation(
+                            messages=prompt,
+                            max_tokens=max_ctx - max_tokens,
+                            strategy="importance_aware",
+                        )
+                        prompt = result.messages
+                        logger.debug(
+                            f"Context window truncated: {token_count} → "
+                            f"{result.original_tokens} tokens (saved {result.tokens_removed})"
+                        )
+            except Exception:
+                logger.debug("context window truncation skipped", exc_info=True)
+
         # Speculative decoding path (Phase 4: single-request EAGLE-3)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
             return await self._generate_speculative(

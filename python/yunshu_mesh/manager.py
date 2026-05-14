@@ -49,6 +49,9 @@ class MeshManager:
         self._heartbeat_task: Optional[asyncio.Task] = None
         # C22: Event sourcing for crash recovery + audit
         self._event_log: Optional[Any] = None
+        # Wave 43: RTT-aware routing (Parallax pattern)
+        from .rtt_routing import RTTAwareRouter
+        self._rtt_router = RTTAwareRouter.from_env()
 
     @property
     def is_distributed(self) -> bool:
@@ -216,6 +219,8 @@ class MeshManager:
         }
         if self._event_log:
             stats["event_log"] = self._event_log.get_stats()
+        # Wave 43: RTT-aware routing stats
+        stats["rtt_routing"] = self._rtt_router.get_stats()
         return stats
 
     def _setup_data_parallel(self) -> None:
