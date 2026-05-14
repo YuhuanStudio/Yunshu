@@ -65,6 +65,8 @@ class EngineCoreConfig:
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     enable_hybrid_prefill: bool = False
     hybrid_chunk_size: int = 512
+    # Per-request generation timeout (seconds, 0 = no timeout)
+    request_timeout_seconds: float = 300.0
 
 
 def _safe_get(obj: Any, attr: str, default: Any = None) -> Any:
@@ -405,6 +407,7 @@ class EngineCore:
 
         # Stats
         self._num_requests_processed: int = 0
+        self._request_timestamps: dict[str, float] = {}  # req_id → monotonic start time
 
     def set_prefix_cache(self, cache: Any) -> None:
         """Set KV prefix cache for batch-path insert_segments (C16)."""
@@ -588,6 +591,18 @@ class EngineCore:
 
         num_prompt_tokens = len(token_ids)
 
+        # ── Context window truncation (prevent garbage output from overlength prompts) ──
+        max_seq_len = self._get_max_seq_len()
+        if max_seq_len > 0 and num_prompt_tokens + max_tokens > max_seq_len:
+            excess = num_prompt_tokens + max_tokens - max_seq_len
+            if excess > 0 and num_prompt_tokens > excess:
+                token_ids = token_ids[excess:]
+                num_prompt_tokens = len(token_ids)
+                logger.info(
+                    f"Context window truncation: {excess} tokens removed from prompt "
+                    f"(max_seq_len={max_seq_len})"
+                )
+
         # ── Wave 42: Budget check (token/time/cost/thinking) ──
         budget = self._budget_manager.register(
             request_id=req_id,
@@ -724,6 +739,7 @@ class EngineCore:
             stream_interval=self.config.stream_interval
         )
         self._finished_events[req_id] = asyncio.Event()
+        self._request_timestamps[req_id] = time.monotonic()
 
         # Add to scheduler on MLX executor (thread-safe)
         loop = asyncio.get_running_loop()
@@ -861,6 +877,16 @@ class EngineCore:
                 if self._composition_scheduler is not None:
                     try:
                         self._composition_scheduler.pre_step(self.scheduler)
+                        # Apply memory pressure recommendations
+                        from .scheduler_mixins import MemoryPressureMixin
+                        for m in self._composition_scheduler._mixins:
+                            if isinstance(m, MemoryPressureMixin):
+                                if m.is_admission_paused:
+                                    logger.debug("MemoryPressureMixin: admission paused")
+                                rec_batch = m.recommended_batch_size
+                                if 0 < rec_batch < self.config.completion_batch_size:
+                                    self.config.completion_batch_size = rec_batch
+                                break
                     except Exception:
                         logger.debug("composition pre_step failed", exc_info=True)
 
@@ -916,6 +942,7 @@ class EngineCore:
                 if req_output.finished:
                     self._signal_finished(rid)
                     self._num_requests_processed += 1
+                    self._request_timestamps.pop(rid, None)
                     # ── Wave 42: Lifecycle + budget + dedup cleanup ──
                     self._lifecycle_orchestrator.on_request_finished(rid)
                     self._budget_manager.remove(rid)
@@ -974,6 +1001,32 @@ class EngineCore:
                         )
                 except Exception:
                     logger.debug("profiler/auto-tuner failed", exc_info=True)
+
+                # ── Per-request generation timeout enforcement ──
+                try:
+                    timeout_s = self.config.request_timeout_seconds
+                    if timeout_s > 0:
+                        now = time.monotonic()
+                        for rid in list(self._request_timestamps.keys()):
+                            start = self._request_timestamps[rid]
+                            if (now - start) > timeout_s:
+                                logger.warning(f"Request {rid} timed out ({now - start:.0f}s > {timeout_s}s)")
+                                self.scheduler.abort_request(rid)
+                                collector = self._output_collectors.get(rid)
+                                if collector is not None:
+                                    from .request import RequestOutput
+                                    collector.put(RequestOutput(
+                                        request_id=rid,
+                                        finished=True,
+                                        finish_reason="timeout",
+                                        error=f"Request exceeded timeout ({timeout_s}s)",
+                                    ))
+                                    collector.put(None)
+                                self._signal_finished(rid)
+                                self._request_timestamps.pop(rid, None)
+                except Exception:
+                    logger.debug("timeout enforcement failed", exc_info=True)
+
                 try:
                     import mlx.core as mx
                     active_mem = mx.get_active_memory()
@@ -1012,6 +1065,20 @@ class EngineCore:
         self._stream_states.pop(request_id, None)
         self._finished_events.pop(request_id, None)
         self.scheduler.remove_finished_request(request_id)
+
+    def _get_max_seq_len(self) -> int:
+        """Get the model's maximum sequence length from config."""
+        try:
+            model = self._model
+            config = getattr(model, 'config', model)
+            for attr in ('max_seq_len', 'max_position_embeddings', 'n_positions',
+                         'max_sequence_length', 'seq_length'):
+                val = _safe_get(config, attr, 0)
+                if val and isinstance(val, int) and val > 0:
+                    return val
+        except Exception:
+            pass
+        return 0
 
     def _messages_to_text(
         self,
