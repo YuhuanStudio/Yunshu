@@ -56,6 +56,12 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         get_server_metrics().record(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
     except Exception:
         logger.debug("server_metrics recording failed", exc_info=True)
+    try:
+        from yunshu_engine.tracing import get_metrics_v2
+        get_metrics_v2().counter("yunshu_tokens_total", {"type": "prompt"}, prompt_tokens)
+        get_metrics_v2().counter("yunshu_tokens_total", {"type": "completion"}, completion_tokens)
+    except Exception:
+        pass
 
 
 def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:
@@ -544,6 +550,23 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     if req.user:
         logger.info(f"[{getattr(request.state, 'request_id', '-')}] user={req.user}")
 
+    # Structured tracing + logging
+    from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
+    tracer = get_inference_tracer()
+    slog = get_structured_logger()
+
+    trace_id = f"chat-{uuid.uuid4().hex[:16]}"
+    trace = tracer.start_trace(trace_id, metadata={
+        "model": req.model,
+        "max_tokens": req.max_tokens,
+        "temperature": req.temperature,
+        "stream": req.stream,
+        "endpoint": "/chat/completions",
+    })
+    tracer.span(trace_id, "prefill", {"model": req.model})
+    slog.info("inference_request", model=req.model, trace_id=trace_id,
+              max_tokens=req.max_tokens, stream=req.stream)
+
     messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
     has_audio = _has_audio(messages)
@@ -728,6 +751,16 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             finish_reason = "tool_calls" if tool_calls else finish
 
             _record_metrics(prompt_tok, completion_tok)
+
+            # End tracing
+            tracer.end_span(trace_id, "prefill")
+            tracer.end_trace(trace_id, result={
+                "prompt_tokens": prompt_tok,
+                "completion_tokens": completion_tok,
+                "finish_reason": finish_reason,
+            })
+            slog.info("inference_complete", model=req.model, trace_id=trace_id,
+                      prompt_tokens=prompt_tok, completion_tokens=completion_tok)
 
             return JSONResponse(format_openai_non_stream(
                 completion_id=completion_id,

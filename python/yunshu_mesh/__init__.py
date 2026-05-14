@@ -35,10 +35,14 @@ from .sharding import (
     mx_barrier,
 )
 from .data_parallel import DataParallelRouter
+from .kv_sync import KVSynchronizationService, MeshHealthMonitor
 
 __all__ = [
     "CollectiveOps",
     "DataParallelRouter",
+    "KVSyncStats",
+    "KVSynchronizationService",
+    "MeshHealthMonitor",
     "MeshManager",
     "MeshNode",
     "MeshNodeState",

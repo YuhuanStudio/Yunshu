@@ -12,6 +12,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Optional
 
+from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -109,9 +111,24 @@ async def create_completion(req: CompletionRequest, request: Request):
 
     completion_id = f"cmpl-{uuid.uuid4().hex[:24]}"
 
+    # Structured tracing + logging
+    tracer = get_inference_tracer()
+    slog = get_structured_logger()
+    trace_id = f"cmpl-{uuid.uuid4().hex[:16]}"
+    tracer.start_trace(trace_id, metadata={
+        "model": req.model,
+        "max_tokens": req.max_tokens,
+        "temperature": req.temperature,
+        "stream": req.stream,
+        "endpoint": "/completions",
+    })
+    tracer.span(trace_id, "prefill", {"model": req.model})
+    slog.info("inference_request", model=req.model, trace_id=trace_id,
+              max_tokens=req.max_tokens, stream=req.stream)
+
     if req.stream:
         return StreamingResponse(
-            _stream_completion(engine, prompt, req, completion_id, request, json_schema=json_schema),
+            _stream_completion(engine, prompt, req, completion_id, request, json_schema=json_schema, trace_id=trace_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -183,6 +200,16 @@ async def create_completion(req: CompletionRequest, request: Request):
         if req.echo:
             text = prompt + text
 
+        # End tracing
+        tracer.end_span(trace_id, "prefill")
+        tracer.end_trace(trace_id, result={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "finish_reason": finish_reason,
+        })
+        slog.info("inference_complete", model=req.model, trace_id=trace_id,
+                  prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+
         return JSONResponse({
             "id": completion_id,
             "object": "text_completion",
@@ -205,7 +232,7 @@ async def create_completion(req: CompletionRequest, request: Request):
 
 
 async def _stream_completion(
-    engine, prompt, req, completion_id, request, json_schema=None
+    engine, prompt, req, completion_id, request, json_schema=None, trace_id=None
 ) -> AsyncIterator[bytes]:
     """SSE streaming for text completions with keepalive and disconnect detection."""
     from ..streaming import with_sse_keepalive

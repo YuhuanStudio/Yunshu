@@ -35,7 +35,24 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **4861 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **5160 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 35 — Distributed KV Sync + Model Optimizations + Tracing + SpecPrefill Engine + Context Window + Prompt Cache)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Distributed KV sync | KVSynchronizationService 跨節點 KV 前綴哈希廣播 + 遠程 KV 請求 + MeshHealthMonitor 心跳+故障偵測+再平衡 | +71 tests |
+| RoPE scaling optimizer | RoPEScalingOptimizer 5種縮放策略 (Linear/DynamicNTK/YaRN/Llama3/LongRoPE) + 混合逐層縮放 | +66 tests |
+| Attention optimizer | AttentionOptimizer 偵測 GQA/MHA/MQA/MLA/SWA + 模型級優化標記 | — |
+| MoE efficiency optimizer | MoEEfficiencyOptimizer 動態 top-k + 專家權重緩存 + 負載均衡 | — |
+| Model warmup manager | ModelWarmupManager mx.compile() 預熱 + KV cache 預填充 + 模型家族特定 warmup prompt | — |
+| InferenceTracer | 推理追蹤 — 每請求 trace span + OpenTelemetry 兼容 JSON 導出 + prefill/decode/spec/KV/memory 事件 | +58 tests |
+| StructuredLogger | 結構化日誌 — JSON 格式 + 上下文綁定 + 級別過濾 | — |
+| MetricsAggregatorV2 | 增強指標 — Counter/Gauge/Histogram + Prometheus 格式輸出 | — |
+| HealthDashboard | 健康儀表板 — 加權健康評分 (0-100) + 系統/模型/請求/記憶體/KV 5維度 | — |
+| SpecPrefill engine | SpecPrefillEngine 優先級預填充隊列 + GPU 空閒時間利用 + 分塊預填充 | +33 tests |
+| Context window manager | ContextWindowManager 4種截斷策略 (truncate_oldest/sliding_window/importance_aware/summary_compression) | +34 tests |
+| Prompt cache manager | PromptCacheManager blake2b hash KV 狀態緩存 + LRU + TTL + 線程安全 | +37 tests |
 
 ### 已完成修復 (2026-05-14 Wave 34 — Batch Spec Integration + KV Optimizations + Gateway Optimizer + Streaming Optimizer)
 

@@ -520,3 +520,16 @@ async def external_prefill_stats() -> dict[str, Any]:
     """
     from yunshu_engine.external_prefill import get_external_prefill_stats
     return get_external_prefill_stats()
+
+
+@router.get("/health-dashboard")
+async def health_dashboard() -> dict[str, Any]:
+    """Aggregated health dashboard with 0-100 scoring.
+
+    Collects system resources, model status, request health,
+    memory guard, KV cache, and spec decode into a single
+    health score report.
+    """
+    from yunshu_engine.tracing import get_health_dashboard
+    dashboard = get_health_dashboard()
+    return dashboard.get_report()
