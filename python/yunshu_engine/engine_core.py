@@ -713,6 +713,9 @@ class EngineCore:
         # KV offload stats (§12.3)
         if self._kv_offload_manager is not None:
             stats["kv_offload"] = self._kv_offload_manager.get_stats()
+        # §12.2: encoder-decoder cache stats
+        if hasattr(self.scheduler, '_encoder_cache'):
+            stats["encoder_cache"] = self.scheduler._encoder_cache.get_stats()
         return stats
 
     def _overlap_step(self) -> Any:

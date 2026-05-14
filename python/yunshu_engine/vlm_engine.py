@@ -13,6 +13,8 @@ Architecture:
 - Text generation: mlx_lm.generate.generate_step (1D input_ids)
 - VLM text-only: model.language_model + manual generate loop
 - Vision features: model.get_input_embeddings() (from mlx-vlm reference)
+- Vision feature caching: skip re-encoding when same image seen again
+- KV prefix reuse: skip prefix prefill for same image across conversations
 - GPU work serialized on shared executor (mlx_executor pattern)
 - Streaming via tokenizer.detokenizer (per-request, never pooled)
 """
@@ -82,6 +84,64 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset({
 })
 
 
+class _MlxVlmVisionCacheAdapter:
+    """Adapts VisionFeatureCache to mlx_vlm's expected vision_cache interface.
+
+    mlx_vlm's stream_generate expects a dict-like object with:
+      - get(image) -> features or None
+      - put(image, features) -> None
+
+    where `image` is the image path string (or list of strings).
+    Our VisionFeatureCache uses (image_hash, model_name) as the key.
+    This adapter computes the hash and delegates to the real cache.
+    """
+
+    def __init__(self, cache, model_name: str):
+        self._cache = cache
+        self._model_name = model_name
+
+    def get(self, image):
+        """Look up cached vision features by image path(s)."""
+        from .vision_feature_cache import compute_image_hash
+
+        try:
+            if isinstance(image, list):
+                # Multi-image: hash all paths concatenated
+                img_hash = compute_image_hash(
+                    b"".join(p.encode() for p in image)
+                )
+            else:
+                # Single image: read file bytes and hash
+                if os.path.exists(image):
+                    with open(image, "rb") as f:
+                        img_hash = compute_image_hash(f.read())
+                else:
+                    img_hash = compute_image_hash(image.encode())
+            return self._cache.get(img_hash, self._model_name)
+        except Exception:
+            logger.debug("vision cache adapter get failed", exc_info=True)
+            return None
+
+    def put(self, image, features):
+        """Store vision features keyed by image path(s)."""
+        from .vision_feature_cache import compute_image_hash
+
+        try:
+            if isinstance(image, list):
+                img_hash = compute_image_hash(
+                    b"".join(p.encode() for p in image)
+                )
+            else:
+                if os.path.exists(image):
+                    with open(image, "rb") as f:
+                        img_hash = compute_image_hash(f.read())
+                else:
+                    img_hash = compute_image_hash(image.encode())
+            self._cache.put(img_hash, self._model_name, features)
+        except Exception:
+            logger.debug("vision cache adapter put failed", exc_info=True)
+
+
 class VLMEngine:
     """Vision-Language Model engine with dual mlx-lm/mlx-vlm support.
 
@@ -108,14 +168,35 @@ class VLMEngine:
         self._mrope_info = None
         self._rope_delta_manager = None
 
-        # Vision feature cache (opt-in via YUNSHU_VISION_CACHE env var)
+        # Vision feature cache — enabled by default for VLM models.
+        # Caches image encoder outputs (vision_tower + projector) keyed by
+        # (image_hash, model_name) so repeated images skip re-encoding.
         self._vision_cache = None
-        import os
-        if os.environ.get("YUNSHU_VISION_CACHE", "").strip() in ("1", "true", "yes"):
+        import os as _os
+        _vc_env = _os.environ.get("YUNSHU_VISION_CACHE", "").strip()
+        if _vc_env not in ("0", "false", "no", "disabled"):
             from .vision_feature_cache import VisionFeatureCache
-            cache_dir = os.environ.get("YUNSHU_VISION_CACHE_DIR", "~/.cache/yunshu/vision")
+            cache_dir = _os.environ.get(
+                "YUNSHU_VISION_CACHE_DIR", "~/.cache/yunshu/vision",
+            )
             self._vision_cache = VisionFeatureCache(cache_dir=cache_dir)
-            logger.info("Vision feature cache enabled")
+            logger.info("Vision feature cache enabled (dir=%s)", cache_dir)
+
+        # Adapter that wraps VisionFeatureCache for mlx_vlm's interface.
+        # Created lazily after model load when model_name is known.
+        self._vlm_vision_cache_adapter = None
+
+        # Per-image KV prefix cache state — maps image_hash to PromptCacheState.
+        # When the same image appears with different text contexts, the KV cache
+        # from the previous conversation is reused for the common image prefix.
+        self._kv_prefix_states: dict[str, Any] = {}
+        self._kv_prefix_max_entries = 32
+
+        # VLM cache stats (vision feature cache + KV prefix reuse)
+        self._vlm_vision_hits = 0
+        self._vlm_vision_misses = 0
+        self._vlm_kv_prefix_hits = 0
+        self._vlm_kv_prefix_misses = 0
 
         # C21: Multimodal prefix cache — maps image_hash + system_prompt hash to
         # processed token IDs, enabling reuse across conversations with same image
@@ -209,6 +290,12 @@ class VLMEngine:
             f"(vision={self._has_vision}, vlm_model={self._is_vlm}, "
             f"mrope={self._mrope_info.enabled})"
         )
+
+        # Create vision cache adapter now that model_name is known
+        if self._vision_cache is not None:
+            self._vlm_vision_cache_adapter = _MlxVlmVisionCacheAdapter(
+                self._vision_cache, self.model_name,
+            )
 
     async def start(self) -> None:
         if self._model is not None:
@@ -495,7 +582,12 @@ class VLMEngine:
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
     ) -> str:
-        """Vision + text generation using mlx_vlm.generate()."""
+        """Vision + text generation using mlx_vlm.generate().
+
+        Passes vision_cache and prompt_cache_state to mlx_vlm so that:
+        1. Image features are cached and reused when the same image appears again
+        2. KV cache is reused for common prefix across conversations with same image
+        """
         from mlx_vlm.generate import generate as vlm_generate
 
         vlm_messages = self._build_vlm_messages(messages)
@@ -511,28 +603,20 @@ class VLMEngine:
             vlm_messages, **tpl_kwargs,
         )
 
-        # Check multimodal prefix cache for hit rate tracking
-        try:
-            system_text = ""
-            for m in messages:
-                if m.get("role") == "system":
-                    system_text += m.get("content", "")
-            cached_prefix = self._get_mm_prefix_tokens(image_paths, system_text)
-            if cached_prefix is not None:
-                logger.debug(f"VLM prefix cache hit: {len(cached_prefix)} tokens")
-        except Exception:
-            logger.debug("failed", exc_info=True)
+        # Compute image hash for KV prefix cache lookup
+        image_hash = self._compute_image_hash(image_paths) if image_paths else None
 
-        # Check vision feature cache
-        cached_features = None
-        if self._vision_cache is not None and len(image_paths) == 1:
-            from .vision_feature_cache import compute_image_hash
-            try:
-                with open(image_paths[0], "rb") as f:
-                    img_hash = compute_image_hash(f.read())
-                cached_features = self._vision_cache.get(img_hash, self.model_name)
-            except Exception:
-                logger.debug("vision cache lookup failed", exc_info=True)
+        # Look up existing KV prefix state for this image
+        kv_prefix_state = self._get_kv_prefix_state(image_hash) if image_hash else None
+        if kv_prefix_state is not None:
+            logger.debug(
+                "VLM KV prefix cache hit for image %s (cache has %d tokens)",
+                image_hash[:8],
+                len(kv_prefix_state.token_ids) if kv_prefix_state.token_ids else 0,
+            )
+
+        # Track vision feature cache hits/misses via adapter stats
+        vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
 
         gen_kwargs: dict = {
             "max_tokens": max_tokens,
@@ -544,12 +628,47 @@ class VLMEngine:
         if audio_paths:
             gen_kwargs["audio"] = audio_paths if len(audio_paths) > 1 else audio_paths[0]
 
+        # Pass vision_cache adapter for image feature caching
+        if self._vlm_vision_cache_adapter is not None:
+            gen_kwargs["vision_cache"] = self._vlm_vision_cache_adapter
+
+        # Pass KV prefix state for reuse across conversations with same image
+        if kv_prefix_state is not None:
+            gen_kwargs["prompt_cache_state"] = kv_prefix_state
+
         result = vlm_generate(
             self._model,
             self._processor,
             prompt=prompt,
             **gen_kwargs,
         )
+
+        # Track vision feature cache stats
+        if self._vision_cache is not None:
+            vc_stats_after = self._vision_cache.stats
+            new_hits = vc_stats_after.get("hits", 0) - vc_stats_before.get("hits", 0)
+            if new_hits > 0:
+                self._vlm_vision_hits += new_hits
+                logger.debug("VLM vision feature cache hit: reused encoded image")
+            elif image_paths:
+                self._vlm_vision_misses += 1
+
+        # After generation, save KV prefix state for this image (first time or
+        # update with new state). stream_generate already called update() on the
+        # prompt_cache_state if provided. For first-time images, create a state.
+        if image_hash is not None:
+            try:
+                if kv_prefix_state is not None:
+                    # State was already updated by stream_generate
+                    pass
+                else:
+                    # First time seeing this image — create a state entry so the
+                    # next conversation with this image can reuse the KV cache.
+                    # We don't have the KV cache here (it's inside vlm_generate),
+                    # but we store the state entry so the next call will create one.
+                    self._ensure_kv_prefix_state(image_hash)
+            except Exception:
+                logger.debug("KV prefix state management failed", exc_info=True)
 
         # Trim output at stop sequences if provided
         if stop and isinstance(result, str):
@@ -575,18 +694,6 @@ class VLMEngine:
             self._store_mm_prefix_tokens(image_paths, system_text, prompt_ids)
         except Exception:
             logger.debug("multimodal prefix cache store failed", exc_info=True)
-
-        # Cache vision features after generation (future calls with same image)
-        if self._vision_cache is not None and cached_features is None and len(image_paths) == 1:
-            try:
-                # Extract features from model's vision tower for caching
-                if hasattr(self._model, 'vision_tower') and hasattr(self._model.vision_tower, 'features'):
-                    features = self._model.vision_tower.features
-                    if features is not None:
-                        mx.eval(features)
-                        self._vision_cache.put(img_hash, self.model_name, features)
-            except Exception:
-                logger.debug("failed", exc_info=True)
 
         return result.text if hasattr(result, 'text') else str(result)
 
@@ -717,7 +824,12 @@ class VLMEngine:
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
     ) -> None:
-        """Streaming vision + text generation using mlx_vlm.stream_generate()."""
+        """Streaming vision + text generation using mlx_vlm.stream_generate().
+
+        Passes vision_cache and prompt_cache_state to mlx_vlm so that:
+        1. Image features are cached and reused when the same image appears again
+        2. KV cache is reused for common prefix across conversations with same image
+        """
         from mlx_vlm.generate import stream_generate as vlm_stream_generate
         from mlx_lm.sample_utils import make_sampler
 
@@ -733,6 +845,21 @@ class VLMEngine:
             vlm_messages, **tpl_kwargs,
         )
 
+        # Compute image hash for KV prefix cache lookup
+        image_hash = self._compute_image_hash(image_paths) if image_paths else None
+
+        # Look up existing KV prefix state for this image
+        kv_prefix_state = self._get_kv_prefix_state(image_hash) if image_hash else None
+        if kv_prefix_state is not None:
+            logger.debug(
+                "VLM stream KV prefix cache hit for image %s (cache has %d tokens)",
+                image_hash[:8],
+                len(kv_prefix_state.token_ids) if kv_prefix_state.token_ids else 0,
+            )
+
+        # Track vision feature cache hits/misses via adapter stats
+        vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
+
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
         stop_suffix = stop or []
         token_count = 0
@@ -745,6 +872,14 @@ class VLMEngine:
                 stream_kwargs["image"] = image_paths if len(image_paths) > 1 else image_paths[0]
             if audio_paths:
                 stream_kwargs["audio"] = audio_paths if len(audio_paths) > 1 else audio_paths[0]
+
+            # Pass vision_cache adapter for image feature caching
+            if self._vlm_vision_cache_adapter is not None:
+                stream_kwargs["vision_cache"] = self._vlm_vision_cache_adapter
+
+            # Pass KV prefix state for reuse across conversations with same image
+            if kv_prefix_state is not None:
+                stream_kwargs["prompt_cache_state"] = kv_prefix_state
 
             for result in vlm_stream_generate(
                 self._model,
@@ -776,19 +911,28 @@ class VLMEngine:
                 if finish_reason:
                     return
 
-            # Cache vision features after streaming
-            if self._vision_cache is not None and len(image_paths) == 1:
+            # Track vision feature cache stats after streaming completes
+            if self._vision_cache is not None:
+                vc_stats_after = self._vision_cache.stats
+                new_hits = vc_stats_after.get("hits", 0) - vc_stats_before.get("hits", 0)
+                if new_hits > 0:
+                    self._vlm_vision_hits += new_hits
+                    logger.debug("VLM stream vision feature cache hit: reused encoded image")
+                elif image_paths:
+                    self._vlm_vision_misses += 1
+
+            # After streaming, save KV prefix state for this image
+            if image_hash is not None:
                 try:
-                    from .vision_feature_cache import compute_image_hash
-                    with open(image_paths[0], "rb") as f:
-                        img_hash = compute_image_hash(f.read())
-                    if hasattr(self._model, 'vision_tower') and hasattr(self._model.vision_tower, 'features'):
-                        features = self._model.vision_tower.features
-                        if features is not None:
-                            mx.eval(features)
-                            self._vision_cache.put(img_hash, self.model_name, features)
+                    if kv_prefix_state is not None:
+                        # State was already updated by stream_generate
+                        pass
+                    else:
+                        # First time seeing this image — create a state entry
+                        self._ensure_kv_prefix_state(image_hash)
                 except Exception:
-                    logger.debug("vision cache store failed", exc_info=True)
+                    logger.debug("KV prefix state management failed", exc_info=True)
+
         except Exception as e:
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
@@ -1072,6 +1216,37 @@ class VLMEngine:
                 logger.debug("failed", exc_info=True)
         return h.hexdigest()[:16]
 
+    def _get_kv_prefix_state(self, image_hash: str) -> Any | None:
+        """Get or create a PromptCacheState for per-image KV prefix reuse.
+
+        Returns the PromptCacheState if one exists for this image, or None
+        if this is the first time the image is seen. The caller should pass
+        the state to mlx_vlm's stream_generate which will populate it.
+        """
+        if image_hash is None:
+            return None
+
+        state = self._kv_prefix_states.get(image_hash)
+        if state is not None:
+            self._vlm_kv_prefix_hits += 1
+            return state
+
+        self._vlm_kv_prefix_misses += 1
+        return None
+
+    def _ensure_kv_prefix_state(self, image_hash: str) -> Any:
+        """Create a new PromptCacheState entry for this image hash."""
+        from mlx_vlm.generate import PromptCacheState
+
+        state = PromptCacheState()
+        # Evict old entries if over limit
+        if len(self._kv_prefix_states) >= self._kv_prefix_max_entries:
+            keys = list(self._kv_prefix_states.keys())
+            for k in keys[:8]:
+                del self._kv_prefix_states[k]
+        self._kv_prefix_states[image_hash] = state
+        return state
+
     # ── Audio Extraction ──
 
     async def _extract_audio(self, messages: list[dict]) -> list[str]:
@@ -1330,8 +1505,11 @@ class VLMEngine:
 
     def get_stats(self) -> dict:
         uptime = time.monotonic() - self._start_time if self._start_time else 0.0
-        total = self._mm_prefix_hits + self._mm_prefix_misses
-        return {
+        total_mm = self._mm_prefix_hits + self._mm_prefix_misses
+        total_vision = self._vlm_vision_hits + self._vlm_vision_misses
+        total_kv = self._vlm_kv_prefix_hits + self._vlm_kv_prefix_misses
+
+        stats = {
             "model": self._model_path,
             "loaded": self.is_loaded,
             "running": self._running,
@@ -1339,9 +1517,29 @@ class VLMEngine:
             "is_vlm": self._is_vlm,
             "num_requests_processed": self._num_requests_processed,
             "uptime_seconds": uptime,
+            # C21: Multimodal prefix cache (token ID reuse)
             "mm_prefix_cache_entries": len(self._multimodal_prefix_cache),
             "mm_prefix_cache_hits": self._mm_prefix_hits,
             "mm_prefix_cache_misses": self._mm_prefix_misses,
-            "mm_prefix_cache_hit_rate": self._mm_prefix_hits / total if total > 0 else 0.0,
+            "mm_prefix_cache_hit_rate": self._mm_prefix_hits / total_mm if total_mm > 0 else 0.0,
+            # Vision feature cache (image encoder output reuse)
             "vision_cache_enabled": self._vision_cache is not None,
+            "vlm_vision_feature_hits": self._vlm_vision_hits,
+            "vlm_vision_feature_misses": self._vlm_vision_misses,
+            "vlm_vision_feature_hit_rate": self._vlm_vision_hits / total_vision if total_vision > 0 else 0.0,
+            # KV prefix cache (per-image KV state reuse)
+            "vlm_kv_prefix_entries": len(self._kv_prefix_states),
+            "vlm_kv_prefix_hits": self._vlm_kv_prefix_hits,
+            "vlm_kv_prefix_misses": self._vlm_kv_prefix_misses,
+            "vlm_kv_prefix_hit_rate": self._vlm_kv_prefix_hits / total_kv if total_kv > 0 else 0.0,
         }
+
+        # Merge underlying VisionFeatureCache stats if available
+        if self._vision_cache is not None:
+            vc_stats = self._vision_cache.stats
+            stats["vision_cache_memory_hits"] = vc_stats.get("hits", 0)
+            stats["vision_cache_ssd_loads"] = vc_stats.get("ssd_loads", 0)
+            stats["vision_cache_saves"] = vc_stats.get("saves", 0)
+            stats["vision_cache_errors"] = vc_stats.get("errors", 0)
+
+        return stats

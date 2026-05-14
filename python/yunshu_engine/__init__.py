@@ -54,6 +54,8 @@ def __getattr__(name):
         "SpecDecodingConfig": ".speculative_decoder",
         "auto_configure_speculative": ".speculative_decoder",
         "detect_spec_heads": ".speculative_decoder",
+        "EncoderCacheManager": ".encoder_cache",
+        "EncoderCacheEntry": ".encoder_cache",
     }
     if name in _lazy:
         import importlib

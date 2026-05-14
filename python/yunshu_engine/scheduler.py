@@ -234,6 +234,10 @@ class Scheduler:
         from .mrope import BatchRopeDeltaManager
         self._rope_delta_mgr = BatchRopeDeltaManager()
 
+        # Encoder-decoder cache (§12.2: vLLM EncoderCacheManager pattern)
+        from .encoder_cache import EncoderCacheManager
+        self._encoder_cache = EncoderCacheManager()
+
         # ITL tracking (C2/ITL-1: inter-token latency per request)
         self._last_token_time: dict[str, float] = {}
         self._itl_samples: dict[str, list[float]] = {}
@@ -431,6 +435,11 @@ class Scheduler:
         # step() runs on the MLX executor thread.
         if self._kv_offload_manager is not None and self._step_counter % 128 == 0:
             self._maybe_kv_offload()
+
+        # 7d. Periodic encoder-decoder cache eviction (§12.2)
+        # Evict expired encoder hidden-state entries to reclaim memory.
+        if self._step_counter % 64 == 0:
+            self._encoder_cache.evict_all_expired()
 
         # 8. Cleanup finished
         self._cleanup_finished()
@@ -1934,6 +1943,8 @@ class Scheduler:
         self._spec_total_accepted = 0
         self._spec_total_rejected = 0
         self._rope_delta_mgr.clear()
+        # §12.2: clear encoder-decoder cache
+        self._encoder_cache.clear()
 
     def shutdown(self) -> None:
         self.deep_reset()
@@ -1999,6 +2010,8 @@ class Scheduler:
                 }
             except Exception:
                 logger.debug("MTP stats unavailable", exc_info=True)
+        # §12.2: encoder-decoder cache stats
+        stats["encoder_cache"] = self._encoder_cache.get_stats()
         return stats
 
 

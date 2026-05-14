@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yunshu_engine.vlm_engine import VLMEngine, _is_mlx_vlm_model
+from yunshu_engine.vlm_engine import VLMEngine, _is_mlx_vlm_model, _MlxVlmVisionCacheAdapter
 
 
 class TestVLMEngineInit:
@@ -207,3 +207,204 @@ class TestIsMlxVlmModel:
         model = MagicMock()
         type(model).__module__ = "custom.models.my_model"
         assert _is_mlx_vlm_model(model) is False
+
+
+class TestMlxVlmVisionCacheAdapter:
+    """Tests for the adapter that bridges VisionFeatureCache to mlx_vlm's interface."""
+
+    def test_get_returns_cached_features(self, tmp_path):
+        """Adapter.get() should return features from the underlying cache."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter = _MlxVlmVisionCacheAdapter(cache, "test-model")
+
+        # Create a test image file
+        img = tmp_path / "test.png"
+        img.write_bytes(b"\x89PNG\r\n fake image data")
+
+        # Pre-populate the cache
+        from yunshu_engine.vision_feature_cache import compute_image_hash
+        with open(str(img), "rb") as f:
+            img_hash = compute_image_hash(f.read())
+        features = MagicMock()
+        cache.put(img_hash, "test-model", features)
+
+        # Adapter should find it
+        result = adapter.get(str(img))
+        assert result is features
+
+    def test_get_returns_none_on_miss(self, tmp_path):
+        """Adapter.get() should return None for unknown images."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter = _MlxVlmVisionCacheAdapter(cache, "test-model")
+
+        img = tmp_path / "unknown.png"
+        img.write_bytes(b"unknown image")
+        assert adapter.get(str(img)) is None
+
+    def test_put_stores_features(self, tmp_path):
+        """Adapter.put() should store features in the underlying cache."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter = _MlxVlmVisionCacheAdapter(cache, "test-model")
+
+        img = tmp_path / "store.png"
+        img.write_bytes(b"image to store")
+
+        features = MagicMock()
+        adapter.put(str(img), features)
+
+        # Verify it's retrievable via the adapter
+        result = adapter.get(str(img))
+        assert result is features
+
+    def test_get_with_nonexistent_path_hashes_path_string(self):
+        """Adapter.get() should handle non-file paths gracefully."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter = _MlxVlmVisionCacheAdapter(cache, "test-model")
+
+        # Non-existent path should not crash
+        result = adapter.get("/nonexistent/path.png")
+        assert result is None
+
+    def test_get_with_list_of_images(self, tmp_path):
+        """Adapter.get() should handle multi-image (list) input."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter = _MlxVlmVisionCacheAdapter(cache, "test-model")
+
+        img1 = tmp_path / "a.png"
+        img2 = tmp_path / "b.png"
+        img1.write_bytes(b"image a")
+        img2.write_bytes(b"image b")
+
+        # Store via list
+        features = MagicMock()
+        adapter.put([str(img1), str(img2)], features)
+
+        # Retrieve via same list
+        result = adapter.get([str(img1), str(img2)])
+        assert result is features
+
+    def test_exception_in_get_returns_none(self, tmp_path):
+        """Adapter.get() should return None on unexpected errors."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter = _MlxVlmVisionCacheAdapter(cache, "test-model")
+
+        # Even if the cache is broken, get should not raise
+        result = adapter.get(None)
+        assert result is None
+
+    def test_different_models_isolated(self, tmp_path):
+        """Adapters for different models should be isolated."""
+        from yunshu_engine.vision_feature_cache import VisionFeatureCache
+
+        cache = VisionFeatureCache(cache_dir=None, max_memory_entries=5)
+        adapter_a = _MlxVlmVisionCacheAdapter(cache, "model-a")
+        adapter_b = _MlxVlmVisionCacheAdapter(cache, "model-b")
+
+        img = tmp_path / "shared.png"
+        img.write_bytes(b"shared image")
+
+        features_a = "features-a"
+        adapter_a.put(str(img), features_a)
+
+        # model-b should not see model-a's features
+        assert adapter_b.get(str(img)) is None
+        assert adapter_a.get(str(img)) == features_a
+
+
+class TestVLMKVPrefixCache:
+    """Tests for per-image KV prefix cache state management."""
+
+    def test_get_kv_prefix_state_returns_none_for_new_image(self):
+        engine = VLMEngine("/models/test")
+        assert engine._get_kv_prefix_state("new_hash") is None
+        assert engine._vlm_kv_prefix_misses == 1
+
+    def test_get_kv_prefix_state_returns_existing(self):
+        engine = VLMEngine("/models/test")
+        # Create a state entry
+        state = engine._ensure_kv_prefix_state("img_hash")
+        # Now get should find it
+        result = engine._get_kv_prefix_state("img_hash")
+        assert result is state
+        assert engine._vlm_kv_prefix_hits == 1
+
+    def test_get_kv_prefix_state_none_hash_returns_none(self):
+        engine = VLMEngine("/models/test")
+        assert engine._get_kv_prefix_state(None) is None
+
+    def test_ensure_kv_prefix_state_creates_entry(self):
+        engine = VLMEngine("/models/test")
+        state = engine._ensure_kv_prefix_state("hash1")
+        assert "hash1" in engine._kv_prefix_states
+        assert engine._kv_prefix_states["hash1"] is state
+
+    def test_ensure_kv_prefix_state_evicts_when_full(self):
+        engine = VLMEngine("/models/test")
+        engine._kv_prefix_max_entries = 4
+
+        # Fill up to max
+        for i in range(4):
+            engine._ensure_kv_prefix_state(f"hash_{i}")
+
+        assert len(engine._kv_prefix_states) == 4
+
+        # Add one more — should evict old entries
+        engine._ensure_kv_prefix_state("hash_4")
+        assert len(engine._kv_prefix_states) <= 4
+        assert "hash_4" in engine._kv_prefix_states
+
+
+class TestVLMCacheStats:
+    """Tests for VLM cache statistics tracking."""
+
+    def test_initial_stats_have_new_fields(self):
+        engine = VLMEngine("/models/test")
+        stats = engine.get_stats()
+        assert "vlm_vision_feature_hits" in stats
+        assert "vlm_vision_feature_misses" in stats
+        assert "vlm_vision_feature_hit_rate" in stats
+        assert "vlm_kv_prefix_entries" in stats
+        assert "vlm_kv_prefix_hits" in stats
+        assert "vlm_kv_prefix_misses" in stats
+        assert "vlm_kv_prefix_hit_rate" in stats
+
+    def test_stats_reflect_kv_prefix_activity(self):
+        engine = VLMEngine("/models/test")
+
+        # Miss
+        engine._get_kv_prefix_state("hash_a")
+        assert engine.get_stats()["vlm_kv_prefix_misses"] == 1
+        assert engine.get_stats()["vlm_kv_prefix_hit_rate"] == 0.0
+
+        # Create and hit
+        engine._ensure_kv_prefix_state("hash_a")
+        engine._get_kv_prefix_state("hash_a")
+        assert engine.get_stats()["vlm_kv_prefix_hits"] == 1
+        assert engine.get_stats()["vlm_kv_prefix_hit_rate"] == pytest.approx(0.5)
+
+    def test_stats_reflect_vision_feature_activity(self):
+        engine = VLMEngine("/models/test")
+        engine._vlm_vision_hits = 3
+        engine._vlm_vision_misses = 1
+        stats = engine.get_stats()
+        assert stats["vlm_vision_feature_hits"] == 3
+        assert stats["vlm_vision_feature_misses"] == 1
+        assert stats["vlm_vision_feature_hit_rate"] == pytest.approx(0.75)
+
+    def test_vision_cache_enabled_in_stats(self):
+        engine = VLMEngine("/models/test")
+        # Vision cache is now enabled by default (unless explicitly disabled)
+        stats = engine.get_stats()
+        assert isinstance(stats["vision_cache_enabled"], bool)
