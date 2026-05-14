@@ -155,6 +155,7 @@ def _write_safetensors(path: str, tensors: dict[str, tuple[bytes, str, list[int]
                 f.write(tensors[name][0])
         os.rename(tmp_path, path)
     except Exception:
+        logger.debug("safetensors write failed", exc_info=True)
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -289,7 +290,7 @@ class SSDKVCache:
                     except OSError:
                         pass
             except Exception as e:
-                logger.debug(f"SSD writer error: {e}")
+                logger.debug("SSD writer error", exc_info=True)
 
     def _flush_writer(self) -> None:
         """Flush all pending writes."""
@@ -498,8 +499,8 @@ class SSDKVCache:
                         os.unlink(item[1])
                     except OSError:
                         pass
-            except Exception as e:
-                logger.debug(f"SSD write error: {e}")
+            except Exception:
+                logger.debug("SSD write error", exc_info=True)
 
     def load_block(self, block_hash: bytes) -> list | None:
         """Load a KV block from hot cache or SSD.
@@ -558,8 +559,8 @@ class SSDKVCache:
 
             return cache_data
 
-        except Exception as e:
-            logger.debug(f"SSD KV load failed for {hex_hash[:16]}: {e}")
+        except Exception:
+            logger.debug(f"SSD KV load failed for {hex_hash[:16]}", exc_info=True)
             return None
 
     def has_block(self, block_hash: bytes) -> bool:
@@ -643,6 +644,7 @@ class SSDKVCache:
             free = stat.f_frsize * stat.f_bavail
             return min(self._max_size_bytes, int(free * 0.95))
         except Exception:
+            logger.debug("statvfs for cache dir failed", exc_info=True)
             return self._max_size_bytes
 
     def get_stats(self) -> SSDCacheStats:

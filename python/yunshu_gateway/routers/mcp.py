@@ -402,7 +402,7 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
         }, req_id)
 
     except Exception as e:
-        logger.error(f"MCP generate error: {e}")
+        logger.error(f"MCP generate error: {e}", exc_info=True)
         return _rpc_response({
             "content": [{"type": "text", "text": f"Error: {e}"}],
             "isError": True,
@@ -450,6 +450,7 @@ async def _tool_synthesize_speech(args: dict, req_id: int | str | None) -> dict:
             "isError": False,
         }, req_id)
     except Exception as e:
+        logger.debug(f"TTS tool error: {e}", exc_info=True)
         return _rpc_response({
             "content": [{"type": "text", "text": f"TTS error: {e}"}],
             "isError": True,
@@ -505,6 +506,7 @@ async def _tool_generate_image(args: dict, req_id: int | str | None) -> dict:
                 "isError": False,
             }, req_id)
     except Exception as e:
+        logger.debug(f"image generation tool error: {e}", exc_info=True)
         return _rpc_response({
             "content": [{"type": "text", "text": f"Image generation error: {e}"}],
             "isError": True,
@@ -663,7 +665,7 @@ async def mcp_endpoint(req: JSONRPCRequest):
         result = await handler(req.params, req.id)
         return JSONResponse(result)
     except Exception as e:
-        logger.error(f"MCP handler error for {req.method}: {e}")
+        logger.error(f"MCP handler error for {req.method}: {e}", exc_info=True)
         return JSONResponse(_rpc_error(JSONRPCError.INTERNAL_ERROR, str(e), req.id))
 
 
@@ -688,6 +690,7 @@ async def mcp_sse_endpoint(request: Request):
                 if await request.is_disconnected():
                     break
             except Exception:
+                logger.debug("SSE disconnect check failed", exc_info=True)
                 break
             await asyncio.sleep(15)
             yield f"event: ping\ndata: {{}}\n\n"

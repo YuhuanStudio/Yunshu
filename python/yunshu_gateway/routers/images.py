@@ -183,6 +183,7 @@ async def create_image_variation(req: ImageVariationsRequest) -> JSONResponse:
     try:
         image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
+        logger.debug("invalid base64 image data in variations request", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
     manager = get_model_manager()
@@ -259,6 +260,7 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
     try:
         image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
+        logger.debug("invalid base64 image data in edits request", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
     manager = get_model_manager()
@@ -336,6 +338,7 @@ async def create_image_inpaint(req: ImageInpaintRequest) -> JSONResponse:
     try:
         image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
+        logger.debug("invalid base64 image data in inpaint request", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
     manager = get_model_manager()
@@ -412,6 +415,7 @@ async def create_image_controlnet(req: ImageControlNetRequest) -> JSONResponse:
     try:
         image_bytes = base64.b64decode(req.image, validate=True)
     except Exception:
+        logger.debug("invalid base64 image data in controlnet request", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
     manager = get_model_manager()
@@ -487,6 +491,7 @@ async def create_image_depth_guided(req: ImageDepthGuidedRequest) -> JSONRespons
     try:
         depth_bytes = base64.b64decode(req.depth_image, validate=True)
     except Exception:
+        logger.debug("invalid base64 depth image data", exc_info=True)
         raise HTTPException(status_code=400, detail="Invalid base64 depth image data")
 
     manager = get_model_manager()

@@ -53,6 +53,12 @@ class EngineCoreConfig:
     kv_num_blocks: int = 0  # pre-computed block count (0 = auto-compute)
     # C18: CPU/GPU overlap scheduling (SGLang pattern)
     enable_cpu_gpu_overlap: bool = False  # Disabled by default; enable via YUNSHU_CPU_GPU_OVERLAP=1
+    # N-gram speculative decoding in batch path (model-free, zero GPU overhead)
+    ngram_spec_enabled: bool = False
+    ngram_spec_min_n: int = 1
+    ngram_spec_max_n: int = 5
+    ngram_spec_k: int = 5
+    ngram_spec_mode: str = "lps"
 
 
 class EngineCore:
@@ -88,6 +94,11 @@ class EngineCore:
             max_kv_size=self.config.max_kv_size,
             deferred_clear_delay=self.config.deferred_clear_delay,
             cache_cleanup_interval=self.config.cache_cleanup_interval,
+            ngram_spec_enabled=self.config.ngram_spec_enabled,
+            ngram_spec_min_n=self.config.ngram_spec_min_n,
+            ngram_spec_max_n=self.config.ngram_spec_max_n,
+            ngram_spec_k=self.config.ngram_spec_k,
+            ngram_spec_mode=self.config.ngram_spec_mode,
         )
 
         if self.config.enable_paged_kv:
@@ -129,6 +140,7 @@ class EngineCore:
                             else:
                                 num_blocks = 1024  # safe default
                         except Exception:
+                            logger.debug("memory monitor unavailable, using default block count", exc_info=True)
                             num_blocks = 1024  # safe default
 
                     kv_manager = KVCacheManager(kv_config, num_blocks=num_blocks)

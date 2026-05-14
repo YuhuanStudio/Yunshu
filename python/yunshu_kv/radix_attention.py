@@ -438,6 +438,57 @@ class RadixTree:
             "eviction_stats": dict(self._eviction_stats),
         }
 
+    def get_bigram_view(self, node: RadixNode, n: int = 5) -> list[int]:
+        """Return the last N tokens leading to and including this node.
+
+        Used by EAGLE/spec decode to get context from the radix tree for
+        draft token generation. Walks from the node toward the root,
+        collecting the most recent `n` tokens.
+
+        Args:
+            node: The matched node in the tree.
+            n: Maximum number of trailing tokens to return.
+
+        Returns:
+            List of up to `n` token IDs (in original order, root→node).
+        """
+        tokens: list[int] = []
+        current: RadixNode | None = node
+        while current is not None and len(tokens) < n:
+            tokens.extend(reversed(current.token_ids))
+            current = current.parent
+        tokens.reverse()
+        # Trim to last n
+        return tokens[-n:] if len(tokens) > n else tokens
+
+    def get_continuation_tokens(self, token_ids: list[int], max_results: int = 5) -> list[int]:
+        """Return continuation tokens from the tree after a prefix match.
+
+        Given a prefix, finds the matched node and returns the first token
+        of each child as possible continuations. This is the "bigram view"
+        for speculative decoding: after matching a prefix, the tree tells
+        us what tokens have historically followed.
+
+        Args:
+            token_ids: Prefix tokens to match.
+            max_results: Maximum continuation tokens to return.
+
+        Returns:
+            List of possible continuation token IDs (children's first tokens).
+        """
+        node, remaining = self.match(token_ids)
+        if remaining:
+            # Not a full match — no continuation info
+            return []
+
+        continuations = []
+        for first_tok, child in node.children.items():
+            if child.ref_count > 0 or child.access_count > 0:
+                continuations.append(first_tok)
+            if len(continuations) >= max_results:
+                break
+        return continuations
+
 
 def _now() -> float:
     import time

@@ -58,7 +58,7 @@ class NodeCapabilities:
                 elif "Total Number of Cores" in line:
                     gpu_cores = int(line.split(":")[-1].strip())
         except Exception:
-            pass
+            logger.debug("failed to detect GPU via system_profiler", exc_info=True)
 
         try:
             result = subprocess.run(
@@ -70,6 +70,7 @@ class NodeCapabilities:
                 total_mem_gb = int(lines[0]) / (1024 ** 3)
                 cpu_cores = int(lines[1])
         except Exception:
+            logger.debug("failed to detect memory/CPU via sysctl", exc_info=True)
             cpu_cores = 0
 
         # Thunderbolt detection
@@ -80,7 +81,7 @@ class NodeCapabilities:
             )
             tb_ports = result.stdout.count("Thunderbolt")
         except Exception:
-            pass
+            logger.debug("failed to detect Thunderbolt ports", exc_info=True)
 
         return NodeCapabilities(
             total_memory_gb=total_mem_gb,
@@ -139,6 +140,7 @@ class MeshNode:
             s.close()
             return ip
         except Exception:
+            logger.debug("failed to detect local IP", exc_info=True)
             return "127.0.0.1"
 
     def is_healthy(self, timeout: float = 30.0) -> bool:

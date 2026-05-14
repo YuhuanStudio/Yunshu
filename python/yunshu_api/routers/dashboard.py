@@ -6,10 +6,14 @@ model status, usage stats, and system info.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+logger = logging.getLogger(__name__)
 
 
 class DashboardConfig(BaseModel):
@@ -90,7 +94,7 @@ async def dashboard_summary(request: Request):
             "cache_bytes": mx.get_cache_memory(),
         }
     except Exception:
-        pass
+        logger.debug("failed to query GPU memory via MLX", exc_info=True)
 
     # Mesh status
     mesh_manager = getattr(request.app.state, "mesh_manager", None)

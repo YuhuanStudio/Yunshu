@@ -50,6 +50,7 @@ def _sysctl(name: str) -> Optional[int]:
         )
         return int(r.stdout.strip())
     except Exception:
+        logger.debug(f"sysctl {name} read failed", exc_info=True)
         return None
 
 
@@ -108,6 +109,7 @@ def _get_gpu_info() -> dict[str, Any]:
             "mlx_version": mlx_version,
         }
     except Exception as e:
+        logger.debug(f"gpu info collection failed: {e}", exc_info=True)
         return {"error": str(e)}
 
 
@@ -287,6 +289,7 @@ async def kv_cache_stats() -> dict[str, Any]:
                     stats = entry.engine.get_kv_cache_stats()
                     caches.append({"model_id": entry.model_id, **stats})
                 except Exception:
+                    logger.debug(f"kv cache stats unavailable for {entry.model_id}", exc_info=True)
                     caches.append({"model_id": entry.model_id, "error": "unavailable"})
     else:
         engine = get_engine()

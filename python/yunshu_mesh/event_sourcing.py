@@ -489,7 +489,7 @@ class EventLog:
                 if row:
                     self._stats.log_size_bytes = row[0]
             except Exception:
-                pass
+                logger.debug("failed to query log size", exc_info=True)
         return self._stats
 
     def get_stats(self) -> dict[str, Any]:

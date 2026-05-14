@@ -488,7 +488,7 @@ class ThinkingSegmentSubstore:
             if filepath.exists():
                 filepath.unlink()
         except Exception:
-            pass
+            logger.debug("SSD file removal failed for segment %s", segment.step_hash, exc_info=True)
 
     def _serialize_kv(self, kv_data: Any) -> Any:
         """Serialize KV data for JSON storage."""

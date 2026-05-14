@@ -6,6 +6,7 @@ Follows oMLX's diagnose pattern for Apple Silicon validation.
 
 from __future__ import annotations
 
+import logging
 import platform
 import subprocess
 import sys
@@ -19,6 +20,8 @@ from rich.tree import Tree
 
 console = Console()
 diagnose_app = typer.Typer(help="System diagnostics.", no_args_is_help=True)
+
+logger = logging.getLogger(__name__)
 
 
 @diagnose_app.command("system")
@@ -37,6 +40,7 @@ def diagnose_system():
         result = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
         hw.add(f"CPU: {result.stdout.strip()}")
     except Exception:
+        logger.debug("failed to query CPU info", exc_info=True)
         hw.add("CPU: [dim]unknown[/]")
 
     # Memory
@@ -45,6 +49,7 @@ def diagnose_system():
         total_gb = int(result.stdout.strip()) / (1024 ** 3)
         hw.add(f"Unified Memory: {total_gb:.0f} GB")
     except Exception:
+        logger.debug("failed to query memory info", exc_info=True)
         hw.add("Memory: [dim]unknown[/]")
 
     # GPU
@@ -60,6 +65,7 @@ def diagnose_system():
             elif "Metal" in line and "Support" in line:
                 gpu.add(line)
     except Exception:
+        logger.debug("failed to query GPU info", exc_info=True)
         gpu.add("[dim]Unable to query GPU[/]")
 
     # MLX
@@ -219,7 +225,7 @@ def diagnose_server(
             for m in models:
                 console.print(f"  • {m.get('id', 'unknown')}")
     except Exception:
-        pass
+        logger.debug("failed to fetch models from server", exc_info=True)
 
 
 def _fmt(b: int) -> str:

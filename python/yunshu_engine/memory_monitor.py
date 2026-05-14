@@ -51,6 +51,7 @@ def get_system_memory() -> int:
         )
         return int(result.stdout.strip())
     except Exception:
+        logger.debug("sysctl hw.memsize detection failed, using 16GB default", exc_info=True)
         return 16 * 1024 ** 3
 
 

@@ -98,11 +98,11 @@ class SSDSQLiteStore:
             try:
                 self.checkpoint()
             except Exception:
-                pass
+                logger.debug("checkpoint during close failed", exc_info=True)
             try:
                 self._conn.close()
             except Exception:
-                pass
+                logger.debug("connection close failed", exc_info=True)
             self._conn = None
 
     # ── Core CRUD ──
@@ -449,7 +449,7 @@ class SSDSQLiteStore:
             with open(json_path) as f:
                 data = json.load(f)
         except Exception:
-            logger.warning("Failed to read JSON index: %s", json_path)
+            logger.warning("Failed to read JSON index: %s", json_path, exc_info=True)
             return 0
 
         entries = data if isinstance(data, list) else data.get("entries", [])

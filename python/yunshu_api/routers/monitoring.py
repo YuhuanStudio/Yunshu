@@ -6,6 +6,7 @@ Supports both single-engine and multi-model mode.
 
 from __future__ import annotations
 
+import logging
 import platform
 import time
 
@@ -19,6 +20,8 @@ from ..schemas.models import (
 )
 
 router = APIRouter(prefix="/monitoring", tags=["monitoring"])
+
+logger = logging.getLogger(__name__)
 
 
 def _get_gpu_stats() -> GPUMemoryStats:
@@ -36,7 +39,7 @@ def _get_gpu_stats() -> GPUMemoryStats:
         )
         total_uma = int(result.stdout.strip())
     except Exception:
-        pass
+        logger.debug("failed to query hw.memsize via sysctl", exc_info=True)
 
     return GPUMemoryStats(
         total_bytes=total_uma,

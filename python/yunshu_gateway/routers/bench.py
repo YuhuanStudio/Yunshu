@@ -420,3 +420,131 @@ async def bench_batch(concurrency: int = 4, num_requests: int = 8, prompt_tokens
     finally:
         with _lock:
             _active_benchmark = None
+
+
+# ── Roofline Model Analysis ──
+
+
+class RooflineModelRequest(BaseModel):
+    chip: str = Field(default="auto", description="Chip name (e.g., M4_Max) or 'auto' to detect")
+    gemm_sizes: list[list[int]] = Field(
+        default=[[1, 4096, 4096], [32, 4096, 4096], [1, 4096, 11008]],
+        description="GEMM sizes [M, N, K] to analyze",
+    )
+
+
+@router.post("/roofline-model")
+async def bench_roofline_model(request: RooflineModelRequest):
+    """Analyze compute vs memory boundedness using the roofline model.
+
+    Uses Yunshu's RooflineModel engine module for analytical throughput
+    prediction based on Apple Silicon chip parameters.
+    """
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "roofline-model"
+
+    try:
+        from yunshu_engine.roofline import RooflineModel
+
+        chip = request.chip
+        if chip == "auto":
+            from yunshu_engine.utils.hardware import get_chip_name
+            chip = get_chip_name()
+
+        rm = RooflineModel(chip)
+        results = []
+        for m, n, k in request.gemm_sizes:
+            report = rm.compute_gemm_roofline(M=m, N=n, K=k)
+            results.append({
+                "gemm_size": [m, n, k],
+                "arithmetic_intensity": round(report.arithmetic_intensity, 2),
+                "compute_bound": report.is_compute_bound,
+                "predicted_throughput_gbps": round(report.predicted_throughput, 2),
+                "roofline_tflops": round(report.roofline_tflops, 2),
+            })
+
+        _benchmark_results["roofline-model"] = {
+            "chip": rm.chip_name,
+            "bandwidth_gbps": rm.bandwidth_gbps,
+            "compute_tflops_fp16": rm.compute_tflops_fp16,
+            "analyses": results,
+        }
+        return _benchmark_results["roofline-model"]
+    except Exception as e:
+        logger.error(f"Roofline model analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        with _lock:
+            _active_benchmark = None
+
+
+# ── BFCL Function Calling Evaluation ──
+
+
+class BFCLEvalRequest(BaseModel):
+    categories: list[str] = Field(
+        default=["simple", "parallel", "multiple", "parallel_multiple"],
+        description="BFCL categories to evaluate",
+    )
+    max_samples: int = Field(default=10, ge=0, description="Max test cases per category (0=all)")
+
+
+@router.post("/bfcl-eval")
+async def bench_bfcl_eval(request: BFCLEvalRequest):
+    """Run BFCL function calling evaluation against the loaded model.
+
+    Evaluates tool/function calling accuracy using the BFCLEvaluator
+    from yunshu_engine. Requires a loaded model with tool calling support.
+    """
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "bfcl-eval"
+
+    try:
+        from yunshu_engine.model_manager import ModelManager
+        from yunshu_engine.bfcl_eval import BFCLEvaluator, BFCLEvalConfig
+
+        mgr = ModelManager()
+        engine = mgr.get_engine()
+        if engine is None:
+            raise HTTPException(status_code=503, detail="No model loaded")
+
+        config = BFCLEvalConfig(
+            model_name=engine.model_name or "unknown",
+            test_categories=[c for c in request.categories if c in ("simple", "parallel", "multiple", "parallel_multiple")],
+            max_samples=request.max_samples,
+        )
+        evaluator = BFCLEvaluator(config, engine=engine)
+
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(None, evaluator.run_all)
+
+        result_dicts = []
+        for r in results:
+            result_dicts.append({
+                "category": r.category,
+                "total": r.total,
+                "correct": r.correct,
+                "accuracy": round(r.accuracy, 3),
+                "avg_latency_ms": round(r.avg_latency_ms, 1),
+                "errors": r.errors[:5],  # Limit error details
+            })
+
+        _benchmark_results["bfcl-eval"] = {
+            "model": config.model_name,
+            "categories": result_dicts,
+            "timestamp": time.time(),
+        }
+        return _benchmark_results["bfcl-eval"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"BFCL evaluation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        with _lock:
+            _active_benchmark = None

@@ -9,8 +9,11 @@ Inspired by vLLM's BlockPool but adapted for Apple Silicon UMA:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -287,7 +290,7 @@ class BlockPool:
                     key_cache[new_block.block_id] = key_cache[old_block.block_id]
                     value_cache[new_block.block_id] = value_cache[old_block.block_id]
                 except Exception:
-                    pass
+                    logger.debug("KV data copy in cow_block_in_table failed", exc_info=True)
             # Update the table entry
             table._blocks[logical_idx] = new_block
 

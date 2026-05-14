@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 28: LCG hash pool, cancel_event, LookaheadReasoning, grammar-aware spec decode, eviction strategies)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 29: Batch N-gram spec decode, zero bare except blocks, audit scan)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,16 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3577 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3594 passed, 13 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 29 — Batch Spec Decode + 零 Bare Except + 全審計掃描)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Batch N-gram spec decode | Scheduler 新增 NgramProposer 批量路徑: `_try_ngram_draft()` 使用模型無關 N-gram 匹配為所有運行請求生成 draft tokens, `_verify_spec_drafts()` 支持雙後端 (cross-model + N-gram), `enable_ngram_spec()` 運行時切換, `SchedulerConfig` 新增 6 個 ngram_spec_* 欄位, `EngineCoreConfig` 透傳 | +17 tests |
+| 零 bare except | 全項目 222+ 處 `except Exception:` (無 exc_info) → 全部添加 `logger.debug("...", exc_info=True)`, 覆蓋 40+ 文件: yunshu_engine (12), yunshu_gateway (7), yunshu_kv (5), yunshu_mesh (4), yunshu_cli (7), yunshu_api (3), yunshu_control (1) | 0 remaining |
+| RadixTree bigram view | `get_bigram_view()` + `get_continuation_tokens()` for EAGLE spec decode 整合 (§14.2) | — |
+| 全審計掃描 | 完整掃描 INTEGRATION_AUDIT.md 22 個 section, 識別 41 項剩餘差距 (見下方) | — |
 
 ### 已完成修復 (2026-05-14 Wave 28 — Spec Decode 完善 + Eviction 策略)
 
@@ -452,7 +461,7 @@
 | C5 | SpecPrefill attention capture 評分 | ✅ 已完成 |
 | C7 | 統一 spec decode begin/draft/accept 接口 | ✅ 已完成 |
 | M15 | 遠端 URL 圖片支持 | ✅ 已完成 |
-| P2-6 | 70 處 except:pass → logger.debug | ✅ 已完成 (21 文件) |
+| P2-6 | 70 處 except:pass → logger.debug | ✅ 已完成 (21 文件) → Wave 29: 222+ 處全項目覆蓋 (40+ 文件, 0 remaining) |
 | C6 | 漸進式 KV 量化 (每 256 tokens) | ✅ 已完成 |
 | C8 | RadixTree 前綴匹配 | ✅ 已完成 |
 | C10 | 批量猜測驗證 | ✅ 已完成 |
@@ -478,7 +487,7 @@
 | 指標 | 數值 |
 |------|------|
 | 引擎模塊總數 | 47 (+ocr_engine) |
-| **完全死亡 (DEAD)** | **11 個** — 零管線調用者 (原 15 個，4 個已接入) |
+| **完全死亡 (DEAD)** | **3 個** — 零管線調用者 (原 11 個，8 個已接入) |
 | 已刪除 (DELETED) | 1 個 (settings.py) |
 | 已接入 (WIRED) | 35 個 |
 | Gateway 缺失的引擎參數 | 0 個 (全部已暴露) |
@@ -509,6 +518,8 @@
 | 3 | audio_engine.py | model_manager, gateway/audio, gateway/mcp | WIRED |
 | 4 | batched_engine.py | gateway/chat, gateway/completions, gateway/main | **WIRED** (主要生產引擎) |
 | 5 | benchmark.py | gateway/bench (/bench/model + /bench/batch endpoints) | **WIRED** ✅ |
+| 5b | bfcl_eval.py | gateway/bench (/bench/bfcl-eval endpoint) | **WIRED** ✅ |
+| 5c | roofline.py | gateway/bench (/bench/roofline-model endpoint) | **WIRED** ✅ |
 | 6 | bfcl_eval.py | 零調用者 | **DEAD** |
 | 7 | deltanet_inversion.py | 僅 scripts/test_inversion.py | **DEAD** (研究性質) |
 | 8 | engine.py (legacy) | model_manager, gateway/engine, 所有 router | WIRED* |
@@ -561,13 +572,15 @@
 
 ### 2.2 DEAD 模塊詳情
 
-11 個完全死亡的模塊，僅存在於文件系統和測試中：
+3 個完全死亡的模塊 (原 11 個)：
 
 | 模塊 | 行數 | 測試文件 | 說明 |
 |------|------|----------|------|
 | ~~adaptive_batch.py~~ | ~~276~~ | test_adaptive_batch.py | ~~自適應批處理，零調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore |
 | ane_embedding.py | 953 | test_ane_embedding.py | ANE 嵌入，僅 bench 腳本 |
 | ~~benchmark.py~~ | ~~472~~ | test_benchmark.py | ~~基準測試框架，僅 scripts/~~ ✅ **WIRED** — BenchmarkRunner 已接入 /bench/model + /bench/batch endpoints |
+| ~~bfcl_eval.py~~ | ~~1,127~~ | 無 | ~~BFCL 評估，零調用~~ ✅ **WIRED** — BFCLEvaluator 已接入 /bench/bfcl-eval endpoint |
+| ~~roofline.py~~ | ~~749~~ | test_roofline.py | ~~屋頂線基準~~ ✅ **WIRED** — RooflineModel 已接入 /bench/roofline-model endpoint |
 | bfcl_eval.py | 1,127 | 無 | BFCL 評估，零調用 |
 | deltanet_inversion.py | 271 | test_deltanet_inversion.py | DeltaNet 狀態反轉 |
 | metal_kernels.py | 698 | test_metal_kernels*.py (2) | Metal 內核管理，僅 scripts/ |
@@ -578,9 +591,9 @@
 | roofline.py | 749 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
 | ~~telemetry.py~~ | ~~196~~ | test_telemetry.py | ~~遙測系統~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore |
 
-**合計: ~3,798 行死代碼 + 4 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch, mtp_patch, benchmark)
+**合計: ~1,922 行死代碼 + 2 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch, mtp_patch, benchmark, bfcl_eval, roofline)
 
-已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start()), mtp_patch (→BatchedEngine.start() + load_model_with_mtp), benchmark (→/bench/model + /bench/batch endpoints)。已刪除: settings.py。
+已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start()), mtp_patch (→BatchedEngine.start() + load_model_with_mtp), benchmark (→/bench/model + /bench/batch), bfcl_eval (→/bench/bfcl-eval), roofline (→/bench/roofline-model)。已刪除: settings.py。
 
 ---
 
@@ -820,7 +833,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 3. `test_deltanet_inversion.py` — DeltaNet inversion 零管線調用 (研究性質)
 4. `test_ane_embedding.py` — ANE embedding 零管線調用
 5. ~~`test_adaptive_batch.py` — adaptive batch 零管線調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore (C18)
-6. `test_roofline.py` — roofline 不被 bench router 使用
+6. ~~`test_roofline.py` — roofline 不被 bench router 使用~~ ✅ **WIRED** — RooflineModel 已接入 /bench/roofline-model endpoint
 7. `test_metal_kernels.py` + `test_metal_kernels_phase0.py` — metal_kernels 僅被 scripts/ 使用
 8. ~~`test_benchmark.py` — benchmark 框架零管線調用~~ ✅ **WIRED** — BenchmarkRunner 已接入 /bench/model + /bench/batch endpoints
 9. ~~`test_telemetry.py` — telemetry 零管線調用~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore (C18)
@@ -922,7 +935,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 
 ### 9.3 錯誤處理問題
 
-- **`except Exception: pass` 已全部替換為 `logger.debug(..., exc_info=True)`** (P2-6, 21 文件)
+- **`except Exception: pass` 已全部替換為 `logger.debug(..., exc_info=True)`** (P2-6: 21 文件 → Wave 29: 40+ 文件, 0 remaining)
 - 關鍵位置: context window 驗證 (chat.py)、VLM engine 解析 (chat.py)、模型註冊 (main.py) — 已加日誌
 - ✅ OOM 錯誤正確返回 `memory_limit` finish_reason (OOM-1)
 - ✅ 請求級超時: 每 32 tokens 檢查 (默認 300s)，串流 queue 超時 120s (TMO-1/2)
@@ -1147,7 +1160,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
 | Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | N-gram(Python), EAGLE-3(代碼存在), MTP | 缺 GPU 加速 N-gram, Medusa, DFlash |
-| 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | 僅單請求 | **關鍵差距**: 批量無法受益 |
+| 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | ✅ NgramProposer 批量路徑 (Wave 29) + cross-model 路徑 | N-gram 無 GPU 開銷; 缺 GPU 加速 N-gram |
 | GPU 拒絕採樣 | GPU kernel | CPU 逐個驗證 | 慢得多 |
 | Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | ✅ _grammar_filter_drafts() 預驗證 (Wave 28) | grammar-aware spec decode |
 | 調度器整合 | draft token IDs 每請求追蹤 | ✅ 已接入 scheduler step loop (Wave 15) | draft 生成 + 驗證 + 統計 |
@@ -1250,7 +1263,7 @@ Yunshu 的 RadixTree (radix_attention.py):
 - ✅ 後驅逐合併 — 單子節點自動合併減少樹深度
 - ✅ 詳細指標 — leaf_count, max_depth, active_ref_nodes, eviction_stats (RADIX-MET)
 - ✅ 監控端點 — `/admin/radix-tree` + WebUI 區段 (RADIX-EP, WEB-RADIX)
-- 缺少: 大gram 視圖 (EAGLE spec decode 整合)
+- ✅ Bigram view — `get_bigram_view()` + `get_continuation_tokens()` (Wave 29)
 
 ### 14.3 SGLang 的性能優化 (Yunshu 可學習)
 
@@ -1272,7 +1285,7 @@ Yunshu 的 RadixTree (radix_attention.py):
 
 mlx-lm 的 BatchGenerator 提供了 `insert_segments()` 方法 — 支持**分段 prompt + 保證停止邊界**。這是 prefix cache 重用的關鍵: 可以將 prompt 分為已緩存和未緩存段，BatchGenerator 只預填充未緩存部分。
 
-**Yunshu 從未使用 `insert_segments()`** — 永遠使用 `insert()` 將整個 prompt 作為一個段。這意味著 Yunshu 的 KV prefix cache 只能在 `generate_step` 單請求路徑中使用，不能在 BatchGenerator 連續批處理路徑中使用。
+**Yunshu 已使用 `insert_segments()`** — ✅ 調度器 _schedule_waiting() 在 KV prefix cache 命中時使用 insert_segments() (C16, scheduler.py:565)。無命中時回退到 insert()。
 
 ### 15.2 採樣器問題 — 重複懲罰
 

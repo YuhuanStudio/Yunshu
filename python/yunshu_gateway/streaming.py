@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -28,6 +29,8 @@ from typing import Any, Optional
 # ── Sentinel for _safe_anext ──
 
 _KEEPALIVE_SENTINEL = object()
+
+logger = logging.getLogger(__name__)
 
 
 # ── SSE Keepalive Wrapper (oMLX pattern) ──
@@ -98,7 +101,7 @@ async def with_sse_keepalive(
                                 pass
                             return
                     except Exception:
-                        pass  # is_disconnected() can fail if scope is already closed
+                        logger.debug("is_disconnected() failed (scope may be closed)", exc_info=True)
                 # Send keepalive at the configured interval
                 keepalive_elapsed += wait_time
                 if keepalive_elapsed >= interval:
@@ -154,7 +157,7 @@ async def run_with_disconnect_guard(
                     pass
                 return None
         except Exception:
-            pass
+            logger.debug("is_disconnected() failed in disconnect guard", exc_info=True)
     return task.result()
 
 
@@ -284,7 +287,7 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
                 if out.reasoning:
                     return (out.reasoning, out.content)
         except Exception:
-            pass
+            logger.debug("reasoning parser failed", exc_info=True)
 
     # Also handle Gemma4 <start_think/>...</end_think/> without model_name
     _GEMMA_THINK_PATTERN = re.compile(r"<start_think\s*/?\s*>(.*?)</end_think\s*/?\s*>(.*)", re.DOTALL)
@@ -803,7 +806,7 @@ async def with_json_keepalive(
                     pass
                 return
         except Exception:
-            pass
+            logger.debug("is_disconnected() failed in json keepalive", exc_info=True)
         yield " "
 
     if task.done() and not task.cancelled():

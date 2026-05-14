@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from abc import ABC, abstractmethod
@@ -23,6 +24,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCo
 
 console = Console()
 eval_app = typer.Typer(help="Run accuracy benchmarks.", no_args_is_help=True)
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "eval_data"
 
@@ -139,6 +142,7 @@ class BaseBenchmark(ABC):
                         text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                         predicted = self.extract_answer(text, item)
                 except Exception:
+                    logger.debug("request failed during benchmark run", exc_info=True)
                     predicted = ""
 
                 elapsed = time.perf_counter() - t0
@@ -536,7 +540,7 @@ def _resolve_model(url: str) -> str | None:
             if models:
                 return models[0].get("id")
     except Exception:
-        pass
+        logger.debug("failed to resolve model", exc_info=True)
     return None
 
 

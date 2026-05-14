@@ -7,9 +7,12 @@ Follows oMLX's model management with HF Hub integration.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import typer
 from rich.console import Console
@@ -38,6 +41,7 @@ def _detect_model_type(config_path: Path) -> str:
         with open(config_path) as f:
             cfg = json.load(f)
     except Exception:
+        logger.debug("Failed to read or parse config.json at %s", config_path, exc_info=True)
         return "UNKNOWN"
 
     # Check model_index.json first (diffusion models)
@@ -180,6 +184,7 @@ def download_model(
             )
             progress.update(task, completed=1, total=1)
         except Exception as e:
+            logger.debug("Model download failed for %s", model_id, exc_info=True)
             console.print(f"[red]Download failed: {e}[/]")
             raise typer.Exit(1)
 

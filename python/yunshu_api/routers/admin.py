@@ -8,6 +8,7 @@ System monitoring: hardware status, server metrics, prefill progress, model disc
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,8 @@ from ..schemas.models import (
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+logger = logging.getLogger(__name__)
 
 
 # ── RBAC Helpers ──
@@ -638,6 +641,7 @@ async def get_cache_status(_=Depends(require_permission("can_view_admin"))):
                     stats = entry.engine.get_kv_cache_stats()
                     caches.append({"model_id": entry.model_id, "stats": stats})
                 except Exception:
+                    logger.debug("failed to get KV cache stats for %s", entry.model_id, exc_info=True)
                     caches.append({"model_id": entry.model_id, "stats": {}})
     else:
         engine = get_engine()
@@ -645,7 +649,7 @@ async def get_cache_status(_=Depends(require_permission("can_view_admin"))):
             try:
                 caches.append({"model_id": getattr(engine, 'model_name', 'default'), "stats": engine.get_kv_cache_stats()})
             except Exception:
-                pass
+                logger.debug("failed to get KV cache stats for single engine", exc_info=True)
 
     return {"caches": caches, "total": len(caches)}
 
@@ -664,7 +668,7 @@ async def clear_cache(_=Depends(require_permission("can_load_models"))):
                     entry.engine._kv_prefix_cache.clear()
                     cleared += 1
                 except Exception:
-                    pass
+                    logger.debug("failed to clear KV cache for %s", entry.model_id, exc_info=True)
     return {"cleared": cleared, "status": "ok"}
 
 

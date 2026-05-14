@@ -9,10 +9,13 @@ Three-tier KV hierarchy (Phase 1 implements hot tier only):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 import mlx.core as mx
+
+logger = logging.getLogger(__name__)
 
 from .block import BlockPool, KVBlock
 from .block_table import BlockTable
@@ -398,7 +401,7 @@ class KVCacheManager:
                         kv_slice = self._key_cache[block_idx]
                         self._warm_tier.demote(block.block_hash, kv_slice)
                     except Exception:
-                        pass
+                        logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
                 # Remove from hot prefix cache
                 self.block_pool._evict_cached_block(block)
                 # If the block is still in the free list (ref_count already 0),
@@ -451,7 +454,7 @@ class KVCacheManager:
                     kv_slice = self._key_cache[block.block_id]
                     self._warm_tier.demote(block.block_hash, kv_slice)
                 except Exception:
-                    pass
+                    logger.debug("warm tier demote failed in memory_pressure_evict", exc_info=True)
 
             self.block_pool._evict_cached_block(block)
             if block.ref_count > 0:

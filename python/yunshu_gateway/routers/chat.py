@@ -410,6 +410,7 @@ def _format_logprobs(
                     try:
                         token_str = tokenizer.decode([lp["token_id"]])
                     except Exception:
+                        logger.debug("tokenizer decode failed for logprobs", exc_info=True)
                         token_str = ""
                 entries.append({
                     "token": token_str,

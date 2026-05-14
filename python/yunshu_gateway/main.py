@@ -54,6 +54,7 @@ def _get_memory_limit_bytes() -> int:
         uma = int(result.stdout.strip())
         return int(uma * 0.8)
     except Exception:
+        logger.debug("failed to read sysctl hw.memsize", exc_info=True)
         return 0  # unlimited
 
 
@@ -105,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     )
             except Exception as e:
                 import logging as _logging
-                _logging.getLogger(__name__).warning("Model discovery failed: %s", e)
+                _logging.getLogger(__name__).warning("Model discovery failed: %s", e, exc_info=True)
 
         # Start ProcessMemoryEnforcer (oMLX pattern)
         if max_bytes > 0:
@@ -318,6 +319,7 @@ def create_app() -> FastAPI:
             else:
                 checks["gpu_memory_ok"] = True
         except Exception:
+            logger.debug("gpu memory check failed in readiness probe", exc_info=True)
             checks["gpu_memory_ok"] = True
 
         # Check if shutting down

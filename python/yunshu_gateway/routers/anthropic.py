@@ -252,6 +252,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                         try:
                             raw = _b64.b64decode(data, validate=False)
                         except Exception:
+                            logger.debug("base64 decode failed, trying with padding", exc_info=True)
                             raw = _b64.b64decode(data + "==", validate=False)
                         ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
                         ext = ext_map.get(media_type, "png")

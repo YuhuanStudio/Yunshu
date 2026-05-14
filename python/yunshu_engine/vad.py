@@ -134,6 +134,7 @@ class WebRTCVAD(VADBase):
             energy = EnergyVAD._compute_energy(audio_bytes)
             return VADResult(is_speech=is_speech, energy=energy)
         except Exception:
+            logger.debug("WebRTC VAD failed, falling back to energy-based", exc_info=True)
             energy = EnergyVAD._compute_energy(audio_bytes)
             return VADResult(is_speech=energy > 0.01, energy=energy)
 

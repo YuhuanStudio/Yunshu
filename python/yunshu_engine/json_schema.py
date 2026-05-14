@@ -730,6 +730,7 @@ class JsonSchemaConstraint:
         try:
             return list(range(len(tokenizer.get_vocab())))
         except Exception:
+            logger.debug("tokenizer vocab size detection failed, using fallback", exc_info=True)
             return list(range(32000))
 
     def _find_tokens_for_chars(self, tokenizer: Any, chars: set[str]) -> list[int]:
@@ -782,6 +783,7 @@ class JsonSchemaConstraint:
                     first_decoded = decoded[0]
                     char_map.setdefault(first_decoded, []).append(token_id)
             except Exception:
+                logger.debug("tokenizer decode failed for token %d, using raw char", token_id, exc_info=True)
                 # Fallback: use raw first char
                 char_map.setdefault(first_char, []).append(token_id)
 
@@ -901,6 +903,7 @@ class ConstrainedSampler:
         try:
             token_text = self._tokenizer.decode([token_id])
         except Exception:
+            logger.debug("tokenizer decode failed for constrained sampler token %d", token_id, exc_info=True)
             token_text = ""
         self._constraint.advance(token_text)
 

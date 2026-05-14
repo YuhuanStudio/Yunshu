@@ -1149,6 +1149,7 @@ class VLMEngine:
                 lambda: urllib.request.urlretrieve(url, tmp.name),
             )
         except Exception:
+            logger.debug("image download failed, trying fallback SSL", exc_info=True)
             # Fallback: try with less strict SSL for some CDNs
             try:
                 await loop.run_in_executor(
@@ -1301,6 +1302,7 @@ class VLMEngine:
                 with open(path, "rb") as f:
                     parts.append(compute_image_hash(f.read()))
             except Exception:
+                logger.debug("image hash computation failed, using path", exc_info=True)
                 parts.append(path)
         return "|".join(parts)
 

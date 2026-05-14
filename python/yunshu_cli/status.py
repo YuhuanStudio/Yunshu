@@ -5,6 +5,8 @@ Quick server health check and stats overview.
 
 from __future__ import annotations
 
+import logging
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -12,6 +14,8 @@ from rich.panel import Panel
 
 console = Console()
 status_app = typer.Typer(help="Server status.", no_args_is_help=True)
+
+logger = logging.getLogger(__name__)
 
 
 @status_app.callback(invoke_without_command=True)
@@ -45,7 +49,7 @@ def status(
         if resp.status_code == 200:
             sys_data = resp.json()
     except Exception:
-        pass
+        logger.debug("failed to fetch system stats", exc_info=True)
 
     # Engine stats
     eng_data = {}
@@ -54,7 +58,7 @@ def status(
         if resp.status_code == 200:
             eng_data = resp.json()
     except Exception:
-        pass
+        logger.debug("failed to fetch engine stats", exc_info=True)
 
     # Models
     models_data = []
@@ -63,7 +67,7 @@ def status(
         if resp.status_code == 200:
             models_data = resp.json().get("data", [])
     except Exception:
-        pass
+        logger.debug("failed to fetch models", exc_info=True)
 
     # Summary panel
     lines = [f"Status: [{status_color}]{status_text}[/]"]

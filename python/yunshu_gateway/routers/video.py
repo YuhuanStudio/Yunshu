@@ -49,6 +49,7 @@ async def create_video(req: VideoGenerateRequest) -> JSONResponse:
         try:
             image_bytes = base64.b64decode(req.image, validate=True)
         except Exception:
+            logger.debug("invalid base64 image data in video request", exc_info=True)
             raise HTTPException(status_code=400, detail="Invalid base64 image data")
 
     # Try to find a registered video engine

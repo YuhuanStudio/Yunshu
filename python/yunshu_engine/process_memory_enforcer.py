@@ -92,7 +92,7 @@ class ProcessMemoryEnforcer:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Memory enforcer error: {e}")
+                logger.error("Memory enforcer error: %s", e, exc_info=True)
             await asyncio.sleep(self._poll_interval)
 
     async def _check_ttl(self) -> None:

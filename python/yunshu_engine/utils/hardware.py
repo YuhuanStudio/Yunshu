@@ -45,6 +45,7 @@ def get_chip_name() -> str:
         )
         return r.stdout.strip()
     except Exception:
+        logger.debug("sysctl chip name detection failed", exc_info=True)
         return "Apple Silicon"
 
 
@@ -131,6 +132,7 @@ def get_mlx_version() -> str:
         import mlx
         return getattr(mlx, "__version__", "unknown")
     except Exception:
+        logger.debug("mlx version detection failed", exc_info=True)
         return "unavailable"
 
 
@@ -139,6 +141,7 @@ def get_mlx_lm_version() -> str:
         import mlx_lm
         return getattr(mlx_lm, "__version__", "unknown")
     except Exception:
+        logger.debug("mlx-lm version detection failed", exc_info=True)
         return "unavailable"
 
 
@@ -162,6 +165,7 @@ def is_mlx_available() -> bool:
         mx.array([1.0])
         return True
     except Exception:
+        logger.debug("MLX array test failed", exc_info=True)
         return False
 
 

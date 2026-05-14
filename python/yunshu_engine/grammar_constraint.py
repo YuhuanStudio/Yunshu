@@ -294,6 +294,7 @@ class LarkGrammarConstraint:
             self._parser.parse(self._text_buffer)
             self._done = True
         except Exception:
+            logger.debug("CFG parse incomplete, continuing generation", exc_info=True)
             pass  # Incomplete parse — keep generating
 
     def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
@@ -343,6 +344,7 @@ class LarkGrammarConstraint:
                 self._parser.parse(candidate)
                 valid.add(ch)
             except Exception:
+                logger.debug("CFG candidate parse failed for char %r", ch, exc_info=True)
                 # Check if it's a valid partial parse (Earley can handle this)
                 # For simplicity, if parse fails it might still be valid partial
                 # We accept it if it doesn't raise UnexpectedToken
@@ -352,6 +354,7 @@ class LarkGrammarConstraint:
                     # If we get here without UnexpectedToken, the char is valid
                     valid.add(ch)
                 except (ImportError, Exception):
+                    logger.debug("CFG partial parse test failed for char %r", ch, exc_info=True)
                     pass
 
         if len(valid) > 90:
@@ -397,6 +400,7 @@ def _build_token_char_map(tokenizer: Any) -> dict[str, list[int]]:
             if decoded:
                 char_map.setdefault(decoded[0], []).append(token_id)
         except Exception:
+            logger.debug("tokenizer decode failed for token %d in char map build", token_id, exc_info=True)
             char_map.setdefault(first_char, []).append(token_id)
 
     return char_map

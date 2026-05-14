@@ -344,6 +344,7 @@ class VisionFeatureCache:
                     self._ssd_total_size += stat.st_size
                     indexed += 1
                 except Exception:
+                    logger.debug("vision cache SSD file scan failed for %s", file_path, exc_info=True)
                     errors += 1
 
         if scanned > 0:

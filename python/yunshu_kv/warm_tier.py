@@ -102,7 +102,7 @@ class KVWarmTier:
 
             return True
         except Exception:
-            logger.warning("Failed to demote block 0x%x to warm tier", block_hash)
+            logger.warning("Failed to demote block 0x%x to warm tier", block_hash, exc_info=True)
             return False
 
     def promote(self, block_hash: int) -> Optional[bytes]:
@@ -133,14 +133,14 @@ class KVWarmTier:
             self._memory_used -= packed_nbytes + scales_nbytes
             self._memory_used = max(0, self._memory_used)
         except Exception:
-            pass
+            logger.debug("memory accounting adjustment in promote failed", exc_info=True)
 
         try:
             from .compression import dequantize_kv_4bit
 
             return dequantize_kv_4bit(packed, scales)
         except Exception:
-            logger.warning("Failed to promote block 0x%x from warm tier", block_hash)
+            logger.warning("Failed to promote block 0x%x from warm tier", block_hash, exc_info=True)
             return None
 
     def contains(self, block_hash: int) -> bool:
@@ -175,7 +175,7 @@ class KVWarmTier:
                 self._memory_used -= packed_nbytes + scales_nbytes
                 self._memory_used = max(0, self._memory_used)
             except Exception:
-                pass
+                logger.debug("memory accounting adjustment in evict failed", exc_info=True)
             evicted += 1
         return evicted
 

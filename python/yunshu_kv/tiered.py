@@ -427,6 +427,7 @@ class TieredKVCacheManager:
                 return None
             return None
         except Exception:
+            logger.debug("KV block extraction from hot cache failed", exc_info=True)
             return None
 
     def free_request(self, table: BlockTable) -> None:

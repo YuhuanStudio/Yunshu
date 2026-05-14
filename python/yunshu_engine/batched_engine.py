@@ -41,6 +41,7 @@ def _wired_limit_ctx(model):
         model_bytes = sum(p.nbytes for p in model.parameters())
         old_limit = mx.set_wired_limit(max_rec) if model_bytes > max_rec * 0.5 else None
     except Exception:
+        logger.debug("wired limit setup failed", exc_info=True)
         old_limit = None
     try:
         yield
@@ -153,6 +154,7 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
             from .json_schema import ConstrainedSampler
             return ConstrainedSampler(sampler, constraint, tokenizer)
         except Exception:
+            logger.debug("grammar constraint setup failed, returning unconstrained sampler", exc_info=True)
             return sampler
 
     # Standard JSON schema path
@@ -844,6 +846,7 @@ class BatchedEngine:
                 _prefill_tracker = get_prefill_tracker()
                 _prefill_tracker.update(_prefill_req_id, 0, prompt_tokens, self.model_name or "default")
             except Exception:
+                logger.debug("prefill tracker setup failed", exc_info=True)
                 _prefill_tracker = None
 
             if thinking_budget is not None or enable_thinking:
@@ -1090,6 +1093,7 @@ class BatchedEngine:
                     lp_entry["token"] = tokenizer.decode([tid])
                     lp_entry["bytes"] = list(lp_entry["token"].encode("utf-8"))
                 except Exception:
+                    logger.debug("logprob token decode failed", exc_info=True)
                     lp_entry["token"] = ""
                     lp_entry["bytes"] = []
                 if "top_logprobs" in lp_entry:
@@ -1098,6 +1102,7 @@ class BatchedEngine:
                             tlp["token"] = tokenizer.decode([tlp["token_id"]])
                             tlp["bytes"] = list(tlp["token"].encode("utf-8"))
                         except Exception:
+                            logger.debug("top_logprob token decode failed", exc_info=True)
                             tlp["token"] = ""
                             tlp["bytes"] = []
             lp_result = token_logprobs
@@ -1218,6 +1223,7 @@ class BatchedEngine:
                 _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
                 _cancel_event = _active_gen.cancel_event
             except Exception:
+                logger.debug("request tracker registration failed", exc_info=True)
                 _cancel_event = None
 
             try:
@@ -1427,6 +1433,7 @@ class BatchedEngine:
                 _prefill_tracker = get_prefill_tracker()
                 _prefill_tracker.update(_prefill_req_id, 0, prompt_tokens, self.model_name or "default")
             except Exception:
+                logger.debug("prefill tracker setup failed", exc_info=True)
                 _prefill_tracker = None
 
             if thinking_budget is not None or enable_thinking:
@@ -1654,7 +1661,7 @@ class BatchedEngine:
                     with open(expanded) as f:
                         prompt_text = f.read().strip()
                 except Exception:
-                    logger.debug(f"Warm prompt file not found: {prompt_text}")
+                    logger.debug(f"Warm prompt file not found: {prompt_text}", exc_info=True)
                     continue
 
             if not prompt_text:
@@ -2058,6 +2065,7 @@ class BatchedEngine:
                         tok_text = tokenizer.decode([tid])
                         _grammar_constraint.advance(tok_text)
                     except Exception:
+                        logger.debug("grammar constraint advance failed", exc_info=True)
                         break
                     allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids + filtered)
                     if allowed:
@@ -2736,6 +2744,26 @@ class BatchedEngine:
             return {"enabled": False}
         return {"enabled": True, **tree.get_stats()}
 
+    def get_radix_continuations(self, token_ids: list[int], max_results: int = 5) -> list[int]:
+        """Return continuation tokens from the radix tree after prefix match.
+
+        Uses the radix tree's bigram view to suggest possible next tokens
+        based on historical request patterns. Useful for spec decode draft
+        generation context enrichment.
+        """
+        if not self._engine_core:
+            return []
+        scheduler = getattr(self._engine_core, "_scheduler", None)
+        if scheduler is None:
+            return []
+        kv_mgr = getattr(scheduler, "_kv_manager", None)
+        if kv_mgr is None:
+            return []
+        tree = getattr(kv_mgr, "_radix_tree", None)
+        if tree is None:
+            return []
+        return tree.get_continuation_tokens(token_ids, max_results)
+
     @staticmethod
     def _extract_model_arch(model: Any) -> dict:
         """Extract model architecture parameters for KV cache sizing.
@@ -2798,6 +2826,7 @@ class BatchedEngine:
             try:
                 num_prompt_tokens = len(self._tokenizer.encode(prompt))
             except Exception:
+                logger.debug("prompt token estimation failed", exc_info=True)
                 num_prompt_tokens = len(prompt.split()) * 2  # rough estimate
         else:
             num_prompt_tokens = len(prompt.split()) * 2

@@ -125,6 +125,7 @@ class ThinkingBudgetProcessor:
         try:
             return tokenizer.encode(THINK_END, add_special_tokens=False)
         except Exception:
+            logger.debug("tokenizer encode for think-end tag failed", exc_info=True)
             return None
 
     def reset(self) -> None:
@@ -305,6 +306,7 @@ def _resolve_think_end_token_ids(tokenizer) -> list[int] | None:
     try:
         return tokenizer.encode("</think/>", add_special_tokens=False)
     except Exception:
+        logger.debug("tokenizer encode for </think/> failed", exc_info=True)
         return None
 
 

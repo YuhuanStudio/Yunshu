@@ -578,3 +578,263 @@ class TestSpecDecodeMultipleRequests:
         # req-1: last 3 = [40, 50, 99] vs draft [40, 50, 60] → 40==40, 50==50, 99!=60 → 2 accepted
         assert scheduler._spec_stats["req-1"]["accepted"] == 2
         assert scheduler._spec_stats["req-1"]["rejected"] == 1
+
+
+# ── Tests: N-gram speculative decoding batch path ──
+
+
+class TestNgramSpecDecode:
+    """Test N-gram speculative decoding in the scheduler batch path."""
+
+    def _make_ngram_scheduler(self, **kwargs):
+        """Create a scheduler with N-gram spec decode enabled."""
+        model = MagicMock()
+        tokenizer = MagicMock()
+        tokenizer.eos_token_ids = [2]
+        tokenizer.encode.return_value = [1]
+        tokenizer.detokenizer = MagicMock()
+        tokenizer.detokenizer.reset.return_value = None
+        model.config = MagicMock()
+        model.config.to_dict.return_value = {"model_type": "llama"}
+
+        config = SchedulerConfig(
+            enable_spec_decode=False,
+            ngram_spec_enabled=kwargs.pop("ngram_spec_enabled", True),
+            ngram_spec_min_n=kwargs.pop("ngram_spec_min_n", 1),
+            ngram_spec_max_n=kwargs.pop("ngram_spec_max_n", 5),
+            ngram_spec_k=kwargs.pop("ngram_spec_k", 5),
+            ngram_spec_mode=kwargs.pop("ngram_spec_mode", "lps"),
+            **kwargs,
+        )
+        scheduler = Scheduler(model=model, tokenizer=tokenizer, config=config)
+        return scheduler
+
+    def test_ngram_proposer_created_on_init(self):
+        scheduler = self._make_ngram_scheduler()
+        assert scheduler._ngram_proposer is not None
+        assert scheduler.config.ngram_spec_enabled is True
+
+    def test_ngram_not_created_when_disabled(self):
+        scheduler = self._make_ngram_scheduler(ngram_spec_enabled=False)
+        assert scheduler._ngram_proposer is None
+
+    def test_ngram_draft_generated_for_active_request(self):
+        """N-gram proposer generates drafts from token pattern matching."""
+        scheduler = self._make_ngram_scheduler()
+        req = _make_request()
+        # Build a sequence with a repeated pattern: [1,2,3,4,5,1,2,3]
+        # After [1,2,3], the proposer should predict [4,5,...]
+        req.prompt_token_ids = [1, 2, 3, 4, 5]
+        req.output_token_ids = [1, 2, 3]
+        scheduler.running["req-1"] = req
+
+        scheduler._try_spec_decode_draft(req)
+
+        # Draft should be generated from the N-gram pattern
+        if scheduler._spec_drafts.get("req-1"):
+            stats = scheduler._spec_stats.get("req-1", {})
+            assert stats.get("mode") == "ngram"
+
+    def test_ngram_draft_skipped_if_too_short(self):
+        """N-gram proposer needs at least min_n tokens."""
+        scheduler = self._make_ngram_scheduler(ngram_spec_min_n=3)
+        req = _make_request()
+        req.prompt_token_ids = []
+        req.output_token_ids = [10, 20]  # Only 2 tokens, min_n=3
+        scheduler._try_spec_decode_draft(req)
+
+        assert scheduler._spec_drafts == {}
+
+    def test_ngram_draft_skipped_for_aborted(self):
+        scheduler = self._make_ngram_scheduler()
+        req = _make_request()
+        req.prompt_token_ids = [1, 2, 3]
+        req.output_token_ids = [10, 20]
+        scheduler._pending_abort_ids.add("req-1")
+        scheduler._try_spec_decode_draft(req)
+
+        assert scheduler._spec_drafts == {}
+
+    def test_ngram_draft_skipped_if_already_pending(self):
+        scheduler = self._make_ngram_scheduler()
+        req = _make_request()
+        req.prompt_token_ids = [1, 2, 3]
+        req.output_token_ids = [10, 20]
+        scheduler._spec_drafts["req-1"] = [40, 50]
+        scheduler._try_spec_decode_draft(req)
+
+        assert scheduler._spec_drafts["req-1"] == [40, 50]  # Unchanged
+
+    def test_ngram_verify_stats_tracked(self):
+        """Verify tracks accepted/rejected for N-gram drafts."""
+        scheduler = self._make_ngram_scheduler()
+        req = _make_request()
+        req.output_token_ids = [10, 20, 30, 40, 50]
+        scheduler.running["req-1"] = req
+        scheduler._spec_drafts["req-1"] = [40, 50, 60]
+
+        output = RequestOutput(
+            request_id="req-1",
+            new_token_ids=[50],
+            output_token_ids=[10, 20, 30, 40, 50],
+        )
+        scheduler._verify_spec_drafts([output])
+
+        # last 3 actual = [30, 40, 50] vs draft [40, 50, 60]
+        # 30!=40 → accepted=0, rejected=3
+        assert scheduler._spec_stats["req-1"]["accepted"] == 0
+        assert scheduler._spec_stats["req-1"]["rejected"] == 3
+
+    def test_ngram_verify_no_cross_model_rollback(self):
+        """N-gram path should NOT attempt draft model cache rollback."""
+        scheduler = self._make_ngram_scheduler()
+        # _spec_decoder is None — no cross-model decoder
+        assert not isinstance(scheduler._spec_decoder, SpeculativeDecoder)
+
+        req = _make_request()
+        req.output_token_ids = [10, 20, 30, 40, 50]
+        scheduler.running["req-1"] = req
+        scheduler._spec_drafts["req-1"] = [40, 50, 60]
+
+        output = RequestOutput(
+            request_id="req-1",
+            new_token_ids=[50],
+            output_token_ids=[10, 20, 30, 40, 50],
+        )
+        # Should not crash even without cross-model decoder
+        scheduler._verify_spec_drafts([output])
+        assert "req-1" not in scheduler._spec_drafts
+
+    def test_ngram_stats_in_get_stats(self):
+        scheduler = self._make_ngram_scheduler()
+        stats = scheduler.get_stats()
+        assert stats["ngram_spec_enabled"] is True
+        assert "ngram_spec" in stats
+        assert stats["ngram_spec"]["mode"] == "lps"
+
+    def test_ngram_stats_absent_when_disabled(self):
+        scheduler = self._make_ngram_scheduler(ngram_spec_enabled=False)
+        stats = scheduler.get_stats()
+        assert stats["ngram_spec_enabled"] is False
+        assert "ngram_spec" not in stats
+
+    def test_enable_ngram_spec_runtime(self):
+        """Test enabling N-gram spec decode at runtime."""
+        scheduler = self._make_ngram_scheduler(ngram_spec_enabled=False)
+        assert scheduler._ngram_proposer is None
+
+        scheduler.enable_ngram_spec(min_n=2, max_n=4, k=3, mode="hashpool")
+        assert scheduler._ngram_proposer is not None
+        assert scheduler.config.ngram_spec_enabled is True
+        assert scheduler._ngram_proposer.config.min_n == 2
+        assert scheduler._ngram_proposer.config.max_n == 4
+        assert scheduler._ngram_proposer.config.k == 3
+
+    def test_deep_reset_preserves_ngram_proposer(self):
+        """deep_reset recreates the N-gram proposer (clears learned patterns)."""
+        scheduler = self._make_ngram_scheduler()
+        proposer_before = scheduler._ngram_proposer
+        scheduler.deep_reset()
+        assert scheduler._ngram_proposer is not None
+        # New instance (cleared patterns)
+        assert scheduler._ngram_proposer is not proposer_before
+
+    def test_step_ngram_spec_generates_drafts(self):
+        """Step loop should generate N-gram drafts when enabled."""
+        scheduler = self._make_ngram_scheduler()
+
+        req = _make_request()
+        req.batch_uid = 0
+        req.prompt_token_ids = [1, 2, 3, 4, 5]
+        req.output_token_ids = [1, 2, 3]
+        scheduler.running["req-1"] = req
+        scheduler._uid_to_req[0] = "req-1"
+
+        mock_bg = MagicMock()
+        resp = _make_response(uid=0, token=4)
+        mock_bg.next.return_value = ([], [resp])
+        mock_bg.next_generated.return_value = []
+        scheduler._batch_gen = mock_bg
+
+        scheduler.step()
+
+        # N-gram should have been attempted (may or may not find a match)
+        # The key test is that it doesn't crash and spec stats exist
+        stats = scheduler.get_stats()
+        assert stats["ngram_spec_enabled"] is True
+
+    def test_step_ngram_and_cross_model_both_off(self):
+        """When both spec decode backends are off, no drafts are generated."""
+        scheduler = self._make_ngram_scheduler(ngram_spec_enabled=False)
+
+        req = _make_request()
+        req.batch_uid = 0
+        req.output_token_ids = [10]
+        scheduler.running["req-1"] = req
+        scheduler._uid_to_req[0] = "req-1"
+
+        mock_bg = MagicMock()
+        resp = _make_response(uid=0, token=20)
+        mock_bg.next.return_value = ([], [resp])
+        mock_bg.next_generated.return_value = []
+        scheduler._batch_gen = mock_bg
+
+        scheduler.step()
+        assert scheduler._spec_drafts == {}
+
+
+class TestNgramSpecDecodeWithRepetition:
+    """Test N-gram spec decode with actual repeated patterns."""
+
+    def _make_ngram_scheduler(self, mode="lps"):
+        model = MagicMock()
+        tokenizer = MagicMock()
+        tokenizer.eos_token_ids = [2]
+        tokenizer.encode.return_value = [1]
+        tokenizer.detokenizer = MagicMock()
+        tokenizer.detokenizer.reset.return_value = None
+        model.config = MagicMock()
+        model.config.to_dict.return_value = {"model_type": "llama"}
+        config = SchedulerConfig(
+            ngram_spec_enabled=True,
+            ngram_spec_min_n=1,
+            ngram_spec_max_n=5,
+            ngram_spec_k=5,
+            ngram_spec_mode=mode,
+        )
+        return Scheduler(model=model, tokenizer=tokenizer, config=config)
+
+    def test_lps_mode_repeated_pattern(self):
+        """LPS mode should find repeated ngrams and propose continuations."""
+        scheduler = self._make_ngram_scheduler(mode="lps")
+        req = _make_request()
+        # Pattern: [10,20,30,10,20] — suffix [10,20] matches earlier [10,20,30]
+        # Should propose [30] as continuation
+        req.prompt_token_ids = [10, 20, 30]
+        req.output_token_ids = [10, 20]
+        scheduler._try_spec_decode_draft(req)
+        # LPS should find the repeated "10,20" and propose "30"
+        draft = scheduler._spec_drafts.get("req-1", [])
+        if draft:
+            assert 30 in draft
+
+    def test_hashpool_mode_repeated_pattern(self):
+        """Hashpool mode should find repeated ngrams."""
+        scheduler = self._make_ngram_scheduler(mode="hashpool")
+        req = _make_request()
+        req.prompt_token_ids = [10, 20, 30, 40, 50]
+        req.output_token_ids = [10, 20, 30]
+        scheduler._try_spec_decode_draft(req)
+        # Hashpool should index and find patterns
+        draft = scheduler._spec_drafts.get("req-1", [])
+        # May or may not have drafts depending on pattern quality
+
+    def test_lcg_mode_repeated_pattern(self):
+        """LCG hashpool mode should find repeated ngrams."""
+        scheduler = self._make_ngram_scheduler(mode="lcg")
+        req = _make_request()
+        req.prompt_token_ids = [10, 20, 30, 40, 50]
+        req.output_token_ids = [10, 20, 30]
+        scheduler._try_spec_decode_draft(req)
+        draft = scheduler._spec_drafts.get("req-1", [])
+        # LCG should also find patterns

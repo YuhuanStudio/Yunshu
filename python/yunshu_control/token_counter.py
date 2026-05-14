@@ -23,7 +23,7 @@ def count_tokens(text: str, tokenizer=None) -> int:
         try:
             return len(tokenizer.encode(text))
         except Exception:
-            pass
+            logger.debug("tokenizer.encode() failed", exc_info=True)
 
     # Heuristic: whitespace-split estimation
     words = len(text.split())

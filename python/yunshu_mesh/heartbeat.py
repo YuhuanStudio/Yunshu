@@ -84,7 +84,7 @@ class HeartbeatMonitor:
             try:
                 self._socket.close()
             except Exception:
-                pass
+                logger.debug("failed to close heartbeat socket", exc_info=True)
         for t in (self._send_thread, self._recv_thread, self._check_thread):
             if t:
                 t.join(timeout=3)
@@ -105,7 +105,7 @@ class HeartbeatMonitor:
                     try:
                         self._socket.sendto(msg, (peer.ip, self.port))
                     except Exception:
-                        pass
+                        logger.debug("failed to send heartbeat to peer", exc_info=True)
             time.sleep(self.interval)
 
     def _recv_loop(self) -> None:
@@ -132,10 +132,11 @@ class HeartbeatMonitor:
                                 try:
                                     cb(node)
                                 except Exception:
-                                    pass
+                                    logger.debug("on_recovery callback failed", exc_info=True)
             except socket.timeout:
                 continue
             except Exception:
+                logger.debug("failed to receive heartbeat packet", exc_info=True)
                 continue
 
     def _check_loop(self) -> None:
@@ -152,7 +153,7 @@ class HeartbeatMonitor:
                                 try:
                                     cb(node)
                                 except Exception:
-                                    pass
+                                    logger.debug("on_timeout callback failed", exc_info=True)
             time.sleep(self.interval)
 
     def check_health(self) -> dict[str, bool]:

@@ -159,7 +159,7 @@ class NodeDiscovery:
                 try:
                     self._udp_socket.sendto(announce, ("<broadcast>", self.discovery_port))
                 except Exception:
-                    pass
+                    logger.debug("failed to send UDP announcement", exc_info=True)
                 # Listen for peers
                 try:
                     data, addr = self._udp_socket.recvfrom(4096)
@@ -181,6 +181,7 @@ class NodeDiscovery:
                 except socket.timeout:
                     continue
                 except Exception:
+                    logger.debug("failed to receive UDP peer packet", exc_info=True)
                     continue
 
         self._udp_thread = threading.Thread(target=_listen, daemon=True)
@@ -196,7 +197,7 @@ class NodeDiscovery:
                 try:
                     cb(node)
                 except Exception:
-                    pass
+                    logger.debug("on_discovered callback failed", exc_info=True)
 
     def _remove_discovered(self, node_id: str) -> None:
         node = self._discovered_nodes.pop(node_id, None)
@@ -205,7 +206,7 @@ class NodeDiscovery:
                 try:
                     cb(node)
                 except Exception:
-                    pass
+                    logger.debug("on_lost callback failed", exc_info=True)
 
     def stop(self) -> None:
         self._running = False
@@ -213,13 +214,13 @@ class NodeDiscovery:
             try:
                 self._zeroconf.close()
             except Exception:
-                pass
+                logger.debug("failed to close zeroconf", exc_info=True)
             self._zeroconf = None
         if self._udp_socket:
             try:
                 self._udp_socket.close()
             except Exception:
-                pass
+                logger.debug("failed to close UDP socket", exc_info=True)
         if self._udp_thread:
             self._udp_thread.join(timeout=3)
         logger.info("Node discovery stopped")

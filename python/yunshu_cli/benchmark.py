@@ -5,8 +5,11 @@ Run performance benchmarks: roofline, latency, throughput, memory.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import typer
 from rich.console import Console
@@ -138,6 +141,7 @@ def bench_latency(
                 else:
                     console.print(f"  [red]Request {i+1} failed: {resp.status_code}[/]")
             except Exception as e:
+                logger.debug("Latency benchmark request %d failed", i + 1, exc_info=True)
                 console.print(f"  [red]Request {i+1} error: {e}[/]")
 
             progress.update(task, advance=1)
@@ -235,6 +239,7 @@ def bench_memory():
         result = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True)
         total_mem = int(result.stdout.strip())
     except Exception:
+        logger.debug("Failed to read system memory via sysctl", exc_info=True)
         total_mem = 0
 
     active_mem = mx.get_active_memory()
@@ -267,6 +272,7 @@ def bench_memory():
             if any(k in line for k in ("Chipset", "VRAM", "Metal", "Total", "Cores")):
                 console.print(f"  {line}")
     except Exception:
+        logger.debug("Failed to query GPU info via system_profiler", exc_info=True)
         console.print("  [dim]Unable to query GPU info[/]")
 
 

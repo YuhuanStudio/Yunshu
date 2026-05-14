@@ -6,8 +6,9 @@ to use a running Yunshu server. Follows oMLX's integration architecture.
 
 from __future__ import annotations
 
-import os
 import json
+import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from rich.table import Table
 
 console = Console()
 launch_app = typer.Typer(help="Launch external tools.", no_args_is_help=True)
+
+logger = logging.getLogger(__name__)
 
 
 # ── Integration Base ──
@@ -259,7 +262,7 @@ def _resolve_model(url: str) -> str | None:
             if models:
                 return models[0].get("id")
     except Exception:
-        pass
+        logger.debug("failed to resolve model from server", exc_info=True)
     return None
 
 
@@ -319,6 +322,7 @@ def launch_tool(
         resp = httpx.get(f"{url}/health", timeout=5)
         resp.raise_for_status()
     except Exception:
+        logger.debug("health check failed for %s", url, exc_info=True)
         console.print(f"[red]Server not running at {url}[/]")
         console.print("Start with: [bold]yunshu serve[/]")
         raise typer.Exit(1)
