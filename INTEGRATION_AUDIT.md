@@ -45,6 +45,7 @@
 | Wave 45: Gateway parameter forwarding | 22 fixes: TTS extended params, Anthropic top_k/thinking_budget/enable_thinking, Responses API full params, completions enable_thinking/stop_token_ids, VLM xtc_*, realtime top_p/enable_thinking, batch inference params, MCP generate_image signature fix, models created timestamp, audio format validation before synthesis | — |
 | Wave 46: Engine hot-path integration | Output parser wired into _generate_fast(), model optimization detection on load (RoPE/Attention/MoE), KV lifecycle admit/release, MemoryAwareScheduler model config | — |
 | Wave 47: KV storage + cache metrics | KV tiered _extract_kv_for_block() fixed (was using non-existent _kv_layers, now uses _key_cache/_value_cache), Anthropic cache_creation_input_tokens/cache_read_input_tokens from real cached_tokens | — |
+| Wave 48: Context window + timeout + memory pressure | Context window truncation in EngineCore continuous batching path (was only fast path), per-request generation timeout (300s default), MemoryPressureMixin outputs consumed (batch size reduction) | — |
 
 ### 已完成修復 (2026-05-15 Wave 43 — Production Wiring 實現-整合)
 
