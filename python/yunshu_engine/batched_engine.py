@@ -505,10 +505,22 @@ class BatchedEngine:
 
         executor = get_mlx_executor()
         arch_kwargs = self._extract_model_arch(self._model)
+
+        # Sarathi-style hybrid chunked prefill (opt-in via YUNSHU_HYBRID_PREFILL=1)
+        hybrid_prefill = os.environ.get(
+            "YUNSHU_HYBRID_PREFILL", ""
+        ).strip() in ("1", "true", "yes")
+        hybrid_chunk = int(os.environ.get("YUNSHU_HYBRID_CHUNK_SIZE", "512"))
+
         self._engine_core = EngineCore(
             model=self._model,
             tokenizer=self._tokenizer,
-            config=EngineCoreConfig(stream_interval=self.stream_interval, **arch_kwargs),
+            config=EngineCoreConfig(
+                stream_interval=self.stream_interval,
+                enable_hybrid_prefill=hybrid_prefill,
+                hybrid_chunk_size=hybrid_chunk,
+                **arch_kwargs,
+            ),
             executor=executor,
         )
         self._engine_core.scheduler.config.model_name = self.model_name

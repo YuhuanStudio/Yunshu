@@ -369,6 +369,14 @@ class Scheduler:
                 else:
                     break
 
+            # 6a. Sarathi-style hybrid prefill: interleave remaining prefill
+            # chunks with decode steps for better tail latency.
+            # When enable_hybrid_prefill=True and there are pending partial
+            # prefills, feed one chunk per iteration then decode, repeating
+            # until all chunks are consumed or a limit is reached.
+            if self.config.enable_hybrid_prefill and self._pending_prefill:
+                outputs = self._hybrid_prefill_step(outputs)
+
             # 6b. Speculative decoding: verify drafts, then generate new ones
             # (vLLM "verify after" pattern — verify pending drafts against
             # target model output, then draft K tokens for next step)
@@ -856,20 +864,26 @@ class Scheduler:
         return retracted
 
     def _process_pending_prefill(self) -> None:
-        """Process one chunk from each pending partial prefill (Sarathi pattern).
+        """Process pending partial prefill chunks (Sarathi-style hybrid pattern).
 
         On each scheduler step, when there are pending prefill requests
         (requests whose prompt was too long and got chunked), we feed
-        one hybrid_chunk_size chunk into the BatchGenerator per step.
+        token chunks into the BatchGenerator.
 
-        This interleaves prefill chunks with decode steps so that
-        existing generation requests don't stall while a long prompt
-        is being processed.
+        When enable_hybrid_prefill is True (Sarathi-style), we process
+        exactly ONE pending prefill chunk per step to interleave with
+        decode steps. This prevents long prefills from starving running
+        generation requests.
+
+        When hybrid prefill is off (default), all pending chunks are
+        fed at once for maximum throughput.
         """
         if not self._pending_prefill:
             return
 
         completed_ids = []
+        chunks_fed = 0
+
         for req_id, state in list(self._pending_prefill.items()):
             remaining = state['remaining_tokens']
             if not remaining:
@@ -890,6 +904,17 @@ class Scheduler:
             if self._batch_gen is None:
                 continue
 
+            # Sarathi-style: only one pending prefill chunk per step to
+            # ensure decode steps are interleaved for latency.
+            if (
+                self.config.enable_hybrid_prefill
+                and self._has_active_requests()
+                and chunks_fed >= 1
+            ):
+                # Remaining chunks will be fed on subsequent steps.
+                # Each step feeds at most one chunk → decode → repeat.
+                break
+
             # Feed one chunk
             chunk_size = self.config.hybrid_chunk_size
             chunk = remaining[:chunk_size]
@@ -909,6 +934,7 @@ class Scheduler:
 
                 # Update tracking
                 self._uid_to_req[uids[0]] = req_id
+                chunks_fed += 1
 
                 if not state['remaining_tokens']:
                     completed_ids.append(req_id)
@@ -930,6 +956,83 @@ class Scheduler:
 
         for rid in completed_ids:
             self._pending_prefill.pop(rid, None)
+
+    def _hybrid_prefill_step(self, outputs: list) -> list:
+        """Sarathi-style hybrid chunked prefill interleaving.
+
+        When hybrid prefill is enabled and there are pending partial prefills,
+        this method interleaves prefill chunk insertion with decode steps.
+        The pattern is:
+
+            for each pending prefill chunk:
+                1. Insert next prefill chunk into BatchGenerator
+                2. Run next() → prefill the chunk + decode all running requests
+                3. Process and collect decode outputs
+                4. Repeat until no more pending chunks or limit reached
+
+        This prevents a long prefill from starving running decode requests
+        by ensuring that after each chunk, all active requests get a decode
+        token. The trade-off is slightly lower prefill throughput for
+        significantly better decode latency under load.
+
+        Args:
+            outputs: Accumulated outputs from the current step so far.
+
+        Returns:
+            Updated outputs list with decode outputs from interleaving.
+        """
+        # Safety limit: don't spend more than N hybrid iterations per step
+        # to avoid starving the event loop.
+        max_hybrid_iters = 32
+        iters = 0
+
+        while self._pending_prefill and iters < max_hybrid_iters:
+            iters += 1
+
+            # Feed exactly one pending prefill chunk
+            self._process_pending_prefill()
+
+            # If nothing was inserted (all remaining chunks already consumed),
+            # break out.
+            if not self._pending_prefill and not self._has_active_requests():
+                break
+
+            try:
+                # next() prefills the chunk we just inserted AND decodes
+                # all active requests (including the one being prefilled
+                # if this is its final chunk).
+                prompt_responses, gen_responses = self._batch_gen.next()
+
+                if prompt_responses:
+                    self._process_prefill_responses(prompt_responses)
+
+                if gen_responses:
+                    new_outputs = self._process_responses(gen_responses)
+                    outputs.extend(new_outputs)
+
+                # Also do any configured extra decode steps
+                for _ in range(self.config.stream_interval):
+                    if not self._has_active_requests():
+                        break
+                    try:
+                        gen_responses = self._batch_gen.next_generated()
+                    except StopIteration:
+                        break
+                    if gen_responses:
+                        new_outputs = self._process_responses(gen_responses)
+                        outputs.extend(new_outputs)
+                    else:
+                        break
+
+            except Exception as e:
+                logger.error(f"Hybrid prefill step error: {e}")
+                from .exceptions import is_cache_corruption_error
+                if is_cache_corruption_error(e):
+                    logger.warning("Cache corruption in hybrid prefill — resetting BatchGenerator")
+                    self.deep_reset()
+                break
+
+        return outputs
 
     def _process_responses(self, responses: list) -> list[RequestOutput]:
         """Distribute GenerationBatch.Response to per-request outputs (oMLX pattern).
@@ -1784,6 +1887,9 @@ class Scheduler:
             "total_preemptions": sum(
                 r.num_preemptions for r in self.requests.values()
             ),
+            "hybrid_prefill_enabled": self.config.enable_hybrid_prefill,
+            "hybrid_prefill_pending": len(self._pending_prefill),
+            "hybrid_chunk_size": self.config.hybrid_chunk_size,
         }
         # Append thinking-segment substore stats
         try:

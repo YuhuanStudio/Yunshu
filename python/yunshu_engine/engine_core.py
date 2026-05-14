@@ -59,6 +59,9 @@ class EngineCoreConfig:
     ngram_spec_max_n: int = 5
     ngram_spec_k: int = 5
     ngram_spec_mode: str = "lps"
+    # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
+    enable_hybrid_prefill: bool = False
+    hybrid_chunk_size: int = 512
 
 
 class EngineCore:
@@ -99,6 +102,8 @@ class EngineCore:
             ngram_spec_max_n=self.config.ngram_spec_max_n,
             ngram_spec_k=self.config.ngram_spec_k,
             ngram_spec_mode=self.config.ngram_spec_mode,
+            enable_hybrid_prefill=self.config.enable_hybrid_prefill,
+            hybrid_chunk_size=self.config.hybrid_chunk_size,
         )
 
         if self.config.enable_paged_kv:
