@@ -35,7 +35,14 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **5857 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **5911 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-15 Wave 43 — Production Wiring 實現-整合)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Wave 42: 實現-整合 wiring | 6 standalone modules wired into EngineCore production paths: RequestLifecycleOrchestrator, InferenceBudgetManager, RequestDeduplicator, KVLifecycleManager, TokenLevelScheduler, AutoTuner + CompositionScheduler (SGLang §14.1) + ModelPreprocessorRegistry (BatchedEngine) | +17 tests |
+| Wave 43: Additional production wiring | ForwardBatch/BatchComposer (3-level hierarchy), BatchSampler (vectorized), MemoryAwareScheduler (admission control), ContextWindowManager (4 truncation strategies), KVPrefixCompressor (3 strategies), RTTAwareRouter (MeshManager), RoPEScalingOptimizer, AttentionOptimizer, MoEEfficiencyOptimizer, ModelWarmupManager, ProcessIsolation (opt-in), GatewayOptimizer (RequestCoalescer + ResponseCache + ConnectionPool) | +19 tests |
 
 ### 已完成修復 (2026-05-15 Wave 40 — Inference Budget Manager + Request Deduplication)
 
@@ -1242,7 +1249,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-15 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。§12.4 猜測解碼 proposer 矩陣完整: 8 種策略。視覺編碼策略 4 種。外部預填充完整成熟。§14.1 調度器模組化: 8 種 mixin + CompositionScheduler。§14.1 批次表示: 3 級層次 (ScheduleBatch→ForwardBatch→BatchResult)。§16.5 模型預處理器: 8 模型家族 + 自動偵測。KV 生命週期管理: 4 層遷移 + 預熱預測 + 碎片整理。RTT 感知路由: Parallax 模式。推論預算管理: token/time/cost/thinking 4 維度。請求去重: SGLang 模式。測試套件 5857 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
+> **結論 (2026-05-15 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。**Wave 42-43 實現-整合**: 所有 standalone 模塊已接入生產路徑 — EngineCore 接線: RequestLifecycleOrchestrator (狀態機), InferenceBudgetManager (4維預算), RequestDeduplicator (SHA-256去重), KVLifecycleManager (4層KV生命週期), TokenLevelScheduler (WFQ+優先級反轉防護), AutoTuner (性能剖析+自適應調優), CompositionScheduler (SGLang §14.1 8 mixin), ForwardBatch (3級批次), BatchSampler (向量化採樣), MemoryAwareScheduler (準入控制), ContextWindowManager (截斷策略), KVPrefixCompressor (壓縮策略), ModelOptimizations (RoPE/Attention/MoE), ProcessIsolation (進程隔離)。BatchedEngine: ModelPreprocessorRegistry (8模型家族), ContextWindow截斷。MeshManager: RTTAwareRouter。Gateway: RequestCoalescer + ResponseCache + ConnectionPool。測試套件 5911 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
 
 ---
 
