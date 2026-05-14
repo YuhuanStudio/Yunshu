@@ -336,6 +336,14 @@ class EngineCore:
         self._kv_compressor = KVPrefixCompressor()
         self._sliding_window_mgr: SlidingWindowKVManager | None = None
 
+        # KV migration manager (multi-tier migration with temperature tracking)
+        from .kv_migration import KVMigrationManager
+        self._kv_migration = KVMigrationManager()
+
+        # Mamba/Hybrid KV cache (SSM state management)
+        from .mamba_cache import HybridKVCache
+        self._hybrid_kv = HybridKVCache()
+
         # Batch sampler (vectorized batch sampling + logits processing + stop checking)
         from .batch_sampler import BatchSampler, LogitsProcessorBatch, BatchStopChecker
         self._batch_sampler = BatchSampler()
@@ -1003,6 +1011,8 @@ class EngineCore:
         stats["memory_aware_scheduler"] = self._memory_aware_scheduler.get_stats().__dict__
         stats["context_window"] = self._context_window_mgr.get_stats()
         stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
+        stats["kv_migration"] = self._kv_migration.get_stats()
+        stats["hybrid_kv"] = self._hybrid_kv.get_stats()
         stats["batch_sampler"] = self._batch_sampler.get_stats()
         stats["model_optimizations"] = {
             "rope": self._rope_optimizer.get_stats(),

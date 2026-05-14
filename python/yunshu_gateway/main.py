@@ -234,6 +234,18 @@ def create_app() -> FastAPI:
     # Import routers lazily to reduce startup memory
     from .routers import anthropic, audio, batch_inference, bench, chat, completions, embeddings, images, mcp, models, monitoring as gw_monitoring, profiling, realtime, scoring, tokenize
 
+    # Wave 43: MCP client manager (LLM → external MCP tool servers)
+    mcp_servers_env = os.environ.get("YUNSHU_MCP_SERVERS", "")
+    if mcp_servers_env:
+        try:
+            from yunshu_engine.mcp_client import get_mcp_client_manager
+            mcp_mgr = get_mcp_client_manager()
+            if mcp_mgr:
+                app.state.mcp_client = mcp_mgr
+                logger.info(f"MCP client manager enabled ({len(mcp_servers_env.split(','))} servers)")
+        except Exception:
+            logger.debug("MCP client setup failed", exc_info=True)
+
     # Routes — L1 Gateway
     from .routers import sleep as sleep_mod
     from .routers import responses as responses_mod
