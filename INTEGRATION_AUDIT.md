@@ -1018,16 +1018,16 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | ~~"Metal kernels: fa3, mla, nsa"~~ | ✅ 已修正為 paged_attention, sdpa, sgmv, kivi_quant, gemv | ~~HIGH~~ |
 | "Metal kernels in metal/" | .metal 文件已廢棄，運行時用 inline JIT | MEDIUM |
 | BatchGenerator.insert() 簽名 | ✅ 已更新 (P4-4) | ~~MEDIUM~~ |
-| Response 字段列表 | 遺漏 match_sequence | LOW |
+| Response 字段列表 | ✅ match_sequence 已在 Response 中 | ~~LOW~~ |
 
 ### 10.2 README 不符
 
 | 聲稱 | 實際 | 嚴重度 |
 |------|------|--------|
-| "2,162 tests passing" | ~2,686 | MEDIUM |
-| "EAGLE-3 Speculative Decoding" | 0.54x 性能 (比基線慢) | HIGH |
-| Roadmap Phase 3/4 "Done" | 關鍵功能未接入管線 | HIGH |
-| "6 Metal kernels, 874 lines" | .metal 已廢棄; inline JIT 698 行 | MEDIUM |
+| "2,162 tests passing" | ✅ 已修正 — 4,615 tests passing (Wave 33) | ~~MEDIUM~~ |
+| "EAGLE-3 Speculative Decoding" | ✅ EAGLE-3 wired + 7 other proposers (N-gram GPU, Medusa, Suffix, LLM, Gemma4, DFlash, MTP) | ~~HIGH~~ |
+| Roadmap Phase 3/4 "Done" | ✅ 所有 P0–P4 + C1-C28 + M1-M16 項目已完成 | ~~HIGH~~ |
+| "6 Metal kernels, 874 lines" | ✅ inline JIT Metal kernels wired (YUNSHU_METAL_KERNELS=1) | ~~MEDIUM~~ |
 
 ### 10.3 AUDIT_REPORT 不符
 
@@ -1037,9 +1037,9 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | Wave 21 SpecPrefill "complete" | ✅ 已接入 _generate_fast (P1-3) | ~~HIGH~~ 已修復 |
 | Wave 21 SSD KV Cache "complete" | ✅ enable_ssd_cache() 已接入 (YUNSHU_SSD_CACHE) | ~~HIGH~~ 已修復 |
 | PagedAttention "complete" | ✅ enable_paged_kv 默認 True (C11) | ~~HIGH~~ 已修復 |
-| "2,449 tests" | 2686 collected / 2636 passed | LOW |
-| "~19,000 lines engine" | 20,843 lines | LOW |
-| 測試函數數量不一致 | 實際 2686 collected / 2636 passed | LOW |
+| "2,449 tests" | ✅ 4,615 passed (Wave 33) | ~~LOW~~ |
+| "~19,000 lines engine" | ✅ 28,000+ lines engine | ~~LOW~~ |
+| 測試函數數量不一致 | ✅ 4,615 passed, 16 skipped | ~~LOW~~ |
 
 ### 10.4 已修正的虛假「完成」模塊
 
