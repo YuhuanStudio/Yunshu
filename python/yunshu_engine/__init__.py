@@ -77,7 +77,17 @@ def __getattr__(name):
         "is_kv_transfer_enabled": ".kv_transfer",
         "create_transfer_client": ".kv_transfer",
         "create_transfer_server": ".kv_transfer",
-        # Mamba / Hybrid KV Cache (§12.2)
+        # Streaming Optimizer (C18 GPU/CPU overlap)
+    "TokenPipeline": ".streaming_optimizer",
+    "PipelineConfig": ".streaming_optimizer",
+    "PipelineStage": ".streaming_optimizer",
+    "PipelineToken": ".streaming_optimizer",
+    "PrefetchSampler": ".streaming_optimizer",
+    "SamplingPlan": ".streaming_optimizer",
+    "BatchedDetokenizer": ".streaming_optimizer",
+    "StreamingBackpressureController": ".streaming_optimizer",
+    "BackpressureConfig": ".streaming_optimizer",
+    # Mamba / Hybrid KV Cache (§12.2)
         "CacheBlockType": ".mamba_cache",
         "HybridKVCache": ".mamba_cache",
         "MambaSSMState": ".mamba_cache",

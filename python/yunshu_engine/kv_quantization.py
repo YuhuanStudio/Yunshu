@@ -18,6 +18,11 @@ Quantization is applied along the last dimension in groups of group_size.
 References:
   - KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache (Wang et al.)
   - GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers
+
+Integration:
+  - AdaptiveKVQuantizer (kv_optimizations.py) uses KVQuantizer internally for
+    per-layer INT4/INT8 quantization. Import via:
+      from .kv_optimizations import AdaptiveKVQuantizer
 """
 
 from __future__ import annotations

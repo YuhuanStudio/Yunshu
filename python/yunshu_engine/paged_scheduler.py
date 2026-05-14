@@ -5,6 +5,8 @@ Extends the base Scheduler with:
 - Prefix caching: reuse cached blocks across requests
 - Memory-aware scheduling: reject requests that exceed KV budget
 - Block-wise cache management integrated with BatchGenerator lifecycle
+- Periodic KV block compaction (KVBlockCompactor from kv_optimizations)
+- Prediction-based eviction (KVEvictionPredictor from kv_optimizations)
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ from typing import Any, Optional
 
 from .scheduler import Scheduler, SchedulerConfig, SchedulerOutput
 from .request import Request, RequestOutput, RequestStatus
+from .kv_optimizations import KVBlockCompactor, KVEvictionPredictor
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +46,21 @@ class PagedScheduler(Scheduler):
                 logger.info("BoundarySnapshotSSDStore started for non-sliceable layers")
             except Exception as e:
                 logger.debug(f"Boundary snapshot store not available: {e}")
+        # KV block compactor for periodic defragmentation (kv_optimizations)
+        self._compactor: KVBlockCompactor | None = None
+        # Eviction predictor for prediction-based block retention (kv_optimizations)
+        self._eviction_predictor: KVEvictionPredictor | None = None
 
     def set_kv_cache_manager(self, manager: Any) -> None:
         self._kv_manager = manager
+
+    def set_compactor(self, compactor: KVBlockCompactor) -> None:
+        """Set the KV block compactor for periodic defragmentation."""
+        self._compactor = compactor
+
+    def set_eviction_predictor(self, predictor: KVEvictionPredictor) -> None:
+        """Set the eviction predictor for prediction-based block retention."""
+        self._eviction_predictor = predictor
 
     def get_block_table(self, request_id: str) -> Any | None:
         return self._block_tables.get(request_id)
@@ -107,6 +122,10 @@ class PagedScheduler(Scheduler):
         output = super().step()
         if self._kv_manager is not None and output.outputs:
             self._manage_kv_cache(output.outputs)
+        # Periodic KV block compaction (every 50 steps)
+        if self._compactor is not None:
+            step_counter = getattr(self, '_step_counter', 0)
+            self._compactor.maybe_compact(step_counter)
         return output
 
     def _manage_kv_cache(self, outputs: list[RequestOutput]) -> None:
@@ -161,4 +180,8 @@ class PagedScheduler(Scheduler):
                 "block_size": self._kv_manager.block_size,
                 "active_block_tables": len(self._block_tables),
             }
+        if self._compactor is not None:
+            stats["kv_compactor"] = self._compactor.get_stats()
+        if self._eviction_predictor is not None:
+            stats["kv_eviction_predictor"] = self._eviction_predictor.get_stats()
         return stats

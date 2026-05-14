@@ -13,6 +13,11 @@ Architecture:
   BatchedEngine.generate() / stream_generate()
     → MemoryGuard preflight before submitting to EngineCore
     → return GenerationOutput with finish_reason="memory_limit" on rejection
+
+Integration:
+  - KVEvictionPredictor (kv_optimizations.py) can be attached for prediction-based
+    eviction decisions. Import via:
+      from .kv_optimizations import KVEvictionPredictor
 """
 from __future__ import annotations
 
@@ -53,6 +58,9 @@ class MemoryGuard:
         self._total_rejections: int = 0
         self._preflight_rejections: int = 0
         self._concurrent_rejections: int = 0
+
+        # Optional eviction predictor for prediction-based eviction (kv_optimizations)
+        self._eviction_predictor: Any | None = None
 
     def preflight_check(
         self,
@@ -213,3 +221,30 @@ class MemoryGuard:
             ),
             "memory": monitor_stats,
         }
+
+    def set_eviction_predictor(self, predictor: Any) -> None:
+        """Set a KVEvictionPredictor for prediction-based eviction decisions.
+
+        When attached, the predictor is consulted before evicting blocks,
+        allowing more intelligent retention of blocks predicted to be needed.
+
+        Args:
+            predictor: A KVEvictionPredictor instance from kv_optimizations.
+        """
+        self._eviction_predictor = predictor
+
+    def should_evict_block(self, block_id: str) -> bool:
+        """Check if a block should be evicted.
+
+        Uses the eviction predictor if available, otherwise returns True
+        (allow eviction by default).
+
+        Args:
+            block_id: The block ID to evaluate.
+
+        Returns:
+            True if the block should be evicted.
+        """
+        if self._eviction_predictor is not None:
+            return self._eviction_predictor.should_evict(block_id)
+        return True

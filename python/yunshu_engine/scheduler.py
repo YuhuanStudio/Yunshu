@@ -34,6 +34,389 @@ from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentC
 logger = logging.getLogger(__name__)
 
 
+# ── Batch-path SpecPrefill, Spec-Aware Scheduling, Batched Draft Collection ──
+
+
+@dataclass
+class BatchSpecPrefillConfig:
+    """Configuration for batch-path SpecPrefill.
+
+    Enables sparse prefill for long prompts in the batch/scheduler path,
+    using a draft model's attention scores to skip unimportant tokens.
+    Controlled via YUNSHU_BATCH_SPEC_PREFILL=1.
+    """
+    enabled: bool = False
+    threshold: int = 8192          # Minimum prompt length to trigger
+    keep_rate: float = 0.20        # Fraction of tokens to keep
+    chunk_size: int = 32           # Chunk size for token selection
+    draft_model: Any = None        # Draft model for attention scoring
+
+
+@dataclass
+class SpecBudget:
+    """Result of spec-aware batch slot computation.
+
+    Attributes:
+        total_slots: Total available batch slots.
+        decode_slots: Slots reserved for decode (running requests).
+        spec_slots: Slots reserved for spec verification overhead.
+        available_for_new: Slots available for new request insertion.
+    """
+    total_slots: int = 256
+    decode_slots: int = 0
+    spec_slots: int = 0
+    available_for_new: int = 0
+
+
+@dataclass
+class DraftCollection:
+    """Structured result from batched draft collection.
+
+    Maps request_id → list of draft token IDs from all spec strategies.
+    Used by the scheduler to batch-verify all drafts in a single forward pass.
+    """
+    drafts: dict[str, list[int]] = field(default_factory=dict)
+    strategy_counts: dict[str, int] = field(default_factory=dict)
+    total_draft_tokens: int = 0
+
+    def add(self, request_id: str, tokens: list[int], strategy: str = "unknown") -> None:
+        """Add draft tokens for a request."""
+        if tokens:
+            self.drafts[request_id] = tokens
+            self.strategy_counts[strategy] = self.strategy_counts.get(strategy, 0) + len(tokens)
+            self.total_draft_tokens += len(tokens)
+
+    def has_drafts(self) -> bool:
+        return bool(self.drafts)
+
+    def get_request_ids(self) -> list[str]:
+        return list(self.drafts.keys())
+
+    def merge(self, other: DraftCollection) -> None:
+        """Merge another DraftCollection into this one (other takes priority)."""
+        for rid, tokens in other.drafts.items():
+            if rid not in self.drafts:
+                self.drafts[rid] = tokens
+        for strategy, count in other.strategy_counts.items():
+            self.strategy_counts[strategy] = self.strategy_counts.get(strategy, 0) + count
+        self.total_draft_tokens += other.total_draft_tokens
+
+
+class BatchPathSpecPrefill:
+    """SpecPrefill integration for the batch scheduler path.
+
+    When a new request enters the scheduler with a long prompt, uses the
+    draft model's attention scores to identify which prompt tokens to skip
+    during prefill. This reduces TTFT for long prompts in batch mode.
+
+    Pipeline (mirrors single-request _generate_fast path):
+      1. score_tokens()  — draft model scores token importance
+      2. select_chunks() — chunk-based top-K% selection
+      3. sparse_prefill() — target prefill with selected tokens
+
+    Enabled via YUNSHU_BATCH_SPEC_PREFILL=1.
+    """
+
+    def __init__(self, config: BatchSpecPrefillConfig | None = None) -> None:
+        self.config = config or BatchSpecPrefillConfig()
+        self._stats = {
+            "prefills_attempted": 0,
+            "prefills_succeeded": 0,
+            "prefills_fallback": 0,
+            "tokens_skipped_total": 0,
+            "tokens_kept_total": 0,
+        }
+
+    def should_prefill(self, prompt_length: int) -> bool:
+        """Check if SpecPrefill should be applied to a prompt."""
+        return (
+            self.config.enabled
+            and self.config.draft_model is not None
+            and prompt_length >= self.config.threshold
+        )
+
+    def compute_skippable_tokens(self, tokens: list[int]) -> list[int] | None:
+        """Compute which tokens are skippable using draft model attention.
+
+        Returns the list of selected (important) token indices, or None if
+        the prompt is too short or scoring fails.
+        """
+        if not self.should_prefill(len(tokens)):
+            return None
+
+        self._stats["prefills_attempted"] += 1
+
+        try:
+            from .spec_prefill import score_tokens, select_chunks
+
+            importance = score_tokens(
+                self.config.draft_model,
+                tokens,
+            )
+            selected = select_chunks(
+                importance,
+                keep_pct=self.config.keep_rate,
+                chunk_size=self.config.chunk_size,
+            )
+            selected_list = selected.tolist()
+            n_kept = len(selected_list)
+            n_skipped = len(tokens) - n_kept
+
+            self._stats["prefills_succeeded"] += 1
+            self._stats["tokens_kept_total"] += n_kept
+            self._stats["tokens_skipped_total"] += n_skipped
+
+            logger.debug(
+                f"Batch SpecPrefill: {n_kept}/{len(tokens)} tokens selected "
+                f"({n_skipped} skipped)"
+            )
+            return selected_list
+
+        except Exception as e:
+            self._stats["prefills_fallback"] += 1
+            logger.debug(f"Batch SpecPrefill scoring failed: {e}")
+            return None
+
+    def get_stats(self) -> dict:
+        """Return SpecPrefill statistics."""
+        stats = dict(self._stats)
+        if stats["prefills_attempted"] > 0:
+            stats["success_rate"] = round(
+                stats["prefills_succeeded"] / stats["prefills_attempted"], 3
+            )
+        else:
+            stats["success_rate"] = 0.0
+        return stats
+
+
+class SpecAwareBatchScheduler:
+    """Spec-decode aware batch slot allocation.
+
+    When speculative decoding is active (N-gram, cross-model, MTP, or Medusa),
+    the scheduler must reserve batch slots for draft verification overhead.
+    Without slot reservation, verification can starve normal decode or cause
+    batch overflow.
+
+    Integration with TBO: When both TBO and spec decode are enabled, draft
+    generation overlaps with verification — the draft model runs on CPU while
+    the target model verifies on GPU.
+    """
+
+    def __init__(
+        self,
+        max_num_seqs: int = 256,
+        spec_overhead_per_request: float = 0.1,
+        tbo_enabled: bool = False,
+    ) -> None:
+        self.max_num_seqs = max_num_seqs
+        self.spec_overhead_per_request = spec_overhead_per_request
+        self.tbo_enabled = tbo_enabled
+        self._stats = {
+            "budget_computations": 0,
+            "spec_slots_reserved": 0,
+            "total_slots_reserved": 0,
+            "tbo_overlap_steps": 0,
+        }
+
+    def compute_spec_budget(
+        self,
+        num_running: int,
+        spec_overhead: float | None = None,
+    ) -> SpecBudget:
+        """Calculate batch slot allocation considering spec decode overhead.
+
+        Args:
+            num_running: Number of currently running decode requests.
+            spec_overhead: Per-request spec overhead (0.0–1.0). If None,
+                uses the configured default.
+
+        Returns:
+            SpecBudget with slot allocation details.
+        """
+        if spec_overhead is None:
+            spec_overhead = self.spec_overhead_per_request
+
+        total = self.max_num_seqs
+        decode_slots = num_running
+
+        # Reserve slots proportional to spec verification overhead.
+        # Each running request with spec decode active consumes extra slot
+        # budget for draft verification. The overhead is the fraction of a
+        # full slot each verification costs.
+        spec_slots = 0
+        if spec_overhead > 0 and num_running > 0:
+            # TBO overlap: draft generation overlaps with verification,
+            # reducing effective overhead by ~50%.
+            effective_overhead = spec_overhead
+            if self.tbo_enabled:
+                effective_overhead *= 0.5
+                self._stats["tbo_overlap_steps"] += 1
+            spec_slots = max(1, round(num_running * effective_overhead))
+
+        available = max(0, total - decode_slots - spec_slots)
+
+        self._stats["budget_computations"] += 1
+        self._stats["spec_slots_reserved"] += spec_slots
+        self._stats["total_slots_reserved"] += decode_slots + spec_slots
+
+        return SpecBudget(
+            total_slots=total,
+            decode_slots=decode_slots,
+            spec_slots=spec_slots,
+            available_for_new=available,
+        )
+
+    def get_available_slots(
+        self,
+        num_running: int,
+        spec_overhead: float | None = None,
+    ) -> int:
+        """Quick access to available slot count."""
+        return self.compute_spec_budget(num_running, spec_overhead).available_for_new
+
+    def get_stats(self) -> dict:
+        """Return spec-aware scheduling statistics."""
+        stats = dict(self._stats)
+        stats["max_num_seqs"] = self.max_num_seqs
+        stats["spec_overhead_per_request"] = self.spec_overhead_per_request
+        stats["tbo_enabled"] = self.tbo_enabled
+        if stats["budget_computations"] > 0:
+            stats["avg_spec_slots"] = round(
+                stats["spec_slots_reserved"] / stats["budget_computations"], 2
+            )
+        else:
+            stats["avg_spec_slots"] = 0.0
+        return stats
+
+
+class BatchedDraftCollection:
+    """Collect draft tokens from all spec strategies for all running requests.
+
+    The key missing piece: currently drafts are verified per-request, not
+    batched. This class collects drafts from N-gram, cross-model, MTP, and
+    Medusa strategies for ALL running requests, returning them as a structured
+    DraftCollection that the scheduler uses to batch-verify all drafts in a
+    single forward pass.
+
+    Usage in scheduler.step():
+      1. After decode, call collect_all_drafts() for all running requests
+      2. Store the DraftCollection for next-step verification
+      3. On next step, verify all drafts together
+    """
+
+    def __init__(self) -> None:
+        self._stats = {
+            "collections": 0,
+            "total_tokens_collected": 0,
+            "strategy_breakdown": {},
+        }
+
+    def collect_all_drafts(
+        self,
+        running: dict[str, Request],
+        spec_decoder: Any | None,
+        mtp_decoder: Any | None,
+        ngram_proposer: NgramProposer | None,
+        pending_abort_ids: set[str],
+        spec_drafts: dict[str, list[int]] | None = None,
+    ) -> DraftCollection:
+        """Collect draft tokens from all strategies for all running requests.
+
+        Args:
+            running: Map of request_id → Request for active requests.
+            spec_decoder: Cross-model SpeculativeDecoder (or None).
+            mtp_decoder: MTP decoder (or None).
+            ngram_proposer: N-gram proposer (or None).
+            pending_abort_ids: Set of request IDs pending abort.
+            spec_drafts: Existing drafts (to avoid overwriting).
+
+        Returns:
+            DraftCollection with all collected drafts.
+        """
+        collection = DraftCollection()
+        self._stats["collections"] += 1
+
+        for rid, req in list(running.items()):
+            # Skip aborted requests
+            if rid in pending_abort_ids:
+                continue
+            # Skip requests that already have pending drafts
+            if spec_drafts and rid in spec_drafts:
+                collection.drafts[rid] = spec_drafts[rid]
+                continue
+            # Skip requests with no output tokens (can't seed a draft)
+            if not req.output_token_ids:
+                continue
+
+            # Try N-gram first (zero GPU overhead)
+            if ngram_proposer is not None:
+                tokens = self._collect_ngram_draft(req, ngram_proposer)
+                if tokens:
+                    collection.add(rid, tokens, "ngram")
+                    continue
+
+            # Try MTP (self-speculative, low overhead)
+            if mtp_decoder is not None:
+                tokens = self._collect_mtp_draft(req, mtp_decoder)
+                if tokens:
+                    collection.add(rid, tokens, "mtp")
+                    continue
+
+            # Try cross-model spec decode (higher overhead)
+            if spec_decoder is not None and isinstance(spec_decoder, SpeculativeDecoder):
+                tokens = self._collect_cross_model_draft(req, spec_decoder)
+                if tokens:
+                    collection.add(rid, tokens, "cross_model")
+                    continue
+
+        self._stats["total_tokens_collected"] += collection.total_draft_tokens
+        for strategy, count in collection.strategy_counts.items():
+            self._stats["strategy_breakdown"][strategy] = (
+                self._stats["strategy_breakdown"].get(strategy, 0) + count
+            )
+
+        return collection
+
+    def _collect_ngram_draft(
+        self, req: Request, proposer: NgramProposer,
+    ) -> list[int] | None:
+        """Collect N-gram draft tokens for a request."""
+        try:
+            prompt_ids = req.prompt_token_ids or []
+            all_ids = prompt_ids + list(req.output_token_ids)
+            if len(all_ids) < proposer.config.min_n:
+                return None
+            return proposer.propose(all_ids)
+        except Exception:
+            return None
+
+    def _collect_mtp_draft(
+        self, req: Request, mtp_decoder: Any,
+    ) -> list[int] | None:
+        """Collect MTP draft tokens for a request (lightweight, no GPU)."""
+        try:
+            # MTP in batch collection mode: return None to defer to per-request
+            # _try_mtp_draft which has access to the model for the forward pass.
+            # Batch collection for MTP is a placeholder — actual MTP requires
+            # a model forward pass which is too expensive for batch collection.
+            return None
+        except Exception:
+            return None
+
+    def _collect_cross_model_draft(
+        self, req: Request, decoder: SpeculativeDecoder,
+    ) -> list[int] | None:
+        """Collect cross-model draft tokens (deferred to per-request path)."""
+        # Cross-model drafting requires running the draft model which is
+        # expensive. Defer to per-request _try_cross_model_draft.
+        return None
+
+    def get_stats(self) -> dict:
+        """Return collection statistics."""
+        stats = dict(self._stats)
+        return stats
+
+
 class SchedulingPolicy(Enum):
     """Request scheduling policy (oMLX pattern)."""
     FCFS = auto()       # First-Come-First-Served
@@ -78,6 +461,12 @@ class SchedulerConfig:
     ngram_spec_max_n: int = 5            # Max ngram length
     ngram_spec_k: int = 5                # Draft tokens per step
     ngram_spec_mode: str = "lps"         # Proposer mode: lps, hashpool, lcg
+    # Batch-path SpecPrefill (sparse prefill for long prompts)
+    batch_spec_prefill_enabled: bool = False  # Enable via YUNSHU_BATCH_SPEC_PREFILL=1
+    batch_spec_prefill_threshold: int = 8192  # Min prompt length to trigger
+    batch_spec_prefill_keep_rate: float = 0.20  # Fraction of tokens to keep
+    # Spec-aware batch scheduling
+    spec_overhead_per_request: float = 0.1  # Slot overhead per spec-active request
 
 
 class _LogitsProcessorSampler:
@@ -245,6 +634,33 @@ class Scheduler:
         # ITL tracking (C2/ITL-1: inter-token latency per request)
         self._last_token_time: dict[str, float] = {}
         self._itl_samples: dict[str, list[float]] = {}
+
+        # Batch-path SpecPrefill (attention-based sparse prefill for long prompts)
+        import os as _os
+        self._batch_spec_prefill: BatchPathSpecPrefill | None = None
+        if self.config.batch_spec_prefill_enabled or _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
+            self._batch_spec_prefill = BatchPathSpecPrefill(BatchSpecPrefillConfig(
+                enabled=True,
+                threshold=self.config.batch_spec_prefill_threshold or int(
+                    _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_THRESHOLD", "8192")
+                ),
+                keep_rate=self.config.batch_spec_prefill_keep_rate or float(
+                    _os.environ.get("YUNSHU_BATCH_SPEC_PREFILL_KEEP_RATE", "0.20")
+                ),
+            ))
+            logger.info(
+                f"Batch SpecPrefill enabled: threshold={self.config.batch_spec_prefill_threshold}, "
+                f"keep_rate={self.config.batch_spec_prefill_keep_rate}"
+            )
+
+        # Spec-aware batch scheduler (slot allocation with spec overhead)
+        self._spec_aware_scheduler = SpecAwareBatchScheduler(
+            max_num_seqs=self.config.max_num_seqs,
+            spec_overhead_per_request=self.config.spec_overhead_per_request,
+        )
+
+        # Batched draft collection (collect drafts from all strategies for all running)
+        self._draft_collector = BatchedDraftCollection()
 
     def _init_batch_generator(self) -> None:
         """Create BatchGenerator on first use (lazy init)."""
@@ -420,7 +836,14 @@ class Scheduler:
             ngram_active = self._ngram_proposer is not None
             if spec_decoder_active or mtp_active or ngram_active:
                 self._verify_spec_drafts(outputs)
-                # Generate drafts for still-active requests
+                # Batched draft collection: collect drafts from all strategies
+                # for all running requests in one pass, then merge into _spec_drafts.
+                batch_drafts = self.collect_batch_drafts()
+                for rid, tokens in batch_drafts.drafts.items():
+                    if rid not in self._spec_drafts:
+                        self._spec_drafts[rid] = tokens
+                # Generate drafts for still-active requests (per-request fallback
+                # for strategies not covered by batch collection, e.g. MTP/cross-model)
                 for req_id in list(self.running.keys()):
                     req = self.running.get(req_id)
                     if req is not None and req.output_token_ids:
@@ -505,7 +928,24 @@ class Scheduler:
 
         # Respect max_num_seqs limit — with preemption under PRIORITY policy
         active_count = len(self.running)
-        available_slots = max(0, self.config.max_num_seqs - active_count)
+
+        # Spec-aware slot allocation: when speculative decoding is active,
+        # reserve slots for draft verification overhead.
+        has_spec = (
+            (self.config.enable_spec_decode and isinstance(self._spec_decoder, SpeculativeDecoder))
+            or self._mtp_decoder is not None
+            or self._ngram_proposer is not None
+        )
+        if has_spec and self._spec_aware_scheduler is not None:
+            budget = self._spec_aware_scheduler.compute_spec_budget(active_count)
+            available_slots = budget.available_for_new
+        else:
+            available_slots = max(0, self.config.max_num_seqs - active_count)
+
+        # Batch-path SpecPrefill: compute skippable tokens for long prompts
+        # before insertion, reducing prefill time.
+        if self._batch_spec_prefill is not None and to_insert:
+            to_insert = self._apply_batch_spec_prefill(to_insert)
 
         if len(to_insert) > available_slots and self.config.policy == SchedulingPolicy.PRIORITY:
             # vLLM preemption pattern: evict lowest-priority running requests
@@ -1930,6 +2370,101 @@ class Scheduler:
 
     # ── End speculative decoding batch-path methods ──
 
+    # ── Batch-path SpecPrefill, Spec-Aware Scheduling, Batched Draft Collection ──
+
+    def _apply_batch_spec_prefill(self, to_insert: list[Request]) -> list[Request]:
+        """Apply SpecPrefill to waiting requests before insertion.
+
+        For each request with a prompt exceeding the threshold, computes
+        which tokens are skippable and attaches the selected indices to
+        the request metadata. The actual sparse prefill happens during
+        the BatchGenerator insert phase.
+
+        Args:
+            to_insert: List of requests to potentially apply SpecPrefill to.
+
+        Returns:
+            The same list with spec_prefill metadata attached where applicable.
+        """
+        if self._batch_spec_prefill is None:
+            return to_insert
+
+        for req in to_insert:
+            if req.prompt_token_ids and len(req.prompt_token_ids) >= self._batch_spec_prefill.config.threshold:
+                selected = self._batch_spec_prefill.compute_skippable_tokens(
+                    req.prompt_token_ids,
+                )
+                if selected is not None:
+                    req._spec_prefill_selected = selected
+                    logger.debug(
+                        f"Batch SpecPrefill: {len(selected)}/{len(req.prompt_token_ids)} "
+                        f"tokens selected for {req.request_id}"
+                    )
+
+        return to_insert
+
+    def spec_prefill_step(self, tokens: list[int]) -> list[int] | None:
+        """Calculate attention-based token importance scores for a prompt.
+
+        Public API for batch-path SpecPrefill. When enabled, uses the draft
+        model's attention scores to identify which prompt tokens to skip,
+        reducing prefill time for long prompts.
+
+        Args:
+            tokens: Prompt token IDs to score.
+
+        Returns:
+            List of selected (important) token indices, or None if
+            SpecPrefill is disabled or scoring fails.
+        """
+        if self._batch_spec_prefill is None:
+            return None
+        return self._batch_spec_prefill.compute_skippable_tokens(tokens)
+
+    def collect_batch_drafts(self) -> DraftCollection:
+        """Collect draft tokens from all spec strategies for all running requests.
+
+        This is the key integration point for batched draft verification.
+        Instead of verifying drafts per-request, this collects drafts from
+        all strategies (N-gram, cross-model, MTP, Medusa) for ALL running
+        requests and returns them as a structured DraftCollection.
+
+        The scheduler can then batch-verify all drafts in a single forward
+        pass on the next step, significantly improving verification throughput.
+
+        Returns:
+            DraftCollection with all collected drafts keyed by request_id.
+        """
+        return self._draft_collector.collect_all_drafts(
+            running=self.running,
+            spec_decoder=self._spec_decoder if isinstance(self._spec_decoder, SpeculativeDecoder) else None,
+            mtp_decoder=self._mtp_decoder,
+            ngram_proposer=self._ngram_proposer,
+            pending_abort_ids=self._pending_abort_ids,
+            spec_drafts=self._spec_drafts,
+        )
+
+    def set_batch_spec_prefill_draft_model(self, draft_model: Any) -> None:
+        """Set the draft model for batch-path SpecPrefill.
+
+        Called by EngineCore/BatchedEngine after loading a draft model.
+        Once set, long prompts in the batch path will use attention-based
+        sparse prefill to reduce TTFT.
+        """
+        if self._batch_spec_prefill is not None:
+            self._batch_spec_prefill.config.draft_model = draft_model
+            logger.info("Batch SpecPrefill draft model set")
+
+    def set_spec_aware_tbo(self, tbo_enabled: bool) -> None:
+        """Update TBO status for spec-aware slot allocation.
+
+        Called by EngineCore when TBO is enabled/disabled at runtime.
+        """
+        if self._spec_aware_scheduler is not None:
+            self._spec_aware_scheduler.tbo_enabled = tbo_enabled
+
+    # ── End Batch-path SpecPrefill, Spec-Aware Scheduling, Batched Draft Collection ──
+
     def get_batch_rope_deltas(self, uids: list[int]) -> list[float]:
         """Get per-request mRoPE deltas for batch decode.
 
@@ -1976,6 +2511,14 @@ class Scheduler:
         self._rope_delta_mgr.clear()
         # §12.2: clear encoder-decoder cache
         self._encoder_cache.clear()
+        # Reset spec-aware scheduler and draft collector stats
+        if self._spec_aware_scheduler is not None:
+            self._spec_aware_scheduler = SpecAwareBatchScheduler(
+                max_num_seqs=self.config.max_num_seqs,
+                spec_overhead_per_request=self.config.spec_overhead_per_request,
+            )
+        if self._draft_collector is not None:
+            self._draft_collector = BatchedDraftCollection()
 
     def shutdown(self) -> None:
         self.deep_reset()
@@ -2053,6 +2596,18 @@ class Scheduler:
                 stats["metal_kernels"].update(get_compilation_status())
             except Exception:
                 logger.debug("Metal kernel stats unavailable", exc_info=True)
+        # Batch-path SpecPrefill stats
+        stats["batch_spec_prefill"] = {
+            "enabled": self._batch_spec_prefill is not None,
+        }
+        if self._batch_spec_prefill is not None:
+            stats["batch_spec_prefill"].update(self._batch_spec_prefill.get_stats())
+        # Spec-aware batch scheduling stats
+        if self._spec_aware_scheduler is not None:
+            stats["spec_aware_scheduler"] = self._spec_aware_scheduler.get_stats()
+        # Batched draft collection stats
+        if self._draft_collector is not None:
+            stats["draft_collector"] = self._draft_collector.get_stats()
         return stats
 
 

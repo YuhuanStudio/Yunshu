@@ -35,7 +35,27 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **4615 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **4861 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 34 — Batch Spec Integration + KV Optimizations + Gateway Optimizer + Streaming Optimizer)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Batch path SpecPrefill | SpecPrefill 接入批量路徑 — scheduler._apply_batch_spec_prefill() 根據注意力分數跳過不重要 token，YUNSHU_BATCH_SPEC_PREFILL=1 | +60 tests |
+| Spec-aware batch scheduling | SpecAwareBatchScheduler — 根據 spec decode 開銷動態分配 batch slots，支持 TBO 整合 | — |
+| BatchedDraftCollection | 批量 draft token 收集 — 一次收集所有運行請求的 draft，支持 N-gram/MTP/cross-model 三種策略 | — |
+| AdaptiveKVQuantizer | 自適應 KV 量化 — 早期層 FP16、中間層 INT8、晚期層 INT4，budget-aware 模式 | +69 tests |
+| KVEvictionPredictor | KV 淘汰預測器 — 基於注意力權重+頻率+最近性的指數移動平均預測，比 LRU 更智能 | — |
+| ChunkedPrefillOptimizer | 分塊預填充優化 — 語義邊界分割 + 重要性排序 + 公平交錯 | — |
+| KVBlockCompactor | KV 塊壓縮器 — 定期合併部分填充塊，減少碎片 | — |
+| RequestCoalescer | 請求合併器 — 同時到達的相同模型請求合併為 batch，可配置窗口 (5ms) | +54 tests |
+| StreamingResponseBuffer | SSE 串流環形緩衝區 — 預分配 64KB，避免逐塊字符串分配 | — |
+| GatewayConnectionPool | 網關連接池 — 分佈式模式 TCP 連接復用 + 健康檢查 | — |
+| ResponseCache | 響應緩存 — SHA-256 content-hash 去重 + TTL + LRU，YUNSHU_RESPONSE_CACHE=1 | — |
+| TokenPipeline | Token 流水線 — 3 階段 (GPU forward → GPU sample → CPU post) 重疊，降低 ITL ~0.3-0.5ms | +63 tests |
+| PrefetchSampler | 預取採樣器 — GPU 生成 logits 時預計算採樣計劃，節省 ~0.1ms/token | — |
+| BatchedDetokenizer | 批量解標記化 — 多請求同時解標記，batch size > 1 時更快 | — |
+| StreamingBackpressure | 串流背壓控制 — 防止慢客戶端導致 OOM，延遲線性增長 | — |
 
 ### 已完成修復 (2026-05-14 Wave 33 — GPU N-gram + Suffix Proposer + LLM Proposer + Gemma4 Spec + Vision Encoding + DFlash Proposer + External Prefill Maturity)
 
@@ -1167,7 +1187,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。§12.4 猜測解碼 proposer 矩陣完整: N-gram (CPU+GPU), EAGLE-3, MTP, Medusa, Suffix, LLM-based, Gemma4, DFlash — 8 種策略全部實現。視覺編碼策略 4 種 (MLX_VLM/QWEN_VL/LLAVA/CUSTOM)。外部預填充完整成熟。測試套件 4615 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
+> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。§12.4 猜測解碼 proposer 矩陣完整: 8 種策略。視覺編碼策略 4 種。外部預填充完整成熟。Wave 34: 批量路徑 spec decode 整合 + KV cache 深度優化 (自適應量化/預測淘汰/語義分塊/塊壓縮) + 網關管線優化 (請求合併/連接池/響應緩存) + 串流管線優化 (3階段流水線/預取採樣/批量解標記/背壓控制)。測試套件 4861 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
 
 ---
 

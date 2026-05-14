@@ -355,6 +355,14 @@ class BatchedEngine:
             "YUNSHU_ENGINE_LOOP", ""
         ).strip() in ("1", "true", "yes")
 
+        # Streaming optimizer pipeline components (C18 pattern)
+        # Enable via YUNSHU_STREAMING_PIPELINE=1 for pipelined GPU/CPU overlap
+        self._streaming_pipeline_enabled = os.environ.get(
+            "YUNSHU_STREAMING_PIPELINE", ""
+        ).strip() in ("1", "true", "yes")
+        self._streaming_backpressure = None  # lazy init
+        self._batched_detokenizer = None  # lazy init
+
     @property
     def is_loaded(self) -> bool:
         return self._loaded
@@ -1607,9 +1615,20 @@ class BatchedEngine:
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GenerationOutput]:
-        """Fast streaming: runs generate_step on executor, yields via asyncio.Queue."""
+        """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
+
+        When YUNSHU_STREAMING_PIPELINE=1, wraps generation with:
+        - StreamingBackpressureController to prevent OOM on slow clients
+        - TokenPipeline for GPU/CPU overlap (future: full pipeline)
+        - PrefetchSampler for sampling plan pre-computation (future: per-step)
+        """
         from mlx_lm.generate import generate_step
         from mlx_lm.sample_utils import make_sampler
+
+        # Streaming optimizer components
+        from .streaming_optimizer import StreamingBackpressureController, BatchedDetokenizer
+        _backpressure = StreamingBackpressureController(max_queue_size=100)
+        _batched_detok = BatchedDetokenizer(tokenizer)
 
         tokenizer = self._tokenizer
         model = self._model
@@ -1847,6 +1866,13 @@ class BatchedEngine:
                 new_text, tok_count, done = item
                 accumulated += new_text
                 n_tok = tok_count
+
+                # Streaming backpressure: slow down if client can't keep up
+                if _backpressure.check_backpressure(_q.qsize()):
+                    _delay = _backpressure.get_delay_ms(_q.qsize())
+                    if _delay > 0:
+                        await asyncio.sleep(_delay / 1000)
+
                 finish_reason = "stop" if done else None
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
@@ -2790,6 +2816,13 @@ class BatchedEngine:
                 new_text, tok_count, done = item
                 accumulated += new_text
                 n_tok = tok_count
+
+                # Streaming backpressure: slow down if client can't keep up
+                if _backpressure.check_backpressure(_q.qsize()):
+                    _delay = _backpressure.get_delay_ms(_q.qsize())
+                    if _delay > 0:
+                        await asyncio.sleep(_delay / 1000)
+
                 finish_reason = "stop" if done else None
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
@@ -3009,6 +3042,13 @@ class BatchedEngine:
                 new_text, tok_count, done = item
                 accumulated += new_text
                 n_tok = tok_count
+
+                # Streaming backpressure: slow down if client can't keep up
+                if _backpressure.check_backpressure(_q.qsize()):
+                    _delay = _backpressure.get_delay_ms(_q.qsize())
+                    if _delay > 0:
+                        await asyncio.sleep(_delay / 1000)
+
                 finish_reason = "stop" if done else None
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
