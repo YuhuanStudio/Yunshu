@@ -1408,7 +1408,7 @@ exo 使用**事件溯源 + 消息傳遞**架構:
 | 層分配 | 記憶體比例 + 頻寬感知 | ✅ LayerAllocator 4策略 (MEMORY_PROPORTIONAL default) + WaterFillingRebalancer (Wave 32) |
 | 分離式 P/D | TCP prefill server | ✅ ExternalPrefillServer/Client TCP 服務 + 分塊 + 壓縮 (Wave 33) |
 | 故障隔離 | 進程隔離 + supervisor | ✅ InferenceWorker + WorkerSupervisor (YUNSHU_PROCESS_ISOLATION=1, Wave 32) |
-| 事件溯源 | 不可變事件日誌 | 命令式狀態 (重啟丟失) |
+| 事件溯源 | 不可變事件日誌 | ✅ EventLog SQLite 持久化 + 7 事件類型 + crash recovery (Wave 23, C22) |
 
 ### 16.3 Parallax — 分佈式流水線並行
 
