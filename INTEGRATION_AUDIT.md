@@ -42,11 +42,15 @@
 | 修復 | 描述 | 測試 |
 |------|------|------|
 | n_confirmed_patch 接入 | apply_n_confirmed_patch() 在 BatchedEngine.start() 中自動調用，Qwen3.5 模型啟用零成本 SSM rollback | 5 tests (`test_mtp_pipeline.py`) |
+| MTP patch 接入 | apply_mtp_patch() 在 start() 中調用，load_model_with_mtp() 載入 MTP 頭權重 | 3 tests (`test_wave27_monitoring.py`) |
 | MTP decoder 接入 | _init_spec_decode() 檢測 MTP 頭 → 創建 MTPDecoder + MTPStrategy，支持 n_confirmed=1 零成本 reject | 31 tests (`test_mtp_pipeline.py`) |
 | MTP generate 路徑 | _generate_mtp() 和 _stream_generate_mtp() 方法，spec_decode=True 時自動路由 | 6 tests (`test_mtp_pipeline.py`) |
 | MTP stats | get_stats() 包含 MTP acceptance/reject/cycle 統計 | 1 test |
 | _get_spec_strategy | 優先返回 MTP strategy，fallback 到 env-based strategy | 2 tests |
-| deprecated 標記移除 | n_confirmed_patch.py 和 mtp_decoder.py 移除 deprecated docstring | — |
+| deprecated 標記移除 | n_confirmed_patch.py, mtp_decoder.py, mtp_patch.py 移除 deprecated docstring | — |
+| Gateway LoRA bug 修復 | VLM streaming _release_lora_adapter 使用正確的 vlm_engine 變量 | — |
+| Gateway 參數轉發 | completions streaming 添加 spec_decode + logprobs，multi-choice 添加 spec_decode | — |
+| 監控端點 | /spec-decode 包含 MTP 統計，新增 /radix-tree 端點，修復 BatchedEngine import 路徑 | 19 tests (`test_wave27_monitoring.py`) |
 
 ### 已完成修復 (2026-05-14 Wave 26 — Image Engine 完整化)
 
@@ -516,7 +520,7 @@
 | 22 | model_registry.py | api/admin | WIRED |
 | 23 | mrope.py | scheduler (BatchRopeDeltaManager), vlm_engine | WIRED** ✅ |
 | 24 | mtp_decoder.py | batched_engine (_generate_mtp, _stream_generate_mtp) | **WIRED** ✅ |
-| 25 | mtp_patch.py | 僅 scripts/ (5 個 bench 腳本) | **DEAD** |
+| 25 | mtp_patch.py | batched_engine.start() (apply_mtp_patch) + _init_spec_decode (load_model_with_mtp) | **WIRED** ✅ |
 | 26 | n_confirmed_patch.py | batched_engine.start() + mtp_decoder | **WIRED** ✅ |
 | 27 | ngram_proposer.py | batched_engine (_generate_ngram_spec) | **WIRED** ✅ |
 | 27b | spec_proposer.py | batched_engine (begin/draft/accept lifecycle) | **WIRED** ✅ |
@@ -559,14 +563,15 @@
 | deltanet_inversion.py | 271 | test_deltanet_inversion.py | DeltaNet 狀態反轉 |
 | metal_kernels.py | 698 | test_metal_kernels*.py (2) | Metal 內核管理，僅 scripts/ |
 | ~~mtp_decoder.py~~ | ~~288~~ | test_mtp_decoder.py | ~~MTP 解碼層~~ ✅ **WIRED** — MTPDecoder 已接入 BatchedEngine |
+| ~~mtp_patch.py~~ | ~~259~~ | — | ~~MTP 模型補丁~~ ✅ **WIRED** — apply_mtp_patch + load_model_with_mtp 已接入 BatchedEngine.start() |
 | mtp_patch.py | 259 | 無 | MTP 模型補丁 |
 | ~~n_confirmed_patch.py~~ | ~~316~~ | test_n_confirmed_patch.py | ~~n_confirmed 驗證補丁~~ ✅ **WIRED** — apply_n_confirmed_patch 已接入 BatchedEngine.start() |
 | roofline.py | 749 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
 | ~~telemetry.py~~ | ~~196~~ | test_telemetry.py | ~~遙測系統~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore |
 
-**合計: ~4,529 行死代碼 + 6 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch)
+**合計: ~4,270 行死代碼 + 5 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch, mtp_patch)
 
-已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start())。已刪除: settings.py。
+已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start()), mtp_patch (→BatchedEngine.start() + load_model_with_mtp)。已刪除: settings.py。
 
 ---
 
