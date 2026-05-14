@@ -134,6 +134,12 @@ def __getattr__(name):
     "KVTierConfig": ".kv_lifecycle",
     "CacheWarmingPredictor": ".kv_lifecycle",
     "KVCompactionScheduler": ".kv_lifecycle",
+    # Inference Budget (token/time/cost enforcement)
+    "InferenceBudget": ".inference_budget",
+    "InferenceBudgetManager": ".inference_budget",
+    # Request Deduplication (SGLang pattern)
+    "RequestDeduplicator": ".request_dedup",
+    "DeduplicationEntry": ".request_dedup",
     }
     if name in _lazy:
         import importlib
