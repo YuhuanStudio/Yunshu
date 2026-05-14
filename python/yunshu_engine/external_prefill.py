@@ -1,5 +1,5 @@
 """Yunshu External Prefill — prefill outside BatchGenerator for memory preflight,
-chunked progress tracking, and mid-prefill abort.
+chunked progress tracking, mid-prefill abort, and remote KV transfer.
 
 Currently, mlx-lm's BatchGenerator manages its own KV cache internally, so we
 cannot directly inject external KV cache into it. The external prefill path's
@@ -8,6 +8,8 @@ value TODAY is:
   2. Chunked progress tracking: on_progress callback per chunk for dashboards
   3. Mid-prefill abort: interrupt long prefills between chunks
   4. Prefix cache integration: report cached_tokens from KVCacheManager
+  5. Remote KV transfer: send prefilled KV blocks to decode nodes
+     (enabled via YUNSHU_KV_TRANSFER=1)
 
 Future work: direct KV cache injection into BatchGenerator (requires MLX-level
 changes to BatchGenerator's internal cache management).
@@ -18,11 +20,13 @@ Architecture:
     → chunked model forward passes (building KV cache externally)
     → on_progress callback per chunk
     → mid-prefill abort check between chunks
+    → optional: transfer_prefill_result() sends KV blocks to remote node
   Then BatchGenerator.insert() proceeds as normal for the decode phase.
 """
 from __future__ import annotations
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -235,6 +239,95 @@ class ExternalPrefiller:
             cached_tokens=0,
             duration_s=elapsed,
         )
+
+    def transfer_prefill_result(
+        self,
+        result: PrefillResult,
+        request_id: str | None = None,
+        model_name: str = "",
+        layer_count: int = 0,
+    ) -> Any:
+        """Transfer prefilled KV blocks to a remote decode node.
+
+        Only active when YUNSHU_KV_TRANSFER=1 is set. Extracts KV blocks
+        from the PrefillResult's kv_cache and sends them via KVTransferClient.
+
+        This enables disaggregated prefill: the prefill node sends the
+        completed KV state to the decode node, which can then skip prefill
+        and immediately begin decode.
+
+        Args:
+            result: The PrefillResult from a completed prefill operation.
+            request_id: Request ID for tracking.
+            model_name: Model name for cache compatibility.
+            layer_count: Number of KV layers.
+
+        Returns:
+            KVTransferResult if transfer was attempted, None if disabled.
+        """
+        if not os.environ.get("YUNSHU_KV_TRANSFER", "0") == "1":
+            return None
+
+        if result.kv_cache is None:
+            logger.debug(
+                "Skipping KV transfer for %s: no KV cache in PrefillResult",
+                request_id,
+            )
+            return None
+
+        try:
+            from .kv_transfer import (
+                KVTransferClient,
+                KVTransferConfig,
+                extract_kv_blocks_from_cache,
+            )
+
+            config = KVTransferConfig.from_env()
+            blocks = extract_kv_blocks_from_cache(
+                result.kv_cache,
+                result.token_ids,
+                block_size=config.block_size,
+            )
+
+            if not blocks:
+                logger.debug(
+                    "No KV blocks extracted for %s", request_id,
+                )
+                return None
+
+            client = KVTransferClient(config)
+            transfer_result = client.send_blocks_sync(
+                blocks=blocks,
+                request_id=request_id,
+                model_name=model_name,
+                total_tokens=result.num_tokens,
+                layer_count=layer_count,
+            )
+
+            if transfer_result.status.value == "completed":
+                logger.info(
+                    "KV transfer sent: %d blocks for %s (%d bytes, %.1f ms)",
+                    transfer_result.blocks_transferred,
+                    request_id,
+                    transfer_result.bytes_transferred,
+                    transfer_result.duration_seconds * 1000,
+                )
+            else:
+                logger.warning(
+                    "KV transfer failed for %s: %s",
+                    request_id,
+                    transfer_result.error,
+                )
+
+            return transfer_result
+
+        except Exception:
+            logger.warning(
+                "KV transfer error for %s",
+                request_id,
+                exc_info=True,
+            )
+            return None
 
     def _run_model_step(self, token_ids: list[int], kv_cache: Any | None) -> Any:
         """Run one forward pass through the model with the given tokens.

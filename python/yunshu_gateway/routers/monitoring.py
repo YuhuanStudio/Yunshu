@@ -485,3 +485,14 @@ async def metal_kernel_stats() -> dict[str, Any]:
     if not results:
         return {"active": False, "env_hint": "Set YUNSHU_METAL_KERNELS=1 to enable"}
     return {"active": True, "models": results}
+
+
+@router.get("/ane-embeddings")
+async def ane_embedding_stats() -> dict[str, Any]:
+    """ANE embedding co-processor status.
+
+    Reports ANE availability, CoreML model compilation status, inference
+    count, and average latency. Enabled via YUNSHU_ANE_EMBEDDINGS=1.
+    """
+    from yunshu_engine.ane_embedding import get_ane_embedding_stats
+    return get_ane_embedding_stats()

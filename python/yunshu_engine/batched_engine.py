@@ -137,9 +137,15 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
     - {"type": "regex", "pattern": "..."} → RegexConstraint
     - {"type": "choice", "choices": [...]} → ChoiceConstraint
     - {"type": "cfg", "grammar": "..."} → LarkGrammarConstraint
+
+    When YUNSHU_GRAMMAR_BITMASK=1 is set, uses the bitmask engine instead
+    of the allowlist-based ConstrainedSampler (xgrammar-style approach).
     """
+    # Determine grammar type and payload
+    grammar_type = None
+    grammar = None
+
     if isinstance(json_schema, dict) and json_schema.get("type") in ("regex", "choice", "cfg"):
-        from .grammar_constraint import ConstraintFactory
         grammar_type = json_schema["type"]
         if grammar_type == "regex":
             grammar = json_schema.get("pattern", "")
@@ -149,6 +155,25 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
             grammar = json_schema.get("grammar", "")
         else:
             return sampler
+    else:
+        grammar_type = "json_schema"
+        grammar = json_schema
+
+    # ── Bitmask path (YUNSHU_GRAMMAR_BITMASK=1) ──
+    try:
+        from .grammar_bitmask import is_bitmask_enabled, build_bitmask_engine, BitmaskConstrainedSampler
+        if is_bitmask_enabled():
+            try:
+                engine = build_bitmask_engine(grammar_type, grammar)
+                return BitmaskConstrainedSampler(sampler, engine, tokenizer)
+            except Exception:
+                logger.debug("bitmask engine setup failed, falling back to allowlist", exc_info=True)
+    except ImportError:
+        logger.debug("grammar_bitmask module not available, using allowlist path", exc_info=True)
+
+    # ── Standard allowlist path ──
+    if grammar_type in ("regex", "choice", "cfg"):
+        from .grammar_constraint import ConstraintFactory
         try:
             constraint = ConstraintFactory.create(grammar_type, grammar, tokenizer)
             from .json_schema import ConstrainedSampler
@@ -2849,6 +2874,12 @@ class BatchedEngine:
         if getattr(self, '_metal_kernel_manager', None) is not None:
             from .metal_kernels import get_compilation_status
             stats["metal_kernels"].update(get_compilation_status())
+        # ANE embedding co-processor status (when enabled via YUNSHU_ANE_EMBEDDINGS=1)
+        try:
+            from .ane_embedding import get_ane_embedding_stats
+            stats["ane_embeddings"] = get_ane_embedding_stats()
+        except Exception:
+            stats["ane_embeddings"] = {"enabled": False, "active": False}
         return stats
 
     def get_kv_cache_stats(self) -> dict:

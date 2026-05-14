@@ -56,6 +56,27 @@ def __getattr__(name):
         "detect_spec_heads": ".speculative_decoder",
         "EncoderCacheManager": ".encoder_cache",
         "EncoderCacheEntry": ".encoder_cache",
+        "GrammarBitmaskEngine": ".grammar_bitmask",
+        "BitmaskApplicator": ".grammar_bitmask",
+        "BitmaskConstrainedSampler": ".grammar_bitmask",
+        "TokenStringTable": ".grammar_bitmask",
+        "build_bitmask_engine": ".grammar_bitmask",
+        "is_bitmask_enabled": ".grammar_bitmask",
+        # KV Transfer Protocol (disaggregated prefill)
+        "KVTransferConfig": ".kv_transfer",
+        "KVTransferProtocol": ".kv_transfer",
+        "KVTransferClient": ".kv_transfer",
+        "KVTransferServer": ".kv_transfer",
+        "KVTransferStats": ".kv_transfer",
+        "KVTransferResult": ".kv_transfer",
+        "KVTransferHeader": ".kv_transfer",
+        "KVTransferMessage": ".kv_transfer",
+        "KVBlockData": ".kv_transfer",
+        "CompressionType": ".kv_transfer",
+        "TransferStatus": ".kv_transfer",
+        "is_kv_transfer_enabled": ".kv_transfer",
+        "create_transfer_client": ".kv_transfer",
+        "create_transfer_server": ".kv_transfer",
     }
     if name in _lazy:
         import importlib

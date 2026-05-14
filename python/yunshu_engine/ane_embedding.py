@@ -1,11 +1,12 @@
 """Yunshu ANE Embedding Co-Processor — CoreML-based embedding inference on Apple Neural Engine.
 
-.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
-
-
 Offloads embedding model inference to the ANE via CoreML for lower latency and
 freeing GPU resources for main LLM inference workloads. Falls back to MLX GPU
 inference when CoreML is unavailable or the model has not been compiled.
+
+Enabled via YUNSHU_ANE_EMBEDDINGS=1 environment variable. When active, the
+embeddings gateway router routes embedding requests through the ANE processor
+instead of the GPU fallback path.
 
 Architecture:
   1. Convert MLX embedding model weights to CoreML .mlpackage
@@ -951,3 +952,59 @@ def benchmark_ane_vs_gpu(
                 result["accuracy_diff"] = round(max_cos_dist, 6)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton (used by gateway embeddings router)
+# ---------------------------------------------------------------------------
+
+_ane_processor: Optional[ANEEmbeddingProcessor] = None
+
+
+def get_ane_processor() -> Optional[ANEEmbeddingProcessor]:
+    """Get or create the global ANE embedding processor singleton.
+
+    Returns None if YUNSHU_ANE_EMBEDDINGS is not enabled.
+    Thread-safe: only creates one instance.
+    """
+    global _ane_processor
+    if _ane_processor is not None:
+        return _ane_processor
+
+    if not is_ane_available():
+        return None
+
+    model_name = os.environ.get("YUNSHU_ANE_EMBEDDING_MODEL", "intfloat/e5-small-v2")
+    max_seq = int(os.environ.get("YUNSHU_ANE_MAX_SEQ_LENGTH", "512"))
+    config = ANEEmbeddingConfig(
+        model_name=model_name,
+        max_seq_length=max_seq,
+        normalize_embeddings=True,
+        compile_on_init=True,
+    )
+    _ane_processor = ANEEmbeddingProcessor(config)
+    logger.info(
+        "ANE embedding processor singleton created: model=%s, compiled=%s",
+        model_name,
+        _ane_processor.is_compiled(),
+    )
+    return _ane_processor
+
+
+def is_ane_embeddings_enabled() -> bool:
+    """Check whether ANE embeddings are enabled via the YUNSHU_ANE_EMBEDDINGS env var."""
+    return (
+        os.environ.get("YUNSHU_ANE_EMBEDDINGS", "").strip() in ("1", "true", "yes")
+        and is_ane_available()
+    )
+
+
+def get_ane_embedding_stats() -> dict[str, Any]:
+    """Return ANE embedding stats, or empty dict if not active."""
+    proc = _ane_processor
+    if proc is None:
+        return {"enabled": is_ane_embeddings_enabled(), "active": False}
+    stats = proc.get_stats()
+    stats["enabled"] = True
+    stats["active"] = True
+    return stats

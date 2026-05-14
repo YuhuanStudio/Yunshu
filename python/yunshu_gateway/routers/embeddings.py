@@ -2,10 +2,14 @@
 
 Supports text embedding generation for semantic search, clustering, etc.
 Uses MLX-native model inference (BGE, E5, Nomic, etc.).
+When YUNSHU_ANE_EMBEDDINGS=1 is set and ANE is available, embeddings are
+computed on the Apple Neural Engine via CoreML for lower latency and
+reduced GPU contention.
 """
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from typing import Optional
@@ -51,7 +55,7 @@ async def create_embedding(req: EmbeddingRequest):
         )
 
     try:
-        embeddings = await _generate_embeddings(engine, texts)
+        embeddings = await _generate_embeddings(engine, texts, model_id=req.model)
     except Exception as e:
         logger.error(f"Embedding error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Embedding generation failed")
@@ -121,14 +125,28 @@ async def _resolve_embedding_engine(model_id: str):
     return None
 
 
-async def _generate_embeddings(engine, texts: list[str]) -> list[list[float]]:
+async def _generate_embeddings(engine, texts: list[str], model_id: str = "") -> list[list[float]]:
     """Generate embeddings using the engine.
 
     Supports:
-    1. Engine with embed() method (native embedding model)
-    2. BatchedEngine with embed() method
-    3. Fallback: use hidden states from the model
+    1. ANE path: when YUNSHU_ANE_EMBEDDINGS=1 and ANE is available
+    2. Engine with embed() method (native embedding model)
+    3. BatchedEngine with embed() method
+    4. Fallback: use hidden states from the model
     """
+    # ── ANE path: offload to Apple Neural Engine via CoreML ──
+    if os.environ.get("YUNSHU_ANE_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
+        try:
+            from yunshu_engine.ane_embedding import get_ane_processor
+            proc = get_ane_processor()
+            if proc is not None:
+                logger.debug("Using ANE for embedding inference (model_id=%s)", model_id)
+                return proc.embed(texts)
+        except Exception as exc:
+            logger.warning(
+                "ANE embedding failed, falling back to GPU: %s", exc, exc_info=True,
+            )
+
     if hasattr(engine, 'embed'):
         return engine.embed(texts)
 
