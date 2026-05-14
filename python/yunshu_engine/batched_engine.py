@@ -347,6 +347,15 @@ class BatchedEngine:
         except Exception:
             logger.debug("n_confirmed patch skipped", exc_info=True)
 
+        # Apply MTP monkey-patch for Qwen3.5 models
+        # Injects mtp_forward() and make_mtp_cache() into model classes
+        try:
+            from .mtp_patch import apply_mtp_patch
+            if apply_mtp_patch():
+                logger.info("MTP patch applied — mtp_forward() available")
+        except Exception:
+            logger.debug("MTP patch skipped", exc_info=True)
+
         # Load per-model settings from model_settings.json + env overrides
         self._load_model_settings()
 
@@ -1748,6 +1757,17 @@ class BatchedEngine:
         # Uses n_confirmed=1 for zero-cost reject on GatedDeltaNet SSM layers.
         if head_info.head_type == "mtp" and self._spec_decoder is None:
             try:
+                # Load MTP head weights if available
+                inner = getattr(self._model, "language_model", self._model)
+                if not hasattr(inner, "mtp"):
+                    try:
+                        from .mtp_patch import load_model_with_mtp
+                        model_name_or_path = model_config.get("_name_or_path", self.model_name)
+                        self._model = load_model_with_mtp(model_name_or_path)
+                        logger.info("MTP head weights loaded from model directory")
+                    except (FileNotFoundError, Exception) as e:
+                        logger.info(f"MTP weights not available ({e}), using backbone-only MTP")
+
                 from .mtp_decoder import MTPDecoder, MTPConfig
                 mtp_config = MTPConfig(
                     max_tokens=256,

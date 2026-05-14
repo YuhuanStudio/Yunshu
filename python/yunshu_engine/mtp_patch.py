@@ -1,8 +1,5 @@
 """MTP (Multi-Token Prediction) monkey-patch for mlx-lm's Qwen3.5 model.
 
-.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
-
-
 Ports the oMLX MTP patch (PR 990) to Yunshu. Adds:
 - MTPModule + MTPDecoderLayer: prediction head that proposes next token
 - Patched TextModel.sanitize: keeps mtp.* weights

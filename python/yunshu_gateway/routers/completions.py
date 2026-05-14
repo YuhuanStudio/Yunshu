@@ -141,6 +141,8 @@ async def create_completion(req: CompletionRequest, request: Request):
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             )
             text = result.text
             prompt_tokens = result.prompt_tokens
@@ -241,6 +243,9 @@ async def _stream_completion(
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                spec_decode=req.spec_decode,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens

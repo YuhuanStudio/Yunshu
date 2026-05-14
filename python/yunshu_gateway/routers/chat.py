@@ -928,7 +928,7 @@ async def _stream_vlm_response(
       ):
           yield event.encode("utf-8")
     finally:
-      _release_lora_adapter(engine, loaded_adapter)
+      _release_lora_adapter(vlm_engine, loaded_adapter)
 
 
 async def _stream_response_multi(
@@ -987,6 +987,7 @@ async def _stream_response_multi(
                     reasoning_effort=req.reasoning_effort,
                     xtc_probability=req.xtc_probability,
                     xtc_threshold=req.xtc_threshold,
+                    spec_decode=req.spec_decode,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():

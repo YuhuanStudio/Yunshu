@@ -228,7 +228,7 @@ async def prometheus_export() -> str:
 
     # Refresh spec decode stats into Prometheus gauges
     from ..engine import get_model_manager
-    from ..engine.batched_engine import BatchedEngine
+    from yunshu_engine.batched_engine import BatchedEngine
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
@@ -264,7 +264,7 @@ async def prometheus_export() -> str:
 async def kv_cache_stats() -> dict[str, Any]:
     """KV prefix cache statistics."""
     from ..engine import get_engine, get_model_manager
-    from ..engine.batched_engine import BatchedEngine
+    from yunshu_engine.batched_engine import BatchedEngine
 
     caches = []
     manager = get_model_manager()
@@ -290,7 +290,7 @@ async def kv_cache_stats() -> dict[str, Any]:
 async def spec_decode_stats() -> dict[str, Any]:
     """Speculative decoding statistics."""
     from ..engine import get_engine, get_model_manager
-    from ..engine.batched_engine import BatchedEngine
+    from yunshu_engine.batched_engine import BatchedEngine
 
     results = []
     manager = get_model_manager()
@@ -299,20 +299,53 @@ async def spec_decode_stats() -> dict[str, Any]:
             if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
                 decoder = getattr(entry.engine, '_spec_decoder', None)
                 ngram = getattr(entry.engine, '_ngram_proposer', None)
+                mtp = getattr(entry.engine, '_mtp_decoder', None)
                 info = {
                     "model_id": entry.model_id,
                     "spec_enabled": entry.engine._spec_enabled,
                     "ngram_enabled": ngram is not None,
+                    "mtp_enabled": mtp is not None,
                 }
                 if decoder is not None:
                     info["spec_stats"] = getattr(decoder, '_stats', {})
                 if ngram is not None:
                     info["ngram_stats"] = getattr(entry.engine, '_ngram_stats', {})
+                if mtp is not None:
+                    s = mtp.stats
+                    info["mtp_stats"] = {
+                        "accepts": s.accepts,
+                        "rejects": s.rejects,
+                        "cooldowns": s.cooldowns,
+                        "tokens_generated": s.tokens_generated,
+                        "total_cycles": s.total_cycles,
+                        "acceptance_rate": (
+                            s.accepts / s.total_cycles if s.total_cycles > 0 else 0.0
+                        ),
+                    }
                 # Adaptive spec stats
                 adaptive_spec = getattr(entry.engine, '_adaptive_spec', None)
                 if adaptive_spec is not None:
                     info["adaptive_spec"] = adaptive_spec.get_stats()
                 results.append(info)
+    return {"models": results}
+
+
+@router.get("/radix-tree")
+async def radix_tree_stats() -> dict[str, Any]:
+    """Radix tree statistics for KV cache prefix matching."""
+    from ..engine import get_engine, get_model_manager
+    from yunshu_engine.batched_engine import BatchedEngine
+
+    results = []
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+                try:
+                    stats = entry.engine.get_radix_tree_stats()
+                    results.append({"model_id": entry.model_id, **stats})
+                except Exception:
+                    logger.debug("radix tree stats unavailable", exc_info=True)
     return {"models": results}
 
 
