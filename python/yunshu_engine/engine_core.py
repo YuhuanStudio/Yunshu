@@ -378,6 +378,10 @@ class EngineCore:
         from .turbo_quant import TurboQuantManager, TurboQuantConfig
         self._turbo_quant = TurboQuantManager(TurboQuantConfig())
 
+        # Staged multimodal pipeline coordinator (7-stage processing)
+        from .staged_pipeline import MultimodalPipelineCoordinator
+        self._multimodal_pipeline = MultimodalPipelineCoordinator()
+
         # Stats
         self._num_requests_processed: int = 0
 

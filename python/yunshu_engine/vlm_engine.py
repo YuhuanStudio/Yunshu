@@ -221,6 +221,9 @@ class VLMEngine:
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
 
+        # Wave 43: Async concurrent VLM engine (opt-in via YUNSHU_VLM_ASYNC=1)
+        self._async_core = None
+
     @property
     def model_name(self) -> str:
         return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else self._model_path

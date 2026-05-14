@@ -137,6 +137,9 @@ class VideoEngine:
         self._lora_adapter_path: str = ""
         self._lora_loaded: bool = False
         self._lora_merged: bool = False
+
+        # Wave 43: Native MLX video pipeline (Wan2.2/LTX2)
+        self._native_pipeline = None  # Created lazily after model load
         self._lora_rank: int = 8
         self._lora_scale: float = 20.0
         self._base_model_weights: dict | None = None
