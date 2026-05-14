@@ -382,6 +382,9 @@ async def _non_stream_batched(engine, messages, req, stop):
                 matched_stop = seq
                 break
 
+    cache_creation = getattr(result, 'prompt_tokens', 0) - getattr(result, 'cached_tokens', 0)
+    cache_read = getattr(result, 'cached_tokens', 0)
+
     resp = {
         "id": message_id,
         "type": "message",
@@ -392,8 +395,8 @@ async def _non_stream_batched(engine, messages, req, stop):
         "usage": {
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": max(0, cache_creation),
+            "cache_read_input_tokens": max(0, cache_read),
         },
     }
     if matched_stop:
@@ -421,6 +424,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
     completion_toks = getattr(result, 'completion_tokens', 0) or getattr(result, 'completion_token_count', 0)
     text = getattr(result, 'text', '') or getattr(result, 'generated_text', '')
     finish_reason = getattr(result, 'finish_reason', None) or getattr(result, 'finish_state', None)
+    cached_toks = getattr(result, 'cached_tokens', 0) or 0
     _record_metrics(prompt_toks, completion_toks)
     return JSONResponse({
         "id": message_id,
@@ -432,8 +436,8 @@ async def _non_stream_legacy(engine, messages, req, stop):
         "usage": {
             "input_tokens": prompt_toks,
             "output_tokens": completion_toks,
-            "cache_creation_input_tokens": 0,
-            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": max(0, prompt_toks - cached_toks),
+            "cache_read_input_tokens": max(0, cached_toks),
         },
     })
 

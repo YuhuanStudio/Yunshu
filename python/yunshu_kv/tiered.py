@@ -407,25 +407,26 @@ class TieredKVCacheManager:
                 except Exception as e:
                     logger.debug(f"Failed to persist block to SSD: {e}")
 
-    def _extract_kv_for_block(self, block: KVBlock) -> Optional[mx.array]:
+    def _extract_kv_for_block(self, block: KVBlock) -> Optional[bytes]:
         """Extract KV tensor data for a block from the hot cache.
 
-        This requires the hot KVCacheManager to expose its layer tensors.
-        Returns None if extraction is not possible (block not in cache).
+        Serializes the key and value tensor slices for the given block_id.
+        Returns None if the cache tensors aren't allocated or block_id is out of range.
         """
         try:
-            # Access KV tensors from the hot manager's cache layers
-            if hasattr(self.hot, '_kv_layers') and self.hot._kv_layers:
-                # Extract the first available layer as representative data
-                # In production, all layers would be serialized
-                for layer_caches in self.hot._kv_layers:
-                    for slot_idx, (key_cache, value_cache) in enumerate(layer_caches):
-                        # Check if this slot corresponds to our block
-                        if slot_idx == block.block_id:
-                            return key_cache
-                # Fallback: return any available KV data for the block
+            key_cache = getattr(self.hot, '_key_cache', None)
+            val_cache = getattr(self.hot, '_value_cache', None)
+            if key_cache is None or val_cache is None:
                 return None
-            return None
+            bid = block.block_id
+            if bid >= key_cache.shape[0]:
+                return None
+            k_slice = key_cache[bid]
+            v_slice = val_cache[bid]
+            import numpy as np
+            k_np = np.array(k_slice) if not isinstance(k_slice, np.ndarray) else k_slice
+            v_np = np.array(v_slice) if not isinstance(v_slice, np.ndarray) else v_slice
+            return k_np.tobytes() + v_np.tobytes()
         except Exception:
             logger.debug("KV block extraction from hot cache failed", exc_info=True)
             return None
