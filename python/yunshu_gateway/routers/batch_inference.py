@@ -131,8 +131,15 @@ async def _execute_chat_completion(body: dict) -> dict:
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
-            top_p=top_p,
+            top_p=top,
+            top_k=body.get("top_k", 0),
+            seed=body.get("seed"),
             stop=stop,
+            enable_thinking=body.get("enable_thinking"),
+            thinking_budget=body.get("thinking_budget"),
+            repetition_penalty=body.get("repetition_penalty", 1.0),
+            frequency_penalty=body.get("frequency_penalty", 0.0),
+            presence_penalty=body.get("presence_penalty", 0.0),
         )
         text = result.text
         prompt_tokens = result.prompt_tokens
@@ -144,7 +151,12 @@ async def _execute_chat_completion(body: dict) -> dict:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            top_k=body.get("top_k", 0),
+            seed=body.get("seed"),
             stop=stop,
+            enable_thinking=body.get("enable_thinking"),
+            thinking_budget=body.get("thinking_budget"),
+            repetition_penalty=body.get("repetition_penalty", 1.0),
         )
         text = state.generated_text
         prompt_tokens = state.prompt_token_count
@@ -193,6 +205,11 @@ async def _execute_completion(body: dict) -> dict:
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=body.get("top_p", 1.0),
+            top_k=body.get("top_k", 0),
+            seed=body.get("seed"),
+            repetition_penalty=body.get("repetition_penalty", 1.0),
+            stop=body.get("stop"),
         )
         text = result.text
         prompt_tokens = result.prompt_tokens

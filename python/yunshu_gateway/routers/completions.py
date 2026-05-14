@@ -301,7 +301,10 @@ async def _stream_completion(
                 logit_bias=req.logit_bias,
                 stop=req.stop,
                 seed=req.seed,
+                enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                stop_token_ids=req.stop_token_ids,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count

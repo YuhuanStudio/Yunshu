@@ -1,6 +1,7 @@
 """OpenAI Models API compatible router."""
 
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException
 
@@ -29,7 +30,7 @@ async def list_models() -> dict:
             model_info = {
                 "id": entry.model_id,
                 "object": "model",
-                "created": 0,
+                "created": int(entry.load_time) if hasattr(entry, 'load_time') and entry.load_time else int(time.time()),
                 "owned_by": "yunshu",
                 "loaded": entry.is_loaded,
                 "type": entry.model_type.name,
@@ -50,7 +51,7 @@ async def list_models() -> dict:
         models.append({
             "id": engine.model_name,
             "object": "model",
-            "created": 0,
+            "created": int(time.time()),
             "owned_by": "yunshu",
         })
     return {"object": "list", "data": models}

@@ -453,6 +453,8 @@ class RealtimeSession:
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    top_p=self.session_config.get("top_p", 1.0),
+                    enable_thinking=self.session_config.get("enable_thinking", False),
                 ):
                     if output.new_text:
                         full_text += output.new_text
@@ -472,6 +474,8 @@ class RealtimeSession:
                     prompt=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    top_p=self.session_config.get("top_p", 1.0),
+                    enable_thinking=self.session_config.get("enable_thinking", False),
                 ):
                     if output.token_text:
                         full_text += output.token_text

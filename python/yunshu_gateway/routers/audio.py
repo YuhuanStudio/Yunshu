@@ -168,6 +168,13 @@ async def create_speech(req: TTSRequest) -> Response:
                 detail=f"No TTS engine available for '{req.model}'",
             )
 
+    # Validate format before burning GPU time
+    if req.response_format not in ("wav",):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported response_format '{req.response_format}'. Only 'wav' is supported.",
+        )
+
     try:
         # VoiceDesign models require 'instruct' for voice description
         instruct = req.instruct
@@ -187,16 +194,16 @@ async def create_speech(req: TTSRequest) -> Response:
             speed=req.speed,
             temperature=req.temperature,
             instruct=instruct,
+            top_k=req.top_k,
+            top_p=req.top_p,
+            repetition_penalty=req.repetition_penalty,
+            max_tokens=req.max_tokens,
+            ref_audio=req.ref_audio,
+            ref_text=req.ref_text,
         )
     except Exception as e:
         logger.error(f"TTS synthesis error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Speech synthesis failed")
-
-    if req.response_format not in ("wav",):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported response_format '{req.response_format}'. Only 'wav' is supported.",
-        )
 
     return Response(
         content=wav_bytes,
@@ -259,6 +266,12 @@ async def stream_speech(req: TTSRequest, request: Request):
                 speed=req.speed,
                 temperature=req.temperature,
                 instruct=stream_instruct,
+                top_k=req.top_k,
+                top_p=req.top_p,
+                repetition_penalty=req.repetition_penalty,
+                max_tokens=req.max_tokens,
+                ref_audio=req.ref_audio,
+                ref_text=req.ref_text,
             ):
                 if chunk.get("is_final"):
                     if seg_idx == len(segments) - 1:

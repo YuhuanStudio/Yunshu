@@ -351,8 +351,10 @@ async def _non_stream_batched(engine, messages, req, stop):
         max_tokens=effective_max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
+        top_k=req.top_k,
         stop=stop,
         enable_thinking=enable_thinking,
+        thinking_budget=budget_tokens,
     )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     _record_metrics(result.prompt_tokens, result.completion_tokens)
@@ -402,12 +404,17 @@ async def _non_stream_batched(engine, messages, req, stop):
 async def _non_stream_legacy(engine, messages, req, stop):
     """Non-streaming response via Engine or BatchedEngine."""
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
+    enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
+    budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     result = await engine.generate(
         prompt=messages,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
+        top_k=req.top_k,
         stop=stop,
+        enable_thinking=enable_thinking,
+        thinking_budget=budget_tokens,
     )
     # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
     prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
@@ -481,8 +488,10 @@ async def _stream_anthropic(
                 max_tokens=effective_max_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
+                top_k=req.top_k,
                 stop=stop,
                 enable_thinking=enable_thinking,
+                thinking_budget=budget_tokens,
             ):
                 parsed = parser.process_chunk(output.new_text)
 
@@ -550,7 +559,10 @@ async def _stream_anthropic(
                 max_tokens=req.max_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
+                top_k=req.top_k,
                 stop=stop,
+                enable_thinking=enable_thinking,
+                thinking_budget=budget_tokens,
             ):
                 parsed = parser.process_chunk(output.token_text)
                 if parsed["visible"]:

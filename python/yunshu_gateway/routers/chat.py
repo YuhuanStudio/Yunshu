@@ -948,6 +948,8 @@ async def _stream_vlm_response(
             frequency_penalty=req.frequency_penalty,
             presence_penalty=req.presence_penalty,
             logit_bias=req.logit_bias,
+            xtc_probability=req.xtc_probability,
+            xtc_threshold=req.xtc_threshold,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
@@ -1270,6 +1272,11 @@ async def _stream_response(
                 stop=req.stop,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                stop_token_ids=req.stop_token_ids,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:

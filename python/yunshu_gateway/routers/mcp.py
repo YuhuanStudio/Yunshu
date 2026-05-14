@@ -485,26 +485,30 @@ async def _tool_generate_image(args: dict, req_id: int | str | None) -> dict:
                 "isError": True,
             }, req_id)
 
-        result = await img_engine.generate_image(
+        size = args.get("size", "1024x1024")
+        try:
+            w, h = size.lower().split("x")
+            width, height = int(w), int(h)
+        except (ValueError, AttributeError):
+            width, height = 1024, 1024
+
+        png_bytes = await img_engine.generate_image(
             prompt=prompt,
-            n=args.get("n", 1),
-            size=args.get("size", "1024x1024"),
+            width=width,
+            height=height,
+            num_inference_steps=args.get("num_inference_steps", 4),
+            seed=args.get("seed"),
         )
-        images = result.get("images", [])
-        if images and isinstance(images[0], dict) and "b64_json" in images[0]:
-            import base64
-            return _rpc_response({
-                "content": [
-                    {"type": "image", "data": images[0]["b64_json"], "mimeType": "image/png"},
-                    {"type": "text", "text": f"Generated image for: {prompt[:50]}..."},
-                ],
-                "isError": False,
-            }, req_id)
-        else:
-            return _rpc_response({
-                "content": [{"type": "text", "text": f"Image generated for: {prompt[:50]}..."}],
-                "isError": False,
-            }, req_id)
+
+        import base64
+        b64 = base64.b64encode(png_bytes).decode("ascii")
+        return _rpc_response({
+            "content": [
+                {"type": "image", "data": b64, "mimeType": "image/png"},
+                {"type": "text", "text": f"Generated {width}x{height} image for: {prompt[:50]}..."},
+            ],
+            "isError": False,
+        }, req_id)
     except Exception as e:
         logger.debug(f"image generation tool error: {e}", exc_info=True)
         return _rpc_response({

@@ -48,11 +48,19 @@ class ResponsesRequest(BaseModel):
     max_output_tokens: int = 2048
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    top_k: int = Field(default=0, ge=0)
     stream: bool = False
     tools: Optional[list[ResponseTool]] = None
     response_format: Optional[dict] = None
     seed: Optional[int] = None
     enable_thinking: Optional[bool] = None
+    thinking_budget: Optional[int] = Field(default=None, ge=1, le=32768)
+    reasoning_effort: Optional[str] = None
+    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
+    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    logit_bias: Optional[dict[str, float]] = None
+    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
     stop: Optional[list[str]] = None
     lora_adapter: Optional[str] = None
 
@@ -164,8 +172,16 @@ async def create_response(req: ResponsesRequest, request: Request):
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
+                top_k=req.top_k,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
             )
@@ -179,8 +195,16 @@ async def create_response(req: ResponsesRequest, request: Request):
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
+                top_k=req.top_k,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                min_p=req.min_p,
                 stop=req.stop,
             )
             text = state.generated_text
@@ -247,8 +271,16 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
+                top_k=req.top_k,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
             ):
@@ -264,8 +296,16 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
+                top_k=req.top_k,
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=req.logit_bias,
+                min_p=req.min_p,
                 stop=req.stop,
             ):
                 yield format_openai_chunk(
