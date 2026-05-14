@@ -210,3 +210,32 @@ class TestCrossModuleWave43:
         stats = core.get_stats()
         assert "process_isolation" in stats
         assert stats["process_isolation"]["enabled"] is False
+
+    def test_output_parser_wired(self):
+        core = _make_core()
+        assert core._parse_output is not None
+        # Test it actually works
+        result = core._parse_output("Hello world")
+        assert result.content == "Hello world"
+
+    def test_spec_prefill_engine_wired(self):
+        core = _make_core()
+        assert core._spec_prefill_engine is not None
+
+    def test_turbo_quant_wired(self):
+        core = _make_core()
+        assert core._turbo_quant is not None
+
+    def test_spec_prefill_in_stats(self):
+        core = _make_core()
+        core._start_time = None
+        stats = core.get_stats()
+        assert "spec_prefill_engine" in stats
+        assert isinstance(stats["spec_prefill_engine"], dict)
+
+    def test_turbo_quant_in_stats(self):
+        core = _make_core()
+        core._start_time = None
+        stats = core.get_stats()
+        assert "turbo_quant" in stats
+        assert isinstance(stats["turbo_quant"], dict)

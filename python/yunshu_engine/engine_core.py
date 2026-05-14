@@ -358,6 +358,18 @@ class EngineCore:
             if self._isolation_enabled:
                 logger.info("Process isolation enabled (YUNSHU_PROCESS_ISOLATION=1)")
 
+        # Output parser (model-specific output extraction)
+        from .output_parser import parse_output
+        self._parse_output = parse_output
+
+        # SpecPrefill engine (priority prefill queue for GPU idle time)
+        from .spec_prefill_engine import SpecPrefillEngine
+        self._spec_prefill_engine = SpecPrefillEngine()
+
+        # TurboQuant (fast quantization utilities)
+        from .turbo_quant import TurboQuantManager, TurboQuantConfig
+        self._turbo_quant = TurboQuantManager(TurboQuantConfig())
+
         # Stats
         self._num_requests_processed: int = 0
 
@@ -999,6 +1011,8 @@ class EngineCore:
             "warmup": self._warmup_manager.get_stats(),
         }
         stats["process_isolation"] = {"enabled": self._isolation_enabled}
+        stats["spec_prefill_engine"] = self._spec_prefill_engine.get_stats()
+        stats["turbo_quant"] = self._turbo_quant.get_stats()
         return stats
 
     def _overlap_step(self) -> Any:

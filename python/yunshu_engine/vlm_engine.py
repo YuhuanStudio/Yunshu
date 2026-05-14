@@ -201,6 +201,14 @@ class VLMEngine:
         # C21: Multimodal prefix cache — maps image_hash + system_prompt hash to
         # processed token IDs, enabling reuse across conversations with same image
         self._multimodal_prefix_cache: dict[str, list[int]] = {}
+
+        # Wave 43: Vision encoding strategy (auto-detect model family)
+        self._vision_encoder_factory = None
+        try:
+            from .vision_encoding import VisionEncoderFactory
+            self._vision_encoder_factory = VisionEncoderFactory()
+        except Exception:
+            pass
         self._mm_prefix_hits = 0
         self._mm_prefix_misses = 0
 
