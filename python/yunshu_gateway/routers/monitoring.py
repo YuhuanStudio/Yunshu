@@ -26,6 +26,18 @@ from ..middleware.prometheus_exporter import get_prometheus_metrics
 router = APIRouter(prefix="/gw/monitoring", tags=["monitoring"])
 
 
+def _collect_engines(default_engine, model_manager) -> list[tuple[str, Any]]:
+    """Collect all loaded engines from model_manager, falling back to default engine."""
+    engines = []
+    if model_manager is not None:
+        for entry in model_manager.list_entries():
+            if entry.is_loaded and hasattr(entry, 'engine') and entry.engine is not None:
+                engines.append((entry.model_id, entry.engine))
+    if not engines and default_engine is not None:
+        engines.append(("default", default_engine))
+    return engines
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -361,47 +373,45 @@ async def prefill_progress() -> dict[str, Any]:
 
 @router.get("/memory-guard")
 async def memory_guard_stats() -> dict[str, Any]:
-    """Memory guard pressure statistics."""
-    from ..engine import get_engine
-    engine = get_engine()
-    if engine is None:
+    """Memory guard pressure statistics across all loaded engines."""
+    from ..engine import get_engine, get_model_manager
+
+    engines = _collect_engines(get_engine(), get_model_manager())
+    results = []
+    for model_id, engine in engines:
+        guard = getattr(engine, '_memory_guard', None)
+        if guard is None:
+            core = getattr(engine, '_engine_core', None)
+            if core:
+                guard = getattr(core, '_memory_guard', None)
+        if guard is not None:
+            results.append({
+                "model_id": model_id,
+                "pressure_level": getattr(guard, 'pressure_level', 'unknown'),
+                "eviction_count": getattr(guard, '_eviction_count', 0),
+            })
+    if not results:
         return {"active": False}
-
-    guard = getattr(engine, '_memory_guard', None)
-    if guard is None:
-        # Try BatchedEngine's engine_core
-        core = getattr(engine, '_engine_core', None)
-        if core:
-            guard = getattr(core, '_memory_guard', None)
-
-    if guard is None:
-        return {"active": False}
-
-    return {
-        "active": True,
-        "pressure_level": getattr(guard, 'pressure_level', 'unknown'),
-        "eviction_count": getattr(guard, '_eviction_count', 0),
-    }
+    return {"active": True, "models": results}
 
 
 @router.get("/ssd-cache")
 async def ssd_cache_stats() -> dict[str, Any]:
-    """SSD KV cache statistics."""
-    from ..engine import get_engine
-    engine = get_engine()
-    if engine is None:
+    """SSD KV cache statistics across all loaded engines."""
+    from ..engine import get_engine, get_model_manager
+
+    engines = _collect_engines(get_engine(), get_model_manager())
+    results = []
+    for model_id, engine in engines:
+        cache = getattr(engine, '_kv_prefix_cache', None)
+        if cache is not None:
+            ssd = getattr(cache, '_ssd_store', None)
+            if ssd is not None:
+                stats = getattr(ssd, 'get_stats', lambda: {})()
+                results.append({"model_id": model_id, **stats})
+    if not results:
         return {"active": False}
-
-    cache = getattr(engine, '_kv_prefix_cache', None)
-    if cache is None:
-        return {"active": False}
-
-    ssd = getattr(cache, '_ssd_store', None)
-    if ssd is None:
-        return {"active": False, "entries": 0}
-
-    stats = getattr(ssd, 'get_stats', lambda: {})()
-    return {"active": True, **stats}
+    return {"active": True, "models": results}
 
 
 @router.get("/per-model")
@@ -419,14 +429,15 @@ async def per_model_stats() -> dict[str, Any]:
 
 @router.get("/thinking-segments")
 async def thinking_segment_stats() -> dict[str, Any]:
-    """Thinking segment KV substore statistics."""
-    from ..engine import get_engine
-    engine = get_engine()
-    if engine is None:
-        return {"active": False}
+    """Thinking segment KV substore statistics across all loaded engines."""
+    from ..engine import get_engine, get_model_manager
 
-    store = getattr(engine, '_thinking_store', None)
-    if store is None:
+    engines = _collect_engines(get_engine(), get_model_manager())
+    results = []
+    for model_id, engine in engines:
+        store = getattr(engine, '_thinking_store', None)
+        if store is not None:
+            results.append({"model_id": model_id, **store.get_stats()})
+    if not results:
         return {"active": False}
-
-    return {"active": True, **store.get_stats()}
+    return {"active": True, "models": results}
