@@ -237,6 +237,27 @@ class EngineCore:
         # Pass offload manager to scheduler for periodic sync offload checks
         self.scheduler.set_kv_offload_manager(self._kv_offload_manager)
 
+        # External prefill server/client (disaggregated prefill, §16.2)
+        from .external_prefill import (
+            ExternalPrefillConfig,
+            ExternalPrefillServer,
+            ExternalPrefillClient,
+            get_prefill_role,
+        )
+        self._prefill_server: ExternalPrefillServer | None = None
+        self._prefill_client: ExternalPrefillClient | None = None
+        prefill_role = get_prefill_role()
+        if prefill_role == "server":
+            prefill_config = ExternalPrefillConfig.from_env()
+            self._prefill_server = ExternalPrefillServer(
+                model, tokenizer, prefill_config,
+            )
+            logger.info("ExternalPrefillServer configured (disaggregated prefill)")
+        elif prefill_role == "client":
+            prefill_config = ExternalPrefillConfig.from_env()
+            self._prefill_client = ExternalPrefillClient(prefill_config)
+            logger.info("ExternalPrefillClient configured (remote prefill)")
+
         # Lifecycle
         self._running = False
         self._loop_task: asyncio.Task | None = None
@@ -311,6 +332,14 @@ class EngineCore:
             except Exception:
                 logger.debug("KV offload manager start failed", exc_info=True)
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
+
+        # Start external prefill server if configured
+        if self._prefill_server is not None:
+            asyncio.get_running_loop().create_task(
+                self._prefill_server.serve()
+            )
+            logger.info("ExternalPrefillServer started")
+
         logger.info("EngineCore started")
 
     async def stop(self) -> None:
@@ -330,6 +359,13 @@ class EngineCore:
                 await self._kv_offload_manager.stop()
             except Exception:
                 logger.debug("KV offload manager stop failed", exc_info=True)
+
+        # Stop external prefill server
+        if self._prefill_server is not None:
+            try:
+                await self._prefill_server.stop()
+            except Exception:
+                logger.debug("prefill server stop failed", exc_info=True)
 
         # Signal all active collectors with sentinel
         for collector in self._output_collectors.values():
@@ -735,6 +771,11 @@ class EngineCore:
         # §12.2: encoder-decoder cache stats
         if hasattr(self.scheduler, '_encoder_cache'):
             stats["encoder_cache"] = self.scheduler._encoder_cache.get_stats()
+        # §16.2: external prefill server/client stats
+        if self._prefill_server is not None:
+            stats["external_prefill_server"] = self._prefill_server.get_stats()
+        if self._prefill_client is not None:
+            stats["external_prefill_client"] = self._prefill_client.get_stats()
         return stats
 
     def _overlap_step(self) -> Any:

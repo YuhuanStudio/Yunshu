@@ -48,6 +48,7 @@ class CompletionRequest(BaseModel):
     stop_token_ids: Optional[list[int]] = None
     echo: bool = False
     logprobs: int = 0
+    top_logprobs: Optional[int] = None
     seed: Optional[int] = None
     spec_decode: bool = False
     enable_thinking: Optional[bool] = None
@@ -58,6 +59,8 @@ class CompletionRequest(BaseModel):
     xtc_threshold: float = 0.0
     lora_adapter: Optional[str] = None
     grammar: Optional[dict] = None  # {"type": "regex", "pattern": "..."} etc.
+    user: Optional[str] = None
+    n: int = 1
 
 
 @router.post("/completions", response_model=None)

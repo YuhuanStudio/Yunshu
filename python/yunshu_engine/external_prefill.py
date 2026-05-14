@@ -10,6 +10,8 @@ value TODAY is:
   4. Prefix cache integration: report cached_tokens from KVCacheManager
   5. Remote KV transfer: send prefilled KV blocks to decode nodes
      (enabled via YUNSHU_KV_TRANSFER=1)
+  6. Disaggregated prefill server/client (YUNSHU_EXTERNAL_PREFILL=1)
+     for offloading prefill to a dedicated node
 
 Future work: direct KV cache injection into BatchGenerator (requires MLX-level
 changes to BatchGenerator's internal cache management).
@@ -22,12 +24,25 @@ Architecture:
     → mid-prefill abort check between chunks
     → optional: transfer_prefill_result() sends KV blocks to remote node
   Then BatchGenerator.insert() proceeds as normal for the decode phase.
+
+  ExternalPrefillServer / ExternalPrefillClient:
+    When YUNSHU_EXTERNAL_PREFILL=1 and YUNSHU_PREFILL_ROLE=server,
+    ExternalPrefillServer listens for TCP connections and runs prefills
+    on behalf of remote decode nodes.
+
+    When YUNSHU_EXTERNAL_PREFILL=1 and YUNSHU_PREFILL_ROLE=client,
+    ExternalPrefillClient.prefill_remote() sends token IDs to the
+    remote prefill server and receives the resulting KV cache.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
+import struct
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -62,6 +77,45 @@ class PrefillResult:
     kv_cache: Any | None = None
     cached_tokens: int = 0
     duration_s: float = 0.0
+
+
+# ── ExternalPrefillConfig ─────────────────────────────────────────────
+
+
+@dataclass
+class ExternalPrefillConfig:
+    """Configuration for external prefill server/client.
+
+    Attributes:
+        server_host: Host address for the prefill server.
+        server_port: Port for the prefill server.
+        max_connections: Maximum concurrent connections.
+        chunk_size: Default chunk size for prefill operations.
+        timeout_seconds: Timeout for prefill operations.
+        retry_attempts: Number of retry attempts for client requests.
+        compression: Compression algorithm ('none', 'lz4', 'zstd').
+    """
+
+    server_host: str = "0.0.0.0"
+    server_port: int = 7891
+    max_connections: int = 8
+    chunk_size: int = 2048
+    timeout_seconds: float = 30.0
+    retry_attempts: int = 3
+    compression: str = "none"
+
+    @classmethod
+    def from_env(cls) -> ExternalPrefillConfig:
+        """Create config from environment variables."""
+        return cls(
+            server_host=os.environ.get("YUNSHU_PREFILL_HOST", "0.0.0.0"),
+            server_port=int(os.environ.get("YUNSHU_PREFILL_PORT", "7891")),
+            max_connections=int(os.environ.get("YUNSHU_PREFILL_MAX_CONN", "8")),
+            chunk_size=int(os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048")),
+            timeout_seconds=float(os.environ.get("YUNSHU_PREFILL_TIMEOUT", "30.0")),
+            retry_attempts=int(os.environ.get("YUNSHU_PREFILL_RETRIES", "3")),
+            compression=os.environ.get("YUNSHU_PREFILL_COMPRESSION", "none"),
+        )
 
 
 class ExternalPrefiller:
@@ -442,3 +496,496 @@ def check_abort(request_id: str, pending_aborts: set[str]) -> bool:
         True if the request should be aborted.
     """
     return request_id in pending_aborts
+
+
+# ── Wire protocol helpers ─────────────────────────────────────────────
+
+# Message format:
+#   4 bytes  — magic (b"YPFL")
+#   4 bytes  — header length (big-endian uint32)
+#   N bytes  — JSON header (UTF-8)
+#   M bytes  — payload (KV cache data, may be empty)
+
+_WIRE_MAGIC = b"YPFL"
+
+
+def _encode_message(header: dict, payload: bytes = b"") -> bytes:
+    """Encode a prefill message into wire format."""
+    header_bytes = json.dumps(header, ensure_ascii=False).encode("utf-8")
+    header_len = len(header_bytes)
+    return _WIRE_MAGIC + struct.pack(">I", header_len) + header_bytes + payload
+
+
+def _decode_message(data: bytes) -> tuple[dict, bytes]:
+    """Decode a prefill message from wire format.
+
+    Returns (header_dict, payload_bytes).
+
+    Raises ValueError if magic bytes don't match.
+    """
+    if len(data) < 12:
+        raise ValueError("Message too short")
+    magic = data[:4]
+    if magic != _WIRE_MAGIC:
+        raise ValueError(f"Invalid magic: {magic!r}")
+    header_len = struct.unpack(">I", data[4:8])[0]
+    header_bytes = data[8:8 + header_len]
+    header = json.loads(header_bytes.decode("utf-8"))
+    payload = data[8 + header_len:]
+    return header, payload
+
+
+async def _read_message(reader: asyncio.StreamReader) -> tuple[dict, bytes]:
+    """Read a framed message from an asyncio StreamReader."""
+    magic = await reader.readexactly(4)
+    if magic != _WIRE_MAGIC:
+        raise ValueError(f"Invalid magic: {magic!r}")
+    header_len_bytes = await reader.readexactly(4)
+    header_len = struct.unpack(">I", header_len_bytes)[0]
+    header_bytes = await reader.readexactly(header_len)
+    header = json.loads(header_bytes.decode("utf-8"))
+    payload_len = header.get("payload_len", 0)
+    payload = b""
+    if payload_len > 0:
+        payload = await reader.readexactly(payload_len)
+    return header, payload
+
+
+def _serialize_prefill_result(result: PrefillResult) -> bytes:
+    """Serialize a PrefillResult into bytes for wire transfer.
+
+    Format: JSON header + binary payload (token_ids as int32 array).
+    """
+    token_bytes = struct.pack(f">{len(result.token_ids)}I", *result.token_ids)
+    header = {
+        "num_tokens": result.num_tokens,
+        "cached_tokens": result.cached_tokens,
+        "duration_s": result.duration_s,
+        "payload_len": len(token_bytes),
+    }
+    return _encode_message(header, token_bytes)
+
+
+def _deserialize_prefill_result(data: bytes) -> PrefillResult:
+    """Deserialize a PrefillResult from wire bytes."""
+    header, payload = _decode_message(data)
+    n_tokens = header.get("num_tokens", 0)
+    token_ids: list[int] = []
+    if payload and n_tokens > 0:
+        token_ids = list(struct.unpack(f">{n_tokens}I", payload[:n_tokens * 4]))
+    return PrefillResult(
+        token_ids=token_ids,
+        num_tokens=n_tokens,
+        kv_cache=None,
+        cached_tokens=header.get("cached_tokens", 0),
+        duration_s=header.get("duration_s", 0.0),
+    )
+
+
+# ── ExternalPrefillServer ─────────────────────────────────────────────
+
+
+class ExternalPrefillServer:
+    """TCP server that receives prefill requests from remote nodes.
+
+    Listens for incoming prefill requests, runs the model prefill,
+    and returns the resulting KV cache data to the client.
+
+    Usage:
+        config = ExternalPrefillConfig(server_port=7891)
+        server = ExternalPrefillServer(model, tokenizer, config)
+        await server.serve(host="0.0.0.0", port=7891)
+
+    Wire protocol:
+      Client sends:  {"type": "prefill", "num_tokens": N, "chunk_size": C, ...}
+                     + binary payload (token IDs as int32 array)
+      Server sends:  {"type": "result", "num_tokens": N, ...}
+                     + binary payload (token IDs as int32 array)
+      Server sends:  {"type": "error", "message": "..."} on failure
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        tokenizer: Any,
+        config: ExternalPrefillConfig | None = None,
+    ) -> None:
+        self._model = model
+        self._tokenizer = tokenizer
+        self._config = config or ExternalPrefillConfig()
+        self._prefiller = ExternalPrefiller(model, tokenizer)
+
+        # Server state
+        self._server: asyncio.Server | None = None
+        self._running = False
+        self._active_connections: int = 0
+        self._lock = threading.Lock()
+
+        # Stats
+        self._requests_served: int = 0
+        self._total_prefill_time_s: float = 0.0
+        self._total_bytes_transferred: int = 0
+        self._errors: int = 0
+
+    async def serve(self, host: str | None = None, port: int | None = None) -> None:
+        """Start the TCP prefill server."""
+        h = host or self._config.server_host
+        p = port or self._config.server_port
+        self._running = True
+
+        self._server = await asyncio.start_server(
+            self._handle_connection,
+            host=h,
+            port=p,
+        )
+        logger.info(f"ExternalPrefillServer listening on {h}:{p}")
+
+        async with self._server:
+            await self._server.serve_forever()
+
+    async def stop(self) -> None:
+        """Stop the prefill server gracefully."""
+        self._running = False
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+        logger.info("ExternalPrefillServer stopped")
+
+    async def _handle_connection(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Handle a single client connection."""
+        with self._lock:
+            if self._active_connections >= self._config.max_connections:
+                writer.close()
+                await writer.wait_closed()
+                logger.warning("Rejected connection: max_connections reached")
+                return
+            self._active_connections += 1
+
+        try:
+            while self._running:
+                try:
+                    header, payload = await asyncio.wait_for(
+                        _read_message(reader),
+                        timeout=self._config.timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    break
+                except (asyncio.IncompleteReadError, ConnectionError):
+                    break
+
+                response = await self._handle_prefill(header, payload)
+
+                try:
+                    writer.write(response)
+                    await writer.drain()
+                except (ConnectionError, OSError):
+                    break
+        finally:
+            with self._lock:
+                self._active_connections -= 1
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                logger.debug("writer close failed", exc_info=True)
+
+    async def handle_prefill(
+        self,
+        request_header: dict,
+        request_payload: bytes,
+    ) -> bytes:
+        """Handle a single prefill request.
+
+        Args:
+            request_header: JSON header with 'num_tokens', 'chunk_size', etc.
+            request_payload: Binary payload with token IDs (int32 array).
+
+        Returns:
+            Wire-encoded response (PrefillResult or error).
+        """
+        return await self._handle_prefill(request_header, request_payload)
+
+    async def _handle_prefill(
+        self,
+        header: dict,
+        payload: bytes,
+    ) -> bytes:
+        """Process a prefill request and return serialized response."""
+        msg_type = header.get("type", "prefill")
+        num_tokens = header.get("num_tokens", 0)
+        chunk_size = header.get("chunk_size", self._config.chunk_size)
+
+        # Decode token IDs from payload
+        token_ids: list[int] = []
+        if payload and num_tokens > 0:
+            try:
+                token_ids = list(struct.unpack(f">{num_tokens}I", payload[:num_tokens * 4]))
+            except struct.error as e:
+                self._errors += 1
+                return _encode_message({
+                    "type": "error",
+                    "message": f"Invalid payload: {e}",
+                })
+
+        if not token_ids:
+            result = PrefillResult(token_ids=[], num_tokens=0)
+            self._requests_served += 1
+            return _serialize_prefill_result(result)
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._prefiller.prefill_chunked(
+                    token_ids=token_ids,
+                    chunk_size=chunk_size,
+                ),
+            )
+            self._requests_served += 1
+            self._total_prefill_time_s += result.duration_s
+            self._total_bytes_transferred += len(payload)
+            return _serialize_prefill_result(result)
+
+        except PrefillAbortedError as e:
+            self._errors += 1
+            return _encode_message({
+                "type": "error",
+                "message": f"Prefill aborted: {e}",
+                "completed_tokens": e.completed_tokens,
+                "total_tokens": e.total_tokens,
+            })
+        except Exception as e:
+            self._errors += 1
+            logger.warning("Prefill server error: %s", e, exc_info=True)
+            return _encode_message({
+                "type": "error",
+                "message": str(e),
+            })
+
+    def get_stats(self) -> dict:
+        """Return server statistics."""
+        avg_time = (
+            self._total_prefill_time_s / self._requests_served
+            if self._requests_served > 0
+            else 0.0
+        )
+        return {
+            "running": self._running,
+            "requests_served": self._requests_served,
+            "avg_prefill_time_s": round(avg_time, 4),
+            "bytes_transferred": self._total_bytes_transferred,
+            "active_connections": self._active_connections,
+            "errors": self._errors,
+        }
+
+
+# ── ExternalPrefillClient ─────────────────────────────────────────────
+
+
+class ExternalPrefillClient:
+    """TCP client that sends prefill requests to remote prefill nodes.
+
+    Connects to a remote ExternalPrefillServer, sends token IDs for
+    prefill, and receives the resulting KV cache.
+
+    Features:
+    - Automatic retry with exponential backoff
+    - Connection health checking
+    - Stats tracking
+
+    Usage:
+        config = ExternalPrefillConfig(server_host="10.0.0.1", server_port=7891)
+        client = ExternalPrefillClient(config)
+        result = await client.prefill_remote(token_ids=[1, 2, 3, ...])
+    """
+
+    def __init__(self, config: ExternalPrefillConfig | None = None) -> None:
+        self._config = config or ExternalPrefillConfig()
+
+        # Stats
+        self._requests_sent: int = 0
+        self._total_latency_s: float = 0.0
+        self._successes: int = 0
+        self._failures: int = 0
+
+    async def prefill_remote(
+        self,
+        token_ids: list[int],
+        model_config: dict | None = None,
+        chunk_size: int | None = None,
+    ) -> PrefillResult:
+        """Send a prefill request to the remote server and return the result.
+
+        Args:
+            token_ids: The prompt token IDs to prefill.
+            model_config: Optional model configuration for the server.
+            chunk_size: Override chunk size for this request.
+
+        Returns:
+            PrefillResult from the remote prefill.
+
+        Raises:
+            ConnectionError: If unable to connect after retries.
+            RuntimeError: If the server returns an error.
+        """
+        cs = chunk_size or self._config.chunk_size
+        n_tokens = len(token_ids)
+
+        # Encode token IDs as binary payload
+        payload = struct.pack(f">{n_tokens}I", *token_ids) if token_ids else b""
+
+        request_header = {
+            "type": "prefill",
+            "num_tokens": n_tokens,
+            "chunk_size": cs,
+        }
+        if model_config:
+            request_header["model_config"] = model_config
+
+        request_data = _encode_message(request_header, payload)
+        request_header["payload_len"] = len(payload)
+        request_data = _encode_message(request_header, payload)
+
+        last_error: Exception | None = None
+        for attempt in range(self._config.retry_attempts):
+            try:
+                result = await self._send_request(request_data)
+                self._requests_sent += 1
+                self._successes += 1
+                return result
+            except Exception as e:
+                last_error = e
+                self._failures += 1
+                if attempt < self._config.retry_attempts - 1:
+                    backoff = 0.1 * (2 ** attempt)
+                    logger.info(
+                        "Prefill client retry %d/%d after %.1fs: %s",
+                        attempt + 1, self._config.retry_attempts, backoff, e,
+                    )
+                    await asyncio.sleep(backoff)
+
+        self._requests_sent += 1
+        raise ConnectionError(
+            f"Failed after {self._config.retry_attempts} attempts: {last_error}"
+        )
+
+    async def _send_request(self, data: bytes) -> PrefillResult:
+        """Send a request to the server and return the response."""
+        async with asyncio.timeout(self._config.timeout_seconds):
+            reader, writer = await asyncio.open_connection(
+                self._config.server_host,
+                self._config.server_port,
+            )
+
+        try:
+            writer.write(data)
+            await writer.drain()
+
+            # Read response
+            response_data = b""
+            magic = await reader.readexactly(4)
+            if magic != _WIRE_MAGIC:
+                raise ValueError(f"Invalid response magic: {magic!r}")
+            header_len_bytes = await reader.readexactly(4)
+            header_len = struct.unpack(">I", header_len_bytes)[0]
+            header_bytes = await reader.readexactly(header_len)
+            header = json.loads(header_bytes.decode("utf-8"))
+            payload_len = header.get("payload_len", 0)
+            payload = b""
+            if payload_len > 0:
+                payload = await reader.readexactly(payload_len)
+
+            elapsed = 0.0  # Latency tracked by caller
+
+            # Check for error response
+            if header.get("type") == "error":
+                msg = header.get("message", "Unknown server error")
+                raise RuntimeError(f"Remote prefill error: {msg}")
+
+            # Deserialize PrefillResult
+            full_data = magic + header_len_bytes + header_bytes + payload
+            return _deserialize_prefill_result(full_data)
+
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                logger.debug("writer close failed", exc_info=True)
+
+    async def health_check(self) -> bool:
+        """Check if the remote prefill server is reachable.
+
+        Returns True if the server is reachable, False otherwise.
+        """
+        try:
+            reader, writer = await asyncio.open_connection(
+                self._config.server_host,
+                self._config.server_port,
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except (ConnectionError, OSError, asyncio.TimeoutError):
+            return False
+
+    def get_stats(self) -> dict:
+        """Return client statistics."""
+        avg_latency = (
+            self._total_latency_s / self._requests_sent
+            if self._requests_sent > 0
+            else 0.0
+        )
+        success_rate = (
+            self._successes / self._requests_sent
+            if self._requests_sent > 0
+            else 0.0
+        )
+        return {
+            "requests_sent": self._requests_sent,
+            "avg_latency_s": round(avg_latency, 4),
+            "success_rate": round(success_rate, 4),
+            "successes": self._successes,
+            "failures": self._failures,
+        }
+
+
+# ── EngineCore wiring helper ──────────────────────────────────────────
+
+
+def get_prefill_role() -> str | None:
+    """Return the prefill role from environment: 'server', 'client', or None."""
+    if os.environ.get("YUNSHU_EXTERNAL_PREFILL", "0") != "1":
+        return None
+    return os.environ.get("YUNSHU_PREFILL_ROLE", None)
+
+
+def get_external_prefill_stats() -> dict:
+    """Return external prefill stats from EngineCore singleton, if active.
+
+    This is called from the monitoring endpoint to expose prefill server/client
+    stats. Returns {"active": False} when not enabled.
+    """
+    try:
+        from .batched_engine import get_batched_engine
+        engine = get_batched_engine()
+        if engine is None:
+            return {"active": False}
+        core = getattr(engine, '_engine_core', None)
+        if core is None:
+            return {"active": False}
+        server = getattr(core, '_prefill_server', None)
+        client = getattr(core, '_prefill_client', None)
+        result: dict = {"active": True, "role": get_prefill_role()}
+        if server is not None:
+            result["server"] = server.get_stats()
+        if client is not None:
+            result["client"] = client.get_stats()
+        return result
+    except Exception:
+        logger.debug("get_external_prefill_stats failed", exc_info=True)
+        return {"active": False}

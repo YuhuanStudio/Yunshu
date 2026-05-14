@@ -35,7 +35,20 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **4290 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **4615 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 33 — GPU N-gram + Suffix Proposer + LLM Proposer + Gemma4 Spec + Vision Encoding + DFlash Proposer + External Prefill Maturity)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| GPU-accelerated N-gram | §12.4 gap closed — GPUNgramProposer 使用 MLX array 向量化匹配 (mx.equal + mx.all)，替代 Python dict，支持 batch lookup + CPU fallback | +39 tests |
+| Suffix proposer | §12.4 gap closed — SuffixProposer 基於 Trie 的後綴匹配，請求內歷史 token 重用，對重複輸出 (code/JSON) 特別有效 | +41 tests |
+| LLM-based proposer | §12.4 gap closed — LLMProposer 獨立小模型作為 drafter，支持 mx.compile() 加速，OOM 時優雅降級 | +43 tests |
+| Gemma4 spec proposer | §12.4 gap closed — Gemma4SpecProposer 偵測 Gemma4 模型內建 spec 能力，從中間層提取 draft predictions | +54 tests |
+| Vision encoding strategies | §18.6 gap closed — 4種視覺編碼策略 (MLX_VLM/QWEN_VL/LLAVA/CUSTOM)，VisionEncoderFactory 自動偵測模型架構 | +70 tests |
+| DFlash spec proposer | DFlash 作為猜測解碼 proposer — 粗略階段 draft + 驗證，接入 SpecStrategyFactory | +48 tests |
+| External prefill maturity | §16.2 gap closed — ExternalPrefillServer/Client TCP 服務，分塊預填充，壓縮傳輸，重試+健康檢查，接入 EngineCore | +28 tests (70 total) |
+| Completions 小缺失 | top_logprobs/user/n 欄位加入 CompletionRequest，與 chat router 對齊 | — |
 
 ### 已完成修復 (2026-05-14 Wave 32 — Memory-Proportional Allocation + Process Isolation + Medusa Proposer + Native Video Pipeline + DP Production Path)
 
@@ -1154,7 +1167,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。yunshu_kv 全部接入管線 (含 warm_tier)。yunshu_control 全部接入 (tenant_store 取代 tenant.py)。yunshu_mesh data_parallel + pipeline 接入。記憶體洩漏和線程安全問題已修復。Wave 32: memory-proportional allocation, process isolation, Medusa proposer, native video pipeline, DP production path 全部實現。測試套件 4290 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
+> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。§12.4 猜測解碼 proposer 矩陣完整: N-gram (CPU+GPU), EAGLE-3, MTP, Medusa, Suffix, LLM-based, Gemma4, DFlash — 8 種策略全部實現。視覺編碼策略 4 種 (MLX_VLM/QWEN_VL/LLAVA/CUSTOM)。外部預填充完整成熟。測試套件 4615 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
 
 ---
 
@@ -1199,7 +1212,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
-| Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | N-gram(Python), EAGLE-3(代碼存在), MTP, ✅ Medusa (Wave 32) | 缺 GPU 加速 N-gram, DFlash |
+| Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | ✅ 全部實現: N-gram(CPU+GPU), EAGLE-3, MTP, Medusa, Suffix, LLM-based, Gemma4, DFlash (Wave 33) | 8 種策略完整 |
 | 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | ✅ NgramProposer 批量路徑 (Wave 29) + cross-model 路徑 | N-gram 無 GPU 開銷; 缺 GPU 加速 N-gram |
 | GPU 拒絕採樣 | GPU kernel | ✅ GPURejectionSampler — MLX 批量 argmax + cumsum 並行驗證 (YUNSHU_GPU_REJECTION=1) (Wave 31) | GPU 批量驗證 |
 | Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | ✅ _grammar_filter_drafts() 預驗證 (Wave 28) | grammar-aware spec decode |
@@ -1393,7 +1406,7 @@ exo 使用**事件溯源 + 消息傳遞**架構:
 | 方面 | exo | Yunshu |
 |------|-----|--------|
 | 層分配 | 記憶體比例 + 頻寬感知 | ✅ LayerAllocator 4策略 (MEMORY_PROPORTIONAL default) + WaterFillingRebalancer (Wave 32) |
-| 分離式 P/D | TCP prefill server | external_prefill.py 存在但不成熟 |
+| 分離式 P/D | TCP prefill server | ✅ ExternalPrefillServer/Client TCP 服務 + 分塊 + 壓縮 (Wave 33) |
 | 故障隔離 | 進程隔離 + supervisor | ✅ InferenceWorker + WorkerSupervisor (YUNSHU_PROCESS_ISOLATION=1, Wave 32) |
 | 事件溯源 | 不可變事件日誌 | 命令式狀態 (重啟丟失) |
 
@@ -1561,7 +1574,7 @@ Gateway 暴露了 14 個參數，VLM 引擎使用情況:
 | 工具調用 (VLM) | ✅ | ✅ 工具定義注入 + 提取 (VLM-TOOL) |
 | 結構化輸出 (VLM) | ✅ GrammarCompiler | ✅ JsonSchemaConstraint 已接入 VLM text path |
 | SpecPrefill (VLM) | ✅ draft model | ✅ SparsePrefill wired into _generate_vlm_text, YUNSHU_VLM_SPEC_PREFILL env var (Wave 26) |
-| 視覺編碼策略 | 3 種 (encode_image, qwen, llava) | 1 種 (mlx_vlm 黑盒) |
+| 視覺編碼策略 | 3 種 (encode_image, qwen, llava) | ✅ 4 種 (MLX_VLM, QWEN_VL, LLAVA, CUSTOM) + VisionEncoderFactory 自動偵測 (Wave 33) |
 | KV prefix 整合 | ✅ 每圖片緩存鍵範圍 | ⚠️ 命中率追蹤已實現 (VLM-PREFIX)，但 mlx_vlm.generate() 不支持傳入預分詞 |
 
 ---

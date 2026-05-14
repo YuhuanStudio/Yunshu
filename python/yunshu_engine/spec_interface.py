@@ -12,6 +12,9 @@ Strategy classes:
   - NgramStrategy: wraps NgramProposer (model-free, LPS or HashPool)
   - CrossModelStrategy: wraps SpeculativeDecoder (draft+target model pair)
   - MTPStrategy: wraps MTPDecoder (multi-token prediction heads)
+  - MedusaStrategy: wraps MedusaProposer (multi-head prediction on hidden state)
+  - LLMStrategy: wraps LLMProposer (smaller LLM as draft model)
+  - Gemma4Strategy: wraps Gemma4SpecProposer (Gemma4 built-in spec decode)
   - CompositeStrategy: combines multiple strategies (first non-empty draft wins)
   - SpecStrategyFactory: creates the right strategy from config dict
 """
@@ -511,14 +514,324 @@ class CompositeStrategy(SpecStrategy):
             s.reset()
 
 
+class GPUNgramStrategy(SpecStrategy):
+    """Wraps GPUNgramProposer as a SpecStrategy.
+
+    GPU-accelerated N-gram matching using MLX arrays for vectorized
+    comparison. Falls back to CPU NgramProposer on miss.
+    """
+
+    def __init__(self, config: Any = None) -> None:
+        from .gpu_ngram import GPUNgramConfig, GPUNgramProposer
+        if config is None:
+            config = GPUNgramConfig()
+        elif isinstance(config, dict):
+            config = GPUNgramConfig(**config)
+        self._config = config
+        self._proposer = GPUNgramProposer(config)
+        self._request_id: Optional[str] = None
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+
+    @property
+    def name(self) -> str:
+        return "gpu_ngram"
+
+    def begin(self, request_id: str) -> None:
+        self._request_id = request_id
+
+    def draft(self, tokens: list[int], n: int) -> DraftProposal:
+        proposed = self._proposer.propose(tokens, n_draft=n)
+        self._total_drafts += 1
+        self._total_draft_tokens += len(proposed)
+        return DraftProposal(
+            tokens=proposed,
+            strategy_name=self.name,
+            metadata={"mode": "gpu_ngram"},
+        )
+
+    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+        self._total_accepted += 1
+        self._total_accepted_tokens += verified_up_to
+        # Add accepted tokens to the GPU table for future matching
+        if verified_up_to > 0:
+            self._proposer.add_sequence(draft_tokens[:verified_up_to])
+
+    def stats(self) -> dict:
+        proposer_stats = self._proposer.get_stats()
+        return {
+            "name": self.name,
+            "total_drafts": self._total_drafts,
+            "total_draft_tokens": self._total_draft_tokens,
+            "total_accepted": self._total_accepted,
+            "total_accepted_tokens": self._total_accepted_tokens,
+            "acceptance_rate": (
+                self._total_accepted_tokens / self._total_draft_tokens
+                if self._total_draft_tokens > 0 else 0.0
+            ),
+            **proposer_stats,
+        }
+
+    def end(self, request_id: str) -> None:
+        self._request_id = None
+
+    def reset(self) -> None:
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+        self._proposer.table.clear()
+
+
+class SuffixStrategy(SpecStrategy):
+    """Wraps SuffixProposer as a SpecStrategy.
+
+    Suffix-based speculative decoding finds common suffixes in the
+    request's own generated text and reuses them as draft tokens.
+    Very effective for repetitive outputs (code, JSON, structured text).
+    """
+
+    def __init__(self, config: Any = None) -> None:
+        from .suffix_proposer import SuffixConfig, SuffixProposer
+        if config is None:
+            config = SuffixConfig()
+        elif isinstance(config, dict):
+            config = SuffixConfig(**config)
+        self._config = config
+        self._proposer = SuffixProposer(config)
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+
+    @property
+    def name(self) -> str:
+        return "suffix"
+
+    def begin(self, request_id: str) -> None:
+        self._proposer.begin(request_id)
+
+    def draft(self, tokens: list[int], n: int) -> DraftProposal:
+        proposed = self._proposer.draft(tokens, n_draft=n)
+        self._total_drafts += 1
+        self._total_draft_tokens += len(proposed)
+        return DraftProposal(
+            tokens=proposed,
+            strategy_name=self.name,
+            metadata={"mode": "suffix"},
+        )
+
+    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+        self._total_accepted += 1
+        self._total_accepted_tokens += verified_up_to
+        self._proposer.accept(draft_tokens, verified_up_to)
+
+    def stats(self) -> dict:
+        proposer_stats = self._proposer.get_stats()
+        return {
+            "name": self.name,
+            "total_drafts": self._total_drafts,
+            "total_draft_tokens": self._total_draft_tokens,
+            "total_accepted": self._total_accepted,
+            "total_accepted_tokens": self._total_accepted_tokens,
+            "acceptance_rate": (
+                self._total_accepted_tokens / self._total_draft_tokens
+                if self._total_draft_tokens > 0 else 0.0
+            ),
+            **proposer_stats,
+        }
+
+    def end(self, request_id: str) -> None:
+        self._proposer.end(request_id)
+
+    def reset(self) -> None:
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+
+
+class LLMStrategy(SpecStrategy):
+    """Wraps LLMProposer as a SpecStrategy.
+
+    The LLM strategy uses a separate smaller LLM as the draft model.
+    The draft model generates token proposals that are verified against
+    the target model. Unlike cross_model (EAGLE-3), this provides a
+    general interface for any draft LLM.
+
+    Note: This strategy requires a loaded draft model via
+    LLMProposer.load_draft_model(). Returns empty proposals if not loaded.
+    """
+
+    def __init__(self, proposer: Any = None, config: Any = None) -> None:
+        self._proposer = proposer
+        self._config = config
+        self._request_id: Optional[str] = None
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+
+    @property
+    def name(self) -> str:
+        return "llm"
+
+    @property
+    def proposer(self) -> Any:
+        """Access the underlying LLMProposer (may be None)."""
+        return self._proposer
+
+    def begin(self, request_id: str) -> None:
+        self._request_id = request_id
+
+    def draft(self, tokens: list[int], n: int) -> DraftProposal:
+        if self._proposer is None or not self._proposer.is_loaded:
+            return DraftProposal(tokens=[], strategy_name=self.name)
+        draft_tokens = self._proposer.propose(tokens, n_draft=n)
+        self._total_drafts += 1
+        self._total_draft_tokens += len(draft_tokens)
+        return DraftProposal(
+            tokens=draft_tokens,
+            strategy_name=self.name,
+            metadata={
+                "draft_model": self._proposer.config.draft_model_name,
+                "draft_length": len(draft_tokens),
+            },
+        )
+
+    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+        self._total_accepted += 1
+        self._total_accepted_tokens += verified_up_to
+        if self._proposer is not None:
+            self._proposer._stats.total_accepted_tokens += verified_up_to
+
+    def stats(self) -> dict:
+        result = {
+            "name": self.name,
+            "total_drafts": self._total_drafts,
+            "total_draft_tokens": self._total_draft_tokens,
+            "total_accepted": self._total_accepted,
+            "total_accepted_tokens": self._total_accepted_tokens,
+            "acceptance_rate": (
+                self._total_accepted_tokens / self._total_draft_tokens
+                if self._total_draft_tokens > 0 else 0.0
+            ),
+        }
+        if self._proposer is not None:
+            result["proposer_stats"] = self._proposer.get_stats()
+        return result
+
+    def end(self, request_id: str) -> None:
+        self._request_id = None
+
+    def reset(self) -> None:
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+        if self._proposer is not None:
+            self._proposer.reset_stats()
+
+
+class Gemma4Strategy(SpecStrategy):
+    """Wraps Gemma4SpecProposer as a SpecStrategy.
+
+    The Gemma4 strategy leverages Gemma4's built-in speculative decoding
+    capability where intermediate attention layers generate draft token
+    predictions. No separate draft model is needed.
+
+    Note: This strategy requires a Gemma4 model with spec capability
+    detected via Gemma4SpecProposer.detect(). Returns empty proposals
+    if the model is not Gemma4 or lacks spec layers.
+    """
+
+    def __init__(self, proposer: Any = None, config: Any = None) -> None:
+        self._proposer = proposer
+        self._config = config
+        self._request_id: Optional[str] = None
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+
+    @property
+    def name(self) -> str:
+        return "gemma4"
+
+    @property
+    def proposer(self) -> Any:
+        """Access the underlying Gemma4SpecProposer (may be None)."""
+        return self._proposer
+
+    def begin(self, request_id: str) -> None:
+        self._request_id = request_id
+
+    def draft(self, tokens: list[int], n: int) -> DraftProposal:
+        if self._proposer is None or not self._proposer.is_detected:
+            return DraftProposal(tokens=[], strategy_name=self.name)
+        # Gemma4 proposes via hidden_states — actual tokens come from propose()
+        # which requires hidden_states (provided by the engine)
+        self._total_drafts += 1
+        draft_len = min(n, self._proposer.config.draft_length)
+        self._total_draft_tokens += draft_len
+        return DraftProposal(
+            tokens=[],  # Actual tokens filled by proposer.propose(hidden_states)
+            strategy_name=self.name,
+            metadata={
+                "draft_length": draft_len,
+                "spec_layers": self._proposer.spec_layers,
+            },
+        )
+
+    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+        self._total_accepted += 1
+        self._total_accepted_tokens += verified_up_to
+        if self._proposer is not None:
+            self._proposer._stats.total_accepted_tokens += verified_up_to
+
+    def stats(self) -> dict:
+        result = {
+            "name": self.name,
+            "total_drafts": self._total_drafts,
+            "total_draft_tokens": self._total_draft_tokens,
+            "total_accepted": self._total_accepted,
+            "total_accepted_tokens": self._total_accepted_tokens,
+            "acceptance_rate": (
+                self._total_accepted_tokens / self._total_draft_tokens
+                if self._total_draft_tokens > 0 else 0.0
+            ),
+        }
+        if self._proposer is not None:
+            result["proposer_stats"] = self._proposer.get_stats()
+        return result
+
+    def end(self, request_id: str) -> None:
+        self._request_id = None
+
+    def reset(self) -> None:
+        self._total_drafts = 0
+        self._total_draft_tokens = 0
+        self._total_accepted = 0
+        self._total_accepted_tokens = 0
+        if self._proposer is not None:
+            self._proposer.reset_stats()
+
+
 class SpecStrategyFactory:
     """Factory for creating SpecStrategy instances from configuration dicts.
 
     Supported strategy types:
       - "ngram": NgramStrategy with optional mode ("lps" or "hashpool")
+      - "gpu_ngram": GPUNgramStrategy with MLX-accelerated lookup
+      - "suffix": SuffixStrategy for self-pattern reuse
       - "cross_model": CrossModelStrategy (requires draft model)
       - "mtp": MTPStrategy (requires model with MTP heads)
       - "medusa": MedusaStrategy (requires MedusaProposer with attached heads)
+      - "llm": LLMStrategy (smaller LLM as draft model)
+      - "gemma4": Gemma4Strategy (Gemma4 built-in spec decode)
+      - "dflash": DFlashStrategy (DFlash coarse pass as draft proposer)
       - "composite": CompositeStrategy combining multiple strategies
 
     Usage:
@@ -550,18 +863,29 @@ class SpecStrategyFactory:
 
         if strategy_type == "ngram":
             return SpecStrategyFactory._create_ngram(config)
+        elif strategy_type == "gpu_ngram":
+            return SpecStrategyFactory._create_gpu_ngram(config)
+        elif strategy_type == "suffix":
+            return SpecStrategyFactory._create_suffix(config)
         elif strategy_type == "cross_model":
             return SpecStrategyFactory._create_cross_model(config)
         elif strategy_type == "mtp":
             return SpecStrategyFactory._create_mtp(config)
         elif strategy_type == "medusa":
             return SpecStrategyFactory._create_medusa(config)
+        elif strategy_type == "llm":
+            return SpecStrategyFactory._create_llm(config)
+        elif strategy_type == "gemma4":
+            return SpecStrategyFactory._create_gemma4(config)
+        elif strategy_type == "dflash":
+            return SpecStrategyFactory._create_dflash(config)
         elif strategy_type == "composite":
             return SpecStrategyFactory._create_composite(config)
         else:
             raise ValueError(
                 f"Unknown spec strategy type: {strategy_type!r}. "
-                f"Supported: ngram, cross_model, mtp, medusa, composite"
+                f"Supported: ngram, gpu_ngram, suffix, cross_model, mtp, "
+                f"medusa, llm, gemma4, dflash, composite"
             )
 
     @staticmethod
@@ -582,6 +906,40 @@ class SpecStrategyFactory:
             ngram_kwargs["hashpool_capacity"] = int(config["hashpool_capacity"])
         ngram_config = NgramConfig(**ngram_kwargs)
         return NgramStrategy(config=ngram_config)
+
+    @staticmethod
+    def _create_gpu_ngram(config: dict) -> GPUNgramStrategy:
+        from .gpu_ngram import GPUNgramConfig
+        kwargs: dict[str, Any] = {}
+        if "min_n" in config:
+            kwargs["min_n"] = int(config["min_n"])
+        if "max_n" in config:
+            kwargs["max_n"] = int(config["max_n"])
+        if "k" in config:
+            kwargs["k"] = int(config["k"])
+        if "max_model_len" in config:
+            kwargs["max_model_len"] = int(config["max_model_len"])
+        if "max_table_entries" in config:
+            kwargs["max_table_entries"] = int(config["max_table_entries"])
+        gpu_config = GPUNgramConfig(**kwargs)
+        return GPUNgramStrategy(config=gpu_config)
+
+    @staticmethod
+    def _create_suffix(config: dict) -> SuffixStrategy:
+        from .suffix_proposer import SuffixConfig
+        kwargs: dict[str, Any] = {}
+        if "min_suffix_length" in config:
+            kwargs["min_suffix_length"] = int(config["min_suffix_length"])
+        if "max_window" in config:
+            kwargs["max_window"] = int(config["max_window"])
+        if "max_draft" in config:
+            kwargs["max_draft"] = int(config["max_draft"])
+        if "max_model_len" in config:
+            kwargs["max_model_len"] = int(config["max_model_len"])
+        if "max_trie_depth" in config:
+            kwargs["max_trie_depth"] = int(config["max_trie_depth"])
+        suffix_config = SuffixConfig(**kwargs)
+        return SuffixStrategy(config=suffix_config)
 
     @staticmethod
     def _create_cross_model(config: dict) -> CrossModelStrategy:
@@ -612,6 +970,63 @@ class SpecStrategyFactory:
             medusa_config = MedusaConfig(**kwargs)
             proposer = MedusaProposer(medusa_config)
         return MedusaStrategy(proposer=proposer, config=medusa_config)
+
+    @staticmethod
+    def _create_llm(config: dict) -> LLMStrategy:
+        from .llm_proposer import LLMProposerConfig, LLMProposer
+        proposer = config.get("proposer")
+        llm_config = config.get("llm_config")
+        if proposer is None:
+            kwargs: dict[str, Any] = {}
+            if "draft_model_name" in config:
+                kwargs["draft_model_name"] = config["draft_model_name"]
+            if "max_draft_length" in config:
+                kwargs["max_draft_length"] = int(config["max_draft_length"])
+            if "temperature" in config:
+                kwargs["temperature"] = float(config["temperature"])
+            if "top_k" in config:
+                kwargs["top_k"] = int(config["top_k"])
+            if "compiled" in config:
+                kwargs["compiled"] = bool(config["compiled"])
+            llm_config = LLMProposerConfig(**kwargs)
+            proposer = LLMProposer(llm_config)
+        return LLMStrategy(proposer=proposer, config=llm_config)
+
+    @staticmethod
+    def _create_gemma4(config: dict) -> Gemma4Strategy:
+        from .gemma4_spec import Gemma4SpecConfig, Gemma4SpecProposer
+        proposer = config.get("proposer")
+        gemma4_config = config.get("gemma4_config")
+        if proposer is None:
+            kwargs: dict[str, Any] = {}
+            if "enabled" in config:
+                kwargs["enabled"] = bool(config["enabled"])
+            if "draft_length" in config:
+                kwargs["draft_length"] = int(config["draft_length"])
+            if "acceptance_threshold" in config:
+                kwargs["acceptance_threshold"] = float(config["acceptance_threshold"])
+            gemma4_config = Gemma4SpecConfig(**kwargs)
+            proposer = Gemma4SpecProposer(gemma4_config)
+        return Gemma4Strategy(proposer=proposer, config=gemma4_config)
+
+    @staticmethod
+    def _create_dflash(config: dict) -> "DFlashStrategy":
+        from .dflash_proposer import DFlashProposer, DFlashProposerConfig, DFlashStrategy
+        proposer = config.get("proposer")
+        dflash_config = config.get("dflash_config")
+        if proposer is None:
+            kwargs: dict[str, Any] = {}
+            if "enabled" in config:
+                kwargs["enabled"] = bool(config["enabled"])
+            if "coarse_draft_length" in config:
+                kwargs["coarse_draft_length"] = int(config["coarse_draft_length"])
+            if "temperature" in config:
+                kwargs["temperature"] = float(config["temperature"])
+            if "max_draft_length" in config:
+                kwargs["max_draft_length"] = int(config["max_draft_length"])
+            dflash_config = DFlashProposerConfig(**kwargs)
+            proposer = DFlashProposer(dflash_config)
+        return DFlashStrategy(proposer=proposer)
 
     @staticmethod
     def _create_composite(config: dict) -> CompositeStrategy:
@@ -645,7 +1060,30 @@ class SpecStrategyFactory:
             cap = os.environ.get("YUNSHU_NGRAM_CAPACITY")
             if cap:
                 config["hashpool_capacity"] = int(cap)
+        elif strategy_type == "gpu_ngram":
+            config["max_n"] = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
+            config["k"] = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
+        elif strategy_type == "suffix":
+            config["min_suffix_length"] = int(
+                os.environ.get("YUNSHU_SUFFIX_MIN_LEN", "3"))
+            config["max_window"] = int(
+                os.environ.get("YUNSHU_SUFFIX_MAX_WINDOW", "512"))
+            config["max_draft"] = int(
+                os.environ.get("YUNSHU_SUFFIX_MAX_DRAFT", "5"))
         elif strategy_type == "medusa":
             config["num_heads"] = int(os.environ.get("YUNSHU_MEDUSA_HEADS", "4"))
             config["tree_size"] = int(os.environ.get("YUNSHU_MEDUSA_TREE_SIZE", "5"))
+        elif strategy_type == "llm":
+            config["draft_model_name"] = os.environ.get(
+                "YUNSHU_LLM_DRAFT_MODEL", "")
+            config["max_draft_length"] = int(
+                os.environ.get("YUNSHU_LLM_MAX_DRAFT", "5"))
+        elif strategy_type == "gemma4":
+            config["enabled"] = True
+            config["draft_length"] = int(
+                os.environ.get("YUNSHU_GEMMA4_DRAFT_LENGTH", "4"))
+        elif strategy_type == "dflash":
+            config["enabled"] = True
+            config["coarse_draft_length"] = int(
+                os.environ.get("YUNSHU_DFLASH_DRAFT_LENGTH", "5"))
         return SpecStrategyFactory.create(config)

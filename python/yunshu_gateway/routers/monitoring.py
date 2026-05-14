@@ -508,3 +508,15 @@ async def ane_embedding_stats() -> dict[str, Any]:
     """
     from yunshu_engine.ane_embedding import get_ane_embedding_stats
     return get_ane_embedding_stats()
+
+
+@router.get("/external-prefill")
+async def external_prefill_stats() -> dict[str, Any]:
+    """External prefill server/client statistics.
+
+    Reports disaggregated prefill status when YUNSHU_EXTERNAL_PREFILL=1 is set.
+    Includes server stats (requests served, avg prefill time, bytes transferred)
+    and client stats (requests sent, avg latency, success rate).
+    """
+    from yunshu_engine.external_prefill import get_external_prefill_stats
+    return get_external_prefill_stats()
