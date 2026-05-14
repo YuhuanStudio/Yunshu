@@ -110,10 +110,10 @@ class EvictionStrategy:
 
     def select_victim(
         self,
-        _entries: list,
-        _last_used: list[int],
-        _access_counter: int,
-        _priorities: list[int],
+        entries: list,
+        last_used: list[int],
+        access_counter: int,
+        priorities: list[int],
     ) -> int:
         """Return the index of the entry to evict.
 
@@ -123,7 +123,7 @@ class EvictionStrategy:
             access_counter: Current access counter value.
             priorities: Per-entry priority values (higher = keep longer).
         """
-        raise NotImplementedError
+        return min(range(len(entries)), key=lambda i: last_used[i])
 
 
 class LRUStrategy(EvictionStrategy):

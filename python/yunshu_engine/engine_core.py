@@ -613,6 +613,16 @@ class EngineCore:
         # ── Wave 42: Lifecycle tracking ──
         self._lifecycle_orchestrator.on_request_added(req_id)
 
+        # ── Wave 43: Memory-aware admission control ──
+        estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
+        admitted = self._memory_aware_scheduler.reserve_memory(
+            request_id=req_id,
+            num_bytes=estimated_bytes,
+            num_tokens=num_prompt_tokens,
+        )
+        if not admitted:
+            logger.warning(f"Memory-aware scheduler rejected request {req_id}: estimated {estimated_bytes} bytes")
+
         # Memory guard preflight check — reject before adding to scheduler
         if self._memory_guard is not None:
             ok, reason = self._memory_guard.preflight_check(
@@ -808,6 +818,13 @@ class EngineCore:
                 continue
 
             try:
+                # Wave 43: CompositionScheduler pre_step hooks (metrics, memory pressure)
+                if self._composition_scheduler is not None:
+                    try:
+                        self._composition_scheduler.pre_step(self.scheduler)
+                    except Exception:
+                        logger.debug("composition pre_step failed", exc_info=True)
+
                 # Run scheduler step on MLX executor thread
                 # §14.1: TBO takes priority when enabled; else C18 overlap; else plain
                 if self._tbo_scheduler.config.enabled:
@@ -822,6 +839,13 @@ class EngineCore:
                     scheduler_output = await loop.run_in_executor(
                         self._executor, self.scheduler.step
                     )
+
+                # Wave 43: CompositionScheduler post_step hooks
+                if self._composition_scheduler is not None and scheduler_output.outputs:
+                    try:
+                        self._composition_scheduler.post_step(self.scheduler, scheduler_output)
+                    except Exception:
+                        logger.debug("composition post_step failed", exc_info=True)
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
                 failed = self.scheduler.fail_all_requests()

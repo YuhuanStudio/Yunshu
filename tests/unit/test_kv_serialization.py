@@ -287,9 +287,9 @@ class TestCompressionModes:
         with pytest.raises(ValueError, match="Unsupported compression"):
             KVCacheSerializer(compression="brotli")
 
-    def test_safetensors_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            KVCacheSerializer(compression="safetensors")
+    def test_safetensors_supported(self):
+        s = KVCacheSerializer(compression="safetensors")
+        assert s.compression == "safetensors"
 
 
 # ── KVCacheManager integration ─────────────────────────────────────
