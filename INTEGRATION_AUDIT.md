@@ -35,9 +35,38 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **5355 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **5857 passed, 16 skipped**。
 
-### 已完成修復 (2026-05-14 Wave 36 — KV Prefix Compression + Memory-Aware Scheduler + Batch Sampler + Checkpoint/Restore)
+### 已完成修復 (2026-05-15 Wave 40 — Inference Budget Manager + Request Deduplication)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Inference budget manager | InferenceBudgetManager — token/time/cost/thinking 預算執行 + 全局速率限制 + 疲勞偵測 | +49 tests |
+| Request deduplication | RequestDeduplicator — 相同請求自動合併 (SHA-256 hash) + fan-out 分發 + TTL + 容量限制 | — |
+
+### 已完成修復 (2026-05-15 Wave 39 — KV Lifecycle Manager + RTT-Aware Routing)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| KV lifecycle manager | KVLifecycleManager — KV 塊准入/分層遷移/淘汰/優化 + CacheWarmingPredictor 頻率+最近性預測 + KVCompactionScheduler 碎片整理 | +53 tests |
+| RTT-aware routing | RTTAwareRouter — Jacobson/Karels RTT 估算 + 加權 (RTT × load) 路由 + 自動探測 + Parallax 模式 | — |
+
+### 已完成修復 (2026-05-15 Wave 38 — Scheduler Mixins + Forward Batch + Request Lifecycle + Model Preprocessors)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Scheduler mixins | §14.1 SGLang 模式 — 8 種 mixin (Metrics/Profiling/Disaggregation/DataParallel/PipelineParallel/SpecDecode/MemoryPressure) + CompositionScheduler 組合調度器 | +77 tests |
+| Forward batch hierarchy | §14.1 vLLM/SGLang 模式 — 3 級批次 (ScheduleBatch → ForwardBatch → BatchResult) + BatchComposer 優先級/記憶體感知組合 + RequestSlot 生命追蹤 | +35 tests |
+| Request lifecycle orchestrator | 請求狀態機 (QUEUED→PREFILLING→DECODING→FINISHED) + AdaptiveConcurrencyController AIMD + 重試協調 + 超時管理 | +30 tests |
+| Model preprocessors | §16.5 vllm-omni 模式 — PreprocessorRegistry 8 模型家族 (QwenOmniAudio/CosyVoice/LLaVA/QwenVL/WanVideo/GLMOCR/DeepSeekOCR/Whisper) + 自動偵測 | +28 tests |
+
+### 已完成修復 (2026-05-14 Wave 37 — Token Scheduler + KV Migration + Auto-Tuner)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Token-level scheduler | TokenLevelScheduler WFQ 排序 + PriorityInversionGuard 優先級反轉防護 + FairnessTracker 公平性追蹤 | +78 tests |
+| KV migration | KVMigrationManager 多層 KV 遷移 (hot/warm/cool/cold) + MultiTierCacheCoordinator 跨層協調 + CacheWarmingScheduler 預熱 | +91 tests |
+| Auto-tuner | PerformanceProfiler 性能剖析 + AutoTuner 自適應調優 + AdaptiveBatchSizer 動態批次 + SLOMonitor SLO 監控 | +61 tests |
 
 | 修復 | 描述 | 測試 |
 |------|------|------|
@@ -1213,7 +1242,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 ---
 
-> **結論 (2026-05-14 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。§12.4 猜測解碼 proposer 矩陣完整: 8 種策略。視覺編碼策略 4 種。外部預填充完整成熟。Wave 34: 批量路徑 spec decode 整合 + KV cache 深度優化 (自適應量化/預測淘汰/語義分塊/塊壓縮) + 網關管線優化 (請求合併/連接池/響應緩存) + 串流管線優化 (3階段流水線/預取採樣/批量解標記/背壓控制)。測試套件 4861 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
+> **結論 (2026-05-15 更新)**: 所有 P0–P4 + C1-C28 + M1-M16 + OOM-1/2 + TMO-1/2 + DP-1 + BG-CLOSE + DRAIN 項目已完成。全部安全問題 (S1-S5, M1-M4) 已修復。§12.4 猜測解碼 proposer 矩陣完整: 8 種策略。視覺編碼策略 4 種。外部預填充完整成熟。§14.1 調度器模組化: 8 種 mixin + CompositionScheduler。§14.1 批次表示: 3 級層次 (ScheduleBatch→ForwardBatch→BatchResult)。§16.5 模型預處理器: 8 模型家族 + 自動偵測。KV 生命週期管理: 4 層遷移 + 預熱預測 + 碎片整理。RTT 感知路由: Parallax 模式。推論預算管理: token/time/cost/thinking 4 維度。請求去重: SGLang 模式。測試套件 5857 個測試全數通過 (0 失敗)。僅剩 1 個 DEAD 模塊 (deltanet_inversion.py, 研究性質)。
 
 ---
 
