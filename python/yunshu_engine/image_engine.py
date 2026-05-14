@@ -1291,6 +1291,12 @@ class ImageGenEngine:
             self._dflash = DFlashEngine(DFlashConfig.from_env())
             logger.info("DFlash Block Diffusion enabled")
 
+        # Wave 43: Diffusion scheduler + pipeline registry
+        from .diffusion_infra import DiffusionScheduler
+        self._diffusion_scheduler = DiffusionScheduler()
+        from .image_pipeline import PipelineType
+        self._pipeline_type = PipelineType
+
         # TeaCache (opt-in via YUNSHU_TEACACHE=1 or threshold value)
         self._teacache = None
         teacache_env = os.environ.get("YUNSHU_TEACACHE", "").strip()

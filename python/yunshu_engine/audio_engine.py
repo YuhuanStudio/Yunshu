@@ -378,6 +378,9 @@ class ASREngine:
         self._running = False
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
+        # Wave 43: VAD for voice activity detection
+        from .vad import create_vad
+        self._vad = create_vad()
 
     @property
     def model_name(self) -> str:
