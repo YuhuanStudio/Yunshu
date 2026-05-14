@@ -98,6 +98,8 @@ class JsonSchemaConstraint:
         self._string_start: int = 0  # position in text_buffer where string started
         self._number_start: int = 0
         self._is_first_value: bool = True  # track first value in object/array
+        # Snapshot stack for rollback (speculative draft validation)
+        self._snapshots: list[tuple] = []
 
         # If no schema, default to generic object
         if schema is None:
@@ -326,6 +328,36 @@ class JsonSchemaConstraint:
 
         # Process characters to update state
         self._process_text(token_text)
+
+    def checkpoint(self) -> None:
+        """Save current state for later rollback (speculative draft validation)."""
+        self._snapshots.append((
+            self._state,
+            self._text_buffer,
+            list(self._schema_stack),
+            [list(k) for k in self._object_keys_remaining],
+            self._current_key,
+            self._in_string,
+            self._string_start,
+            self._number_start,
+            self._is_first_value,
+        ))
+
+    def rollback(self) -> None:
+        """Restore state to last checkpoint."""
+        if not self._snapshots:
+            return
+        (
+            self._state,
+            self._text_buffer,
+            self._schema_stack,
+            self._object_keys_remaining,
+            self._current_key,
+            self._in_string,
+            self._string_start,
+            self._number_start,
+            self._is_first_value,
+        ) = self._snapshots.pop()
 
     def _process_text(self, text: str) -> None:
         """Process the generated text to update state machine."""

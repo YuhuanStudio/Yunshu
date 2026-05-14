@@ -208,6 +208,10 @@ class BatchedEngine:
         # Adaptive speculative decode controller (opt-in via YUNSHU_ADAPTIVE_SPEC=1)
         self._adaptive_spec = None
 
+        # Lookahead reasoning: boosts spec decode during <think/> blocks
+        from .speculative_decoder import LookaheadReasoning
+        self._lookahead_reasoning = LookaheadReasoning()
+
         # SpecPrefill config (opt-in via YUNSHU_SPEC_PREFILL env var)
         self._spec_prefill_enabled = False
         self._spec_prefill_threshold = 8192
@@ -570,6 +574,7 @@ class BatchedEngine:
         reasoning_effort: str | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        cancel_event: asyncio.Event | None = None,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -631,6 +636,7 @@ class BatchedEngine:
                 seed=seed,
                 logprobs=logprobs,
                 top_logprobs=top_logprobs,
+                json_schema=json_schema,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
@@ -656,6 +662,7 @@ class BatchedEngine:
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
                 json_schema=json_schema,
+                cancel_event=cancel_event,
             )
 
         # Engine loop path: continuous batching with scheduler overhead
@@ -720,6 +727,7 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         json_schema: dict | str | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -916,6 +924,9 @@ class BatchedEngine:
                             max_tokens=remaining, sampler=sampler,
                             prompt_cache=cache, logits_processors=_lprocs,
                         ):
+                            if cancel_event is not None and cancel_event.is_set():
+                                mx.synchronize()
+                                break
                             tokens.append(token)
                             if logprobs:
                                 log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
@@ -967,6 +978,10 @@ class BatchedEngine:
                             if time.perf_counter() > _timeout_deadline:
                                 logger.warning(f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
                                 break
+                        # Cancellation check
+                        if cancel_event is not None and cancel_event.is_set():
+                            mx.synchronize()
+                            break
                         # Thinking budget enforcement: cap thinking tokens
                         if thinking_budget is not None and enable_thinking:
                             thinking_tokens_used += 1
@@ -1008,10 +1023,12 @@ class BatchedEngine:
                             if not _in_thinking and token == think_start_token:
                                 _in_thinking = True
                                 _thinking_tokens = []
+                                self._lookahead_reasoning.check_thinking_state_text("<think")
                             elif _in_thinking:
                                 _thinking_tokens.append(token)
                                 if token == think_end_token:
                                     _in_thinking = False
+                                    self._lookahead_reasoning.check_thinking_state_text("</think")
 
             # Cache the completed KV state for future prefix matching
             # Quantize cache layers to save memory (mlx-lm pattern)
@@ -1470,10 +1487,12 @@ class BatchedEngine:
                         if not _in_thinking and token == think_start_token:
                             _in_thinking = True
                             _thinking_tokens = []
+                            self._lookahead_reasoning.check_thinking_state_text("<think")
                         elif _in_thinking:
                             _thinking_tokens.append(token)
                             if token == think_end_token:
                                 _in_thinking = False
+                                self._lookahead_reasoning.check_thinking_state_text("</think")
                     _put((new_text, n_tok, stop_hit or suffix_hit))
                     if stop_hit or suffix_hit:
                         # Store thinking segment on stop
@@ -1967,6 +1986,7 @@ class BatchedEngine:
         seed: int | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        json_schema: dict | str | None = None,
     ) -> GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -2002,6 +2022,52 @@ class BatchedEngine:
                     stop_suffixes.append(s)
 
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+
+        # Grammar constraint: pre-validate draft tokens against allowed set
+        _grammar_constraint = None
+        if json_schema is not None:
+            try:
+                sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
+                _grammar_constraint = sampler.constraint if hasattr(sampler, 'constraint') else None
+            except Exception:
+                logger.warning("Grammar constraint setup failed for n-gram spec", exc_info=True)
+
+        def _grammar_filter_drafts(
+            draft_ids: list[int],
+            generated_ids: list[int],
+        ) -> list[int]:
+            """Filter draft tokens that violate grammar constraints.
+
+            Returns the longest prefix of draft_ids where every token is
+            in the grammar's allowed set at its position. This avoids
+            wasting a batched forward pass on drafts that can't be accepted.
+            """
+            if _grammar_constraint is None:
+                return draft_ids
+            _grammar_constraint.checkpoint()
+            allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids)
+            if not allowed:
+                _grammar_constraint.rollback()
+                return draft_ids
+            allowed_set = set(allowed)
+            filtered = []
+            for tid in draft_ids:
+                if tid in allowed_set:
+                    filtered.append(tid)
+                    try:
+                        tok_text = tokenizer.decode([tid])
+                        _grammar_constraint.advance(tok_text)
+                    except Exception:
+                        break
+                    allowed = _grammar_constraint.get_allowed_tokens(tokenizer, generated_ids + filtered)
+                    if allowed:
+                        allowed_set = set(allowed)
+                    else:
+                        break
+                else:
+                    break
+            _grammar_constraint.rollback()
+            return filtered
 
         def _run():
             if seed is not None:
@@ -2049,6 +2115,8 @@ class BatchedEngine:
                     # Use adaptive K if controller is active, else use proposer default
                     _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
                     draft_ids = proposer.propose(all_token_ids)[:(_adaptive_k or len(all_token_ids))]
+                    # Grammar-aware draft filtering: reject drafts that violate constraints
+                    draft_ids = _grammar_filter_drafts(draft_ids, all_token_ids)
                     n_draft = min(len(draft_ids), remaining)
 
                     if n_draft == 0:
@@ -2640,6 +2708,8 @@ class BatchedEngine:
                 "tokens_generated": s.tokens_generated,
                 "total_cycles": s.total_cycles,
             }
+        if self._lookahead_reasoning is not None:
+            stats["lookahead_reasoning"] = self._lookahead_reasoning.get_stats()
         return stats
 
     def get_kv_cache_stats(self) -> dict:

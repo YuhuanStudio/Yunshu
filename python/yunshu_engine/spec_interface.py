@@ -121,9 +121,10 @@ class NgramStrategy(SpecStrategy):
     """Wraps NgramProposer as a SpecStrategy.
 
     The N-gram proposer is model-free: it looks up repeated patterns in
-    the token history to predict what comes next. Two modes:
+    the token history to predict what comes next. Three modes:
       - "lps": KMP-based O(n) matching (vLLM pattern)
-      - "hashpool": O(1) hash lookup (llama.cpp pattern)
+      - "hashpool": O(1) dict lookup (llama.cpp pattern)
+      - "lcg": O(1) circular-buffer LCG hash pool (llama.cpp ngram-mod pattern)
     """
 
     def __init__(self, config: Any = None) -> None:
@@ -188,6 +189,8 @@ class NgramStrategy(SpecStrategy):
         self._total_accepted_tokens = 0
         if self._proposer._hashpool is not None:
             self._proposer._hashpool.clear()
+        if self._proposer._lcg_pool is not None:
+            self._proposer._lcg_pool.clear()
 
 
 class CrossModelStrategy(SpecStrategy):
@@ -535,4 +538,7 @@ class SpecStrategyFactory:
             config["mode"] = os.environ.get("YUNSHU_NGRAM_MODE", "lps")
             config["max_n"] = int(os.environ.get("YUNSHU_NGRAM_MAX_N", "5"))
             config["k"] = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
+            cap = os.environ.get("YUNSHU_NGRAM_CAPACITY")
+            if cap:
+                config["hashpool_capacity"] = int(cap)
         return SpecStrategyFactory.create(config)

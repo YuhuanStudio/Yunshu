@@ -686,17 +686,31 @@ class LookaheadReasoning:
 
     During the thinking phase (<think/> tags), this module:
     1. Detects when the model is in reasoning mode
-    2. Uses speculative decoding with higher draft_length
+    2. Signals to n-gram / spec decode proposers to draft more aggressively
     3. Caches the thinking output for potential reuse
-    4. Automatically adjusts draft_length based on acceptance rate
+    4. Adjusts draft_length dynamically based on thinking state
 
     For models like DeepSeek-R1, Qwen3 that emit long thinking chains.
+
+    Works independently of any specific spec decode strategy — the thinking
+    state is checked by BatchedEngine's generation loops to boost spec decode
+    aggressiveness during reasoning.
     """
 
-    def __init__(self, decoder: SpeculativeDecoder) -> None:
+    def __init__(
+        self,
+        decoder: SpeculativeDecoder | None = None,
+        base_draft_k: int = 5,
+        thinking_draft_k: int = 10,
+    ) -> None:
         self.decoder = decoder
         self._in_thinking = False
         self._thinking_tokens: list[int] = []
+        self._base_draft_k = base_draft_k
+        self._thinking_draft_k = thinking_draft_k
+        # Track recent acceptance rate for adaptive adjustment
+        self._recent_accepts: list[int] = []
+        self._window = 10
 
     def check_thinking_state(self, last_token: int, tokenizer) -> None:
         """Track whether we're inside <think/> tags."""
@@ -710,19 +724,52 @@ class LookaheadReasoning:
         except Exception:
             logger.debug("thinking state tracking failed", exc_info=True)
 
-    def adjust_draft_length(self) -> int:
-        """Dynamically adjust draft length based on acceptance rate."""
-        base_length = self.decoder.config.draft_length
+    def check_thinking_state_text(self, text_chunk: str) -> None:
+        """Track thinking state from decoded text (avoids re-decoding)."""
+        if "<think" in text_chunk:
+            self._in_thinking = True
+            self._thinking_tokens = []
+        elif "</think" in text_chunk:
+            self._in_thinking = False
 
-        if self._in_thinking:
-            # During thinking, draft more aggressively (higher acceptance rate expected)
-            return min(base_length * 2, 10)
-        else:
-            return base_length
+    def record_accept(self, count: int) -> None:
+        """Record acceptance count for adaptive adjustment."""
+        self._recent_accepts.append(count)
+        if len(self._recent_accepts) > self._window:
+            self._recent_accepts.pop(0)
+
+    @property
+    def in_thinking(self) -> bool:
+        return self._in_thinking
+
+    def adjust_draft_k(self) -> int:
+        """Dynamically adjust draft tokens based on thinking state + acceptance rate."""
+        if not self._in_thinking:
+            return self._base_draft_k
+
+        # During thinking: boost draft length
+        if self._recent_accepts:
+            avg_accept = sum(self._recent_accepts) / len(self._recent_accepts)
+            # If acceptance rate is high (>70% of base_k), be more aggressive
+            if avg_accept >= self._base_draft_k * 0.7:
+                return self._thinking_draft_k
+            # Moderate acceptance: slightly boost
+            return min(self._base_draft_k + 2, self._thinking_draft_k)
+
+        return self._thinking_draft_k
 
     def get_stats(self) -> dict:
-        return {
+        result = {
             "in_thinking": self._in_thinking,
             "thinking_tokens_cached": len(self._thinking_tokens),
-            "decoder_stats": self.decoder.get_stats(),
+            "base_draft_k": self._base_draft_k,
+            "thinking_draft_k": self._thinking_draft_k,
+            "current_k": self.adjust_draft_k(),
+            "recent_avg_accept": (
+                sum(self._recent_accepts) / len(self._recent_accepts)
+                if self._recent_accepts else 0.0
+            ),
         }
+        if self.decoder is not None:
+            result["decoder_stats"] = self.decoder.get_stats()
+        return result

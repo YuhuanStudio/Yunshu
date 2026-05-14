@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 26: VAE encoder, inpainting, VAE tiling, ControlNet, depth-guided, TeaCache, pipeline registry)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 28: LCG hash pool, cancel_event, LookaheadReasoning, grammar-aware spec decode, eviction strategies)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,22 +35,31 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **3621 passed, 13 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **3577 passed, 13 skipped**。
 
-### 已完成修復 (2026-05-14 Wave 27 — MTP Pipeline Integration)
+### 已完成修復 (2026-05-14 Wave 28 — Spec Decode 完善 + Eviction 策略)
 
 | 修復 | 描述 | 測試 |
 |------|------|------|
-| n_confirmed_patch 接入 | apply_n_confirmed_patch() 在 BatchedEngine.start() 中自動調用，Qwen3.5 模型啟用零成本 SSM rollback | 5 tests (`test_mtp_pipeline.py`) |
-| MTP patch 接入 | apply_mtp_patch() 在 start() 中調用，load_model_with_mtp() 載入 MTP 頭權重 | 3 tests (`test_wave27_monitoring.py`) |
-| MTP decoder 接入 | _init_spec_decode() 檢測 MTP 頭 → 創建 MTPDecoder + MTPStrategy，支持 n_confirmed=1 零成本 reject | 31 tests (`test_mtp_pipeline.py`) |
-| MTP generate 路徑 | _generate_mtp() 和 _stream_generate_mtp() 方法，spec_decode=True 時自動路由 | 6 tests (`test_mtp_pipeline.py`) |
-| MTP stats | get_stats() 包含 MTP acceptance/reject/cycle 統計 | 1 test |
-| _get_spec_strategy | 優先返回 MTP strategy，fallback 到 env-based strategy | 2 tests |
-| deprecated 標記移除 | n_confirmed_patch.py, mtp_decoder.py, mtp_patch.py 移除 deprecated docstring | — |
-| Gateway LoRA bug 修復 | VLM streaming _release_lora_adapter 使用正確的 vlm_engine 變量 | — |
-| Gateway 參數轉發 | completions streaming 添加 spec_decode + logprobs，multi-choice 添加 spec_decode | — |
-| 監控端點 | /spec-decode 包含 MTP 統計，新增 /radix-tree 端點，修復 BatchedEngine import 路徑 | 19 tests (`test_wave27_monitoring.py`) |
+| LCG Hash Pool | LCGHashPool: FNV-1a hashing + LCG probing + circular buffer, O(1) insert/lookup/evict, 替代 dict FIFO 淘汰 (llama.cpp ngram-mod pattern) | 27 existing pass |
+| cancel_event (非流式) | _generate_fast() 新增 cancel_event 參數, generate() 透傳, 主循環 + SpecPrefill 子循環均檢查 is_set() | — |
+| LookaheadReasoning 接入 | 重構為獨立類 (不依賴 SpeculativeDecoder), 支持 check_thinking_state_text(), 自適應 draft_k 調整 (acceptance rate aware), 接入 _generate_fast + _stream_generate_fast 思考追蹤 | 7 tests |
+| Grammar-aware spec decode | JsonSchemaConstraint 新增 checkpoint()/rollback() 快照機制, _grammar_filter_drafts() 預驗證 draft tokens, N-gram spec decode 路徑集成 json_schema | — |
+| KV 淘汰策略 | EvictionStrategy 抽象 + 5 種實現: LRU (默認), MRU (scan workload), FILO (oldest-first), SLRU (80/20 分段保護), Priority (可設優先級), KVPrefixCache(eviction=) 參數 | 56 existing pass |
+| LookaheadReasoning 統計 | get_stats() 暴露 lookahead_reasoning 狀態 (in_thinking, current_k, recent_avg_accept) | — |
+
+### 已完成修復 (2026-05-14 Wave 27b — Type Extraction + SDK Deletion + VLM Fix)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| EngineConfig 提取 | 新建 types.py，EngineConfig + RequestPhase 獨立模塊，6 個文件更新 import | — |
+| SDK 刪除 | yunshu_sdk/ (1350 行) 完全刪除，零生產消費者，含 phantom endpoint | -28 tests |
+| VLM 非流式參數 | thinking_budget, reasoning_effort, stop_token_ids, xtc_* 轉發到 VLM engine | — |
+| VLM engine 參數 | generate() 提取並使用 stop_token_ids, thinking_budget, xtc_*; 添加 thinking budget 強制執行 | — |
+| 多模型監控 | /memory-guard, /ssd-cache, /thinking-segments 使用 _collect_engines() 遍歷所有模型 | — |
+| Embeddings dimensions | dimensions 參數實際截斷嵌入向量 (Matryoshka 支持) | — |
+
+### 已完成修復 (2026-05-14 Wave 27 — MTP Pipeline Integration)
 
 ### 已完成修復 (2026-05-14 Wave 26 — Image Engine 完整化)
 
@@ -499,7 +508,7 @@
 | 2 | ane_embedding.py | 僅 scripts/ | **DEAD** |
 | 3 | audio_engine.py | model_manager, gateway/audio, gateway/mcp | WIRED |
 | 4 | batched_engine.py | gateway/chat, gateway/completions, gateway/main | **WIRED** (主要生產引擎) |
-| 5 | benchmark.py | 僅 scripts/bench.py | **DEAD** |
+| 5 | benchmark.py | gateway/bench (/bench/model + /bench/batch endpoints) | **WIRED** ✅ |
 | 6 | bfcl_eval.py | 零調用者 | **DEAD** |
 | 7 | deltanet_inversion.py | 僅 scripts/test_inversion.py | **DEAD** (研究性質) |
 | 8 | engine.py (legacy) | model_manager, gateway/engine, 所有 router | WIRED* |
@@ -558,7 +567,7 @@
 |------|------|----------|------|
 | ~~adaptive_batch.py~~ | ~~276~~ | test_adaptive_batch.py | ~~自適應批處理，零調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore |
 | ane_embedding.py | 953 | test_ane_embedding.py | ANE 嵌入，僅 bench 腳本 |
-| benchmark.py | 472 | test_benchmark.py | 基準測試框架，僅 scripts/ |
+| ~~benchmark.py~~ | ~~472~~ | test_benchmark.py | ~~基準測試框架，僅 scripts/~~ ✅ **WIRED** — BenchmarkRunner 已接入 /bench/model + /bench/batch endpoints |
 | bfcl_eval.py | 1,127 | 無 | BFCL 評估，零調用 |
 | deltanet_inversion.py | 271 | test_deltanet_inversion.py | DeltaNet 狀態反轉 |
 | metal_kernels.py | 698 | test_metal_kernels*.py (2) | Metal 內核管理，僅 scripts/ |
@@ -569,9 +578,9 @@
 | roofline.py | 749 | test_roofline.py | 屋頂線基準 (bench router 有自己的實現) |
 | ~~telemetry.py~~ | ~~196~~ | test_telemetry.py | ~~遙測系統~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore |
 
-**合計: ~4,270 行死代碼 + 5 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch, mtp_patch)
+**合計: ~3,798 行死代碼 + 4 個測試文件** (原 5,605 行 + 10 個測試文件，已 WIRED: adaptive_batch, telemetry, ngram_proposer, spec_prefill, ssd_kv_cache, vision_feature_cache, mtp_decoder, n_confirmed_patch, mtp_patch, benchmark)
 
-已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start()), mtp_patch (→BatchedEngine.start() + load_model_with_mtp)。已刪除: settings.py。
+已從 DEAD 轉為 WIRED 的模塊: ngram_proposer (→BatchedEngine), spec_prefill (→_generate_fast), ssd_kv_cache (→KVPrefixCache), vision_feature_cache (→VLMEngine), adaptive_batch (→EngineCore), telemetry (→EngineCore), mtp_decoder (→BatchedEngine._init_spec_decode + _generate_mtp), n_confirmed_patch (→BatchedEngine.start()), mtp_patch (→BatchedEngine.start() + load_model_with_mtp), benchmark (→/bench/model + /bench/batch endpoints)。已刪除: settings.py。
 
 ---
 
@@ -789,7 +798,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 | 單元測試 (tests/unit/) | 128 |
 | 集成測試 (tests/integration/) | 1 |
 | E2E 測試 (tests/e2e/) | 1 |
-| 測試函數總數 (def test_*) | **2,686** (collected) / **2,604** (grep count) |
+| 測試函數總數 (def test_*) | **3,577** passed / **2,604** (grep count) |
 | 使用 Mock 的測試 | ~52 |
 | 不使用 Mock 的測試 | ~58 |
 | 從 yunshu_engine import 的測試 | ~65 |
@@ -813,7 +822,7 @@ ChatCompletionRequest → BatchedEngine.generate() 缺失:
 5. ~~`test_adaptive_batch.py` — adaptive batch 零管線調用~~ ✅ **WIRED** — AdaptiveBatchScheduler 已接入 EngineCore (C18)
 6. `test_roofline.py` — roofline 不被 bench router 使用
 7. `test_metal_kernels.py` + `test_metal_kernels_phase0.py` — metal_kernels 僅被 scripts/ 使用
-8. `test_benchmark.py` — benchmark 框架零管線調用
+8. ~~`test_benchmark.py` — benchmark 框架零管線調用~~ ✅ **WIRED** — BenchmarkRunner 已接入 /bench/model + /bench/batch endpoints
 9. ~~`test_telemetry.py` — telemetry 零管線調用~~ ✅ **WIRED** — TelemetryCollector 已接入 EngineCore (C18)
 
 **這些測試給人「功能完整」的錯覺，但實際上測的是從未在推理管線中運行的代碼。**
@@ -1315,9 +1324,9 @@ llama.cpp 有 **6 種獨立的猜測解碼實現**，全部可組合:
 **關鍵設計模式**: 共享 `common_speculative_state` 基類，`begin()/draft()/accept()` 生命週期。每個實現子類化。服務器可以**同時組合 draft model + ngram-mod**。
 
 **Yunshu 可學習**:
-1. 統一的 spec decode 接口 (begin/draft/accept) — 使 ngram_proposer, speculative_decoder, mtp_decoder 可組合
-2. ngram-mod hash pool — O(1) 查找 vs 當前 KMP O(n)
-3. 每策略統計追蹤 (#calls, #gen_drafts, #acc_drafts, durations)
+1. 統一的 spec decode 接口 (begin/draft/accept) — ✅ SpecInterface 已實現 (C7)
+2. ngram-mod hash pool — ✅ LCGHashPool 已實現 (Wave 28), O(1) circular buffer 替代 KMP O(n)
+3. 每策略統計追蹤 (#calls, #gen_drafts, #acc_drafts, durations) — ✅ 每策略 get_stats() 已接入
 
 ### 16.2 exo — Apple Silicon 分佈式推理
 
@@ -1391,7 +1400,12 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 | C4 | **Warm prompt 預加載**: 啟動時預填充熱門前綴 | vllm-mlx | 1.3-2.25x TTFT 提升 |
 | C5 | **修復 spec_prefill 評分方法**: 用 attention capture 替代 key magnitude | oMLX | 當前方法學術上未驗證 |
 | C6 | **漸進式 KV 量化**: 生成期間每步量化而非僅生成結束後 | mlx-lm | 長序列內存峰值更低 |
-| C7 | **統一 spec decode 接口**: begin()/draft()/accept() 生命週期 | llama.cpp | 使多策略可組合 |
+| C7 | **統一 spec decode 接口**: begin()/draft()/accept() 生命週期 | llama.cpp | ✅ SpecInterface + CompositeStrategy 已實現 (Wave 21) |
+| C24 | **ngram-mod LCG hash pool**: O(1) circular-buffer 替代 KMP O(n) | llama.cpp | ✅ LCGHashPool 已實現 (Wave 28) |
+| C25 | **Grammar-aware spec decode**: 預驗證 draft tokens against grammar constraints | vLLM | ✅ checkpoint/rollback + _grammar_filter_drafts (Wave 28) |
+| C26 | **KV eviction 策略**: MRU, FILO, SLRU, Priority 替代純 LRU | SGLang | ✅ 5 種策略可插拔 (Wave 28) |
+| C27 | **非流式 cancel_event**: 取消非流式請求支持 | vLLM | ✅ _generate_fast cancel_event (Wave 28) |
+| C28 | **LookaheadReasoning**: 思考模型 spec decode 加速 | oMLX | ✅ 自適應 draft_k + 接入思考追蹤 (Wave 28) |
 
 ### 中期目標 (高影響, 中風險)
 

@@ -83,46 +83,48 @@ class TestSpeculativeDecoderStats:
 
 class TestLookaheadReasoning:
     def test_initial_state(self):
-        config = SpecDecodingConfig()
-        class MockModel:
-            pass
-        class MockTokenizer:
-            pass
-        decoder = SpeculativeDecoder(MockModel(), MockModel(), MockTokenizer(), config)
-        lookahead = LookaheadReasoning(decoder)
-        assert lookahead._in_thinking is False
+        lookahead = LookaheadReasoning(base_draft_k=5, thinking_draft_k=10)
+        assert lookahead.in_thinking is False
+        assert lookahead.adjust_draft_k() == 5
 
-    def test_adjust_draft_length_normal(self):
-        config = SpecDecodingConfig(draft_length=5)
-        class MockModel:
-            pass
-        class MockTokenizer:
-            pass
-        decoder = SpeculativeDecoder(MockModel(), MockModel(), MockTokenizer(), config)
-        lookahead = LookaheadReasoning(decoder)
-        assert lookahead.adjust_draft_length() == 5
+    def test_adjust_draft_k_normal(self):
+        lookahead = LookaheadReasoning(base_draft_k=5, thinking_draft_k=10)
+        assert lookahead.adjust_draft_k() == 5
 
-    def test_adjust_draft_length_thinking(self):
-        config = SpecDecodingConfig(draft_length=5)
-        class MockModel:
-            pass
-        class MockTokenizer:
-            pass
-        decoder = SpeculativeDecoder(MockModel(), MockModel(), MockTokenizer(), config)
-        lookahead = LookaheadReasoning(decoder)
+    def test_adjust_draft_k_thinking(self):
+        lookahead = LookaheadReasoning(base_draft_k=5, thinking_draft_k=10)
         lookahead._in_thinking = True
-        assert lookahead.adjust_draft_length() == 10
+        assert lookahead.adjust_draft_k() == 10
+
+    def test_adjust_draft_k_thinking_with_acceptance(self):
+        lookahead = LookaheadReasoning(base_draft_k=5, thinking_draft_k=10)
+        lookahead._in_thinking = True
+        # Low acceptance → slight boost
+        for _ in range(5):
+            lookahead.record_accept(2)
+        assert lookahead.adjust_draft_k() == 7  # min(5+2, 10)
+        # High acceptance → full boost
+        lookahead._recent_accepts.clear()
+        for _ in range(5):
+            lookahead.record_accept(4)
+        assert lookahead.adjust_draft_k() == 10  # 4 >= 5*0.7
 
     def test_get_stats(self):
+        lookahead = LookaheadReasoning(base_draft_k=5, thinking_draft_k=10)
+        stats = lookahead.get_stats()
+        assert "in_thinking" in stats
+        assert stats["base_draft_k"] == 5
+        assert stats["thinking_draft_k"] == 10
+
+    def test_with_decoder(self):
         config = SpecDecodingConfig()
         class MockModel:
             pass
         class MockTokenizer:
             pass
         decoder = SpeculativeDecoder(MockModel(), MockModel(), MockTokenizer(), config)
-        lookahead = LookaheadReasoning(decoder)
+        lookahead = LookaheadReasoning(decoder=decoder)
         stats = lookahead.get_stats()
-        assert "in_thinking" in stats
         assert "decoder_stats" in stats
 
 

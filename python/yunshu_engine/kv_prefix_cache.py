@@ -12,7 +12,7 @@ Major speedup for:
 Design:
 - Hash-chain prefix index: O(matched_blocks) lookup instead of O(n) scan
 - Block-level hashing (following oMLX's compute_block_hash + vLLM pattern)
-- LRU eviction when at capacity
+- Pluggable eviction strategies: LRU, MRU, FILO, SLRU, Priority
 - Detached copies to avoid graph reference leaks
 - Supports any cache type with keys/values/offset attributes
 
@@ -102,6 +102,139 @@ def _compute_block_hashes(tokens) -> list[bytes]:
     return hashes
 
 
+# ── Eviction Strategies ──────────────────────────────────────────────────────
+
+
+class EvictionStrategy:
+    """Base class for cache eviction strategies."""
+
+    def select_victim(
+        self,
+        entries: list,
+        last_used: list[int],
+        access_counter: int,
+        priorities: list[int],
+    ) -> int:
+        """Return the index of the entry to evict.
+
+        Args:
+            entries: List of prompt arrays (for size-aware strategies).
+            last_used: Access timestamps for each entry.
+            access_counter: Current access counter value.
+            priorities: Per-entry priority values (higher = keep longer).
+        """
+        raise NotImplementedError
+
+
+class LRUStrategy(EvictionStrategy):
+    """Evict the least-recently-used entry (default, SGLang/vLLM pattern)."""
+
+    def select_victim(self, entries, last_used, access_counter, priorities):
+        # Among same-priority entries, evict least recently used
+        min_priority = min(priorities) if priorities else 0
+        candidates = [i for i in range(len(entries)) if priorities[i] == min_priority]
+        return min(candidates, key=lambda i: last_used[i])
+
+
+class MRUStrategy(EvictionStrategy):
+    """Evict the most-recently-used entry.
+
+    Counter-intuitive but optimal for scan workloads where a large
+    result set is read once and never reused (e.g., bulk document analysis).
+    Keeps older entries that might be reused in multi-turn conversations.
+    """
+
+    def select_victim(self, entries, last_used, access_counter, priorities):
+        min_priority = min(priorities) if priorities else 0
+        candidates = [i for i in range(len(entries)) if priorities[i] == min_priority]
+        return max(candidates, key=lambda i: last_used[i])
+
+
+class FILOStrategy(EvictionStrategy):
+    """First-In, Last-Out: evict the newest entry.
+
+    Preserves the oldest cached entries (warm system prompts, long-lived
+    contexts). Useful when newer entries are speculative and might not
+    be reused (e.g., one-shot generations).
+    """
+
+    def select_victim(self, entries, last_used, access_counter, priorities):
+        min_priority = min(priorities) if priorities else 0
+        candidates = [i for i in range(len(entries)) if priorities[i] == min_priority]
+        return max(candidates, key=lambda i: last_used[i])
+
+
+class SLRUStrategy(EvictionStrategy):
+    """Segmented LRU: entries are promoted to a protected segment after N hits.
+
+    Two segments:
+    - Probationary: new entries (evicted first)
+    - Protected: entries with 2+ accesses (evicted last, within segment by LRU)
+
+    80/20 split: 80% capacity for protected, 20% for probationary.
+    Best for workloads with clear hot/cold separation.
+    """
+
+    def __init__(self, protected_ratio: float = 0.8, promote_after: int = 2):
+        self._protected_ratio = protected_ratio
+        self._promote_after = promote_after
+        self._access_counts: list[int] = []
+
+    def update_access_counts(self, access_counts: list[int]) -> None:
+        self._access_counts = access_counts
+
+    def select_victim(self, entries, last_used, access_counter, priorities):
+        protected_cap = max(1, int(len(entries) * self._protected_ratio))
+        # Separate into probationary and protected
+        probationary = [
+            i for i in range(len(entries))
+            if self._access_counts[i] < self._promote_after
+        ]
+        protected = [
+            i for i in range(len(entries))
+            if self._access_counts[i] >= self._promote_after
+        ]
+
+        # Evict from probationary first (LRU within segment)
+        if probationary and len(protected) >= protected_cap:
+            return min(probationary, key=lambda i: last_used[i])
+        # If probationary is empty or protected is oversized, evict LRU from all
+        return min(range(len(entries)), key=lambda i: last_used[i])
+
+
+class PriorityStrategy(EvictionStrategy):
+    """Priority-based eviction: higher priority entries are kept longer.
+
+    Within the same priority level, uses LRU as tiebreaker.
+    Priority is assigned per-entry via set_priority().
+    """
+
+    def select_victim(self, entries, last_used, access_counter, priorities):
+        # Evict lowest priority first, then LRU within that tier
+        min_priority = min(priorities) if priorities else 0
+        candidates = [i for i in range(len(entries)) if priorities[i] == min_priority]
+        return min(candidates, key=lambda i: last_used[i])
+
+
+def _make_eviction_strategy(name: str) -> EvictionStrategy:
+    """Create an eviction strategy by name."""
+    strategies = {
+        "lru": LRUStrategy,
+        "mru": MRUStrategy,
+        "fifo": FILOStrategy,
+        "filo": FILOStrategy,
+        "slru": SLRUStrategy,
+        "priority": PriorityStrategy,
+    }
+    cls = strategies.get(name.lower())
+    if cls is None:
+        raise ValueError(
+            f"Unknown eviction strategy: {name!r}. "
+            f"Supported: {', '.join(strategies.keys())}"
+        )
+    return cls()
+
+
 class KVPrefixCache:
     """Cache prefilled KV states keyed by prompt token prefix.
 
@@ -116,7 +249,12 @@ class KVPrefixCache:
     - Block refcounts are tracked in _block_refcount: hash → count.
     """
 
-    def __init__(self, max_entries: int = 64, min_prefix_length: int = 32):
+    def __init__(
+        self,
+        max_entries: int = 64,
+        min_prefix_length: int = 32,
+        eviction: str = "lru",
+    ):
         self._prompts: list[mx.array] = []
         self._caches: list[list] = []
         self._block_hashes: list[list[bytes]] = []
@@ -124,6 +262,9 @@ class KVPrefixCache:
         self._access_counter: int = 0
         self._max_entries = max_entries
         self._min_prefix = min_prefix_length
+        self._eviction_strategy: EvictionStrategy = _make_eviction_strategy(eviction)
+        self._priorities: list[int] = []  # Per-entry priority
+        self._access_counts: list[int] = []  # For SLRU promotion tracking
         # Hash-chain prefix index: block_hash → (entry_index, block_index)
         self._hash_index: dict[str, int] = {}
         self._prefix_index: dict[bytes, list[tuple[int, int]]] = {}
@@ -163,6 +304,8 @@ class KVPrefixCache:
         self._block_hashes.append(block_hashes)
         self._access_counter += 1
         self._last_used.append(self._access_counter)
+        self._priorities.append(0)
+        self._access_counts.append(1)
         self._hash_index[h] = idx
 
         # Add to prefix index with block dedup refcounting (vLLM pattern)
@@ -346,9 +489,10 @@ class KVPrefixCache:
         return result
 
     def _touch(self, index: int) -> None:
-        """Update LRU timestamp for accessed entry."""
+        """Update LRU timestamp and access count for accessed entry."""
         self._access_counter += 1
         self._last_used[index] = self._access_counter
+        self._access_counts[index] += 1
 
     def _remove_entry(self, index: int) -> None:
         """Remove an entry and clean up all indices."""
@@ -370,6 +514,8 @@ class KVPrefixCache:
         self._caches.pop(index)
         self._block_hashes.pop(index)
         self._last_used.pop(index)
+        self._priorities.pop(index)
+        self._access_counts.pop(index)
         self._rebuild_hash_index()
 
     def _rebuild_hash_index(self) -> None:
@@ -386,13 +532,21 @@ class KVPrefixCache:
                 self._block_refcount[bh] = self._block_refcount.get(bh, 0) + 1
 
     def _evict_if_full(self) -> None:
-        """Evict LRU entries when at capacity."""
+        """Evict entries using the configured strategy when at capacity."""
         while len(self._prompts) >= self._max_entries:
-            lru_index = self._last_used.index(min(self._last_used))
-            h = _token_hash(self._prompts[lru_index])
+            # Update SLRU access counts if applicable
+            if isinstance(self._eviction_strategy, SLRUStrategy):
+                self._eviction_strategy.update_access_counts(self._access_counts)
+            victim = self._eviction_strategy.select_victim(
+                self._prompts, self._last_used, self._access_counter,
+                self._priorities,
+            )
+            h = _token_hash(self._prompts[victim])
             self._hash_index.pop(h, None)
-            self._remove_entry(lru_index)
-            logger.info("KV prefix cache evicted LRU entry (capacity)")
+            self._remove_entry(victim)
+            logger.info(
+                f"KV prefix cache evicted entry via {type(self._eviction_strategy).__name__} (capacity)"
+            )
 
     def evict_under_pressure(self, threshold_pct: float = 85.0) -> int:
         """Evict LRU entries when GPU memory is under pressure.
@@ -434,8 +588,13 @@ class KVPrefixCache:
                 if (active / max_ws) * 100 < threshold_pct - 5.0:
                     break
 
-                lru_index = self._last_used.index(min(self._last_used))
-                self._remove_entry(lru_index)
+                if isinstance(self._eviction_strategy, SLRUStrategy):
+                    self._eviction_strategy.update_access_counts(self._access_counts)
+                victim = self._eviction_strategy.select_victim(
+                    self._prompts, self._last_used, self._access_counter,
+                    self._priorities,
+                )
+                self._remove_entry(victim)
                 evicted += 1
 
             if evicted > 0:
@@ -456,6 +615,8 @@ class KVPrefixCache:
         self._caches.clear()
         self._block_hashes.clear()
         self._last_used.clear()
+        self._priorities.clear()
+        self._access_counts.clear()
         self._hash_index.clear()
         self._prefix_index.clear()
         self._block_refcount.clear()
@@ -466,6 +627,11 @@ class KVPrefixCache:
     @property
     def size(self) -> int:
         return len(self._prompts)
+
+    def set_priority(self, index: int, priority: int) -> None:
+        """Set eviction priority for a cached entry (higher = kept longer)."""
+        if 0 <= index < len(self._priorities):
+            self._priorities[index] = priority
 
     def get_stats(self) -> dict:
         total_tokens = sum(len(p) for p in self._prompts)
@@ -482,6 +648,7 @@ class KVPrefixCache:
             "prefix_index_size": len(self._prefix_index),
             "min_prefix_length": self._min_prefix,
             "block_size": _BLOCK_SIZE,
+            "eviction_strategy": type(self._eviction_strategy).__name__,
         }
         if self._ssd_cache is not None:
             try:

@@ -334,3 +334,89 @@ async def bench_status():
         "active": active,
         "results_available": list(_benchmark_results.keys()),
     }
+
+
+# ── Model Benchmark (engine-level) ──
+
+
+class ModelBenchRequest(BaseModel):
+    prompt_lengths: list[int] = Field(default=[32, 128, 512, 1024])
+    max_tokens_list: list[int] = Field(default=[32, 128])
+    num_requests: int = Field(default=3, ge=1)
+    stream: bool = False
+
+
+@router.post("/model")
+async def bench_model(request: ModelBenchRequest):
+    """Run model-level benchmark using BatchedEngine directly (no HTTP overhead).
+
+    This uses the engine's BenchmarkRunner for in-process benchmarking,
+    measuring pure GPU inference speed without network latency.
+    """
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "model"
+
+    try:
+        from yunshu_engine.model_manager import ModelManager
+        from yunshu_engine.benchmark import BenchmarkRunner, BenchmarkSuite
+
+        mgr = ModelManager()
+        engine = mgr.get_engine()
+        if engine is None:
+            raise HTTPException(status_code=503, detail="No model loaded")
+
+        runner = BenchmarkRunner(engine)
+        suite = await runner.run_suite(
+            prompt_lengths=request.prompt_lengths,
+            max_tokens_list=request.max_tokens_list,
+            num_requests=request.num_requests,
+            stream=request.stream,
+        )
+        _benchmark_results["model"] = suite.to_dict()
+        return suite.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Model benchmark failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        with _lock:
+            _active_benchmark = None
+
+
+@router.post("/batch")
+async def bench_batch(concurrency: int = 4, num_requests: int = 8, prompt_tokens: int = 128, max_tokens: int = 32):
+    """Run batch benchmark measuring concurrent request throughput."""
+    with _lock:
+        if _active_benchmark:
+            raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
+        _active_benchmark = "batch"
+
+    try:
+        from yunshu_engine.model_manager import ModelManager
+        from yunshu_engine.benchmark import BenchmarkRunner
+
+        mgr = ModelManager()
+        engine = mgr.get_engine()
+        if engine is None:
+            raise HTTPException(status_code=503, detail="No model loaded")
+
+        runner = BenchmarkRunner(engine)
+        result = await runner.bench_batch(
+            concurrency=concurrency,
+            num_requests=num_requests,
+            prompt_tokens=prompt_tokens,
+            max_tokens=max_tokens,
+        )
+        _benchmark_results["batch"] = result.to_dict()
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch benchmark failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        with _lock:
+            _active_benchmark = None
