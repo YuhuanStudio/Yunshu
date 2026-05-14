@@ -258,6 +258,59 @@ class EngineCore:
             self._prefill_client = ExternalPrefillClient(prefill_config)
             logger.info("ExternalPrefillClient configured (remote prefill)")
 
+        # ── Wave 42: 實現-整合 wiring ──
+
+        # Request lifecycle orchestrator (QUEUED→PREFILLING→DECODING→FINISHED)
+        from .request_lifecycle import RequestLifecycleOrchestrator, AdaptiveConcurrencyController
+        concurrency_ctrl = AdaptiveConcurrencyController.from_env()
+        self._lifecycle_orchestrator = RequestLifecycleOrchestrator(
+            concurrency_controller=concurrency_ctrl,
+        )
+        logger.info(f"RequestLifecycleOrchestrator wired (max_concurrent={concurrency_ctrl._maximum})")
+
+        # Inference budget manager (token/time/cost/thinking 4-dimension budgets)
+        from .inference_budget import InferenceBudgetManager
+        self._budget_manager = InferenceBudgetManager.from_env()
+        logger.info("InferenceBudgetManager wired")
+
+        # Request deduplication (SHA-256 content-hash dedup with fan-out)
+        from .request_dedup import RequestDeduplicator
+        self._request_dedup: RequestDeduplicator | None = None
+        self._dedup_hashes: dict[str, str] = {}  # req_id → content_hash
+        if os.environ.get("YUNSHU_REQUEST_DEDUP", "").strip() in ("1", "true", "yes"):
+            self._request_dedup = RequestDeduplicator.from_env()
+            logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
+
+        # KV lifecycle manager (4-tier hot/warm/cool/cold admission/migration/eviction)
+        from .kv_lifecycle import KVLifecycleManager, KVTierConfig
+        self._kv_lifecycle = KVLifecycleManager()
+        logger.info("KVLifecycleManager wired (4-tier KV lifecycle)")
+
+        # Token-level scheduler (WFQ token budget + priority inversion guard)
+        from .token_scheduler import TokenLevelScheduler, PriorityInversionGuard, FairnessTracker
+        self._token_scheduler = TokenLevelScheduler()
+        self._priority_guard = PriorityInversionGuard()
+        self._fairness_tracker = FairnessTracker()
+
+        # Auto-tuner (adaptive config: performance profiler + SLO monitor + hill-climbing)
+        from .auto_tuner import AutoTuner, PerformanceProfiler, SLOMonitor, AdaptiveBatchSizer
+        self._profiler = PerformanceProfiler()
+        self._slo_monitor = SLOMonitor()
+        self._auto_tuner = AutoTuner(profiler=self._profiler, slo_monitor=self._slo_monitor)
+        self._adaptive_batch_sizer = AdaptiveBatchSizer()
+
+        # Composition scheduler mixins (SGLang §14.1 pattern)
+        from .scheduler_mixins import CompositionScheduler, MetricsMixin, MemoryPressureMixin
+        try:
+            _metrics_mixin = MetricsMixin()
+            _mem_pressure_mixin = MemoryPressureMixin.from_env()
+            self._composition_scheduler = CompositionScheduler(self.scheduler)
+            self._composition_scheduler.add_mixin(_metrics_mixin)
+            self._composition_scheduler.add_mixin(_mem_pressure_mixin)
+        except Exception:
+            logger.debug("CompositionScheduler setup skipped", exc_info=True)
+            self._composition_scheduler = None
+
         # Lifecycle
         self._running = False
         self._loop_task: asyncio.Task | None = None
@@ -360,6 +413,17 @@ class EngineCore:
             except Exception:
                 logger.debug("KV offload manager stop failed", exc_info=True)
 
+        # ── Wave 42: Shutdown wired modules ──
+        if self._composition_scheduler is not None:
+            try:
+                self._composition_scheduler.shutdown()
+            except Exception:
+                logger.debug("composition scheduler shutdown failed", exc_info=True)
+        try:
+            self._profiler.stop_profiling()
+        except Exception:
+            pass
+
         # Stop external prefill server
         if self._prefill_server is not None:
             try:
@@ -437,6 +501,52 @@ class EngineCore:
             token_ids = list(prompt)
 
         num_prompt_tokens = len(token_ids)
+
+        # ── Wave 42: Budget check (token/time/cost/thinking) ──
+        budget = self._budget_manager.register(
+            request_id=req_id,
+            max_tokens=max_tokens,
+            prompt_tokens=num_prompt_tokens,
+            thinking_budget=thinking_budget or 0,
+        )
+        if budget.is_exhausted:
+            budget_reason = budget.exhaustion_reason or "budget_exceeded"
+            from .output_collector import RequestOutputCollector, RequestStreamState
+            from .request import RequestOutput
+            self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+            self._stream_states[req_id] = RequestStreamState(
+                stream_interval=self.config.stream_interval
+            )
+            self._finished_events[req_id] = asyncio.Event()
+            error_output = RequestOutput(
+                request_id=req_id,
+                finished=True,
+                finish_reason=budget_reason,
+                error=f"Budget exceeded: {budget_reason}",
+                prompt_tokens=num_prompt_tokens,
+                completion_tokens=0,
+            )
+            self._output_collectors[req_id].put(error_output)
+            self._output_collectors[req_id].put(None)
+            self._finished_events[req_id].set()
+            return req_id
+
+        # ── Wave 42: Request dedup ──
+        if self._request_dedup is not None:
+            from .request_dedup import RequestDeduplicator
+            content_hash = RequestDeduplicator.compute_hash(
+                model="", prompt=str(prompt), max_tokens=max_tokens,
+                temperature=temperature, top_p=top_p,
+            )
+            dedup_result = self._request_dedup.check(req_id, content_hash)
+            if dedup_result is not None:
+                logger.debug(f"Request {req_id} dedup hit for {dedup_result.primary_request_id}")
+            else:
+                self._request_dedup.register(req_id, content_hash)
+            self._dedup_hashes[req_id] = content_hash
+
+        # ── Wave 42: Lifecycle tracking ──
+        self._lifecycle_orchestrator.on_request_added(req_id)
 
         # Memory guard preflight check — reject before adding to scheduler
         if self._memory_guard is not None:
@@ -678,9 +788,55 @@ class EngineCore:
                 if req_output.finished:
                     self._signal_finished(rid)
                     self._num_requests_processed += 1
+                    # ── Wave 42: Lifecycle + budget + dedup cleanup ──
+                    self._lifecycle_orchestrator.on_request_finished(rid)
+                    self._budget_manager.remove(rid)
+                    if self._request_dedup is not None:
+                        content_hash = self._dedup_hashes.pop(rid, None)
+                        if content_hash:
+                            self._request_dedup.complete(content_hash)
 
             # Update adaptive batch scheduler metrics
             if scheduler_output.outputs:
+                # ── Wave 42: Lifecycle decode tracking for active requests ──
+                for req_output in scheduler_output.outputs:
+                    rid = req_output.request_id
+                    if not req_output.finished and req_output.completion_tokens > 0:
+                        state = self._lifecycle_orchestrator.get_state(rid)
+                        if state is not None and state.phase.name in ("PREFILLING",):
+                            self._lifecycle_orchestrator.on_decode_start(rid)
+                        # Budget consumption
+                        self._budget_manager.consume(rid, tokens=1)
+
+                # ── Wave 42: Profiler + auto-tuner + fairness ──
+                try:
+                    batch_size = len(scheduler_output.outputs)
+                    from .auto_tuner import StepMetrics
+                    step_metrics = StepMetrics(
+                        batch_size=batch_size,
+                        tokens_generated=sum(
+                            o.completion_tokens for o in scheduler_output.outputs
+                        ),
+                        wall_time_ms=0.0,
+                    )
+                    self._profiler.record_step(step_metrics)
+                    # Auto-tune every 100 steps
+                    if self._profiler._total_steps % 100 == 0:
+                        tuning = self._auto_tuner.apply_tuning()
+                        if tuning:
+                            logger.debug(f"AutoTuner: {tuning}")
+                    # SLO checks
+                    self._slo_monitor.check_slo("ttft", step_metrics.ttft_ms)
+                    self._slo_monitor.check_slo("itl", step_metrics.itl_ms)
+                    self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
+                    # Fairness tracker
+                    for req_output in scheduler_output.outputs:
+                        self._fairness_tracker.record_allocation(
+                            req_output.request_id,
+                            tokens_allocated=req_output.completion_tokens or 1,
+                        )
+                except Exception:
+                    logger.debug("profiler/auto-tuner failed", exc_info=True)
                 try:
                     import mlx.core as mx
                     active_mem = mx.get_active_memory()
@@ -776,6 +932,19 @@ class EngineCore:
             stats["external_prefill_server"] = self._prefill_server.get_stats()
         if self._prefill_client is not None:
             stats["external_prefill_client"] = self._prefill_client.get_stats()
+        # ── Wave 42: Wired module stats ──
+        stats["lifecycle"] = self._lifecycle_orchestrator.get_stats()
+        stats["budget"] = self._budget_manager.get_stats()
+        stats["kv_lifecycle"] = self._kv_lifecycle.get_stats()
+        stats["token_scheduler"] = self._token_scheduler.get_stats()
+        stats["auto_tuner"] = self._auto_tuner.get_stats()
+        stats["fairness"] = self._fairness_tracker.get_stats()
+        stats["profiler"] = self._profiler.get_stats()
+        stats["slo"] = self._slo_monitor.get_stats()
+        if self._request_dedup is not None:
+            stats["request_dedup"] = self._request_dedup.get_stats()
+        if self._composition_scheduler is not None:
+            stats["composition_scheduler"] = self._composition_scheduler.get_stats()
         return stats
 
     def _overlap_step(self) -> Any:

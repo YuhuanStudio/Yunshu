@@ -220,6 +220,11 @@ class BatchedEngine:
         self._engine_core = None
         self._loaded = False
 
+        # ── Wave 42: Wired production modules ──
+        # Model preprocessor registry (auto-detects model family for multimodal input)
+        from .model_preprocessor import PreprocessorRegistry
+        self._preprocessor_registry = PreprocessorRegistry()
+
         # Speculative decoding state (Phase 4)
         self._spec_decoder = None  # SpeculativeDecoder instance
         self._spec_enabled = False
@@ -1044,6 +1049,27 @@ class BatchedEngine:
 
         tokenizer = self._tokenizer
         model = self._model
+
+        # ── Wave 42: Model preprocessor for multimodal input ──
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            # Check for multimodal content (images, audio, video)
+            has_multimodal = any(
+                isinstance(c.get("content"), list)
+                for c in prompt
+                if isinstance(c.get("content"), list)
+            )
+            if has_multimodal and self._preprocessor_registry is not None:
+                try:
+                    preprocessor = self._preprocessor_registry.detect(
+                        self.model_name, model
+                    )
+                    if preprocessor is not None:
+                        from .model_preprocessor import PreprocessedInput
+                        processed = preprocessor.preprocess(prompt, tokenizer)
+                        if processed.token_ids:
+                            prompt = processed.token_ids
+                except Exception:
+                    logger.debug("model preprocessor failed, using raw prompt", exc_info=True)
 
         # Encode prompt
         if isinstance(prompt, str):
@@ -3171,6 +3197,9 @@ class BatchedEngine:
                 "states_stored": 0,
             }),
         }
+        # Wave 42: Model preprocessor registry stats
+        if hasattr(self, '_preprocessor_registry') and self._preprocessor_registry is not None:
+            stats["model_preprocessor"] = self._preprocessor_registry.get_stats()
         return stats
 
     def get_kv_cache_stats(self) -> dict:
