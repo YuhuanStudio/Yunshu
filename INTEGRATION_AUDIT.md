@@ -1199,7 +1199,7 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 
 | 功能 | vLLM | Yunshu | 狀態 |
 |------|------|--------|------|
-| Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | N-gram(Python), EAGLE-3(代碼存在), MTP | 缺 GPU 加速 N-gram, Medusa, DFlash |
+| Proposer 類型 | N-gram(CPU+GPU), EAGLE, Medusa, DFlash, Gemma4, suffix, LLM-based | N-gram(Python), EAGLE-3(代碼存在), MTP, ✅ Medusa (Wave 32) | 缺 GPU 加速 N-gram, DFlash |
 | 批量 spec decode | 完整整合 SpecDecodeMetadata, 每請求 draft tokens | ✅ NgramProposer 批量路徑 (Wave 29) + cross-model 路徑 | N-gram 無 GPU 開銷; 缺 GPU 加速 N-gram |
 | GPU 拒絕採樣 | GPU kernel | ✅ GPURejectionSampler — MLX 批量 argmax + cumsum 並行驗證 (YUNSHU_GPU_REJECTION=1) (Wave 31) | GPU 批量驗證 |
 | Spec + 結構化輸出 | 延遲採樣組合 grammar bitmask + draft | ✅ _grammar_filter_drafts() 預驗證 (Wave 28) | grammar-aware spec decode |
@@ -1392,9 +1392,9 @@ exo 使用**事件溯源 + 消息傳遞**架構:
 **Yunshu 差距**:
 | 方面 | exo | Yunshu |
 |------|-----|--------|
-| 層分配 | 記憶體比例 + 頻寬感知 | `auto_partition_model()` 等分 |
+| 層分配 | 記憶體比例 + 頻寬感知 | ✅ LayerAllocator 4策略 (MEMORY_PROPORTIONAL default) + WaterFillingRebalancer (Wave 32) |
 | 分離式 P/D | TCP prefill server | external_prefill.py 存在但不成熟 |
-| 故障隔離 | 進程隔離 + supervisor | 全部 in-process |
+| 故障隔離 | 進程隔離 + supervisor | ✅ InferenceWorker + WorkerSupervisor (YUNSHU_PROCESS_ISOLATION=1, Wave 32) |
 | 事件溯源 | 不可變事件日誌 | 命令式狀態 (重啟丟失) |
 
 ### 16.3 Parallax — 分佈式流水線並行
@@ -1660,7 +1660,7 @@ VideoEngine 已實現 (Wave 26)，包裝 mlx-video 的 Wan2.2 和 LTX2 pipeline:
 - ModelType.VIDEO 自動偵測
 - Fallback 模式 (無模型時生成佔位幀)
 
-尚待: 原生 MLX 視頻 pipeline (不依賴 mlx-video 庫)、串流視頻幀、視頻 LoRA。
+尚待: 串流視頻幀優化、更多視頻模型架構原生支持。✅ 原生 MLX 視頻 pipeline (WanVideoPipeline, Wave 32)、✅ 視頻 LoRA (VideoLoRAManager)。
 
 ---
 
