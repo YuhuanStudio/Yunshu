@@ -1250,7 +1250,7 @@ Yunshu 有而 vLLM 沒有的:
 | **Native MTP** | Monkey-patch mlx-lm, 模型專用補丁 (deepseek_v4, qwen35), 含 VLM MTP | mtp_patch.py 僅 scripts/ | 研究性質 |
 | **N-gram** | 調度器 logits processors | ✅ **WIRED** — BatchedEngine 雙路徑接入 (P1-2) | 已接入 |
 
-### 13.2 oMLX 有而 Yunshu 完全缺失的功能
+### 13.2 ~~oMLX 有而 Yunshu 完全缺失的功能~~ ✅ 全部已實現
 
 | 功能 | 說明 | 價值 |
 |------|------|------|
@@ -1511,13 +1511,11 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 > **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3301 passed, 13 skipped。
 
-### 18.1 致命 Bug: Streaming VLM 丟失圖片
+### 18.1 ~~致命 Bug: Streaming VLM 丟失圖片~~ ✅ 已修復 (M1)
 
-**VLM streaming 完全不處理圖片** — `generate_stream()` 方法先調用 `_format_prompt()` 將 messages 轉為純文本 (剝離所有圖片內容)，然後調用 `_stream_vlm_text()` 做純文本生成。圖片在 streaming 路徑中被完全丟棄。
+~~**VLM streaming 完全不處理圖片** — `generate_stream()` 方法先調用 `_format_prompt()` 將 messages 轉為純文本 (剝離所有圖片內容)，然後調用 `_stream_vlm_text()` 做純文本生成。圖片在 streaming 路徑中被完全丟棄。~~
 
-非 streaming 路徑正常工作: `generate()` 正確提取圖片 → 調用 `_generate_vlm_vision()`。
-
-**影響**: 所有使用 `"stream": true` + 圖片的 VLM 請求都只會得到文本回應，忽略圖片。
+✅ **已修復 (M1)**: streaming 路徑現在使用 `mlx_vlm.stream_generate()` 正確處理圖片。
 
 ### 18.2 mRoPE 死代碼
 
