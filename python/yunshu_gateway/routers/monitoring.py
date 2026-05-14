@@ -417,6 +417,17 @@ async def ssd_cache_stats() -> dict[str, Any]:
     return {"active": True, "models": results}
 
 
+@router.get("/data-parallel")
+async def data_parallel_stats() -> dict[str, Any]:
+    """DataParallelRouter statistics — load distribution across replicas."""
+    from ..engine import get_dp_router
+
+    router = get_dp_router()
+    if router is None:
+        return {"active": False}
+    return {"active": True, **router.get_stats()}
+
+
 @router.get("/per-model")
 async def per_model_stats() -> dict[str, Any]:
     """Per-model request statistics."""

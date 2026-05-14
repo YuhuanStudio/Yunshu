@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _engine: Engine | None = None
 _model_manager: ModelManager | None = None
+_dp_router = None  # DataParallelRouter for multi-replica routing
 
 
 def get_engine() -> Engine | None:
@@ -97,13 +98,27 @@ def _discover_models(models_dir: str) -> None:
 async def get_engine_for_model(model_id: str) -> Engine:
     """Get an engine for the specified model.
 
-    Resolution order (oMLX pattern):
-    1. If ModelManager is active, resolve through it (supports aliases)
-    2. Fall back to single engine with resolve_model_id()
+    Resolution order:
+    1. If DataParallelRouter is active and model matches, route via DP
+    2. If ModelManager is active, resolve through it (supports aliases)
+    3. Fall back to single engine with resolve_model_id()
 
     The returned engine may be an Engine (legacy) or BatchedEngine.
     Both expose generate(), generate_stream(), chat(), stream_chat().
     """
+    # Data-parallel routing: if DP is configured, select a replica node
+    if _dp_router is not None and _dp_router.num_nodes > 0:
+        node_id = _dp_router.select_node()
+        if node_id is not None:
+            _dp_router.record_request_start(node_id)
+            # In single-process mode, all DP nodes share the same engine
+            # In multi-process mode, the node_id maps to a remote engine
+            # For now, route to the local engine and track load
+            engine = _engine or (_model_manager.get_engine(model_id) if _model_manager else None)
+            if engine is not None:
+                await _ensure_engine_started(engine)
+                return engine
+
     if _model_manager is not None:
         # Try model manager resolution
         entry = _model_manager.get_entry(model_id)
@@ -151,6 +166,33 @@ async def _ensure_engine_started(engine) -> None:
             await engine.start()
 
 
+def init_data_parallel(strategy: str = "least_loaded"):
+    """Initialize DataParallelRouter for multi-replica routing.
+
+    When enabled, the gateway can distribute requests across multiple
+    engine instances running the same model (data parallelism).
+    Requires nodes to be registered via add_dp_node().
+    """
+    global _dp_router
+    from yunshu_mesh.data_parallel import DataParallelRouter
+    _dp_router = DataParallelRouter(strategy=strategy)
+    logger.info(f"DataParallelRouter initialized: strategy={strategy}")
+    return _dp_router
+
+
+def get_dp_router():
+    """Get the DataParallelRouter (or None if not initialized)."""
+    return _dp_router
+
+
+def add_dp_node(node_id: str, rank: int = 0) -> None:
+    """Register a data-parallel engine replica node."""
+    if _dp_router is None:
+        init_data_parallel()
+    _dp_router.add_node(node_id, rank)
+    logger.info(f"DP node registered: {node_id} rank={rank}")
+
+
 __all__ = [
     "Engine",
     "EngineConfig",
@@ -161,4 +203,7 @@ __all__ = [
     "init_engine",
     "init_model_manager",
     "set_engine",
+    "init_data_parallel",
+    "get_dp_router",
+    "add_dp_node",
 ]

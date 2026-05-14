@@ -20,12 +20,6 @@ from typing import Optional
 
 import numpy as np
 
-try:
-    import mlx.core as mx
-    HAS_MLX = True
-except ImportError:
-    HAS_MLX = False
-
 logger = logging.getLogger(__name__)
 
 
@@ -158,7 +152,7 @@ class KVWarmTier:
         """
         evicted = 0
         for _ in range(min(count, len(self._store))):
-            block_hash, entry = self._store.popitem(last=False)  # FIFO = LRU
+            _block_hash, entry = self._store.popitem(last=False)  # FIFO = LRU
             packed, scales = entry
             # Adjust memory accounting
             try:
