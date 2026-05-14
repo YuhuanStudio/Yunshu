@@ -27,7 +27,7 @@ import gc
 import hashlib
 import logging
 from copy import copy
-from typing import Optional
+from typing import Any, Optional
 
 import mlx.core as mx
 
@@ -110,10 +110,10 @@ class EvictionStrategy:
 
     def select_victim(
         self,
-        entries: list,
-        last_used: list[int],
-        access_counter: int,
-        priorities: list[int],
+        _entries: list,
+        _last_used: list[int],
+        _access_counter: int,
+        _priorities: list[int],
     ) -> int:
         """Return the index of the entry to evict.
 
@@ -273,6 +273,8 @@ class KVPrefixCache:
         # SSD-tier cache (lazy init)
         self._ssd_cache: Any | None = None
         self._ssd_model_name: str = ""
+        # Pre-eviction callback for DeltaNet inversion (set by BatchedEngine)
+        self._pre_evict_callback: Any | None = None
 
     def add(
         self,
@@ -496,6 +498,15 @@ class KVPrefixCache:
 
     def _remove_entry(self, index: int) -> None:
         """Remove an entry and clean up all indices."""
+        # Pre-eviction callback: gives engine a chance to capture inverted
+        # DeltaNet SSM state before the KV cache is discarded.
+        if self._pre_evict_callback is not None:
+            try:
+                self._pre_evict_callback(
+                    self._prompts[index], self._caches[index],
+                )
+            except Exception:
+                logger.debug("pre-evict callback failed", exc_info=True)
         # Decrement block refcounts and clean up prefix index
         for bh in self._block_hashes[index]:
             if bh in self._block_refcount:
@@ -693,7 +704,6 @@ class KVPrefixCache:
                 tokens = np_array(prompt)
                 start = bi * _BLOCK_SIZE
                 end = min(start + _BLOCK_SIZE, len(tokens))
-                block_tokens = tokens[start:end]
                 self._ssd_cache.save_block(
                     block_hash=bh,
                     cache_data=cache,

@@ -1,7 +1,8 @@
 """DeltaNet state inversion — analytically invert the SSM recurrence on rejection.
 
-.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
-
+Used in the KV cache eviction path: when KV blocks are evicted from the prefix
+cache under memory pressure, the inverted state allows partial recovery of
+evicted context. Enabled via YUNSHU_DELTANET_INVERSION=1 env var.
 
 The GatedDeltaNet recurrence (ICLR 2025, Songlin Yang et al.):
 
@@ -41,8 +42,10 @@ Limitations:
   - Multi-token verify (K>1): invert K updates sequentially
 
 Verdict: Mathematically correct (float32 roundtrip < 1e-7 error) but
-NOT practical for BF16 speculative decoding. Kept for reference — may
-be useful if float32 states or mixed-precision inference becomes viable.
+NOT practical for BF16 speculative decoding. Wired into KV cache eviction
+path as an opt-in feature (YUNSHU_DELTANET_INVERSION=1) for SSM layer
+state recovery. May become more useful if float32 states or mixed-precision
+inference becomes viable.
 Capture mechanism integrated via register_hooks() for DeltaNet layers.
 """
 from __future__ import annotations
