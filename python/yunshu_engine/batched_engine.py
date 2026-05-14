@@ -551,6 +551,22 @@ class BatchedEngine:
         await loop.run_in_executor(get_mlx_executor(), _cleanup)
         logger.info(f"BatchedEngine stopped: {self.model_name}")
 
+    def _should_use_engine_loop(self, use_engine_loop: bool | None) -> bool:
+        """Determine whether to route through EngineCore continuous batching.
+
+        Auto-detects: if EngineCore has active requests, prefer the batch
+        path for better throughput under concurrency. Single-request fast
+        path is preferred for latency when no other requests are pending.
+        """
+        if use_engine_loop is not None:
+            return use_engine_loop
+        if getattr(self, '_engine_loop_default', False):
+            return True
+        # Auto-detect: switch to batch path when concurrency is detected
+        if self._engine_core is not None and self._engine_core.has_active_requests:
+            return True
+        return False
+
     async def generate(
         self,
         prompt: str,
@@ -594,7 +610,7 @@ class BatchedEngine:
         if not self._loaded:
             await self.start()
 
-        _use_engine_loop = getattr(self, '_engine_loop_default', False) if use_engine_loop is None else use_engine_loop
+        _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
 
         # Memory guard preflight check
         guard_rejection = self._check_memory_guard(prompt, max_tokens)
@@ -1172,7 +1188,7 @@ class BatchedEngine:
         if not self._loaded:
             await self.start()
 
-        _use_engine_loop = getattr(self, '_engine_loop_default', False) if use_engine_loop is None else use_engine_loop
+        _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
             effort_map = {"low": 2048, "medium": 8192, "high": 32768}
