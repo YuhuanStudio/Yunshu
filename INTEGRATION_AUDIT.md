@@ -1179,8 +1179,8 @@ ngram_proposer.py → BatchedEngine._generate_ngram_spec()
 |------|------|--------|------|
 | 進程模型 | 多進程 (ZMQ IPC) | 單進程 (asyncio) | Yunshu 無法跨 GPU 擴展 |
 | 調度-執行 | 獨立進程 + 非阻塞 future | asyncio + 單 GPU 線程 | MLX 執行阻塞事件循環 |
-| 流水線並行 | Batch queue + 異步 overlap | 無 | 無調度/執行重疊 |
-| 數據並行 | DPEngineCoreProc + all-reduce | DataParallelRouter 接入 MeshManager (DP-1) | 管線已接入，但尚未在生產請求路徑中使用 |
+| 流水線並行 | Batch queue + 異步 overlap | ✅ TBO (Two-Batch Overlap) + CPU/GPU OverlapScheduler (Wave 31) | Pipeline overlap |
+| 數據並行 | DPEngineCoreProc + all-reduce | ✅ DataParallelRouter + DPRouterMiddleware 生產路徑 (Wave 32) | DP 完整接入 |
 | 休眠/喚醒 | 3 級休眠 (L0:暫停 L1:卸載權重 L2:丟棄 GPU) | ✅ 3 級休眠端點 (SLEEP) | L0 暫停 + L1 卸載 + L2 深度休眠 |
 | 優雅關閉 | 3 狀態機 (RUNNING/REQUESTED/SHUTTING_DOWN) | ✅ 3 狀態機 (SHUTDOWN) | RUNNING → REQUESTED → SHUTTING_DOWN |
 
