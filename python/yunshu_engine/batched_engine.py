@@ -415,6 +415,23 @@ class BatchedEngine:
         except Exception:
             logger.debug("Model patches skipped", exc_info=True)
 
+        # Detect model architecture optimizations (RoPE scaling, attention type, MoE)
+        try:
+            from .model_optimizations import RoPEScalingOptimizer, AttentionOptimizer, MoEEfficiencyOptimizer
+            rope_opt = RoPEScalingOptimizer()
+            rope_opt.configure(self._model)
+            attn_opt = AttentionOptimizer()
+            attn_opt.detect_attention_type(self._model)
+            moe_opt = MoEEfficiencyOptimizer()
+            moe_opt.configure(self._model)
+            logger.info(
+                f"Model optimizations detected: RoPE={rope_opt.get_scaling_config().scaling_type}, "
+                f"Attention={attn_opt.get_stats().get('attention_type', 'unknown')}, "
+                f"MoE={moe_opt.get_stats().get('num_experts', 0)} experts"
+            )
+        except Exception:
+            logger.debug("Model optimization detection skipped", exc_info=True)
+
         # Apply n_confirmed patch for GatedDeltaNet SSM layers (Qwen3.5)
         # Enables zero-cost reject in MTP: restore_rollback instead of refeed
         try:
@@ -1033,9 +1050,22 @@ class BatchedEngine:
         if finish_reason == "memory_exceeded":
             finish_reason = "memory_limit"
 
+        # Apply output parser to extract reasoning/tool_calls from raw text
+        output_text = _clean_special_tokens(result.output_text)
+        try:
+            from .output_parser import parse_output
+            parsed = parse_output(output_text, self.model_name)
+            if parsed.finish_reason:
+                finish_reason = parsed.finish_reason
+            # Use cleaned content (reasoning stripped) as the main text
+            if parsed.reasoning and parsed.content != output_text:
+                output_text = parsed.content
+        except Exception:
+            logger.debug("output_parser failed", exc_info=True)
+
         return GenerationOutput(
-            text=_clean_special_tokens(result.output_text),
-            new_text=_clean_special_tokens(result.output_text),
+            text=output_text,
+            new_text=output_text,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
             finished=True,

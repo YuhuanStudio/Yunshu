@@ -67,6 +67,13 @@ class EngineCoreConfig:
     hybrid_chunk_size: int = 512
 
 
+def _safe_get(obj: Any, attr: str, default: Any = None) -> Any:
+    """Safely get an attribute from a config object or dict."""
+    if isinstance(obj, dict):
+        return obj.get(attr, default)
+    return getattr(obj, attr, default)
+
+
 class EngineCore:
     """MLX-native continuous batching engine core (oMLX EngineCore pattern).
 
@@ -326,6 +333,20 @@ class EngineCore:
         # Memory-aware scheduler (admission control with memory budget)
         from .memory_aware_scheduler import MemoryAwareScheduler
         self._memory_aware_scheduler = MemoryAwareScheduler()
+
+        # Configure memory-aware scheduler with model parameters for accurate estimation
+        try:
+            model_config = getattr(model, 'config', model) if model else None
+            if model_config is not None:
+                layers = _safe_get(model_config, 'num_hidden_layers', 0)
+                heads = _safe_get(model_config, 'num_key_value_heads',
+                                  _safe_get(model_config, 'num_attention_heads', 0))
+                h_dim = _safe_get(model_config, 'head_dim', 0)
+                self._memory_aware_scheduler.set_model_config(
+                    num_layers=layers, num_kv_heads=heads, head_dim=h_dim,
+                )
+        except Exception:
+            logger.debug("memory_aware_scheduler model config skipped", exc_info=True)
 
         # Context window manager (4 truncation strategies for long prompts)
         from .context_window import ContextWindowManager
@@ -613,15 +634,30 @@ class EngineCore:
         # ── Wave 42: Lifecycle tracking ──
         self._lifecycle_orchestrator.on_request_added(req_id)
 
+        # ── Wave 46: KV lifecycle admission ──
+        try:
+            estimated_kv_bytes = num_prompt_tokens * 2048
+            self._kv_lifecycle.admit(
+                block_id=hash(req_id) % (10**9),
+                size_bytes=estimated_kv_bytes,
+                prefix_hash="",
+            )
+        except Exception:
+            logger.debug("kv_lifecycle admit failed", exc_info=True)
+
         # ── Wave 43: Memory-aware admission control ──
-        estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
-        admitted = self._memory_aware_scheduler.reserve_memory(
-            request_id=req_id,
-            num_bytes=estimated_bytes,
-            num_tokens=num_prompt_tokens,
-        )
-        if not admitted:
-            logger.warning(f"Memory-aware scheduler rejected request {req_id}: estimated {estimated_bytes} bytes")
+        try:
+            estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
+            if isinstance(estimated_bytes, int) and estimated_bytes > 0:
+                admitted = self._memory_aware_scheduler.reserve_memory(
+                    request_id=req_id,
+                    num_bytes=estimated_bytes,
+                    num_tokens=num_prompt_tokens,
+                )
+                if not admitted:
+                    logger.warning(f"Memory-aware scheduler rejected request {req_id}: estimated {estimated_bytes} bytes")
+        except Exception:
+            logger.debug("memory-aware admission check skipped", exc_info=True)
 
         # Memory guard preflight check — reject before adding to scheduler
         if self._memory_guard is not None:
@@ -884,6 +920,10 @@ class EngineCore:
                     self._lifecycle_orchestrator.on_request_finished(rid)
                     self._budget_manager.remove(rid)
                     self._memory_aware_scheduler.release_memory(rid)
+                    try:
+                        self._kv_lifecycle.release(hash(rid) % (10**9))
+                    except Exception:
+                        logger.debug("kv_lifecycle release failed", exc_info=True)
                     if self._request_dedup is not None:
                         content_hash = self._dedup_hashes.pop(rid, None)
                         if content_hash:
