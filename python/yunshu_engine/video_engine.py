@@ -140,6 +140,7 @@ class VideoEngine:
 
         # Wave 43: Native MLX video pipeline (Wan2.2/LTX2)
         self._native_pipeline = None  # Created lazily after model load
+        import yunshu_engine.video_pipeline as _vp  # ensure module is loaded
         self._lora_rank: int = 8
         self._lora_scale: float = 20.0
         self._base_model_weights: dict | None = None
