@@ -127,6 +127,13 @@ def __getattr__(name):
     # Model Preprocessors (§16.5 vllm-omni pattern)
     "PreprocessorRegistry": ".model_preprocessor",
     "PreprocessedInput": ".model_preprocessor",
+    # KV Lifecycle (unified tier management)
+    "KVLifecycleManager": ".kv_lifecycle",
+    "KVBlock": ".kv_lifecycle",
+    "KVTier": ".kv_lifecycle",
+    "KVTierConfig": ".kv_lifecycle",
+    "CacheWarmingPredictor": ".kv_lifecycle",
+    "KVCompactionScheduler": ".kv_lifecycle",
     }
     if name in _lazy:
         import importlib
