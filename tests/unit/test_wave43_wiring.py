@@ -185,3 +185,28 @@ class TestCrossModuleWave43:
         comp = KVPrefixCompressor()
         stats = comp.get_stats()
         assert isinstance(stats, dict)
+
+    def test_model_optimizations_wired(self):
+        core = _make_core()
+        assert core._rope_optimizer is not None
+        assert core._attention_optimizer is not None
+        assert core._moe_optimizer is not None
+        assert core._warmup_manager is not None
+
+    def test_model_optimizations_in_stats(self):
+        core = _make_core()
+        core._start_time = None
+        stats = core.get_stats()
+        assert "model_optimizations" in stats
+        mo = stats["model_optimizations"]
+        assert isinstance(mo, dict)
+        assert "rope" in mo
+        assert "attention" in mo
+        assert "moe" in mo
+
+    def test_process_isolation_in_stats(self):
+        core = _make_core()
+        core._start_time = None
+        stats = core.get_stats()
+        assert "process_isolation" in stats
+        assert stats["process_isolation"]["enabled"] is False

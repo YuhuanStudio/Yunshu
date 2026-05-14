@@ -341,6 +341,23 @@ class EngineCore:
         self._batch_sampler = BatchSampler()
         self._batch_stop_checker = BatchStopChecker()
 
+        # Model optimizations (RoPE scaling, attention type detection, MoE efficiency)
+        from .model_optimizations import (
+            RoPEScalingOptimizer, AttentionOptimizer, MoEEfficiencyOptimizer, ModelWarmupManager,
+        )
+        self._rope_optimizer = RoPEScalingOptimizer()
+        self._attention_optimizer = AttentionOptimizer()
+        self._moe_optimizer = MoEEfficiencyOptimizer()
+        self._warmup_manager = ModelWarmupManager()
+
+        # Process isolation (opt-in via YUNSHU_PROCESS_ISOLATION=1)
+        self._isolation_enabled = False
+        if os.environ.get("YUNSHU_PROCESS_ISOLATION", "").lower() in ("1", "true", "yes"):
+            from .process_isolation import is_isolation_enabled
+            self._isolation_enabled = is_isolation_enabled()
+            if self._isolation_enabled:
+                logger.info("Process isolation enabled (YUNSHU_PROCESS_ISOLATION=1)")
+
         # Stats
         self._num_requests_processed: int = 0
 
@@ -975,6 +992,13 @@ class EngineCore:
         stats["context_window"] = self._context_window_mgr.get_stats()
         stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
         stats["batch_sampler"] = self._batch_sampler.get_stats()
+        stats["model_optimizations"] = {
+            "rope": self._rope_optimizer.get_stats(),
+            "attention": self._attention_optimizer.get_stats(),
+            "moe": self._moe_optimizer.get_stats(),
+            "warmup": self._warmup_manager.get_stats(),
+        }
+        stats["process_isolation"] = {"enabled": self._isolation_enabled}
         return stats
 
     def _overlap_step(self) -> Any:

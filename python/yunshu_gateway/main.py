@@ -203,6 +203,22 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TenantAuthMiddleware)
 
+    # ── Wave 43: Gateway optimizer wiring ──
+    from yunshu_engine.gateway_optimizer import (
+        get_request_coalescer, get_streaming_buffer,
+        get_response_cache, get_connection_pool,
+    )
+    app.state.request_coalescer = get_request_coalescer()
+    app.state.streaming_buffer = get_streaming_buffer()
+    # Response cache: opt-in via YUNSHU_RESPONSE_CACHE=1
+    if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
+        app.state.response_cache = get_response_cache()
+        logger.info("ResponseCache enabled (YUNSHU_RESPONSE_CACHE=1)")
+    # Connection pool for distributed mode
+    if os.environ.get("YUNSHU_DISTRIBUTED", "").lower() in ("1", "true", "yes"):
+        app.state.connection_pool = get_connection_pool()
+        logger.info("GatewayConnectionPool enabled (YUNSHU_DISTRIBUTED=1)")
+
     # Startup warnings
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         logger.warning(
