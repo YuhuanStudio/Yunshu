@@ -35,7 +35,16 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **5911 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **5979 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-15 Wave 44-47 — Deep Bug Fixes + Parameter Forwarding + Hot-Path Integration)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| Wave 44: Critical bug fixes | AutoTuner.auto_tune() (was TypeError), MemoryAwareScheduler memory leak (release never called), duplicate Scheduler.shutdown() (BatchGenerator never closed), StepMetrics real timing (was 0.0), missing Any/asyncio imports | +24 tests |
+| Wave 45: Gateway parameter forwarding | 22 fixes: TTS extended params, Anthropic top_k/thinking_budget/enable_thinking, Responses API full params, completions enable_thinking/stop_token_ids, VLM xtc_*, realtime top_p/enable_thinking, batch inference params, MCP generate_image signature fix, models created timestamp, audio format validation before synthesis | — |
+| Wave 46: Engine hot-path integration | Output parser wired into _generate_fast(), model optimization detection on load (RoPE/Attention/MoE), KV lifecycle admit/release, MemoryAwareScheduler model config | — |
+| Wave 47: KV storage + cache metrics | KV tiered _extract_kv_for_block() fixed (was using non-existent _kv_layers, now uses _key_cache/_value_cache), Anthropic cache_creation_input_tokens/cache_read_input_tokens from real cached_tokens | — |
 
 ### 已完成修復 (2026-05-15 Wave 43 — Production Wiring 實現-整合)
 
