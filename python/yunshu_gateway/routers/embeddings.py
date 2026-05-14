@@ -60,6 +60,9 @@ async def create_embedding(req: EmbeddingRequest):
     data = []
     total_tokens = 0
     for i, (emb, text) in enumerate(zip(embeddings, texts)):
+        # Truncate to requested dimensions (Matryoshka embedding support)
+        if req.dimensions is not None and req.dimensions > 0:
+            emb = emb[:req.dimensions]
         if req.encoding_format == "base64":
             import base64
             import struct
