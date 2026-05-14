@@ -823,10 +823,15 @@ async def _handle_vlm_chat(
         seed=req.seed,
         repetition_penalty=req.repetition_penalty,
         stop=req.stop,
+        stop_token_ids=req.stop_token_ids,
         enable_thinking=req.enable_thinking,
+        thinking_budget=req.thinking_budget,
+        reasoning_effort=req.reasoning_effort,
         frequency_penalty=req.frequency_penalty,
         presence_penalty=req.presence_penalty,
         logit_bias=req.logit_bias,
+        xtc_probability=req.xtc_probability,
+        xtc_threshold=req.xtc_threshold,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema

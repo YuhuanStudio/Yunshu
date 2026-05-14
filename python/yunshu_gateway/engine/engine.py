@@ -5,6 +5,6 @@ the L4 engine module (yunshu_engine.batched_engine).
 """
 
 from yunshu_engine.batched_engine import BatchedEngine as Engine
-from yunshu_engine.engine import EngineConfig
+from yunshu_engine.types import EngineConfig
 
 __all__ = ["Engine", "EngineConfig"]

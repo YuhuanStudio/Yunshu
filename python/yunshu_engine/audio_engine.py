@@ -27,7 +27,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from .engine import EngineConfig
+from .types import EngineConfig
 
 logger = logging.getLogger(__name__)
 

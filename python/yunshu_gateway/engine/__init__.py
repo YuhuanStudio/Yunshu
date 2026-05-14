@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from yunshu_engine.batched_engine import BatchedEngine as Engine
-from yunshu_engine.engine import EngineConfig
+from yunshu_engine.types import EngineConfig
 from yunshu_engine.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)

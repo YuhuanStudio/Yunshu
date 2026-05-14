@@ -39,14 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ── Enums and Data Classes ──
 
-
-class RequestPhase(Enum):
-    WAITING = auto()
-    PREFILLING = auto()
-    DECODING = auto()
-    FINISHED = auto()
-
-
+from .types import EngineConfig, RequestPhase  # noqa: F401 — re-export for backward compat
 from .request import RequestOutput  # noqa: F401 — re-export for backward compat
 
 
@@ -90,24 +83,6 @@ class RequestState:
 
     # Timing
     arrival_time: float = field(default_factory=time.monotonic)
-
-
-@dataclass
-class EngineConfig:
-    """Engine tuning parameters.
-
-    Maps to BatchGenerator constructor + oMLX's SchedulerConfig.
-    """
-
-    completion_batch_size: int = 32
-    prefill_batch_size: int = 8
-    prefill_step_size: int = 2048
-    max_kv_size: Optional[int] = None
-    step_interval_ms: float = 1.0
-    # oMLX deferred cache clearing: wait N steps after completion
-    deferred_clear_delay: int = 8
-    # Periodic cache cleanup interval (steps between mx.clear_cache())
-    cache_cleanup_interval: int = 512
 
 
 # ── Engine Core ──

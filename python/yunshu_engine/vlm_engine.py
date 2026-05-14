@@ -32,7 +32,8 @@ from typing import Any, Optional
 
 import mlx.core as mx
 
-from .engine import EngineConfig, RequestOutput
+from .types import EngineConfig
+from .request import RequestOutput
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,18 @@ class VLMEngine:
         image_paths.extend(video_frames)
         self._enable_thinking = enable_thinking
 
+        # Extract advanced parameters from kwargs
+        stop_token_ids = kwargs.get('stop_token_ids') or []
+        thinking_budget = kwargs.get('thinking_budget')
+        reasoning_effort = kwargs.get('reasoning_effort')
+        xtc_probability = kwargs.get('xtc_probability', 0.0)
+        xtc_threshold = kwargs.get('xtc_threshold', 0.0)
+
+        # Resolve reasoning_effort → thinking_budget
+        if thinking_budget is None and reasoning_effort is not None:
+            effort_map = {"low": 2048, "medium": 8192, "high": 32768}
+            thinking_budget = effort_map.get(reasoning_effort, 8192)
+
         # Compute image hash for vision feature cache lookup
         image_hash = self._compute_image_hash(image_paths) if image_paths else None
 
@@ -290,10 +303,10 @@ class VLMEngine:
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
 
-            sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+            sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
             eos_ids = self._get_eos_ids()
 
-            # Build stop token IDs from string stop sequences
+            # Build stop token IDs from string stop sequences + explicit stop_token_ids
             stop_ids = set(eos_ids)
             if stop:
                 for s in stop:
@@ -303,6 +316,8 @@ class VLMEngine:
                             stop_ids.add(ids[0])
                     except Exception:
                         pass
+            if stop_token_ids:
+                stop_ids.update(stop_token_ids)
 
             tokens = []
             for token_id, _ in generate_step(
@@ -312,6 +327,9 @@ class VLMEngine:
             ):
                 tokens.append(token_id)
                 if token_id in stop_ids:
+                    break
+                # Thinking budget enforcement
+                if thinking_budget is not None and enable_thinking and len(tokens) >= thinking_budget:
                     break
 
             return self._tokenizer.decode(tokens, skip_special_tokens=True)
