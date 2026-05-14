@@ -238,6 +238,10 @@ class Scheduler:
         from .encoder_cache import EncoderCacheManager
         self._encoder_cache = EncoderCacheManager()
 
+        # Metal kernel manager for custom GPU kernels (paged attention, GEMV, KIVI)
+        # Set by EngineCore when YUNSHU_METAL_KERNELS=1 is enabled.
+        self._metal_kernel_manager: Any | None = None
+
         # ITL tracking (C2/ITL-1: inter-token latency per request)
         self._last_token_time: dict[str, float] = {}
         self._itl_samples: dict[str, list[float]] = {}
@@ -295,6 +299,15 @@ class Scheduler:
         The scheduler calls manager.maybe_offload() periodically from step().
         """
         self._kv_offload_manager = manager
+
+    def set_metal_kernel_manager(self, manager: Any) -> None:
+        """Set Metal kernel manager for custom GPU kernel operations.
+
+        Called by EngineCore when YUNSHU_METAL_KERNELS=1 is enabled.
+        Provides Metal-accelerated paged attention decode, GEMV, and
+        KIVI 2-bit KV cache compression to the batch path.
+        """
+        self._metal_kernel_manager = manager
 
     def _get_external_prefiller(self) -> Any:
         """Lazy-initialize the ExternalPrefiller."""
@@ -2012,6 +2025,16 @@ class Scheduler:
                 logger.debug("MTP stats unavailable", exc_info=True)
         # §12.2: encoder-decoder cache stats
         stats["encoder_cache"] = self._encoder_cache.get_stats()
+        # Metal kernel manager stats (when enabled via YUNSHU_METAL_KERNELS=1)
+        stats["metal_kernels"] = {
+            "available": self._metal_kernel_manager is not None,
+        }
+        if self._metal_kernel_manager is not None:
+            try:
+                from .metal_kernels import get_compilation_status
+                stats["metal_kernels"].update(get_compilation_status())
+            except Exception:
+                logger.debug("Metal kernel stats unavailable", exc_info=True)
         return stats
 
 

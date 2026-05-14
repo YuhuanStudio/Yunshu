@@ -291,6 +291,14 @@ class BatchedEngine:
             "YUNSHU_MX_COMPILE", ""
         ).strip() in ("1", "true", "yes")
 
+        # Metal kernel manager for custom GPU kernels (paged attention, GEMV, KIVI)
+        # Enable via YUNSHU_METAL_KERNELS=1 — provides Metal-accelerated attention,
+        # quantized GEMV, and KIVI 2-bit KV cache compression kernels.
+        self._metal_kernel_manager = None
+        self._metal_kernels_enabled = os.environ.get(
+            "YUNSHU_METAL_KERNELS", ""
+        ).strip() in ("1", "true", "yes")
+
         # Engine loop default (continuous batching mode)
         # Enable via YUNSHU_ENGINE_LOOP=1 for multi-user concurrent serving
         self._engine_loop_default = os.environ.get(
@@ -419,6 +427,38 @@ class BatchedEngine:
             except Exception as e:
                 logger.warning(f"EngineCore auto-start failed ({e}), falling back to fast-path only")
                 self._engine_core = None
+
+        # Initialize Metal kernel manager for custom GPU kernels
+        # (paged attention, GEMV, KIVI 2-bit KV compression)
+        # Enable via YUNSHU_METAL_KERNELS=1 env var.
+        if self._metal_kernels_enabled:
+            self._init_metal_kernels()
+
+    def _init_metal_kernels(self) -> None:
+        """Initialize Metal kernel manager and wire into pipeline components.
+
+        Creates a MetalKernelManager singleton, pre-compiles all kernels,
+        and wires it into the EngineCore scheduler for attention/KV operations.
+        Also stores reference on self for stats exposure.
+        """
+        try:
+            from .metal_kernels import get_kernel_manager
+            mgr = get_kernel_manager()
+            mgr.load_default_library()
+            self._metal_kernel_manager = mgr
+            logger.info(
+                "Metal kernels initialized: paged_attention, gemv_fp16, "
+                "gemv_q4, kivi_quantize, kivi_dequantize"
+            )
+
+            # Wire into EngineCore scheduler for batch-path usage
+            if self._engine_core is not None:
+                self._engine_core.set_metal_kernel_manager(mgr)
+                logger.info("Metal kernel manager wired into EngineCore scheduler")
+
+        except Exception as e:
+            logger.warning(f"Metal kernel init failed ({e}), continuing without custom kernels")
+            self._metal_kernel_manager = None
 
     def _load_model_settings(self):
         """Load per-model settings from model directory and apply to engine."""
@@ -599,6 +639,7 @@ class BatchedEngine:
         self._mtp_strategy = None
         self._warm_prompts = None
         self._thinking_store = None
+        self._metal_kernel_manager = None
         self._model = None
         self._tokenizer = None
         self._loaded = False
@@ -2801,6 +2842,13 @@ class BatchedEngine:
             }
         if self._lookahead_reasoning is not None:
             stats["lookahead_reasoning"] = self._lookahead_reasoning.get_stats()
+        # Metal kernel manager status (when enabled via YUNSHU_METAL_KERNELS=1)
+        stats["metal_kernels"] = {
+            "enabled": getattr(self, '_metal_kernel_manager', None) is not None,
+        }
+        if getattr(self, '_metal_kernel_manager', None) is not None:
+            from .metal_kernels import get_compilation_status
+            stats["metal_kernels"].update(get_compilation_status())
         return stats
 
     def get_kv_cache_stats(self) -> dict:
@@ -2845,6 +2893,16 @@ class BatchedEngine:
         if tree is None:
             return []
         return tree.get_continuation_tokens(token_ids, max_results)
+
+    def get_metal_kernel_manager(self):
+        """Return the MetalKernelManager instance, or None if not enabled.
+
+        Callers should check the return value before using:
+            mgr = engine.get_metal_kernel_manager()
+            if mgr is not None:
+                result = mgr.paged_attention_decode(...)
+        """
+        return self._metal_kernel_manager
 
     @staticmethod
     def _extract_model_arch(model: Any) -> dict:

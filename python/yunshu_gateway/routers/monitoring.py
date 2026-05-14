@@ -455,3 +455,33 @@ async def thinking_segment_stats() -> dict[str, Any]:
     if not results:
         return {"active": False}
     return {"active": True, "models": results}
+
+
+@router.get("/metal-kernels")
+async def metal_kernel_stats() -> dict[str, Any]:
+    """Metal kernel manager status across all loaded engines.
+
+    Reports kernel compilation status, available kernels, and per-engine
+    availability. Enabled via YUNSHU_METAL_KERNELS=1 environment variable.
+    """
+    from ..engine import get_engine, get_model_manager
+
+    engines = _collect_engines(get_engine(), get_model_manager())
+    results = []
+    for model_id, engine in engines:
+        mgr = getattr(engine, '_metal_kernel_manager', None)
+        entry = {"model_id": model_id, "enabled": mgr is not None}
+        if mgr is not None:
+            try:
+                from yunshu_engine.metal_kernels import get_compilation_status
+                entry.update(get_compilation_status())
+            except Exception:
+                pass
+        # Also pull from engine stats (which includes scheduler-level info)
+        stats = getattr(engine, 'get_stats', lambda: {})()
+        if "metal_kernels" in stats:
+            entry["scheduler"] = stats["metal_kernels"]
+        results.append(entry)
+    if not results:
+        return {"active": False, "env_hint": "Set YUNSHU_METAL_KERNELS=1 to enable"}
+    return {"active": True, "models": results}

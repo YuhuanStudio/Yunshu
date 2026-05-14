@@ -245,6 +245,15 @@ class EngineCore:
         """Set KV prefix cache for batch-path insert_segments (C16)."""
         self.scheduler.set_prefix_cache(cache)
 
+    def set_metal_kernel_manager(self, manager: Any) -> None:
+        """Set Metal kernel manager for custom GPU kernel operations.
+
+        Wires the MetalKernelManager into the scheduler so batch-path
+        operations can use Metal-accelerated paged attention, GEMV,
+        and KIVI 2-bit KV compression.
+        """
+        self.scheduler.set_metal_kernel_manager(manager)
+
     @property
     def is_running(self) -> bool:
         return self._running
