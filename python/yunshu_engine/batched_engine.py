@@ -2223,6 +2223,7 @@ class BatchedEngine:
         repetition_penalty: float = 1.0,
         stop: list[str] | None = None,
         seed: int | None = None,
+        json_schema: dict | str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
