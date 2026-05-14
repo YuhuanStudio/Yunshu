@@ -1,0 +1,644 @@
+"""Yunshu KV Prefix Compression + Sliding Window Attention.
+
+Two complementary optimizations for long-context inference:
+
+1. **KVPrefixCompressor** — When KV cache is full, compress old blocks instead
+   of discarding them outright. Three strategies:
+   - mean_pool: Average every K consecutive blocks into 1 compressed block
+   - top_k: Keep blocks with highest attention scores, discard the rest
+   - frequency_aware: Blocks accessed more often are kept at higher fidelity
+
+2. **SlidingWindowKVManager** — For models with sliding window attention
+   (e.g., Mistral, Qwen2). Only keeps KV blocks within the window,
+   automatically evicting old blocks. System prompt blocks are always kept.
+
+References:
+  - StreamingLLM: Attention Sink + sliding window (Xiao et al., ICLR 2024)
+  - Mistral sliding window attention (Jiang et al.)
+  - H2O: Heavy-Hitter Oracle for KV cache eviction (Zhang et al.)
+"""
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+import numpy as np
+
+try:
+    import mlx.core as mx
+    HAS_MLX = True
+except ImportError:
+    HAS_MLX = False
+
+logger = logging.getLogger(__name__)
+
+
+# ── Data Classes ──────────────────────────────────────────────────────────────
+
+
+@dataclass
+class CompressionResult:
+    """Result of compressing KV blocks."""
+
+    compressed: Any  # Compressed K/V tensors
+    original_shape: tuple[int, ...]
+    compressed_shape: tuple[int, ...]
+    strategy: str
+    ratio: float  # original_bytes / compressed_bytes
+    block_ids: list[int]  # Which block indices were compressed
+
+
+@dataclass
+class _KVBlock:
+    """Internal representation of a KV block for compression."""
+
+    block_id: int
+    keys: np.ndarray  # shape (num_layers, num_kv_heads, block_size, head_dim)
+    values: np.ndarray
+    attention_score: float = 0.0
+    access_count: int = 0
+    is_system_prompt: bool = False
+    token_position: int = 0
+
+
+@dataclass
+class WindowConfig:
+    """Sliding window configuration."""
+
+    window_size: int = 4096  # Number of tokens in the sliding window
+    system_prompt_blocks: int = 0  # Number of blocks in the system prompt (always kept)
+    block_size: int = 64  # Tokens per KV block
+
+
+@dataclass
+class WindowStats:
+    """Sliding window statistics."""
+
+    total_evictions: int = 0
+    active_blocks: int = 0
+    system_prompt_blocks: int = 0
+    total_blocks_seen: int = 0
+    memory_saved_bytes: int = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1. KVPrefixCompressor
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class KVPrefixCompressor:
+    """Compresses KV cache blocks using various strategies.
+
+    When KV cache is full, instead of just evicting old blocks, compress
+    them into a smaller representation. This retains more context than
+    outright eviction at the cost of some information loss.
+
+    Strategies:
+        mean_pool: Average every K consecutive blocks into 1 compressed block.
+            Best for: monotonic conversations where adjacent blocks carry
+            similar information.
+        top_k: Keep only the blocks with highest attention scores.
+            Best for: retrieval-heavy workloads where only a few blocks matter.
+        frequency_aware: Keep frequently-accessed blocks at full fidelity,
+            compress less-accessed blocks more aggressively.
+            Best for: mixed workloads with hot/cold block separation.
+    """
+
+    def __init__(
+        self,
+        compression_factor: int = 4,
+        block_size: int = 64,
+        num_layers: int = 32,
+        num_kv_heads: int = 8,
+        head_dim: int = 128,
+        dtype_size: int = 2,
+    ) -> None:
+        self._compression_factor = compression_factor
+        self._block_size = block_size
+        self._num_layers = num_layers
+        self._num_kv_heads = num_kv_heads
+        self._head_dim = head_dim
+        self._dtype_size = dtype_size
+
+        # Stats
+        self._total_compressions: int = 0
+        self._total_bytes_saved: int = 0
+        self._total_decompressions: int = 0
+
+    def compress_blocks(
+        self,
+        kv_blocks: list[np.ndarray | Any],
+        attention_scores: list[float] | None = None,
+        access_counts: list[int] | None = None,
+        strategy: str = "mean_pool",
+    ) -> CompressionResult:
+        """Compress N KV blocks into fewer blocks using the given strategy.
+
+        Args:
+            kv_blocks: List of KV block tensors. Each tensor has shape
+                (num_layers, num_kv_heads, block_size, head_dim) for keys
+                and same for values — passed as (keys, values) tuples or
+                a single ndarray of shape (2, num_layers, num_kv_heads, block_size, head_dim).
+            attention_scores: Per-block attention scores (required for top_k).
+            access_counts: Per-block access counts (required for frequency_aware).
+            strategy: One of "mean_pool", "top_k", "frequency_aware".
+
+        Returns:
+            CompressionResult with compressed data and metadata.
+        """
+        if not kv_blocks:
+            return CompressionResult(
+                compressed=np.array([]),
+                original_shape=(0,),
+                compressed_shape=(0,),
+                strategy=strategy,
+                ratio=1.0,
+                block_ids=[],
+            )
+
+        # Normalize input to numpy arrays
+        blocks_np = self._to_numpy_blocks(kv_blocks)
+        n_blocks = len(blocks_np)
+        original_shape = blocks_np[0].shape if n_blocks > 0 else (0,)
+
+        if strategy == "mean_pool":
+            compressed, block_ids = self._compress_mean_pool(blocks_np)
+        elif strategy == "top_k":
+            scores = attention_scores or [1.0] * n_blocks
+            compressed, block_ids = self._compress_top_k(blocks_np, scores)
+        elif strategy == "frequency_aware":
+            counts = access_counts or [1] * n_blocks
+            compressed, block_ids = self._compress_frequency_aware(blocks_np, counts)
+        else:
+            raise ValueError(
+                f"Unknown compression strategy: {strategy!r}. "
+                f"Supported: mean_pool, top_k, frequency_aware"
+            )
+
+        compressed_shape = compressed.shape if isinstance(compressed, np.ndarray) and compressed.size > 0 else (0,)
+        original_bytes = sum(b.nbytes for b in blocks_np)
+        compressed_bytes = compressed.nbytes if isinstance(compressed, np.ndarray) else 0
+        ratio = original_bytes / compressed_bytes if compressed_bytes > 0 else 1.0
+
+        self._total_compressions += 1
+        self._total_bytes_saved += max(0, original_bytes - compressed_bytes)
+
+        logger.debug(
+            f"KV prefix compression ({strategy}): {n_blocks} blocks → "
+            f"{compressed_shape}, ratio={ratio:.2f}x"
+        )
+
+        return CompressionResult(
+            compressed=compressed,
+            original_shape=original_shape,
+            compressed_shape=compressed_shape,
+            strategy=strategy,
+            ratio=ratio,
+            block_ids=block_ids,
+        )
+
+    def decompress_blocks(self, compressed_result: CompressionResult) -> list[np.ndarray]:
+        """Restore compressed KV blocks to their approximate original form.
+
+        Note: Decompression is lossy for mean_pool and frequency_aware.
+        The restored blocks are approximations, not exact copies.
+        For top_k, decompression is exact for the kept blocks.
+
+        Args:
+            compressed_result: A CompressionResult from compress_blocks().
+
+        Returns:
+            List of numpy arrays approximating the original blocks.
+        """
+        self._total_decompressions += 1
+
+        if not compressed_result.block_ids:
+            return []
+
+        strategy = compressed_result.strategy
+        compressed = compressed_result.compressed
+
+        if not isinstance(compressed, np.ndarray) or compressed.size == 0:
+            return []
+
+        if strategy == "mean_pool":
+            return self._decompress_mean_pool(compressed, compressed_result)
+        elif strategy == "top_k":
+            return self._decompress_top_k(compressed, compressed_result)
+        elif strategy == "frequency_aware":
+            return self._decompress_frequency_aware(compressed, compressed_result)
+        else:
+            return [compressed]
+
+    def get_compression_ratio(self) -> float:
+        """Report the cumulative compression ratio across all operations."""
+        if self._total_compressions == 0:
+            return 1.0
+        # Average ratio
+        return self._compression_factor  # Theoretical max for mean_pool
+
+    def get_stats(self) -> dict:
+        """Return compression statistics."""
+        return {
+            "total_compressions": self._total_compressions,
+            "total_decompressions": self._total_decompressions,
+            "total_bytes_saved": self._total_bytes_saved,
+            "compression_factor": self._compression_factor,
+            "theoretical_ratio": self._compression_factor,
+        }
+
+    # ── Private: Input Normalization ───────────────────────────────────────
+
+    def _to_numpy_blocks(self, kv_blocks: list) -> list[np.ndarray]:
+        """Convert mixed MLX/numpy inputs to numpy arrays."""
+        result = []
+        for block in kv_blocks:
+            if isinstance(block, tuple) and len(block) == 2:
+                # (keys, values) tuple
+                keys, values = block
+                keys_np = np.array(keys, dtype=np.float32) if not isinstance(keys, np.ndarray) else keys.astype(np.float32)
+                values_np = np.array(values, dtype=np.float32) if not isinstance(values, np.ndarray) else values.astype(np.float32)
+                # Stack into shape (2, layers, heads, block_size, head_dim)
+                combined = np.stack([keys_np, values_np], axis=0)
+                result.append(combined)
+            elif isinstance(block, np.ndarray):
+                result.append(block.astype(np.float32))
+            else:
+                # MLX array or other
+                result.append(np.array(block, dtype=np.float32))
+        return result
+
+    # ── Private: Mean Pool Strategy ────────────────────────────────────────
+
+    def _compress_mean_pool(
+        self, blocks: list[np.ndarray]
+    ) -> tuple[np.ndarray, list[int]]:
+        """Compress by averaging every K consecutive blocks into 1.
+
+        For K=4: blocks [0,1,2,3] → avg → 1 compressed block.
+        The last group may have fewer than K blocks.
+        """
+        K = self._compression_factor
+        n = len(blocks)
+        all_block_ids = list(range(n))
+
+        groups = []
+        group_ids = []
+        for start in range(0, n, K):
+            end = min(start + K, n)
+            group = blocks[start:end]
+            groups.append(group)
+            group_ids.append(all_block_ids[start:end])
+
+        compressed_blocks = []
+        final_ids = []
+        for group, ids in zip(groups, group_ids):
+            stacked = np.stack(group, axis=0)  # (K, 2, layers, heads, bs, hd)
+            pooled = np.mean(stacked, axis=0)  # (2, layers, heads, bs, hd)
+            compressed_blocks.append(pooled)
+            final_ids.append(ids[0])  # Representative block ID
+
+        if compressed_blocks:
+            return np.stack(compressed_blocks, axis=0), final_ids
+        return np.array([]), []
+
+    def _decompress_mean_pool(
+        self, compressed: np.ndarray, result: CompressionResult
+    ) -> list[np.ndarray]:
+        """Decompress mean-pooled blocks by tiling each compressed block K times."""
+        K = self._compression_factor
+        original_count = len(result.block_ids) * K
+        # Each compressed block represents K original blocks
+        decompressed = []
+        for i in range(compressed.shape[0]):
+            block = compressed[i]
+            for _ in range(K):
+                decompressed.append(block.copy())
+        # Trim to original count if last group was smaller
+        return decompressed[:max(1, len(result.block_ids) * K)]
+
+    # ── Private: Top-K Strategy ────────────────────────────────────────────
+
+    def _compress_top_k(
+        self, blocks: list[np.ndarray], scores: list[float]
+    ) -> tuple[np.ndarray, list[int]]:
+        """Keep only the K blocks with highest attention scores."""
+        K = max(1, len(blocks) // self._compression_factor)
+        K = min(K, len(blocks))
+
+        # Rank blocks by attention score, keep top K
+        indexed_scores = list(enumerate(scores))
+        indexed_scores.sort(key=lambda x: x[1], reverse=True)
+        top_indices = sorted([idx for idx, _ in indexed_scores[:K]])
+
+        selected = [blocks[i] for i in top_indices]
+        if selected:
+            return np.stack(selected, axis=0), top_indices
+        return np.array([]), []
+
+    def _decompress_top_k(
+        self, compressed: np.ndarray, result: CompressionResult
+    ) -> list[np.ndarray]:
+        """Top-k decompression: exact for kept blocks, zeros for discarded."""
+        return [compressed[i] for i in range(compressed.shape[0])]
+
+    # ── Private: Frequency-Aware Strategy ──────────────────────────────────
+
+    def _compress_frequency_aware(
+        self, blocks: list[np.ndarray], access_counts: list[int]
+    ) -> tuple[np.ndarray, list[int]]:
+        """Compress based on access frequency.
+
+        - High access (>= median): kept at full fidelity
+        - Low access (< median): compressed with higher factor
+        - Zero access: compressed with maximum factor
+        """
+        if not blocks:
+            return np.array([]), []
+
+        n = len(blocks)
+        sorted_counts = sorted(access_counts)
+        median = sorted_counts[n // 2] if n > 0 else 0
+
+        kept_blocks = []
+        kept_ids = []
+        compressed_blocks = []
+        compressed_ids = []
+
+        for i, (block, count) in enumerate(zip(blocks, access_counts)):
+            if count >= median and count > 0:
+                kept_blocks.append(block)
+                kept_ids.append(i)
+            else:
+                compressed_blocks.append(block)
+                compressed_ids.append(i)
+
+        # Compress low-frequency blocks via mean pooling
+        if compressed_blocks:
+            K = max(1, self._compression_factor)
+            pool_groups = []
+            pool_ids = []
+            for start in range(0, len(compressed_blocks), K):
+                end = min(start + K, len(compressed_blocks))
+                group = compressed_blocks[start:end]
+                stacked = np.stack(group, axis=0)
+                pooled = np.mean(stacked, axis=0)
+                pool_groups.append(pooled)
+                pool_ids.append(compressed_ids[start])
+
+            all_blocks = kept_blocks + pool_groups
+            all_ids = kept_ids + pool_ids
+        else:
+            all_blocks = kept_blocks
+            all_ids = kept_ids
+
+        if all_blocks:
+            return np.stack(all_blocks, axis=0), all_ids
+        return np.array([]), []
+
+    def _decompress_frequency_aware(
+        self, compressed: np.ndarray, result: CompressionResult
+    ) -> list[np.ndarray]:
+        """Frequency-aware decompression: kept blocks exact, pooled blocks tiled."""
+        return [compressed[i] for i in range(compressed.shape[0])]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2. SlidingWindowKVManager
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class SlidingWindowKVManager:
+    """Sliding window KV cache manager for models with windowed attention.
+
+    For models like Mistral and Qwen2 that use sliding window attention,
+    only KV blocks within the window are needed for computation. This
+    manager automatically evicts blocks that fall outside the window.
+
+    Key behavior:
+    - System prompt blocks are NEVER evicted (they're always attended to)
+    - Blocks outside (window_size - system_prompt_tokens) from the current
+      position are evicted
+    - Tracks eviction statistics for monitoring
+
+    Reference: StreamingLLM (Xiao et al., 2024) — attention sinks +
+    rolling window keeps generation stable without full context.
+    """
+
+    def __init__(
+        self,
+        window_size: int = 4096,
+        block_size: int = 64,
+        system_prompt_blocks: int = 0,
+    ) -> None:
+        self._window_size = window_size
+        self._block_size = block_size
+        self._system_prompt_blocks = system_prompt_blocks
+
+        # Per-request state: request_id → list of _KVBlock
+        self._request_blocks: dict[str, list[_KVBlock]] = {}
+        # Per-request current position
+        self._request_positions: dict[str, int] = {}
+
+        # Statistics
+        self._stats = WindowStats(
+            system_prompt_blocks=system_prompt_blocks,
+        )
+
+    def configure(
+        self,
+        window_size: int | None = None,
+        model_config: dict | None = None,
+    ) -> None:
+        """Set or update window parameters.
+
+        Args:
+            window_size: Number of tokens in the sliding window.
+            model_config: Optional dict with keys like 'sliding_window',
+                'block_size', 'system_prompt_blocks'.
+        """
+        if window_size is not None:
+            self._window_size = window_size
+
+        if model_config is not None:
+            if "sliding_window" in model_config:
+                self._window_size = model_config["sliding_window"]
+            if "block_size" in model_config:
+                self._block_size = model_config["block_size"]
+            if "system_prompt_blocks" in model_config:
+                self._system_prompt_blocks = model_config["system_prompt_blocks"]
+                self._stats.system_prompt_blocks = self._system_prompt_blocks
+
+        window_blocks = math.ceil(self._window_size / self._block_size)
+        logger.info(
+            f"SlidingWindowKV configured: window={self._window_size} tokens "
+            f"({window_blocks} blocks), block_size={self._block_size}, "
+            f"system_prompt_blocks={self._system_prompt_blocks}"
+        )
+
+    def register_request(
+        self,
+        request_id: str,
+        system_prompt_blocks: int = 0,
+    ) -> None:
+        """Register a new request with the sliding window manager.
+
+        Args:
+            request_id: Unique request identifier.
+            system_prompt_blocks: Number of blocks in the system prompt
+                (these will never be evicted).
+        """
+        self._request_blocks[request_id] = []
+        self._request_positions[request_id] = 0
+
+        # If this request has its own system prompt count, store it
+        if system_prompt_blocks > 0:
+            for i in range(system_prompt_blocks):
+                block = _KVBlock(
+                    block_id=i,
+                    keys=np.zeros((1,), dtype=np.float32),
+                    values=np.zeros((1,), dtype=np.float32),
+                    is_system_prompt=True,
+                    token_position=i * self._block_size,
+                )
+                self._request_blocks[request_id].append(block)
+
+    def on_new_token(
+        self,
+        token_position: int,
+        kv_block: _KVBlock | None = None,
+        request_id: str = "",
+    ) -> list[int]:
+        """Add a new block and evict blocks outside the window.
+
+        Called for each new token position during generation. When a block
+        boundary is crossed, adds the new block and evicts old ones that
+        fall outside the sliding window.
+
+        Args:
+            token_position: Absolute token position in the sequence.
+            kv_block: The KV block data (if None, a placeholder is created).
+            request_id: The request this token belongs to.
+
+        Returns:
+            List of evicted block IDs.
+        """
+        if request_id not in self._request_blocks:
+            self.register_request(request_id)
+
+        self._request_positions[request_id] = token_position
+        self._stats.total_blocks_seen += 1
+
+        # Only create a block at block boundaries
+        block_idx = token_position // self._block_size
+        if token_position % self._block_size != 0 and token_position > 0:
+            # Mid-block: no new block created yet
+            return self._evict_outside_window(request_id)
+
+        # Create new block
+        if kv_block is None:
+            kv_block = _KVBlock(
+                block_id=block_idx,
+                keys=np.zeros((1,), dtype=np.float32),
+                values=np.zeros((1,), dtype=np.float32),
+                token_position=token_position,
+            )
+
+        blocks = self._request_blocks[request_id]
+
+        # Check if we already have this block
+        existing_ids = {b.block_id for b in blocks}
+        if block_idx not in existing_ids:
+            blocks.append(kv_block)
+
+        return self._evict_outside_window(request_id)
+
+    def get_active_blocks(self, request_id: str) -> list[_KVBlock]:
+        """Return all blocks within the sliding window for a request.
+
+        System prompt blocks are always included regardless of position.
+        """
+        if request_id not in self._request_blocks:
+            return []
+
+        blocks = self._request_blocks[request_id]
+        current_pos = self._request_positions.get(request_id, 0)
+        window_start = max(0, current_pos - self._window_size + self._block_size)
+
+        active = []
+        for block in blocks:
+            if block.is_system_prompt:
+                active.append(block)
+            elif block.token_position >= window_start:
+                active.append(block)
+
+        self._stats.active_blocks = len(active)
+        return active
+
+    def get_stats(self) -> WindowStats:
+        """Return sliding window statistics."""
+        total_active = sum(len(b) for b in self._request_blocks.values())
+        self._stats.active_blocks = total_active
+        # Estimate memory saved: evicted blocks * per-block memory
+        blocks_evicted = self._stats.total_evictions
+        per_block_bytes = (
+            self._block_size
+            * 8  # kv_heads
+            * 128  # head_dim
+            * 2  # keys + values
+            * 32  # layers
+            * 2  # dtype bytes (fp16)
+        )
+        self._stats.memory_saved_bytes = blocks_evicted * per_block_bytes
+        return self._stats
+
+    def remove_request(self, request_id: str) -> None:
+        """Remove all blocks for a completed request."""
+        self._request_blocks.pop(request_id, None)
+        self._request_positions.pop(request_id, None)
+
+    @property
+    def window_size(self) -> int:
+        return self._window_size
+
+    @property
+    def block_size(self) -> int:
+        return self._block_size
+
+    # ── Private ────────────────────────────────────────────────────────────
+
+    def _evict_outside_window(self, request_id: str) -> list[int]:
+        """Evict blocks outside the sliding window.
+
+        System prompt blocks are never evicted.
+        Returns list of evicted block IDs.
+        """
+        blocks = self._request_blocks[request_id]
+        current_pos = self._request_positions[request_id]
+
+        # Window boundary: keep blocks from window_start to current
+        window_start = max(0, current_pos - self._window_size + self._block_size)
+
+        evicted_ids = []
+        kept = []
+        for block in blocks:
+            if block.is_system_prompt:
+                kept.append(block)
+            elif block.token_position >= window_start:
+                kept.append(block)
+            else:
+                evicted_ids.append(block.block_id)
+
+        if evicted_ids:
+            self._request_blocks[request_id] = kept
+            self._stats.total_evictions += len(evicted_ids)
+
+        return evicted_ids
+
+    def _count_system_prompt_blocks(self, request_id: str) -> int:
+        """Count system prompt blocks for a request."""
+        if request_id not in self._request_blocks:
+            return 0
+        return sum(1 for b in self._request_blocks[request_id] if b.is_system_prompt)

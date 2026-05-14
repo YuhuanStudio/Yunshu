@@ -87,6 +87,15 @@ def __getattr__(name):
     "BatchedDetokenizer": ".streaming_optimizer",
     "StreamingBackpressureController": ".streaming_optimizer",
     "BackpressureConfig": ".streaming_optimizer",
+    # Checkpoint / Restore (fault recovery)
+    "InferenceCheckpoint": ".checkpoint",
+    "InferenceState": ".checkpoint",
+    "AutoCheckpointPolicy": ".checkpoint",
+    "FaultRecoveryManager": ".checkpoint",
+    "RecoveryStrategy": ".checkpoint",
+    "RecoveryResult": ".checkpoint",
+    "ProgressEstimator": ".checkpoint",
+    "ProgressInfo": ".checkpoint",
     # Mamba / Hybrid KV Cache (§12.2)
         "CacheBlockType": ".mamba_cache",
         "HybridKVCache": ".mamba_cache",
