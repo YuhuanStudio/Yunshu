@@ -35,7 +35,16 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **5160 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **5355 passed, 16 skipped**。
+
+### 已完成修復 (2026-05-14 Wave 36 — KV Prefix Compression + Memory-Aware Scheduler + Batch Sampler + Checkpoint/Restore)
+
+| 修復 | 描述 | 測試 |
+|------|------|------|
+| KV prefix compression | KVPrefixCompressor 3策略 (mean_pool/top_k/frequency_aware) + SlidingWindowKVManager 滑動窗口 + 系統提示保護 | +45 tests |
+| Memory-aware scheduler | MemoryAwareScheduler 記憶體預算估算 + 準入控制 + 壓力暫停 (磁滯) | +36 tests |
+| Batch sampler | BatchSampler 向量化採樣 (temperature/top-k/top-p/min-p) + LogitsProcessorBatch 5處理器管線 + BatchStopChecker Aho-Corasick | +60 tests |
+| Checkpoint/restore | InferenceCheckpoint 自動檢查點 (每N token/秒) + FaultRecoveryManager 4策略 (retry/truncate/fallback/graceful) + ProgressEstimator EMA | +55 tests |
 
 ### 已完成修復 (2026-05-14 Wave 35 — Distributed KV Sync + Model Optimizations + Tracing + SpecPrefill Engine + Context Window + Prompt Cache)
 
