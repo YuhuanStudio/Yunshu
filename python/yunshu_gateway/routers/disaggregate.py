@@ -42,6 +42,7 @@ class PrefillRequest(BaseModel):
     seed: int | None = None
     json_schema: dict | str | None = None
     enable_thinking: bool | None = None
+    chunk_size: int | None = None
 
 
 class PrefillResponse(BaseModel):
@@ -71,10 +72,27 @@ class DecodeResponse(BaseModel):
     finish_reason: str | None = None
 
 
+def _resolve_engine(request: Request):
+    """Resolve the engine from the gateway's engine registry.
+
+    Tries app.state.engine first (for backwards compatibility), then
+    falls back to the gateway engine module's get_engine().
+    """
+    engine = getattr(request.app.state, "engine", None)
+    if engine is not None:
+        return engine
+    try:
+        from ..engine import get_engine
+        engine = get_engine()
+    except Exception:
+        pass
+    return engine
+
+
 @router.post("/prefill", response_model=PrefillResponse)
 async def prefill(req: PrefillRequest, request: Request):
     """Run prefill only — tokenize and build KV cache, return cache handle."""
-    engine = request.app.state.engine
+    engine = _resolve_engine(request)
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not loaded")
 
@@ -93,13 +111,26 @@ async def prefill(req: PrefillRequest, request: Request):
     token_ids = tokenizer.encode(prompt_text)
     prompt_tokens = len(token_ids)
 
+    # Determine chunk size: request override > engine config > default 2048
+    chunk_size = req.chunk_size or 2048
+    # Check if engine's scheduler has external prefill configured (for chunk size)
+    try:
+        scheduler = getattr(engine._engine_core, "scheduler", None)
+        if scheduler is not None:
+            chunk_size = req.chunk_size or scheduler.config.prefill_chunk_size
+    except Exception:
+        logger.debug("failed to read scheduler config for chunk size", exc_info=True)
+
     # Run prefill
     from yunshu_engine.external_prefill import ExternalPrefiller
 
     prefiller = ExternalPrefiller(engine._model, tokenizer)
 
     def _prefill():
-        return prefiller.prefill(token_ids)
+        return prefiller.prefill_chunked(
+            token_ids=token_ids,
+            chunk_size=chunk_size,
+        )
 
     from yunshu_engine.mlx_executor import get_mlx_executor
     executor = get_mlx_executor()
@@ -130,7 +161,7 @@ async def prefill(req: PrefillRequest, request: Request):
 @router.post("/decode", response_model=DecodeResponse)
 async def decode(req: DecodeRequest, request: Request):
     """Run decode with a prefill cache handle."""
-    engine = request.app.state.engine
+    engine = _resolve_engine(request)
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not loaded")
 

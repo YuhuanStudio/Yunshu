@@ -59,6 +59,9 @@ class EngineCoreConfig:
     ngram_spec_max_n: int = 5
     ngram_spec_k: int = 5
     ngram_spec_mode: str = "lps"
+    # External prefill (memory preflight, chunked progress, mid-prefill abort)
+    use_external_prefill: bool = False
+    prefill_chunk_size: int = 2048
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     enable_hybrid_prefill: bool = False
     hybrid_chunk_size: int = 512
@@ -104,6 +107,8 @@ class EngineCore:
             ngram_spec_mode=self.config.ngram_spec_mode,
             enable_hybrid_prefill=self.config.enable_hybrid_prefill,
             hybrid_chunk_size=self.config.hybrid_chunk_size,
+            use_external_prefill=self.config.use_external_prefill,
+            prefill_chunk_size=self.config.prefill_chunk_size,
         )
 
         if self.config.enable_paged_kv:
@@ -219,6 +224,14 @@ class EngineCore:
         telemetry_enabled = os.environ.get("YUNSHU_TELEMETRY", "0") == "1"
         self._telemetry = TelemetryCollector(TelemetryConfig(enabled=telemetry_enabled))
 
+        # KV offload manager (async tier-to-tier block migration, §12.3)
+        from .kv_offload import KVOffloadConfig, KVOffloadManager
+        kv_offload_cfg = KVOffloadConfig.from_env()
+        self._kv_offload_manager = KVOffloadManager(kv_offload_cfg, kv_manager=self._kv_manager)
+
+        # Pass offload manager to scheduler for periodic sync offload checks
+        self.scheduler.set_kv_offload_manager(self._kv_offload_manager)
+
         # Lifecycle
         self._running = False
         self._loop_task: asyncio.Task | None = None
@@ -277,6 +290,12 @@ class EngineCore:
         self._running = True
         self._start_time = time.monotonic()
         self._wake_event = asyncio.Event()
+        # Start KV offload manager (async tier migration, §12.3)
+        if self._kv_offload_manager is not None:
+            try:
+                await self._kv_offload_manager.start()
+            except Exception:
+                logger.debug("KV offload manager start failed", exc_info=True)
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
         logger.info("EngineCore started")
 
@@ -290,6 +309,13 @@ class EngineCore:
             except asyncio.CancelledError:
                 pass
             self._loop_task = None
+
+        # Stop KV offload manager
+        if self._kv_offload_manager is not None:
+            try:
+                await self._kv_offload_manager.stop()
+            except Exception:
+                logger.debug("KV offload manager stop failed", exc_info=True)
 
         # Signal all active collectors with sentinel
         for collector in self._output_collectors.values():
@@ -684,6 +710,9 @@ class EngineCore:
             "adaptive_batch": self._adaptive_batch.get_stats(),
             **{f"scheduler_{k}": v for k, v in scheduler_stats.items()},
         }
+        # KV offload stats (§12.3)
+        if self._kv_offload_manager is not None:
+            stats["kv_offload"] = self._kv_offload_manager.get_stats()
         return stats
 
     def _overlap_step(self) -> Any:
@@ -702,7 +731,7 @@ class EngineCore:
             return {"enabled": False}
         mgr = self._kv_manager
         pool = mgr.block_pool
-        return {
+        result = {
             "enabled": True,
             "block_size": mgr.block_size,
             "total_blocks": pool.num_blocks,
@@ -717,6 +746,10 @@ class EngineCore:
                 getattr(self.scheduler, '_block_tables', {})
             ),
         }
+        # Append KV offload stats (§12.3)
+        if self._kv_offload_manager is not None:
+            result["offload"] = self._kv_offload_manager.get_stats()
+        return result
 
 
 class AsyncEngineCore:

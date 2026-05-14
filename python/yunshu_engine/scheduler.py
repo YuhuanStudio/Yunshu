@@ -186,6 +186,10 @@ class Scheduler:
         # Thinking-segment KV substore for reasoning cache reuse (§3.6 / Δ-6)
         self._thinking_store = ThinkingSegmentSubstore(ThinkingSegmentConfig())
 
+        # KV offload manager (async tier-to-tier block migration, §12.3)
+        # Set by EngineCore after initialization.
+        self._kv_offload_manager: Any | None = None
+
         # Speculative decoding (Phase 4: EAGLE-3 single-request path)
         self._spec_decoder: Any | None = None
         self._spec_head_info: Any | None = None  # SpecHeadInfo from detect_spec_heads()
@@ -279,6 +283,14 @@ class Scheduler:
     def set_prefix_cache(self, cache: Any) -> None:
         """Set KV prefix cache for batch-path cache hits (C16: insert_segments support)."""
         self._prefix_cache = cache
+
+    def set_kv_offload_manager(self, manager: Any) -> None:
+        """Set KV offload manager for periodic tier migration (§12.3).
+
+        Called by EngineCore after creating the KVOffloadManager.
+        The scheduler calls manager.maybe_offload() periodically from step().
+        """
+        self._kv_offload_manager = manager
 
     def _get_external_prefiller(self) -> Any:
         """Lazy-initialize the ExternalPrefiller."""
@@ -412,6 +424,13 @@ class Scheduler:
         # 7b. Periodic memory pressure eviction (C12)
         if self._step_counter % 64 == 0 and self._memory_monitor is not None:
             self._maybe_evict_kv_cache()
+
+        # 7c. Periodic KV offload check (§12.3)
+        # When KVOffloadManager is configured, periodically check if blocks
+        # should be migrated from hot → warm → SSD. Uses sync mode since
+        # step() runs on the MLX executor thread.
+        if self._kv_offload_manager is not None and self._step_counter % 128 == 0:
+            self._maybe_kv_offload()
 
         # 8. Cleanup finished
         self._cleanup_finished()
@@ -1327,6 +1346,64 @@ class Scheduler:
         except Exception:
             logger.debug("failed", exc_info=True)
 
+    def _maybe_kv_offload(self) -> None:
+        """Periodic KV offload check via KVOffloadManager (§12.3).
+
+        Called from step() every 128 steps. Uses the manager's sync
+        offload path since step() runs on the MLX executor thread.
+        The manager's policy decides whether offloading is needed and
+        which blocks to migrate (hot → warm → SSD).
+        """
+        if self._kv_offload_manager is None:
+            return
+        try:
+            # Use sync offload since we're on the executor thread
+            mgr = self._kv_offload_manager
+            if not mgr.config.enabled:
+                return
+
+            # Gather context for the policy
+            context: dict[str, Any] = {
+                "step_counter": self._step_counter,
+                "memory_usage": 0.0,
+                "free_blocks": 0,
+            }
+            try:
+                import mlx.core as mx
+                active_mem = mx.get_active_memory()
+                from .utils.hardware import get_hardware_info
+                hw = get_hardware_info()
+                total_mem = hw.total_memory_bytes
+                if total_mem > 0:
+                    context["memory_usage"] = active_mem / total_mem
+            except Exception:
+                logger.debug("memory context gather in offload failed", exc_info=True)
+
+            # Let the policy decide
+            if not mgr._policy.should_offload(context):
+                return
+
+            hot_mgr = mgr._get_hot_manager()
+            if hot_mgr is None:
+                return
+
+            max_blocks = context.get("max_blocks", mgr.config.lru_max_blocks_per_cycle)
+            block_hashes = mgr._policy.select_blocks(hot_mgr, max_blocks, context)
+            if not block_hashes:
+                return
+
+            # Execute sync offload
+            result = mgr.offload_blocks_sync(block_hashes)
+            if result.blocks_offloaded > 0:
+                logger.info(
+                    "KV offload: %d blocks migrated (%s → %s)",
+                    result.blocks_offloaded,
+                    result.source_tier.value,
+                    result.dest_tier.value,
+                )
+        except Exception:
+            logger.debug("KV offload check failed", exc_info=True)
+
     def _cleanup_finished(self) -> None:
         """Remove finished requests from running dict."""
         for req_id in list(self.running.keys()):
@@ -1497,13 +1574,8 @@ class Scheduler:
             f"Scheduler spec decoder set: type={type(decoder).__name__}"
         )
 
-    def set_mtp_decoder(self, mtp_decoder: Any, config: Any = None) -> None:
-        """Set an MTP decoder for batch-path speculative decoding.
-
-        Args:
-            mtp_decoder: An MTPDecoder instance (from mtp_decoder.py).
-            config: Optional SpecDecodingConfig (draft_length used for K).
-        """
+    def set_mtp_decoder(self, mtp_decoder: Any, _config: Any = None) -> None:
+        """Set an MTP decoder for batch-path speculative decoding."""
         self._mtp_decoder = mtp_decoder
         self.config.enable_spec_decode = True
         logger.info(

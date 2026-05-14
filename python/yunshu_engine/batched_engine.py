@@ -512,6 +512,16 @@ class BatchedEngine:
         ).strip() in ("1", "true", "yes")
         hybrid_chunk = int(os.environ.get("YUNSHU_HYBRID_CHUNK_SIZE", "512"))
 
+        # External prefill (opt-in via YUNSHU_EXTERNAL_PREFILL=1)
+        # Enables memory preflight checks, chunked progress tracking,
+        # and mid-prefill abort before BatchGenerator.insert().
+        external_prefill = os.environ.get(
+            "YUNSHU_EXTERNAL_PREFILL", ""
+        ).strip() in ("1", "true", "yes")
+        prefill_chunk_size = int(
+            os.environ.get("YUNSHU_PREFILL_CHUNK_SIZE", "2048")
+        )
+
         self._engine_core = EngineCore(
             model=self._model,
             tokenizer=self._tokenizer,
@@ -519,6 +529,8 @@ class BatchedEngine:
                 stream_interval=self.stream_interval,
                 enable_hybrid_prefill=hybrid_prefill,
                 hybrid_chunk_size=hybrid_chunk,
+                use_external_prefill=external_prefill,
+                prefill_chunk_size=prefill_chunk_size,
                 **arch_kwargs,
             ),
             executor=executor,
