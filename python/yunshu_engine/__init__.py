@@ -103,6 +103,30 @@ def __getattr__(name):
         "BlockAlignedCacheSplitter": ".mamba_cache",
         "LayerGroup": ".mamba_cache",
         "CachePoolStats": ".mamba_cache",
+    # Scheduler Mixins (§14.1 SGLang pattern)
+    "SchedulerMixin": ".scheduler_mixins",
+    "MetricsMixin": ".scheduler_mixins",
+    "ProfilingMixin": ".scheduler_mixins",
+    "DisaggregationMixin": ".scheduler_mixins",
+    "DataParallelMixin": ".scheduler_mixins",
+    "PipelineParallelMixin": ".scheduler_mixins",
+    "SpecDecodeMixin": ".scheduler_mixins",
+    "MemoryPressureMixin": ".scheduler_mixins",
+    "CompositionScheduler": ".scheduler_mixins",
+    # Forward Batch (§14.1 vLLM/SGLang 3-level batch)
+    "RequestSlot": ".forward_batch",
+    "ScheduleBatch": ".forward_batch",
+    "ForwardBatch": ".forward_batch",
+    "BatchResult": ".forward_batch",
+    "BatchComposer": ".forward_batch",
+    # Request Lifecycle (state machine + adaptive concurrency)
+    "RequestPhase": ".request_lifecycle",
+    "RequestLifecycleState": ".request_lifecycle",
+    "AdaptiveConcurrencyController": ".request_lifecycle",
+    "RequestLifecycleOrchestrator": ".request_lifecycle",
+    # Model Preprocessors (§16.5 vllm-omni pattern)
+    "PreprocessorRegistry": ".model_preprocessor",
+    "PreprocessedInput": ".model_preprocessor",
     }
     if name in _lazy:
         import importlib
