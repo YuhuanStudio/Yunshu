@@ -928,6 +928,7 @@ async def _handle_vlm_chat(
         )
 
     content = result.get("text", "")
+    vlm_reasoning_tokens = result.get("reasoning_tokens", 0)
     tok = getattr(vlm_engine, '_tokenizer', None)
     prompt_tok = 0
     completion_tok = 0
@@ -957,6 +958,14 @@ async def _handle_vlm_chat(
             for i, tc in enumerate(tool_calls)
         ]
 
+    vlm_usage = {
+        "prompt_tokens": prompt_tok,
+        "completion_tokens": completion_tok,
+        "total_tokens": prompt_tok + completion_tok,
+    }
+    if vlm_reasoning_tokens > 0:
+        vlm_usage["completion_tokens_details"] = {"reasoning_tokens": vlm_reasoning_tokens}
+
     return JSONResponse({
         "id": completion_id,
         "object": "chat.completion",
@@ -967,11 +976,7 @@ async def _handle_vlm_chat(
             "message": message,
             "finish_reason": finish_reason,
         }],
-        "usage": {
-            "prompt_tokens": prompt_tok,
-            "completion_tokens": completion_tok,
-            "total_tokens": prompt_tok + completion_tok,
-        },
+        "usage": vlm_usage,
     })
 
 
