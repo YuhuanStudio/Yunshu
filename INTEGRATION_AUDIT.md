@@ -37,6 +37,19 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **4329 passed, 14 skipped** (1 pre-existing flaky).
 
+### 已完成修復 (2026-05-15 Wave 67-76 — Reasoning Tokens + Video Streaming + Thread Safety)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 67: TTS parameter forwarding | Forward language + seed parameters from TTSRequest to TTSEngine synthesize() and synthesize_stream() | §19.1 TTS Gateway 完整參數 |
+| Wave 68: Reasoning tokens engine tracking | GenerationOutput.reasoning_tokens field, populated from _thinking_tokens in fast path + streaming fast path (4-element queue tuples). Fixed critical video streaming crash: gateway _stream_video_frames() called wrong method signature. Fixed CLI admin config --set body format. VideoEngine TeaCache initialization. | 引擎級思考 token 追蹤, 視頻串流修復, CLI 修復 |
+| Wave 69: Preprocessor detect() fix | ModelPreprocessorRegistry.detect() was called with wrong args (model_name, model) instead of (model_config: dict). Now constructs proper config dict. Added reasoning_tokens to completions and responses routers. | 預處理器路由修復 |
+| Wave 70: VLM reasoning tokens | VLMEngine.generate() tracks thinking tokens via <think/> start/end token detection. All VLM generation paths return (text, reasoning_tokens) tuple. | VLM 思考追蹤 |
+| Wave 71: ProcessMemoryEnforcer thread safety | _check_and_enforce() now acquires ModelManager._lock before accessing _entries dict. Moved unload_model() call outside lock. Updated stale DEAD entries in §2.1. | 併發安全, 文檔準確 |
+| Wave 72-73: VLM response reasoning + full path tracking | VLM non-streaming response includes usage.completion_tokens_details. _generate_vlm_text and _stream_vlm_text track thinking tokens. | VLM 完整思考追蹤 |
+| Wave 74: Reasoning tokens monitoring | BatchedEngine._total_reasoning_tokens cumulative counter. /gw/monitoring/reasoning-tokens endpoint. | 運維監控 |
+| Wave 75-76: Streaming usage reasoning tokens | format_openai_usage_chunk() includes reasoning_tokens. Completions streaming tracks and reports reasoning tokens in final usage chunk. | 串流完整報告 |
+
 ### 已完成修復 (2026-05-15 Wave 60-62 — Stats-Only Module Production Wiring)
 
 | 修復 | 描述 | 影響 |
