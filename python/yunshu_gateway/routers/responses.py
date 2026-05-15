@@ -303,7 +303,15 @@ async def create_response(req: ResponsesRequest, request: Request):
 
         # Build output items
         output_items = []
-        content_parts = [{"type": "output_text", "text": text.strip()}]
+        text_part = {"type": "output_text", "text": text.strip()}
+        # Include logprobs if requested
+        if req.logprobs:
+            _result_lp = getattr(result, 'logprobs', None) if is_batched else getattr(state, 'logprobs', None)
+            if _result_lp:
+                _chunk_lp = _format_chat_logprobs(_result_lp)
+                if _chunk_lp:
+                    text_part["logprobs"] = _chunk_lp
+        content_parts = [text_part]
         output_items.append({
             "type": "message",
             "id": f"msg-{uuid.uuid4().hex[:24]}",

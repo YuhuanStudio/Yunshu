@@ -792,6 +792,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         enable_thinking=req.enable_thinking,
                         json_schema=json_schema,
                         logprobs=req.logprobs,
+                        top_logprobs=req.top_logprobs,
                         spec_decode=req.spec_decode,
                         thinking_budget=req.thinking_budget,
                         stop_token_ids=req.stop_token_ids,

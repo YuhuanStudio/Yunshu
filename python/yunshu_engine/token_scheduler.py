@@ -138,6 +138,7 @@ class TokenLevelScheduler:
             "budget_utilization": [],
             "max_weight_seen": 0.0,
             "min_weight_seen": float("inf"),
+            "steps_with_allocations": 0,
         }
 
     def compute_token_budget(

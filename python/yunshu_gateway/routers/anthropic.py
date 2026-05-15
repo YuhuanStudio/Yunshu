@@ -422,9 +422,10 @@ async def _non_stream_legacy(engine, messages, req, stop):
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
+    effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
     result = await engine.generate(
         prompt=messages,
-        max_tokens=req.max_tokens,
+        max_tokens=effective_max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
@@ -452,11 +453,22 @@ async def _non_stream_legacy(engine, messages, req, stop):
     finish_reason = getattr(result, 'finish_reason', None) or getattr(result, 'finish_state', None)
     cached_toks = getattr(result, 'cached_tokens', 0) or 0
     _record_metrics(prompt_toks, completion_toks)
+
+    # Extract thinking tokens if thinking mode enabled
+    content = []
+    visible_text = text
+    if enable_thinking:
+        from ..streaming import extract_thinking
+        thinking_text, visible_text = extract_thinking(text)
+        if thinking_text:
+            content.append({"type": "thinking", "thinking": thinking_text})
+    content.append({"type": "text", "text": visible_text})
+
     return JSONResponse({
         "id": message_id,
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "text", "text": text}],
+        "content": content,
         "model": req.model,
         "stop_reason": "end_turn" if finish_reason == "stop" else (finish_reason or "end_turn"),
         "usage": {

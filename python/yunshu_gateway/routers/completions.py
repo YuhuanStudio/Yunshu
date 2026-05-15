@@ -374,12 +374,14 @@ async def _stream_completion(
                     prompt_tok = output.prompt_token_count
                 if hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1
+                _chunk_lp = _format_streaming_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 yield format_openai_chunk(
                     completion_id=completion_id,
                     model=req.model,
                     delta_content=output.token_text,
                     finish_reason=output.finish_reason,
                     choice_index=choice_idx,
+                    logprobs=_chunk_lp,
                 )
 
     async def _token_source():

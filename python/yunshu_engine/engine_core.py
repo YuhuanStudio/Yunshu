@@ -1085,6 +1085,10 @@ class EngineCore:
                     self._kv_lifecycle.release(hash(req_id) % (10**9))
                 except Exception:
                     pass
+                try:
+                    self._kv_migration.unregister_block(hash(req_id) % (10**9))
+                except Exception:
+                    pass
                 if self._sliding_window_mgr is not None:
                     try:
                         self._sliding_window_mgr.remove_request(req_id)
@@ -1372,7 +1376,7 @@ class EngineCore:
                             alloc.prefill_tokens + alloc.decode_tokens,
                         )
                 except Exception:
-                    pass
+                    logger.debug("token-level scheduling failed", exc_info=True)
 
                 # Run scheduler step on MLX executor thread
                 # §14.1: TBO takes priority when enabled; else C18 overlap; else plain
@@ -1464,6 +1468,15 @@ class EngineCore:
                 if req_output.finished:
                     self._signal_finished(rid)
                     self._num_requests_processed += 1
+                    # FairnessTracker: record completion before timestamp is popped
+                    _start_ts = self._request_timestamps.get(rid)
+                    if _start_ts is not None:
+                        try:
+                            self._fairness_tracker.record_completion(
+                                rid, 0.0, time.monotonic() - _start_ts,
+                            )
+                        except Exception:
+                            logger.debug("fairness record_completion failed", exc_info=True)
                     self._request_timestamps.pop(rid, None)
                     # Checkpoint: save final state for crash recovery
                     if self._checkpoint_mgr is not None:
@@ -1750,18 +1763,6 @@ class EngineCore:
             self._kv_migration.unregister_block(_block_id)
         except Exception:
             logger.debug("kv_migration unregister failed", exc_info=True)
-        # FairnessTracker: record request completion with wait/total time
-        try:
-            _start_ts = self._request_timestamps.get(request_id)
-            if _start_ts is not None:
-                _now = time.monotonic()
-                self._fairness_tracker.record_completion(
-                    request_id, 0.0, _now - _start_ts,
-                )
-        except Exception:
-            logger.debug("fairness tracker record_completion failed", exc_info=True)
-        except Exception:
-            logger.debug("kv_lifecycle release failed", exc_info=True)
         if self._request_dedup is not None:
             content_hash = self._dedup_hashes.pop(request_id, None)
             self._dedup_shadows.pop(request_id, None)

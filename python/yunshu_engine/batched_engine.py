@@ -1110,7 +1110,7 @@ class BatchedEngine:
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             try:
                 if self._tokenizer and hasattr(self._tokenizer, 'encode'):
-                    text = self._messages_to_text(prompt, enable_thinking)
+                    text = self._apply_chat_template(prompt, enable_thinking)
                     token_count = len(self._tokenizer.encode(text))
                     max_ctx = getattr(self._model, 'max_seq_len', None)
                     if max_ctx is None:
