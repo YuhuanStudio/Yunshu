@@ -1153,7 +1153,7 @@ class EngineCore:
                     if suggested < self.config.completion_batch_size:
                         self.config.completion_batch_size = suggested
                 except Exception:
-                    pass  # best-effort
+                    logger.debug("adaptive batch sizing failed", exc_info=True)
 
                 # Priority inversion guard: detect and resolve priority inversion
                 # before scheduling (token_scheduler.py PriorityInversionGuard)
@@ -1183,7 +1183,7 @@ class EngineCore:
                                 actual.sampling_params.priority = low_req.effective_priority
                             logger.debug(f"Priority inheritance: {inv.low_request_id} boosted to {low_req.effective_priority}")
                 except Exception:
-                    pass  # best-effort
+                    logger.debug("priority inversion guard failed", exc_info=True)
 
                 # Run scheduler step on MLX executor thread
                 # §14.1: TBO takes priority when enabled; else C18 overlap; else plain
@@ -1235,7 +1235,7 @@ class EngineCore:
                         if parsed.finish_reason:
                             req_output.finish_reason = parsed.finish_reason
                     except Exception:
-                        pass  # best-effort
+                        logger.debug("output parser failed", exc_info=True)
 
                 if use_simple_streaming:
                     collector.put(req_output)
