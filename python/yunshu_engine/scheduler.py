@@ -631,6 +631,10 @@ class Scheduler:
         # Set by EngineCore when YUNSHU_METAL_KERNELS=1 is enabled.
         self._metal_kernel_manager: Any | None = None
 
+        # Hybrid KV cache for Mamba/hybrid models (layer-type-aware routing)
+        # Set by EngineCore when model has mixed attention + SSM layers.
+        self._hybrid_kv: Any | None = None
+
         # ITL tracking (C2/ITL-1: inter-token latency per request)
         self._last_token_time: dict[str, float] = {}
         self._itl_samples: dict[str, list[float]] = {}
@@ -725,6 +729,14 @@ class Scheduler:
         KIVI 2-bit KV cache compression to the batch path.
         """
         self._metal_kernel_manager = manager
+
+    def set_hybrid_kv_cache(self, hybrid_kv: Any) -> None:
+        """Set HybridKVCache for layer-type-aware KV management.
+
+        When the model has mixed attention + SSM layers (Mamba, Jamba, etc.),
+        this allows the scheduler to route allocate/free to the correct pool.
+        """
+        self._hybrid_kv = hybrid_kv
 
     def _get_external_prefiller(self) -> Any:
         """Lazy-initialize the ExternalPrefiller."""

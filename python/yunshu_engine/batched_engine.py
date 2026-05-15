@@ -403,6 +403,25 @@ class BatchedEngine:
             mx.synchronize()
             mx.clear_cache()
 
+        def _model_warmup():
+            """Full warmup using ModelWarmupManager (compile + KV cache prefill)."""
+            from .model_optimizations import ModelWarmupManager
+            mgr = ModelWarmupManager()
+            model_type = "generic"
+            name_lower = self.model_name.lower()
+            for family in ("qwen", "llama", "deepseek", "gemma"):
+                if family in name_lower:
+                    model_type = family
+                    break
+            use_compile = self._use_compile and not self._compiled
+            result = mgr.warmup(self._model, model_type=model_type, compile=use_compile)
+            logger.info(
+                f"Model warmup: {result.warmup_time_s:.3f}s, "
+                f"compile={result.compile_cached}, prompts={result.prompts_warmed}"
+            )
+            # Also do basic warmup to ensure MX compile cache is populated
+            _warmup()
+
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
 
@@ -473,9 +492,9 @@ class BatchedEngine:
         if self._deltanet_inversion_enabled and self._model is not None:
             self._init_deltanet_inversion()
 
-        # Warmup generation + cache clear drops RSS from ~3.8GB to ~200MB
-        # by forcing OS to reclaim clean mmap pages
-        await loop.run_in_executor(executor, _warmup)
+        # Warmup: ModelWarmupManager handles compile caching + KV prefill
+        # The basic generate_step warmup is wrapped inside _model_warmup()
+        await loop.run_in_executor(executor, _model_warmup)
 
         # mx.compile() for Metal kernel caching (SGLang CUDA Graphs equivalent)
         # Compiles the model's forward pass into optimized Metal kernels.
@@ -792,8 +811,53 @@ class BatchedEngine:
         except Exception:
             logger.debug("MemoryGuard setup skipped", exc_info=True)
 
+        # Setup TurboQuant per-layer mixed-precision KV quantization
+        try:
+            model_cfg = getattr(self._model, 'config', self._model) if self._model else None
+            if model_cfg is not None:
+                num_layers = getattr(model_cfg, 'num_hidden_layers', 0)
+                if num_layers > 0:
+                    quant_bits = getattr(model_cfg, 'kv_cache_quant_bits', None)
+                    quant_start = int(os.environ.get(
+                        "YUNSHU_TURBOQUANT_START_LAYER",
+                        getattr(model_cfg, 'kv_cache_quant_start_layer', 0),
+                    ))
+                    quant_group = int(os.environ.get(
+                        "YUNSHU_TURBOQUANT_GROUP_SIZE",
+                        getattr(model_cfg, 'kv_cache_quant_group_size', 64),
+                    ))
+                    # Enable if model has quant settings or env opt-in
+                    env_enable = os.environ.get("YUNSHU_TURBOQUANT", "").strip() in ("1", "true", "yes")
+                    if quant_bits is not None or env_enable:
+                        self._engine_core.setup_turbo_quant(
+                            total_layers=num_layers,
+                            kv_quant_bits=quant_bits,
+                            kv_quant_start_layer=quant_start,
+                            kv_quant_group_size=quant_group,
+                        )
+        except Exception:
+            logger.debug("TurboQuant setup skipped", exc_info=True)
+
+        # Setup HybridKVCache layer type registration for Mamba/hybrid models
+        try:
+            model_cfg = getattr(self._model, 'config', self._model) if self._model else None
+            if model_cfg is not None and self._model is not None:
+                num_layers = getattr(model_cfg, 'num_hidden_layers', 0)
+                if num_layers > 0:
+                    self._engine_core.setup_hybrid_kv(
+                        model=self._model,
+                        total_layers=num_layers,
+                    )
+        except Exception:
+            logger.debug("HybridKVCache setup skipped", exc_info=True)
+
         # Wire prefix cache into scheduler for batch-path insert_segments (C16)
         self._engine_core.set_prefix_cache(self._kv_prefix_cache)
+        # Wire HybridKVCache into scheduler for layer-type-aware KV routing
+        if self._engine_core._hybrid_kv is not None:
+            self._engine_core.scheduler.set_hybrid_kv_cache(
+                self._engine_core._hybrid_kv
+            )
         # Wire speculative decoding decoders into the scheduler
         self._wire_spec_decoders_to_scheduler()
         await self._engine_core.start()

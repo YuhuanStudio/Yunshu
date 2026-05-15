@@ -517,6 +517,89 @@ class EngineCore:
             f"{head_dim}d, max_concurrent={max_concurrent_requests}"
         )
 
+    def setup_turbo_quant(
+        self,
+        total_layers: int,
+        kv_quant_bits: int | None = None,
+        kv_quant_start_layer: int = 0,
+        kv_quant_group_size: int = 64,
+    ) -> None:
+        """Configure TurboQuant per-layer mixed-precision KV quantization."""
+        if total_layers <= 0:
+            return
+        from .turbo_quant import TurboQuantConfig
+        if kv_quant_bits is not None:
+            config = TurboQuantConfig(
+                enabled=True,
+                total_layers=total_layers,
+                fp16_end_layer=max(kv_quant_start_layer - 1, 0),
+                int8_end_layer=min(kv_quant_start_layer + total_layers // 3, total_layers - 1),
+                int4_group_size=kv_quant_group_size,
+            )
+        else:
+            # Default: lightweight mixed-precision profile
+            config = TurboQuantConfig(
+                enabled=True,
+                total_layers=total_layers,
+                fp16_end_layer=min(3, total_layers - 1),
+                int8_end_layer=min(total_layers // 2, total_layers - 1),
+                int4_group_size=64,
+            )
+        self._turbo_quant = TurboQuantManager(config)
+        logger.info(
+            f"TurboQuant configured: {total_layers} layers, "
+            f"compression={config.expected_compression_ratio:.1f}x"
+        )
+
+    def setup_hybrid_kv(
+        self,
+        model: Any,
+        total_layers: int,
+    ) -> None:
+        """Register model layer types in HybridKVCache for Mamba/hybrid models.
+
+        Scans model layers for SSM (state-space model) vs attention types and
+        registers them so the scheduler can route allocate/free correctly.
+        """
+        from .mamba_cache import CacheBlockType
+        registered = 0
+        for idx in range(total_layers):
+            try:
+                layer = model.layers[idx] if hasattr(model, 'layers') else None
+                if layer is None:
+                    continue
+                # Detect SSM layers by presence of state attribute or class name
+                layer_cls = type(layer).__name__.lower()
+                has_ssm = (
+                    hasattr(layer, 'state')
+                    or 'mamba' in layer_cls
+                    or 'ssm' in layer_cls
+                    or 'deltanet' in layer_cls
+                )
+                if has_ssm:
+                    self._hybrid_kv.register_layer(
+                        idx, CacheBlockType.MAMBA_SSM,
+                        cache_shape=(48, 16),
+                    )
+                else:
+                    model_cfg = getattr(model, 'config', model)
+                    num_heads = getattr(model_cfg, 'num_key_value_heads', 1)
+                    head_dim = getattr(model_cfg, 'hidden_size', 1) // max(
+                        getattr(model_cfg, 'num_attention_heads', 1), 1
+                    )
+                    self._hybrid_kv.register_layer(
+                        idx, CacheBlockType.ATTENTION,
+                        cache_shape=(num_heads, head_dim, self.config.kv_block_size),
+                    )
+                registered += 1
+            except Exception:
+                break
+        if registered > 0:
+            logger.info(
+                f"HybridKVCache registered {registered}/{total_layers} layers "
+                f"({len(self._hybrid_kv._pools)} pools)"
+            )
+
     async def start(self) -> None:
         """Start the engine loop."""
         if self._running:
@@ -1185,6 +1268,17 @@ class EngineCore:
                         "engine_step_memory_usage",
                         mem_usage,
                     )
+                    # SpecPrefill: use GPU idle time for priority prefill queue
+                    if mem_usage < 0.7 and self._spec_prefill_engine is not None:
+                        try:
+                            batch_size = len(scheduler_output.outputs)
+                            budget = max(0, self.config.completion_batch_size - batch_size) * 512
+                            if budget > 0:
+                                entry = self._spec_prefill_engine.try_prefill(budget)
+                                if entry is not None and entry.status == "completed":
+                                    self._spec_prefill_engine.remove_entry(entry.request_id)
+                        except Exception:
+                            logger.debug("spec prefill attempt failed", exc_info=True)
                 except Exception:
                     logger.debug("failed", exc_info=True)
 
