@@ -35,7 +35,28 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6052 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6051 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-16 Wave 99 — Production Wiring + Agent Audit Deep Fixes)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 99: KVMigrationManager 生命週期 | start() 在 init 調用，register_block() 在 KV lifecycle admission 調用，unregister_block() 在 cleanup + memory guard rejection 調用，stop() 在 shutdown 調用 | KV 分層遷移背景線程啟用 |
+| Wave 99: AutoTuner profiling | start_profiling() 在 init 調用，stop_profiling() 在 shutdown 調用 | 性能剖析生命週期完整 |
+| Wave 99: FairnessTracker 接入 | record_allocation() 在 token budget 計算後調用，record_completion() 在 engine loop finish 時調用（修復 read-after-pop bug） | Jain's 公平指數正確計算 |
+| Wave 99: Checkpoint 崩潰恢復 | save() 在 request finish 時保存 InferenceState，load() 在 engine start 時恢復 | 崩潰恢復基礎設施啟用 |
+| Wave 99: 監控端點 | /gw/monitoring/request-coalescer, /token-scheduler (WFQ + 反轉 + 公平), /kv-migration | 運維觀測 |
+| Wave 99: Spec/ngram/MTP logprobs | 所有猜測解碼路徑（spec decode + n-gram + MTP，串流 + 非串流）現在填充 logprobs | logprobs=true 全路徑支持 |
+| Wave 99b: TokenLevelScheduler KeyError | `steps_with_allocations` 鍵未在 _stats 中初始化 — 每步 KeyError 被靜默捕獲，導致 token 排程完全失效 | 排程器核心功能修復 |
+| Wave 99b: _request_timestamps read-after-pop | FairnessTracker.record_completion() 在 pop 後讀取，永遠得到 None。移至 engine loop finish 時調用 | 公平追蹤正確運作 |
+| Wave 99b: BatchedEngine._messages_to_text | 方法不存在 — context window 截斷觸發時 AttributeError。替換為 _apply_chat_template() | 長 prompt 截斷不再崩潰 |
+| Wave 99b: Anthropic legacy thinking | 非串流 legacy 路徑不提取 thinking tokens（標記洩漏到輸出）。修復: extract_thinking() | Anthropic API thinking 完整 |
+| Wave 99b: Responses API logprobs | 非串流路徑不包含 logprobs。修復: 格式化並附加到 output_text | Responses API logprobs 完整 |
+| Wave 99b: Completions legacy logprobs | 串流 legacy 路徑不傳遞 logprobs 到 SSE chunks。修復: _format_streaming_logprobs | Completions logprobs 全路徑 |
+| Wave 99b: Chat batched top_logprobs | 非串流 batched 路徑缺少 top_logprobs 參數 | Chat top_logprobs 完整 |
+| Wave 99c: _generate_fast 資源洩漏 | 非 OOM/RuntimeError 例外未清理 inflight prefix。新增通用 Exception handler | 全例外類型資源安全 |
+| Wave 99c: N-gram streaming exception | _run 無 try/except — 例外導致 120s timeout 掛起。新增 _run_inner wrapper + BaseException check | N-gram 錯誤快速傳播 |
+| Wave 99c: Chat batched thinking routing | 串流 batched 路徑不檢查 current_state — thinking 內容作為普通文本發送。新增 reasoning state routing | 串流思考模式正確路由 |
 
 ### 已完成修復 (2026-05-15 Wave 95 — Inflight Prefix Sharing + Zero Silent Excepts + Dead Code)
 
