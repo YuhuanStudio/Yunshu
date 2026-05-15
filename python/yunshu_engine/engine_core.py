@@ -881,6 +881,12 @@ class EngineCore:
         )
         if budget.is_exhausted:
             budget_reason = budget.exhaustion_reason or "budget_exceeded"
+            # Clean up inflight prefix registration before early return
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(req_id)
+            except Exception:
+                pass
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
@@ -972,6 +978,13 @@ class EngineCore:
                 max_tokens=max_tokens,
             )
             if not ok:
+                # Clean up inflight prefix registration and memory reservation before early return
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(req_id)
+                except Exception:
+                    pass
+                self._memory_aware_scheduler.release_memory(req_id)
                 # Set up output collector with error response
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 from .request import RequestOutput

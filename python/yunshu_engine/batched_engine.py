@@ -1999,6 +1999,8 @@ class BatchedEngine:
                     completion_tokens=output.completion_tokens,
                     finished=output.finished,
                     finish_reason=finish_reason,
+                    reasoning_tokens=getattr(output, 'reasoning_tokens', 0),
+                    cached_tokens=getattr(output, 'cached_tokens', 0),
                 )
                 if output.finished:
                     finished_normally = True

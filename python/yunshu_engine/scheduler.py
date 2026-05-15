@@ -1820,6 +1820,12 @@ class Scheduler:
                 completion_tokens=req.num_output_tokens,
                 logprobs=logprobs,
                 current_state=current_state,
+                reasoning_tokens=(
+                    len(req.output_token_ids) - ts['thinking_start_idx']
+                    if ts and ts.get('thinking_start_idx') is not None and ts.get('in_thinking')
+                    else 0
+                ),
+                cached_tokens=getattr(req, 'cached_tokens', 0),
             )
             outputs.append(output)
 

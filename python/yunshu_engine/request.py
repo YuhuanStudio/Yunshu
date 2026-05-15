@@ -94,8 +94,10 @@ class RequestOutput:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     logprobs: Any = None
+    reasoning_tokens: int = 0
     current_state: str = "normal"
     error: str | None = None
+    cached_tokens: int = 0
 
     # Backward compat aliases for legacy Engine path
     @property
