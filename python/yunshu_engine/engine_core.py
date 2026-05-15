@@ -1707,7 +1707,7 @@ class EngineCore:
                                     ))
                                     collector.put(None)
                                 self._signal_finished(rid)
-                                self._request_timestamps.pop(rid, None)
+                                self._finalize_request(rid)
                 except Exception:
                     logger.debug("timeout enforcement failed", exc_info=True)
 

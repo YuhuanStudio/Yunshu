@@ -281,6 +281,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 min_p=req.min_p,
+                json_schema=json_schema,
                 stop=req.stop,
                 stop_token_ids=req.stop_token_ids,
                 spec_decode=req.spec_decode,

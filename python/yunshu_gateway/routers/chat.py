@@ -1399,6 +1399,7 @@ async def _stream_response_multi(
       async for event in with_sse_keepalive(
           _token_source(),
           http_request=request,
+          cancel_event=gen.cancel_event,
       ):
           yield event.encode("utf-8")
     finally:
@@ -1561,6 +1562,7 @@ async def _stream_response(
                 top_logprobs=req.top_logprobs,
                 spec_decode=req.spec_decode,
                 logits_processors=req.logits_processors,
+                cancel_event=_tracker_gen.cancel_event,
             ):
                 token_text = output.new_text
                 if output.finish_reason is not None:
@@ -1739,6 +1741,7 @@ async def _stream_response(
       async for event in with_sse_keepalive(
           _token_source(),
           http_request=request,
+          cancel_event=_tracker_gen.cancel_event,
       ):
           encoded = event.encode("utf-8")
           # Best-effort write to streaming buffer

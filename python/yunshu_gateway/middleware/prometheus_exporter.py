@@ -348,6 +348,14 @@ class PrometheusMetrics:
             "yunshu_step_duration_ms",
             "Last scheduler step wall time in milliseconds",
         )
+        self._gauges["attention_eviction_tracked_requests"] = _Gauge(
+            "yunshu_attention_eviction_tracked_requests",
+            "Number of requests tracked by H2O attention eviction",
+        )
+        self._gauges["attention_eviction_total_blocks"] = _Gauge(
+            "yunshu_attention_eviction_total_blocks",
+            "Total KV blocks scored by H2O attention eviction",
+        )
 
     # --- Counter API ---
 

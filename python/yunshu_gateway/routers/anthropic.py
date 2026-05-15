@@ -415,7 +415,19 @@ async def _non_stream_batched(engine, messages, req, stop):
         if thinking_text:
             content.append({"type": "thinking", "thinking": thinking_text})
 
-    content.append({"type": "text", "text": visible_text})
+    text_block: dict = {"type": "text", "text": visible_text}
+
+    # Include logprobs in the text content block if requested
+    if req.logprobs:
+        _result_lp = getattr(result, 'logprobs', None)
+        if _result_lp:
+            # Anthropic format: logprobs array in the content block
+            # Each entry: {"token": str, "logprob": float, "top_logprobs": [...]}
+            formatted_lp = _format_anthropic_logprobs(_result_lp)
+            if formatted_lp:
+                text_block["logprobs"] = formatted_lp
+
+    content.append(text_block)
 
     stop_reason = result.finish_reason or "end_turn"
     if stop_reason == "stop":
@@ -511,7 +523,17 @@ async def _non_stream_legacy(engine, messages, req, stop):
         thinking_text, visible_text = extract_thinking(text)
         if thinking_text:
             content.append({"type": "thinking", "thinking": thinking_text})
-    content.append({"type": "text", "text": visible_text})
+    text_block: dict = {"type": "text", "text": visible_text}
+
+    # Include logprobs in the text content block if requested
+    if req.logprobs:
+        _result_lp = getattr(result, 'logprobs', None)
+        if _result_lp:
+            formatted_lp = _format_anthropic_logprobs(_result_lp)
+            if formatted_lp:
+                text_block["logprobs"] = formatted_lp
+
+    content.append(text_block)
 
     return JSONResponse({
         "id": message_id,
@@ -663,7 +685,7 @@ async def _stream_anthropic(
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
-                max_tokens=req.max_tokens,
+                max_tokens=effective_max_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -774,6 +796,33 @@ async def _stream_anthropic(
         _release_lora_adapter(engine, loaded_adapter)
 
     _record_metrics(input_tokens, output_tokens)
+
+
+def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] | None:
+    """Format per-token logprobs from GenerationOutput into Anthropic Messages format.
+
+    Anthropic returns logprobs as an array in each text content block:
+    [{"token": str, "logprob": float, "top_logprobs": [{"token": str, "logprob": float}, ...]}]
+
+    Returns None if no valid logprobs entries are found.
+    """
+    if not logprobs_list:
+        return None
+    entries = []
+    for lp_entry in logprobs_list:
+        if not isinstance(lp_entry, dict):
+            continue
+        top_lps = lp_entry.get("top_logprobs", [])
+        decoded_top = [
+            {"token": tlp.get("token", ""), "logprob": tlp.get("logprob", 0.0)}
+            for tlp in top_lps
+        ]
+        entries.append({
+            "token": lp_entry.get("token", ""),
+            "logprob": lp_entry.get("logprob", 0.0),
+            "top_logprobs": decoded_top,
+        })
+    return entries if entries else None
 
 
 @router.post("/messages/count_tokens")

@@ -270,6 +270,11 @@ async def create_completion(req: CompletionRequest, request: Request):
             "choices": choices,
             "usage": usage,
         })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Insufficient GPU memory")
+    except Exception as e:
+        logger.error(f"Completions generation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
 
@@ -420,6 +425,13 @@ async def _stream_completion(
             http_request=request,
         ):
             yield event.encode("utf-8")
+    except MemoryError:
+        yield f"data: {{\"error\": {{\"message\": \"Insufficient GPU memory\", \"type\": \"server_error\"}}}}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+    except Exception as e:
+        logger.error(f"Completions streaming error: {e}", exc_info=True)
+        yield f"data: {{\"error\": {{\"message\": \"Internal server error\", \"type\": \"server_error\"}}}}\n\n".encode()
+        yield b"data: [DONE]\n\n"
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         _tracker.unregister(completion_id)

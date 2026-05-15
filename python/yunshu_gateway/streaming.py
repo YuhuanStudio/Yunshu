@@ -55,6 +55,7 @@ async def with_sse_keepalive(
     http_request=None,
     interval: float = 10.0,
     disconnect_poll: float = 2.0,
+    cancel_event=None,
 ) -> AsyncIterator[str]:
     """Wrap an SSE generator to send periodic keep-alive comments.
 
@@ -67,6 +68,11 @@ async def with_sse_keepalive(
     between prefill steps. This detects cancellation during long prefills
     where uvicorn's ASGI disconnect message is not delivered until after
     the generator yields.
+
+    When cancel_event is provided (an asyncio.Event), it is set when a
+    client disconnect is detected. This allows the engine's generation
+    loop to cooperatively stop GPU work immediately rather than waiting
+    for the next iteration.
 
     Direct replication of oMLX's _with_sse_keepalive pattern.
     """
@@ -94,6 +100,9 @@ async def with_sse_keepalive(
                     try:
                         disconnected = await http_request.is_disconnected()
                         if disconnected:
+                            # Signal the engine to stop GPU work immediately
+                            if cancel_event is not None:
+                                cancel_event.set()
                             task.cancel()
                             try:
                                 await task

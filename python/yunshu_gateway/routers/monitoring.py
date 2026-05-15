@@ -312,6 +312,18 @@ async def prometheus_export() -> str:
                 except Exception:
                     logger.debug("scheduler monitoring gauge population failed", exc_info=True)
 
+                # H2O attention eviction gauges
+                try:
+                    core = entry.engine._engine_core
+                    if core is not None:
+                        tracker = getattr(core.scheduler, '_attention_score_tracker', None)
+                        if tracker is not None:
+                            at_stats = tracker.get_stats()
+                            pm.set_gauge("attention_eviction_tracked_requests", at_stats.get("tracked_requests", 0))
+                            pm.set_gauge("attention_eviction_total_blocks", at_stats.get("total_blocks", 0))
+                except Exception:
+                    logger.debug("attention eviction gauge population failed", exc_info=True)
+
     return pm.generate()
 
 
@@ -721,4 +733,47 @@ async def kv_migration_stats() -> dict[str, Any]:
         return {"enabled": False, "reason": "engine_core not active"}
     except Exception:
         logger.debug("operation failed", exc_info=True)
+        return {"enabled": False}
+
+
+@router.get("/attention-eviction")
+async def attention_eviction_stats() -> dict[str, Any]:
+    """H2O-style attention-score-based KV eviction statistics.
+
+    Shows how many requests are being tracked, total blocks scored,
+    and heuristic vs real attention weight update counts.
+    """
+    try:
+        engines = _collect_engines()
+        results = []
+        for model_id, engine in engines:
+            if hasattr(engine, '_engine_core') and engine._engine_core is not None:
+                scheduler = engine._engine_core.scheduler
+                tracker = getattr(scheduler, '_attention_score_tracker', None)
+                if tracker is not None:
+                    results.append({"model_id": model_id, **tracker.get_stats()})
+                else:
+                    results.append({"model_id": model_id, "enabled": False})
+        if not results:
+            return {"enabled": False, "reason": "no engines with attention eviction"}
+        return {"models": results}
+    except Exception:
+        logger.debug("attention eviction stats failed", exc_info=True)
+        return {"enabled": False}
+
+
+@router.get("/batch-size")
+async def batch_size_stats() -> dict[str, Any]:
+    """Batch size distribution statistics from server metrics.
+
+    Shows batch size percentiles (p50, p99) for scheduler steps.
+    """
+    try:
+        from ..middleware.metrics import get_metrics
+        metrics = get_metrics()
+        if hasattr(metrics, '_server_metrics') and metrics._server_metrics is not None:
+            return metrics._server_metrics.get_batch_size_stats()
+        return {"enabled": False, "reason": "server_metrics not active"}
+    except Exception:
+        logger.debug("batch size stats failed", exc_info=True)
         return {"enabled": False}
