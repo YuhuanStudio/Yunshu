@@ -95,23 +95,27 @@ class QwenOmniAudioPreprocessor(ModelPreprocessor):
         audio_tokens = []
         warnings = []
 
-        if isinstance(raw_input, bytes):
-            # Raw audio bytes — encode to tokens
-            # In production, this uses the model's audio codec
-            # For now, estimate token count from audio duration
-            estimated_tokens = len(raw_input) // 320  # ~6.25 tokens per 200 bytes
-            audio_tokens = list(range(151660, 151660 + estimated_tokens))
-        elif isinstance(raw_input, list) and raw_input and isinstance(raw_input[0], int):
+        if isinstance(raw_input, list) and raw_input and isinstance(raw_input[0], int):
+            # Pre-tokenized input — pass through directly
             audio_tokens = raw_input
         elif isinstance(raw_input, dict):
             audio_tokens = raw_input.get("token_ids", [])
-            if not audio_tokens:
-                audio_data = raw_input.get("audio", b"")
-                if audio_data:
-                    estimated_tokens = len(audio_data) // 320
-                    audio_tokens = list(range(151660, 151660 + estimated_tokens))
         else:
-            warnings.append(f"Unsupported audio input type: {type(raw_input)}")
+            # Raw audio bytes — real codec not yet implemented
+            # Return empty token_ids to prevent fake tokens replacing real prompt
+            warnings.append("Qwen3-Omni audio codec not yet integrated — pass pre-tokenized input")
+            estimated_tokens = 0
+            if isinstance(raw_input, (bytes, bytearray)):
+                estimated_tokens = len(raw_input) // 320
+            return PreprocessedInput(
+                input_type=PreprocessorType.AUDIO,
+                model_family=self.model_family,
+                token_ids=[],  # SAFE: no fake tokens
+                original_tokens=estimated_tokens,
+                processed_tokens=0,
+                features={"codec": "qwen3_omni", "estimated_tokens": estimated_tokens},
+                warnings=warnings,
+            )
 
         return PreprocessedInput(
             input_type=PreprocessorType.AUDIO,
@@ -147,17 +151,16 @@ class CosyVoicePhonemePreprocessor(ModelPreprocessor):
         elif isinstance(raw_input, dict):
             text = raw_input.get("text", "")
 
-        # Phoneme estimation (average ~3 phonemes per character for Chinese)
         estimated_phonemes = len(text) * 3
-        phoneme_tokens = list(range(estimated_phonemes))
 
         return PreprocessedInput(
             input_type=PreprocessorType.SPEECH,
             model_family=self.model_family,
-            token_ids=phoneme_tokens,
+            token_ids=[],  # Placeholder: phoneme encoder not yet integrated
             original_tokens=len(text.split()),
-            processed_tokens=len(phoneme_tokens),
+            processed_tokens=estimated_phonemes,
             features={"phoneme_count": estimated_phonemes},
+            warnings=["CosyVoice phoneme encoder not yet integrated"],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -181,14 +184,12 @@ class LLaVAImagePreprocessor(ModelPreprocessor):
         self._patch_size = patch_size
 
     def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
-        warnings = []
         num_patches = (self._image_size // self._patch_size) ** 2
-        image_tokens = list(range(num_patches))
 
         return PreprocessedInput(
             input_type=PreprocessorType.IMAGE,
             model_family=self.model_family,
-            token_ids=image_tokens,
+            token_ids=[],  # Placeholder: vision encoder not yet integrated
             original_tokens=1,
             processed_tokens=num_patches,
             features={
@@ -196,7 +197,7 @@ class LLaVAImagePreprocessor(ModelPreprocessor):
                 "patch_size": self._patch_size,
                 "num_patches": num_patches,
             },
-            warnings=warnings,
+            warnings=["LLaVA vision encoder not yet integrated — VLM engine uses mlx_vlm directly"],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -219,19 +220,14 @@ class QwenVLImagePreprocessor(ModelPreprocessor):
         self._max_pixels = max_pixels
 
     def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
-        warnings = []
-
         resolution = kwargs.get("resolution", 448)
         patch_size = 14
         num_patches = (resolution // patch_size) ** 2
 
-        # Qwen-VL uses special vision tokens
-        image_tokens = [151655] * num_patches
-
         return PreprocessedInput(
             input_type=PreprocessorType.IMAGE,
             model_family=self.model_family,
-            token_ids=image_tokens,
+            token_ids=[],  # Placeholder: ViT encoder not yet integrated
             original_tokens=1,
             processed_tokens=num_patches,
             features={
@@ -240,7 +236,7 @@ class QwenVLImagePreprocessor(ModelPreprocessor):
                 "min_pixels": self._min_pixels,
                 "max_pixels": self._max_pixels,
             },
-            warnings=warnings,
+            warnings=["Qwen-VL ViT encoder not yet integrated — VLM engine uses mlx_vlm directly"],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -266,19 +262,16 @@ class WanVideoPreprocessor(ModelPreprocessor):
         self._frame_size = frame_size
 
     def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
-        warnings = []
-
         num_frames = kwargs.get("num_frames", self._num_frames)
         frame_size = kwargs.get("frame_size", self._frame_size)
 
-        # Estimate token count for video encoding
         tokens_per_frame = (frame_size // 16) ** 2
         total_tokens = num_frames * tokens_per_frame
 
         return PreprocessedInput(
             input_type=PreprocessorType.VIDEO,
             model_family=self.model_family,
-            token_ids=list(range(total_tokens)),
+            token_ids=[],  # Placeholder: video encoder not yet integrated
             original_tokens=num_frames,
             processed_tokens=total_tokens,
             features={
@@ -287,7 +280,7 @@ class WanVideoPreprocessor(ModelPreprocessor):
                 "tokens_per_frame": tokens_per_frame,
                 "temporal_encoding": "3d_conv",
             },
-            warnings=warnings,
+            warnings=["Wan video encoder not yet integrated"],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -305,23 +298,20 @@ class GLMOCRPreprocessor(ModelPreprocessor):
     input_type = PreprocessorType.OCR
 
     def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
-        warnings = []
         max_patches = kwargs.get("max_patches", 1024)
-
-        # OCR models typically process images as patch sequences
         num_patches = min(max_patches, 1024)
 
         return PreprocessedInput(
             input_type=PreprocessorType.OCR,
             model_family=self.model_family,
-            token_ids=list(range(num_patches)),
+            token_ids=[],  # Placeholder: OCR layout encoder not yet integrated
             original_tokens=1,
             processed_tokens=num_patches,
             features={
                 "max_patches": max_patches,
                 "layout_aware": True,
             },
-            warnings=warnings,
+            warnings=["GLM-OCR layout encoder not yet integrated"],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -339,10 +329,11 @@ class DeepSeekOCRPreprocessor(ModelPreprocessor):
         return PreprocessedInput(
             input_type=PreprocessorType.OCR,
             model_family=self.model_family,
-            token_ids=list(range(max_patches)),
+            token_ids=[],  # Placeholder: DeepSeek OCR encoder not yet integrated
             original_tokens=1,
             processed_tokens=max_patches,
             features={"max_patches": max_patches},
+            warnings=["DeepSeek OCR encoder not yet integrated"],
         )
 
     def detect_model(self, model_config: dict) -> bool:
@@ -375,7 +366,6 @@ class WhisperSpeechPreprocessor(ModelPreprocessor):
         elif isinstance(raw_input, dict):
             audio_length = raw_input.get("audio_length", 0)
 
-        # Whisper: 1 mel frame per 160 samples (10ms at 16kHz)
         num_mel_frames = min(
             audio_length // 160,
             int(self._max_seconds * self._sample_rate / 160),
@@ -384,7 +374,7 @@ class WhisperSpeechPreprocessor(ModelPreprocessor):
         return PreprocessedInput(
             input_type=PreprocessorType.SPEECH,
             model_family=self.model_family,
-            token_ids=list(range(num_mel_frames)),
+            token_ids=[],  # Placeholder: mel spectrogram not yet computed
             original_tokens=audio_length,
             processed_tokens=num_mel_frames,
             features={
@@ -392,6 +382,7 @@ class WhisperSpeechPreprocessor(ModelPreprocessor):
                 "n_mels": self._n_mels,
                 "mel_frames": num_mel_frames,
             },
+            warnings=["Whisper mel spectrogram not yet integrated"],
         )
 
     def detect_model(self, model_config: dict) -> bool:

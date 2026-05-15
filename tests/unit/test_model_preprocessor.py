@@ -24,7 +24,10 @@ class TestQwenOmniAudioPreprocessor:
         result = p.preprocess(b"\x00" * 3200)
         assert result.input_type == PreprocessorType.AUDIO
         assert result.model_family == "qwen3_omni"
-        assert len(result.token_ids) > 0
+        # Placeholder returns empty token_ids (real codec not integrated)
+        assert result.token_ids == []
+        assert result.original_tokens == 10  # 3200 // 320
+        assert len(result.warnings) > 0
 
     def test_token_ids_input(self):
         p = QwenOmniAudioPreprocessor()
@@ -40,7 +43,8 @@ class TestQwenOmniAudioPreprocessor:
     def test_dict_audio_bytes(self):
         p = QwenOmniAudioPreprocessor()
         result = p.preprocess({"audio": b"\x00" * 640})
-        assert len(result.token_ids) > 0
+        # dict without token_ids key — returns empty
+        assert result.token_ids == []
 
     def test_unsupported_input(self):
         p = QwenOmniAudioPreprocessor()
@@ -60,8 +64,9 @@ class TestCosyVoicePhonemePreprocessor:
         p = CosyVoicePhonemePreprocessor()
         result = p.preprocess("你好世界")
         assert result.input_type == PreprocessorType.SPEECH
-        assert len(result.token_ids) > 0
+        assert result.token_ids == []  # Placeholder: no real phoneme encoder
         assert result.features["phoneme_count"] > 0
+        assert len(result.warnings) > 0
 
     def test_dict_input(self):
         p = CosyVoicePhonemePreprocessor()
@@ -86,13 +91,15 @@ class TestLLaVAImagePreprocessor:
         assert result.input_type == PreprocessorType.IMAGE
         assert result.model_family == "llava"
         expected_patches = (336 // 14) ** 2
-        assert len(result.token_ids) == expected_patches
+        assert result.token_ids == []  # Placeholder: no real vision encoder
+        assert result.features["num_patches"] == expected_patches
 
     def test_custom_image_size(self):
         p = LLaVAImagePreprocessor(image_size=384, patch_size=16)
         result = p.preprocess(None)
         expected_patches = (384 // 16) ** 2
-        assert len(result.token_ids) == expected_patches
+        assert result.token_ids == []  # Placeholder
+        assert result.features["num_patches"] == expected_patches
 
     def test_features(self):
         p = LLaVAImagePreprocessor()
@@ -120,12 +127,13 @@ class TestQwenVLImagePreprocessor:
         p = QwenVLImagePreprocessor()
         result = p.preprocess(None, resolution=672)
         assert result.features["resolution"] == 672
-        assert len(result.token_ids) > 0
+        assert result.token_ids == []  # Placeholder: no real ViT encoder
 
     def test_special_vision_tokens(self):
         p = QwenVLImagePreprocessor()
         result = p.preprocess(None)
-        assert all(t == 151655 for t in result.token_ids)
+        assert result.token_ids == []  # Placeholder: no real ViT encoder
+        assert result.features["num_patches"] > 0
 
     def test_detect_model(self):
         p = QwenVLImagePreprocessor()
@@ -173,7 +181,8 @@ class TestGLMOCRPreprocessor:
     def test_max_patches(self):
         p = GLMOCRPreprocessor()
         result = p.preprocess(None, max_patches=512)
-        assert len(result.token_ids) == 512
+        assert result.token_ids == []  # Placeholder: no real OCR encoder
+        assert result.features["max_patches"] == 512
 
     def test_detect_model(self):
         p = GLMOCRPreprocessor()
@@ -255,7 +264,7 @@ class TestPreprocessorRegistry:
         reg = PreprocessorRegistry()
         result = reg.preprocess(b"\x00" * 320, model_family="qwen3_omni")
         assert result.input_type == PreprocessorType.AUDIO
-        assert len(result.token_ids) > 0
+        assert result.token_ids == []  # Placeholder: no real codec
 
     def test_preprocess_by_config(self):
         reg = PreprocessorRegistry()
@@ -264,7 +273,7 @@ class TestPreprocessorRegistry:
             model_config={"model_type": "llava"},
         )
         assert result.input_type == PreprocessorType.IMAGE
-        assert len(result.token_ids) > 0
+        assert result.token_ids == []  # Placeholder: no real vision encoder
 
     def test_preprocess_unknown_fallback(self):
         reg = PreprocessorRegistry()

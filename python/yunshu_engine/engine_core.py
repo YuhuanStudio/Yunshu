@@ -369,8 +369,10 @@ class EngineCore:
             logger.debug("CompositionScheduler setup skipped", exc_info=True)
             self._composition_scheduler = None
 
-        # Lifecycle
+        # Lifecycle — vLLM 3-state shutdown pattern:
+        # RUNNING → REQUESTED (drain in-flight) → SHUTTING_DOWN (force stop)
         self._running = False
+        self._shutdown_requested = False
         self._loop_task: asyncio.Task | None = None
         self._start_time: float | None = None
         self._wake_event: asyncio.Event | None = None  # Event-driven wake-up for idle loop
@@ -659,15 +661,49 @@ class EngineCore:
         logger.info("EngineCore started")
 
     async def stop(self) -> None:
-        """Stop the engine and release all resources (oMLX EngineCore.close pattern)."""
-        self._running = False
-        if self._loop_task:
-            self._loop_task.cancel()
+        """Stop the engine with graceful drain (vLLM 3-state shutdown pattern).
+
+        RUNNING → REQUESTED: reject new requests, let in-flight finish.
+        REQUESTED → SHUTTING_DOWN: after drain timeout, force-stop remaining.
+        """
+        # Phase 1: REQUESTED — signal graceful shutdown, reject new requests
+        self._shutdown_requested = True
+
+        # Wake the engine loop so it notices shutdown_requested immediately
+        if self._wake_event is not None:
+            self._wake_event.set()
+
+        # Phase 2: wait for in-flight requests to drain (up to 30s)
+        if self._loop_task is not None:
+            drain_timeout = float(os.environ.get("YUNSHU_SHUTDOWN_DRAIN_TIMEOUT", "30"))
+            if self.scheduler.has_requests():
+                logger.info(
+                    f"Graceful shutdown requested, waiting up to {drain_timeout}s "
+                    f"for in-flight requests to complete"
+                )
             try:
-                await self._loop_task
+                await asyncio.wait_for(self._loop_task, timeout=drain_timeout)
+            except asyncio.TimeoutError:
+                active = len(self.scheduler.running) + len(self.scheduler.waiting)
+                logger.warning(
+                    f"Graceful shutdown timeout ({drain_timeout}s), "
+                    f"force-stopping with {active} active requests"
+                )
             except asyncio.CancelledError:
                 pass
+
+            # If loop task is still running, force-cancel
+            if not self._loop_task.done():
+                self._loop_task.cancel()
+                try:
+                    await self._loop_task
+                except asyncio.CancelledError:
+                    pass
             self._loop_task = None
+
+        # Phase 3: SHUTTING_DOWN — full cleanup
+        self._running = False
+        self._shutdown_requested = False
 
         # Stop KV offload manager
         if self._kv_offload_manager is not None:
@@ -771,6 +807,28 @@ class EngineCore:
         from .request import Request, SamplingParams
 
         req_id = request_id or f"req-{uuid.uuid4().hex[:8]}"
+
+        # Reject new requests during graceful shutdown (vLLM REQUESTED state)
+        if self._shutdown_requested:
+            from .output_collector import RequestOutputCollector, RequestStreamState
+            from .request import RequestOutput
+            self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+            self._stream_states[req_id] = RequestStreamState(
+                stream_interval=self.config.stream_interval
+            )
+            self._finished_events[req_id] = asyncio.Event()
+            error_output = RequestOutput(
+                request_id=req_id,
+                finished=True,
+                finish_reason="error",
+                error="Engine is shutting down, new requests rejected",
+                prompt_tokens=0,
+                completion_tokens=0,
+            )
+            self._output_collectors[req_id].put(error_output)
+            self._output_collectors[req_id].put(None)
+            self._finished_events[req_id].set()
+            return req_id
 
         # Apply per-request LoRA adapter (load before generation, unload after)
         loaded_lora = None
@@ -881,7 +939,7 @@ class EngineCore:
         )
         if budget.is_exhausted:
             budget_reason = budget.exhaustion_reason or "budget_exceeded"
-            # Clean up inflight prefix registration before early return
+            self._budget_manager.remove(req_id)
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().unregister(req_id)
@@ -923,6 +981,13 @@ class EngineCore:
                 )
                 self._dedup_shadows[req_id] = primary_id
                 self._dedup_hashes[req_id] = content_hash
+                # Clean up registrations that won't be used by shadow path
+                self._budget_manager.remove(req_id)
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(req_id)
+                except Exception:
+                    pass
                 # Create output collector + finished event so the caller can await
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
@@ -978,13 +1043,27 @@ class EngineCore:
                 max_tokens=max_tokens,
             )
             if not ok:
-                # Clean up inflight prefix registration and memory reservation before early return
+                # Clean up all registrations before early return
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
                     get_inflight_tracker().unregister(req_id)
                 except Exception:
                     pass
                 self._memory_aware_scheduler.release_memory(req_id)
+                self._budget_manager.remove(req_id)
+                try:
+                    self._lifecycle_orchestrator.on_request_finished(req_id)
+                except Exception:
+                    pass
+                try:
+                    self._kv_lifecycle.release(hash(req_id) % (10**9))
+                except Exception:
+                    pass
+                if self._sliding_window_mgr is not None:
+                    try:
+                        self._sliding_window_mgr.remove_request(req_id)
+                    except Exception:
+                        pass
                 # Set up output collector with error response
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 from .request import RequestOutput
@@ -1123,7 +1202,7 @@ class EngineCore:
                 if output.finished:
                     break
         except asyncio.CancelledError:
-            pass
+            raise
         finally:
             self._cleanup_request(request_id)
 
@@ -1171,6 +1250,11 @@ class EngineCore:
         use_simple_streaming = self.config.stream_interval == 1
 
         while self._running:
+            # Graceful shutdown: if requested, exit loop once all requests finish
+            if self._shutdown_requested and not self.scheduler.has_requests():
+                logger.info("Graceful shutdown: all in-flight requests completed")
+                break
+
             if not self.scheduler.has_requests():
                 # Event-driven idle: wait for wake signal instead of polling
                 if self._wake_event is not None:
@@ -1276,6 +1360,12 @@ class EngineCore:
                         self.config.completion_batch_size = suggested
                 except Exception:
                     logger.debug("adaptive batch sizing failed", exc_info=True)
+            except asyncio.CancelledError:
+                logger.info("Engine loop cancelled, failing all in-flight requests")
+                failed = self.scheduler.fail_all_requests()
+                for req_id in failed:
+                    self._signal_finished(req_id)
+                raise
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
                 failed = self.scheduler.fail_all_requests()

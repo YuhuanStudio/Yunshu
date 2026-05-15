@@ -526,6 +526,8 @@ async def _build_multi_choice(
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
                 priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -554,6 +556,8 @@ async def _build_multi_choice(
                 spec_decode=req.spec_decode,
                 json_schema=json_schema,
                 priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -983,6 +987,7 @@ async def _handle_vlm_chat(
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
+        min_p=req.min_p,
         seed=req.seed,
         repetition_penalty=req.repetition_penalty,
         stop=req.stop,
@@ -995,6 +1000,10 @@ async def _handle_vlm_chat(
         logit_bias=req.logit_bias,
         xtc_probability=req.xtc_probability,
         xtc_threshold=req.xtc_threshold,
+        logprobs=req.logprobs,
+        top_logprobs=req.top_logprobs,
+        spec_decode=req.spec_decode,
+        priority=req.priority,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
@@ -1119,6 +1128,7 @@ async def _stream_vlm_response(
             temperature=req.temperature,
             top_p=req.top_p,
             top_k=req.top_k,
+            min_p=req.min_p,
             seed=req.seed,
             repetition_penalty=req.repetition_penalty,
             stop=req.stop,
@@ -1131,6 +1141,10 @@ async def _stream_vlm_response(
             logit_bias=req.logit_bias,
             xtc_probability=req.xtc_probability,
             xtc_threshold=req.xtc_threshold,
+            logprobs=req.logprobs,
+            top_logprobs=req.top_logprobs,
+            spec_decode=req.spec_decode,
+            priority=req.priority,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
@@ -1248,6 +1262,8 @@ async def _stream_response_multi(
                     xtc_threshold=req.xtc_threshold,
                     spec_decode=req.spec_decode,
                     priority=req.priority,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1297,6 +1313,8 @@ async def _stream_response_multi(
                     spec_decode=req.spec_decode,
                     json_schema=json_schema,
                     priority=req.priority,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1478,6 +1496,9 @@ async def _stream_response(
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
                 priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
+                spec_decode=req.spec_decode,
             ):
                 token_text = output.new_text
                 if output.finish_reason is not None:
@@ -1539,6 +1560,8 @@ async def _stream_response(
                 spec_decode=req.spec_decode,
                 json_schema=json_schema,
                 priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:

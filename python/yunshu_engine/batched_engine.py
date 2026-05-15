@@ -1267,6 +1267,8 @@ class BatchedEngine:
             finished=True,
             finish_reason=finish_reason,
             reasoning_tokens=_reasoning_tok,
+            cached_tokens=getattr(result, 'cached_tokens', 0),
+            logprobs=getattr(result, 'logprobs', None),
         )
         if _rc_hash is not None and engine_loop_result.finish_reason != "error":
             try:
@@ -1760,6 +1762,11 @@ class BatchedEngine:
             tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run)
         except MemoryError:
             logger.warning("OOM during generation — returning memory_limit finish reason")
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_inflight_req_id)
+            except Exception:
+                pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -1769,12 +1776,22 @@ class BatchedEngine:
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
                 logger.warning(f"MLX OOM during generation: {e}")
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(_inflight_req_id)
+                except Exception:
+                    pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
                 )
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_inflight_req_id)
+            except Exception:
+                pass
             raise
 
         # Decode token strings for logprobs
@@ -2001,6 +2018,7 @@ class BatchedEngine:
                     finish_reason=finish_reason,
                     reasoning_tokens=getattr(output, 'reasoning_tokens', 0),
                     cached_tokens=getattr(output, 'cached_tokens', 0),
+                    logprobs=getattr(output, 'logprobs', None),
                 )
                 if output.finished:
                     finished_normally = True
@@ -2157,12 +2175,14 @@ class BatchedEngine:
             try:
                 _run_inner()
             except (MemoryError, RuntimeError) as e:
+                _unregister_inflight()
                 if isinstance(e, MemoryError) or "memory" in str(e).lower():
                     logger.warning(f"OOM during streaming: {e}")
                     _put(e)
                 else:
                     _put(e)
             except Exception as e:
+                _unregister_inflight()
                 _put(e)
             finally:
                 _put(_sentinel)

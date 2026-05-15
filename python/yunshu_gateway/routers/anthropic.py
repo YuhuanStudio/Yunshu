@@ -362,6 +362,12 @@ async def _non_stream_batched(engine, messages, req, stop):
         enable_thinking=enable_thinking,
         thinking_budget=budget_tokens,
         reasoning_effort=getattr(req, 'reasoning_effort', None),
+        stop_token_ids=getattr(req, 'stop_token_ids', None),
+        spec_decode=getattr(req, 'spec_decode', False),
+        xtc_probability=getattr(req, 'xtc_probability', 0.0),
+        xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+        priority=getattr(req, 'priority', 0),
+        json_schema=getattr(req, 'json_schema', None),
     )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     _record_metrics(result.prompt_tokens, result.completion_tokens)
@@ -432,6 +438,12 @@ async def _non_stream_legacy(engine, messages, req, stop):
         enable_thinking=enable_thinking,
         thinking_budget=budget_tokens,
         reasoning_effort=getattr(req, 'reasoning_effort', None),
+        stop_token_ids=getattr(req, 'stop_token_ids', None),
+        spec_decode=getattr(req, 'spec_decode', False),
+        xtc_probability=getattr(req, 'xtc_probability', 0.0),
+        xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+        priority=getattr(req, 'priority', 0),
+        json_schema=getattr(req, 'json_schema', None),
     )
     # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
     prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
@@ -517,6 +529,12 @@ async def _stream_anthropic(
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
                 reasoning_effort=getattr(req, 'reasoning_effort', None),
+                stop_token_ids=getattr(req, 'stop_token_ids', None),
+                spec_decode=getattr(req, 'spec_decode', False),
+                xtc_probability=getattr(req, 'xtc_probability', 0.0),
+                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+                priority=getattr(req, 'priority', 0),
+                json_schema=getattr(req, 'json_schema', None),
             ):
                 parsed = parser.process_chunk(output.new_text)
 
@@ -595,6 +613,12 @@ async def _stream_anthropic(
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
                 reasoning_effort=getattr(req, 'reasoning_effort', None),
+                stop_token_ids=getattr(req, 'stop_token_ids', None),
+                spec_decode=getattr(req, 'spec_decode', False),
+                xtc_probability=getattr(req, 'xtc_probability', 0.0),
+                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+                priority=getattr(req, 'priority', 0),
+                json_schema=getattr(req, 'json_schema', None),
             ):
                 parsed = parser.process_chunk(output.token_text)
                 if parsed["visible"]:

@@ -554,7 +554,13 @@ class VLMEngine:
             return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
 
         loop = asyncio.get_running_loop()
-        result, reasoning_tokens = await loop.run_in_executor(self._executor, _generate_sync)
+        try:
+            result, reasoning_tokens = await loop.run_in_executor(self._executor, _generate_sync)
+        except Exception:
+            self._active_count -= 1
+            self._num_requests_processed += 1
+            self._cleanup_temp_files()
+            raise
 
         elapsed = time.monotonic() - t0
         self._active_count -= 1
@@ -767,6 +773,7 @@ class VLMEngine:
             self._active_count -= 1
             if not stream_task.done():
                 stream_task.cancel()
+            self._cleanup_temp_files()
 
     def _generate_vlm_vision(
         self,
@@ -1723,12 +1730,18 @@ class VLMEngine:
             )
         except FileNotFoundError:
             logger.warning("ffmpeg not available — cannot extract video frames")
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return []
         except subprocess.CalledProcessError as e:
             logger.warning(f"ffmpeg failed: {e.stderr.decode()[:200] if e.stderr else 'unknown'}")
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return []
         except Exception as e:
             logger.warning(f"Video frame extraction failed: {e}")
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return []
 
         frames = sorted(
