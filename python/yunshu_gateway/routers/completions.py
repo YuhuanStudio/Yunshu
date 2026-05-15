@@ -278,11 +278,12 @@ async def _stream_completion(
     )
     prompt_tok = 0
     completion_tok = 0
-    reasoning_tok = 0
+    # Track reasoning tokens per-choice to avoid overwrite across n>1 choices
+    reasoning_tok_per_choice: dict[int, int] = {}
     n = max(req.n, 1)
 
     async def _stream_choice(choice_idx: int):
-        nonlocal prompt_tok, completion_tok, reasoning_tok
+        nonlocal prompt_tok, completion_tok
         if req.echo:
             yield format_openai_chunk(
                 completion_id=completion_id,
@@ -321,13 +322,19 @@ async def _stream_completion(
                     prompt_tok = output.prompt_tokens
                 if output.new_text:
                     completion_tok += 1
-                reasoning_tok = getattr(output, 'reasoning_tokens', 0)
+                _choice_reasoning = getattr(output, 'reasoning_tokens', 0)
+                reasoning_tok_per_choice[choice_idx] = _choice_reasoning
+                # Format logprobs for this token if present
+                _chunk_logprobs = None
+                if output.logprobs:
+                    _chunk_logprobs = _format_streaming_logprobs(output.logprobs)
                 yield format_openai_chunk(
                     completion_id=completion_id,
                     model=req.model,
                     delta_content=output.new_text,
                     finish_reason=output.finish_reason,
                     choice_index=choice_idx,
+                    logprobs=_chunk_logprobs,
                 )
         else:
             async for output in engine.generate_stream(
@@ -372,12 +379,14 @@ async def _stream_completion(
                 yield chunk
 
         if include_usage:
+            # Sum reasoning tokens across all choices for total usage
+            _total_reasoning = sum(reasoning_tok_per_choice.values())
             yield format_openai_usage_chunk(
                 completion_id=completion_id,
                 model=req.model,
                 prompt_tokens=prompt_tok,
                 completion_tokens=completion_tok,
-                reasoning_tokens=reasoning_tok,
+                reasoning_tokens=_total_reasoning,
             )
 
         yield format_openai_done()
@@ -428,4 +437,39 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
         "tokens": [e["token"] for e in token_logprobs],
         "token_logprobs": [e["logprob"] for e in token_logprobs],
         "top_logprobs": [e["top_logprobs"] for e in token_logprobs],
+    }
+
+
+def _format_streaming_logprobs(logprobs_list: list[dict]) -> dict | None:
+    """Format per-token logprobs from streaming GenerationOutput into OpenAI Completions format.
+
+    In streaming mode, each GenerationOutput has at most 1 logprob entry.
+    Returns the single-token logprobs dict in OpenAI completions format, or None.
+    """
+    if not logprobs_list:
+        return None
+    entries = []
+    for lp_entry in logprobs_list:
+        if not isinstance(lp_entry, dict):
+            continue
+        token_str = lp_entry.get("token", "")
+        top_lps = lp_entry.get("top_logprobs", [])
+        # Decode top_logprobs token_ids to strings
+        decoded_top = []
+        for tlp in top_lps:
+            decoded_top.append({
+                "token": tlp.get("token", ""),
+                "logprob": tlp.get("logprob", 0.0),
+            })
+        entries.append({
+            "token": token_str,
+            "logprob": lp_entry.get("logprob", 0.0),
+            "top_logprobs": decoded_top,
+        })
+    if not entries:
+        return None
+    return {
+        "tokens": [e["token"] for e in entries],
+        "token_logprobs": [e["logprob"] for e in entries],
+        "top_logprobs": [e["top_logprobs"] for e in entries],
     }

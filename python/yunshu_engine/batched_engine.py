@@ -2066,7 +2066,7 @@ class BatchedEngine:
                         if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                             suffix_hit = True
                     # Thinking budget enforcement in streaming
-                    if thinking_budget is not None and enable_thinking:
+                    if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
                             # Store thinking segment before returning
