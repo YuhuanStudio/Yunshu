@@ -35,9 +35,21 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **5979 passed, 16 skipped**。
+> 以下為基於本報告發現所完成的修復，最新測試: **4329 passed, 14 skipped** (1 pre-existing flaky).
 
-### 已完成修復 (2026-05-15 Wave 44-47 — Deep Bug Fixes + Parameter Forwarding + Hot-Path Integration)
+### 已完成修復 (2026-05-15 Wave 50-57 — Deep Integration: Mixins, MemoryGuard, Caching, Priority, ASR)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 50: MCP tool execution + LID + pricing | MCPTool.handler for async callable execution, spectral LID (FFT energy), token cost pricing data | 工具執行, 音頻語言偵測, 計費 |
+| Wave 51: Full scheduler mixin wiring | All 7/7 CompositionScheduler mixins wired (was 2/7), MemoryGuard.setup_memory_guard() called after model load, ResponseCacheMiddleware, video SSE streaming | 調度器模組化, 內存保護, 響應緩存, 視頻串流 |
+| Wave 52: Zero bare except:pass | 6 fixes across engine_core, batched_engine, chat, disaggregate, monitoring → all have logger.debug(exc_info=True) | 可調試性 |
+| Wave 53: ASR VAD + LID + profiling | ASR VAD pre-check (was instantiated but never called), LID auto-detect language, /profile/engine endpoint | ASR 語音偵測, 語言自動識別 |
+| Wave 54: Comprehensive cleanup | _cleanup_request handles all state: LoRA, lifecycle, budget, memory, KV, dedup (was only removing output collectors) | 資源洩漏修復 |
+| Wave 55: Priority end-to-end | priority parameter: ChatCompletionRequest → engine.generate() → EngineCore.add_request() → SamplingParams → Scheduler heap. CompletionRequest: new field + forwarding. stream_generate() also accepts priority. | 優先級調度生效 |
+| Wave 56-57: Streaming fixes | stream_generate() priority passthrough, n>1 streaming stop_token_ids forwarding | 串流路徑參數完整 |
+
+### 已完成修復 (2026-05-15 Wave 44-48 — Deep Bug Fixes + Parameter Forwarding + Hot-Path Integration)
 
 | 修復 | 描述 | 測試 |
 |------|------|------|
