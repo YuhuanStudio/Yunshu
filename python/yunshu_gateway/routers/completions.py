@@ -308,6 +308,7 @@ async def _stream_completion(
                 spec_decode=req.spec_decode,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                priority=req.priority,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
