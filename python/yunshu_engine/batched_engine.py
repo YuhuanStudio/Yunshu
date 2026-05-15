@@ -1710,13 +1710,13 @@ class BatchedEngine:
 
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
-            return tokens, output_text, token_logprobs, ttft_s, cached_tokens
+            return tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _itl_samples, _thinking_tokens
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         try:
-            tokens, output_text, token_logprobs, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+            tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run)
         except MemoryError:
             logger.warning("OOM during generation — returning memory_limit finish reason")
             return GenerationOutput(
@@ -3069,6 +3069,8 @@ class BatchedEngine:
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
+        from .streaming_optimizer import StreamingBackpressureController
+        _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
             loop.call_soon_threadsafe(_q.put_nowait, item)
@@ -3381,6 +3383,8 @@ class BatchedEngine:
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
+        from .streaming_optimizer import StreamingBackpressureController
+        _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
             loop.call_soon_threadsafe(_q.put_nowait, item)
