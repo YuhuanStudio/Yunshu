@@ -1222,6 +1222,7 @@ class BatchedEngine:
             thinking_budget=thinking_budget,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
+            priority=priority,
         )
 
         if result is None:
@@ -2002,9 +2003,8 @@ class BatchedEngine:
         from mlx_lm.sample_utils import make_sampler
 
         # Streaming optimizer components
-        from .streaming_optimizer import StreamingBackpressureController, BatchedDetokenizer
+        from .streaming_optimizer import StreamingBackpressureController
         _backpressure = StreamingBackpressureController(max_queue_size=100)
-        _batched_detok = BatchedDetokenizer(tokenizer)
 
         # TokenPipeline for GPU/CPU overlap — activated via YUNSHU_STREAMING_PIPELINE=1
         _pipeline = None
@@ -2111,6 +2111,8 @@ class BatchedEngine:
         def _run_inner():
             import mlx.core as mx
             from mlx_lm.models.cache import make_prompt_cache
+            if seed is not None:
+                mx.random.seed(seed)
             ids = mx.array(input_ids)
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
@@ -3759,11 +3761,12 @@ class BatchedEngine:
         else:
             num_prompt_tokens = len(prompt.split()) * 2
 
-        ok, _reason = guard.preflight_check(
+        ok, reason = guard.preflight_check(
             num_prompt_tokens=num_prompt_tokens,
             max_tokens=max_tokens,
         )
         if not ok:
+            logger.info(f"Memory guard rejected request: {reason}")
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
