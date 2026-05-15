@@ -159,6 +159,7 @@ class VLMEngine:
         self._running = False
         self._active_count = 0
         self._num_requests_processed = 0
+        self._total_reasoning_tokens = 0
         self._start_time = 0.0
         self._has_vision = False
         self._is_vlm = False
@@ -536,9 +537,8 @@ class VLMEngine:
         elapsed = time.monotonic() - t0
         self._active_count -= 1
         self._num_requests_processed += 1
+        self._total_reasoning_tokens += reasoning_tokens
         self._cleanup_temp_files()
-
-        return {"text": result, "finish_reason": "stop", "elapsed": elapsed, "reasoning_tokens": reasoning_tokens}
 
     async def generate_stream(
         self,
@@ -1673,6 +1673,7 @@ class VLMEngine:
             "has_vision": self._has_vision,
             "is_vlm": self._is_vlm,
             "num_requests_processed": self._num_requests_processed,
+            "reasoning_tokens": self._total_reasoning_tokens,
             "uptime_seconds": uptime,
             # C21: Multimodal prefix cache (token ID reuse)
             "mm_prefix_cache_entries": len(self._multimodal_prefix_cache),
