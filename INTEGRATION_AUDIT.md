@@ -37,6 +37,14 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **4329 passed, 14 skipped** (1 pre-existing flaky).
 
+### 已完成修復 (2026-05-15 Wave 60-62 — Stats-Only Module Production Wiring)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 60: SpecPrefill + TurboQuant + HybridKVCache + ModelWarmupManager | SpecPrefillEngine: fix incorrect cancel_prefill → remove_entry for completed prefills. TurboQuant: setup_turbo_quant() from model config + env vars. HybridKVCache: setup_hybrid_kv() auto-detect layer types from model, register ATTENTION/MAMBA_SSM pools, wire into scheduler. ModelWarmupManager: replace basic warmup with full compile + KV prefill. | KV 量化, 混合層管理, 模型預熱, 預填充優化 |
+| Wave 61: MultimodalPipelineCoordinator | Register text/image/audio preprocessing processors in VLMEngine, call pipeline.process() in generate() and generate_stream(), expose pipeline stats in get_stats() | 統一多模態管線追蹤 |
+| Wave 62: BatchComposer | Wire BatchComposer into Scheduler._schedule_waiting() — composes schedule batches from pending + active slots, tracks composition stats (total_batches_composed, total_requests_scheduled) | vLLM/SGLang 批次組成模式 |
+
 ### 已完成修復 (2026-05-15 Wave 50-57 — Deep Integration: Mixins, MemoryGuard, Caching, Priority, ASR)
 
 | 修復 | 描述 | 影響 |
