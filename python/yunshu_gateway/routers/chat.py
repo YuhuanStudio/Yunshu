@@ -474,6 +474,7 @@ async def _build_multi_choice(
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -732,6 +733,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         reasoning_effort=req.reasoning_effort,
                         xtc_probability=req.xtc_probability,
                         xtc_threshold=req.xtc_threshold,
+                        priority=req.priority,
                     )
                     raw_text = result.text
                     prompt_tok = result.prompt_tokens
@@ -1146,6 +1148,7 @@ async def _stream_response_multi(
                     xtc_probability=req.xtc_probability,
                     xtc_threshold=req.xtc_threshold,
                     spec_decode=req.spec_decode,
+                    priority=req.priority,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1347,6 +1350,7 @@ async def _stream_response(
                 reasoning_effort=req.reasoning_effort,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
             ):
                 token_text = output.new_text
                 finish_reason = output.finish_reason
