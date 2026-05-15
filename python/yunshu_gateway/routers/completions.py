@@ -405,6 +405,10 @@ async def _stream_completion(
         yield format_openai_done()
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    # Register with request tracker for cancellation support
+    from yunshu_engine.request_tracker import get_request_tracker
+    _tracker = get_request_tracker()
+    _tracker.register(completion_id, req.model)
     try:
         async for event in with_sse_keepalive(
             _token_source(),
@@ -413,6 +417,7 @@ async def _stream_completion(
             yield event.encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
+        _tracker.unregister(completion_id)
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:

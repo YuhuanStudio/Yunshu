@@ -2359,6 +2359,8 @@ class BatchedEngine:
                         mx.synchronize()
                         if _pipeline is not None:
                             _pipeline.finish()
+                        if _prefill_tracker is not None:
+                            _prefill_tracker.remove(_prefill_req_id)
                         _unregister_inflight()
                         return
                     # Prefill complete on first token — remove from progress tracker
@@ -2391,6 +2393,8 @@ class BatchedEngine:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
                             mx.synchronize()
+                            if _prefill_tracker is not None:
+                                _prefill_tracker.remove(_prefill_req_id)
                             _unregister_inflight()
                             return
                     # Track thinking segment boundaries in streaming

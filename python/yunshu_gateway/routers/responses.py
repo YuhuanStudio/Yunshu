@@ -220,7 +220,7 @@ async def create_response(req: ResponsesRequest, request: Request):
     # LoRA lifecycle is managed inside _stream_response's finally block.
     if req.stream:
         return StreamingResponse(
-            _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter),
+            _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter, request=request),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -350,7 +350,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         _release_lora_adapter(engine, loaded_adapter)
 
 
-async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None):
+async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None, request=None):
     """SSE streaming for Responses API."""
     from ..streaming import with_sse_keepalive, format_openai_done, format_openai_usage_chunk
     from yunshu_engine.batched_engine import BatchedEngine
@@ -474,7 +474,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             )
         yield format_openai_done()
 
-      async for chunk in with_sse_keepalive(_token_source()):
+      async for chunk in with_sse_keepalive(_token_source(), http_request=request):
         yield chunk
     finally:
         if _tracker is not None:

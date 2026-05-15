@@ -118,6 +118,7 @@ class EngineCore:
             hybrid_chunk_size=self.config.hybrid_chunk_size,
             use_external_prefill=self.config.use_external_prefill,
             prefill_chunk_size=self.config.prefill_chunk_size,
+            request_timeout_seconds=self.config.request_timeout_seconds,
         )
 
         if self.config.enable_paged_kv:
@@ -819,6 +820,7 @@ class EngineCore:
         top_logprobs: int | None = None,
         lora_adapter: str | None = None,
         priority: int = 0,
+        reasoning_effort: str | None = None,
         **kwargs,
     ) -> str:
         """Add a generation request. Returns request_id for streaming/abort.
@@ -1137,6 +1139,7 @@ class EngineCore:
             priority=priority,
             xtc_probability=kwargs.get('xtc_probability', 0.0),
             xtc_threshold=kwargs.get('xtc_threshold', 0.0),
+            reasoning_effort=reasoning_effort,
         )
 
         request = Request(
@@ -1428,7 +1431,17 @@ class EngineCore:
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
                 failed = self.scheduler.fail_all_requests()
+                from .request import RequestOutput
                 for req_id in failed:
+                    collector = self._output_collectors.get(req_id)
+                    if collector is not None:
+                        collector.put(RequestOutput(
+                            request_id=req_id,
+                            finished=True,
+                            finish_reason="error",
+                            error=f"Scheduler step error: {e}",
+                        ))
+                        collector.put(None)  # sentinel
                     self._finalize_request(req_id)
                 await asyncio.sleep(0.1)
                 continue

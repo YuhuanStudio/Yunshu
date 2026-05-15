@@ -1135,6 +1135,7 @@ async def _stream_vlm_response(
         vlm_prompt_tok = 0
         vlm_completion_tok = 0
         vlm_reasoning_tok = 0
+        vlm_cached_tok = 0
         vlm_last_finish_reason = None
         include_usage = (
             req.stream_options is not None and req.stream_options.include_usage
@@ -1170,6 +1171,8 @@ async def _stream_vlm_response(
                 vlm_completion_tok += 1
             if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                 vlm_reasoning_tok = output.reasoning_tokens
+            if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                vlm_cached_tok = max(vlm_cached_tok, output.cached_tokens)
             if output.finish_reason is not None:
                 vlm_last_finish_reason = output.finish_reason
             yield format_openai_chunk(
@@ -1203,6 +1206,7 @@ async def _stream_vlm_response(
                 prompt_tokens=vlm_prompt_tok,
                 completion_tokens=vlm_completion_tok,
                 reasoning_tokens=vlm_reasoning_tok,
+                cached_tokens=vlm_cached_tok,
             )
 
         yield format_openai_done()
@@ -1392,7 +1396,7 @@ async def _stream_response_multi(
           yield event.encode("utf-8")
     finally:
       _release_lora_adapter(engine, loaded_adapter)
-    tracker.unregister(completion_id)
+      tracker.unregister(completion_id)
 
 
 def _format_choice_chunk(
@@ -1468,6 +1472,10 @@ async def _stream_response(
     OpenAI streaming delta format when detected.
     """
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    # Register with request tracker for cancellation support
+    from yunshu_engine.request_tracker import get_request_tracker
+    _tracker = get_request_tracker()
+    _tracker_gen = _tracker.register(completion_id, req.model)
     use_tool_streamer = req.tools is not None and len(req.tools) > 0
     tool_streamer = ToolCallStreamer() if use_tool_streamer else None
     tool_call_index = 0  # Track index for streaming tool_calls delta
@@ -1733,6 +1741,7 @@ async def _stream_response(
           yield encoded
     finally:
       _release_lora_adapter(engine, loaded_adapter)
+      _tracker.unregister(completion_id)
       # Log buffer stats at debug level
       if _stream_buf is not None:
           try:
