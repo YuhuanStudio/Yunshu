@@ -37,6 +37,27 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6051 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-16 Wave 100-103 — Spec Decode Parameters + Resource Leak Consolidation + Responses API + Multimodal)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 100: Spec decode 參數轉發 | stop, stop_token_ids, seed 轉發到 _generate_speculative + _stream_generate_speculative + MTP 全路徑 + n-gram stop_token_ids | 推測解碼採樣參數完整 |
+| Wave 100: MTP streaming inflight prefix | _stream_generate_mtp 註冊/取消 inflight prefix tracker | MTP 串流參與並行 KV 前綴共享 |
+| Wave 100: MTP streaming cancel_event | 生產者和消費者雙側 cancel_event 檢查 | MTP 串流客戶端斷開不阻塞 GPU |
+| Wave 100: stream_generate cancel_event | Request tracker 註冊移至 spec paths 之前，所有推測解碼路徑共享 cancel_event | 全串流路徑取消支持 |
+| Wave 101: CRITICAL Responses API LoRA | LoRA adapter 在串流生成器開始前被 finally 釋放。修復: 串流在 try/finally 外返回，LoRA 生命週期移入串流 finally | 串流 LoRA 推理正確 |
+| Wave 101: Responses API engine.chat | engine.generate(prompt=messages) → engine.chat(messages=messages)，確保 chat template 正確應用 | Responses API BatchedEngine 路徑正確 |
+| Wave 101: _finalize_request 統一清理 | 合併 inflight prefix + LoRA + lifecycle + budget + memory + kv_lifecycle + kv_migration + dedup + checkpoint + sliding window + collectors + scheduler 到單一冪等方法 | 資源洩漏根除 |
+| Wave 101: Engine loop finish path | 50+ 行部分內聯清理替換為 _finalize_request() — 修復缺失的 kv_migration + sliding window 清理 | 正常完成路徑資源完整釋放 |
+| Wave 101: abort/abort_all + engine loop exceptions | 全部替換 _signal_finished() 為 _finalize_request() — 重複 abort 不再累積 dict | 錯誤路徑資源不洩漏 |
+| Wave 101: _kv_migration.start 生命週期 | 從 __init__ 移至 start()，移除重複 _profiler.stop_profiling() | 背景線程正確管理 |
+| Wave 102: Anthropic 非串流錯誤處理 | batched + legacy 路徑添加 MemoryError (507) + Exception (500) 錯誤響應 | Anthropic API 錯誤格式合規 |
+| Wave 102: Anthropic 串流 input_tokens | Legacy 路徑 input_tokens 永遠 0。修復: 從 output.prompt_token_count 提取 | Anthropic usage 報告正確 |
+| Wave 102: Chat 非串流 reasoning_tokens | 單選路徑不提取 reasoning_tokens/cached_tokens。修復: 添加到 usage dict | Chat API usage 完整 |
+| Wave 103: Video temp file 洩漏 | _extract_frames + _encode_frames_to_mp4 錯誤路徑洩漏 tmp_path + frame_dir。修復: finally block 清理 | /tmp 不再累積 |
+| Wave 103: VLM _cleanup_temp_files | os.unlink 呼叫目錄路徑失敗。修復: 區分檔案/目錄使用 shutil.rmtree | VLM 暫存檔正確清理 |
+| Wave 103: VLM _stream_vlm_text cancel_event | 新增 cancel_event 參數 + per-iteration 檢查 + try/except 錯誤輸出 | VLM 文字串流可取消 + 錯誤可見 |
+
 ### 已完成修復 (2026-05-16 Wave 99 — Production Wiring + Agent Audit Deep Fixes)
 
 | 修復 | 描述 | 影響 |
