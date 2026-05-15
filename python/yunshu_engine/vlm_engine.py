@@ -898,6 +898,14 @@ class VLMEngine:
             if current.item() in stop_ids:
                 return self._tokenizer.decode(tokens, skip_special_tokens=True), 0
 
+            _in_thinking = False
+            _thinking_tokens = 0
+            try:
+                think_start_id = self._tokenizer.encode("<think")[-1]
+                think_end_id = self._tokenizer.encode("</think")[-1]
+            except Exception:
+                think_start_id = think_end_id = None
+
             for _ in range(max_tokens - 1):
                 output = lm(current[None], cache=cache)
                 logits = output.logits[:, -1, :]
@@ -930,11 +938,19 @@ class VLMEngine:
 
                 current = sampler(logits)
                 mx.eval(current)
-                tokens.append(current.item())
-                if current.item() in stop_ids:
+                tok_id = current.item()
+                tokens.append(tok_id)
+                if think_start_id is not None:
+                    if not _in_thinking and tok_id == think_start_id:
+                        _in_thinking = True
+                    elif _in_thinking:
+                        _thinking_tokens += 1
+                        if tok_id == think_end_id:
+                            _in_thinking = False
+                if tok_id in stop_ids:
                     break
 
-        return self._tokenizer.decode(tokens, skip_special_tokens=True), 0
+        return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
 
     def _stream_vlm_vision(
         self,
@@ -1134,6 +1150,14 @@ class VLMEngine:
         mx.eval(current)
         token_count = 1
 
+        _in_thinking = False
+        _thinking_tokens = 0
+        try:
+            think_start_id = self._tokenizer.encode("<think")[-1]
+            think_end_id = self._tokenizer.encode("</think")[-1]
+        except Exception:
+            think_start_id = think_end_id = None
+
         token_id = current.item()
         is_eos = token_id in stop_ids
         finish_reason = "stop" if is_eos else None
@@ -1193,6 +1217,14 @@ class VLMEngine:
             token_count += 1
 
             token_id = current.item()
+            # Track thinking segment boundaries in VLM streaming
+            if think_start_id is not None:
+                if not _in_thinking and token_id == think_start_id:
+                    _in_thinking = True
+                elif _in_thinking:
+                    _thinking_tokens += 1
+                    if token_id == think_end_id:
+                        _in_thinking = False
             is_eos = token_id in stop_ids
             suffix_hit = False
             if not is_eos and stop_suffixes and has_detokenizer:
