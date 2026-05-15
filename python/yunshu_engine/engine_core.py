@@ -966,7 +966,7 @@ class EngineCore:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().unregister(req_id)
             except Exception:
-                pass
+                logger.debug(f"inflight unregister failed in budget rejection for {req_id}", exc_info=True)
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
@@ -1009,7 +1009,7 @@ class EngineCore:
                     from .inflight_prefix_sharing import get_inflight_tracker
                     get_inflight_tracker().unregister(req_id)
                 except Exception:
-                    pass
+                    logger.debug(f"inflight unregister failed in dedup shadow for {req_id}", exc_info=True)
                 # Create output collector + finished event so the caller can await
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
@@ -1074,26 +1074,26 @@ class EngineCore:
                     from .inflight_prefix_sharing import get_inflight_tracker
                     get_inflight_tracker().unregister(req_id)
                 except Exception:
-                    pass
+                    logger.debug(f"inflight unregister failed in memguard rejection for {req_id}", exc_info=True)
                 self._memory_aware_scheduler.release_memory(req_id)
                 self._budget_manager.remove(req_id)
                 try:
                     self._lifecycle_orchestrator.on_request_finished(req_id)
                 except Exception:
-                    pass
+                    logger.debug(f"lifecycle cleanup failed in memguard rejection for {req_id}", exc_info=True)
                 try:
                     self._kv_lifecycle.release(hash(req_id) % (10**9))
                 except Exception:
-                    pass
+                    logger.debug(f"kv_lifecycle release failed in memguard rejection for {req_id}", exc_info=True)
                 try:
                     self._kv_migration.unregister_block(hash(req_id) % (10**9))
                 except Exception:
-                    pass
+                    logger.debug(f"kv_migration unregister failed in memguard rejection for {req_id}", exc_info=True)
                 if self._sliding_window_mgr is not None:
                     try:
                         self._sliding_window_mgr.remove_request(req_id)
                     except Exception:
-                        pass
+                        logger.debug(f"sliding window cleanup failed in memguard rejection for {req_id}", exc_info=True)
                 # Set up output collector with error response
                 from .output_collector import RequestOutputCollector, RequestStreamState
                 from .request import RequestOutput

@@ -2894,7 +2894,8 @@ class BatchedEngine:
 
         await loop.run_in_executor(executor, _prefill)
 
-        while len(generated_tokens) < max_tokens:
+        try:
+          while len(generated_tokens) < max_tokens:
             def _spec_step():
                 draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache)
                 verify_result = self._spec_decoder.verify_draft(
@@ -2964,6 +2965,11 @@ class BatchedEngine:
                 return accepted_tensor[:, -1:]
 
             current_ids = await loop.run_in_executor(executor, _feedback)
+        except GeneratorExit:
+            logger.debug("Client disconnected during spec decode streaming")
+        except Exception as e:
+            logger.error(f"Spec decode streaming error: {e}", exc_info=True)
+            raise
 
     async def _generate_ngram_spec(
         self,
@@ -3277,6 +3283,7 @@ class BatchedEngine:
             except Exception as e:
                 logger.error(f"N-gram streaming generation failed: {e}", exc_info=True)
                 _put(e)
+            finally:
                 _put(_sentinel)
 
         def _run_inner():
@@ -3699,9 +3706,10 @@ class BatchedEngine:
                         primary_h = verify_h[:, 0:1, :]
 
                 detokenizer.finalize()
-                _put(_sentinel)
             except Exception as e:
+                logger.error(f"MTP streaming generation failed: {e}", exc_info=True)
                 _put(e)
+            finally:
                 _put(_sentinel)
 
         executor = get_mlx_executor()
