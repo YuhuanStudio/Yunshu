@@ -216,11 +216,13 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                             pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0))
                             pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0))
                 except Exception:
+                    logger.debug("operation failed", exc_info=True)
                     pass
                 pm_text = pm.generate()
                 if pm_text:
                     parts.append(pm_text)
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 pass
             return Response(
                 content="\n".join(parts),

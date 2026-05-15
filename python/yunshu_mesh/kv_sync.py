@@ -833,6 +833,7 @@ class MeshHealthMonitor:
             if result.returncode == 0:
                 metadata.memory_total_bytes = int(result.stdout.strip())
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
         return metadata
 

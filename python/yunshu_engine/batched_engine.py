@@ -2393,6 +2393,7 @@ class BatchedEngine:
                         _lp_entry["token"] = tokenizer.decode([_lp_entry["token_id"]])
                         _lp_entry["bytes"] = list(_lp_entry["token"].encode("utf-8"))
                     except Exception:
+                        logger.debug("logprob token decode failed in streaming", exc_info=True)
                         _lp_entry["token"] = ""
                         _lp_entry["bytes"] = []
                     _lp_list = [_lp_entry]

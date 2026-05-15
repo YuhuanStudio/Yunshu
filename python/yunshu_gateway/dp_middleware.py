@@ -369,6 +369,7 @@ class DPRouterMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             # Request failed at the framework level
             latency_ms = (time.monotonic() - t0) * 1000
             if node_id is not None:

@@ -914,6 +914,7 @@ class ChunkedPrefillOptimizer:
                     if marker in text:
                         return True
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 pass
 
         return False

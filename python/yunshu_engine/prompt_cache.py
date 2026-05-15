@@ -363,6 +363,7 @@ class PromptCacheManager:
                     total *= dim
                 total *= itemsize
             except Exception:
+                logger.debug("tensor size estimation failed", exc_info=True)
                 total = 1024  # safe default per item
         else:
             total = 1024  # safe default per item

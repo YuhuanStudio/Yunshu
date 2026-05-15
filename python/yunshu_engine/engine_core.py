@@ -609,6 +609,7 @@ class EngineCore:
                     )
                 registered += 1
             except Exception:
+                logger.debug("hybrid KV layer registration failed", exc_info=True)
                 break
         if registered > 0:
             logger.info(
@@ -1511,6 +1512,7 @@ class EngineCore:
             first_block_tokens = prompt_token_ids[:block_size]
             return compute_block_hash(None, first_block_tokens)
         except Exception:
+            logger.debug("block hash computation failed", exc_info=True)
             return None
 
     def _signal_finished(self, request_id: str) -> None:

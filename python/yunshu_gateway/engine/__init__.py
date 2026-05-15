@@ -145,6 +145,7 @@ async def get_engine_for_model(model_id: str) -> Engine:
             if lb is not None:
                 node_id = lb.select_node(model_id=model_id)
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
 
         if node_id is None:

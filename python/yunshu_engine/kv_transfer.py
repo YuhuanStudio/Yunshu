@@ -809,11 +809,13 @@ def _tensor_to_bytes(tensor: Any) -> bytes:
             np_array = np.array(tensor)
             return np_array.tobytes()
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             try:
                 import numpy as np
                 np_array = np.array(tensor)
                 return np_array.tobytes()
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 pass
     # Fallback: just the bytes from the array
     if hasattr(tensor, 'tobytes'):
@@ -918,6 +920,7 @@ class KVTransferClient:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 pass
         self._connections.clear()
         logger.info("KV transfer client stopped")
@@ -1209,6 +1212,7 @@ class KVTransferServer:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 pass
 
     async def _process_frame(self, frame: bytes) -> KVTransferResult:

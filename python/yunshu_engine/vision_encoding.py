@@ -292,6 +292,7 @@ class QwenVLEncoder(VisionEncoder):
                 if pixel_values.size == 0:
                     return None
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 return None
         else:
             return None
@@ -458,6 +459,7 @@ class LLaVAEncoder(VisionEncoder):
                 )
                 pixel_values = mx.array(image_inputs.get("pixel_values", []))
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 return None
         else:
             return None
@@ -691,6 +693,7 @@ class VisionEncoderFactory:
                     )
                     return encoder
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 continue
         return None
 
@@ -788,6 +791,7 @@ def get_vision_encoding_strategy(model: Any) -> VisionEncodingStrategy:
             if encoder.supports_model(model):
                 return strategy
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             continue
 
     return VisionEncodingStrategy.MLX_VLM

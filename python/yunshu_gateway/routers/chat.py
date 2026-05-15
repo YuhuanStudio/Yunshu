@@ -69,6 +69,7 @@ async def _try_execute_mcp_tools(
                 import json as _json
                 arguments = _json.loads(arguments)
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 arguments = {}
 
         try:
@@ -1163,6 +1164,7 @@ async def _stream_vlm_response(
                 try:
                     vlm_prompt_tok = len(tok.encode(vlm_engine._format_prompt(messages)))
                 except Exception:
+                    logger.debug("operation failed", exc_info=True)
                     pass
             yield format_openai_usage_chunk(
                 completion_id=completion_id,
@@ -1642,4 +1644,5 @@ async def _stream_response(
                   stats["utilization_pct"],
               )
           except Exception:
+              logger.debug("operation failed", exc_info=True)
               logger.debug("StreamingResponseBuffer stats logging failed", exc_info=True)

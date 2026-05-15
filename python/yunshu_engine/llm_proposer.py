@@ -282,6 +282,7 @@ class LLMProposer:
             # Create fresh cache for this proposal
             self._cache = make_prompt_cache(self._model)
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             # Model may not have standard layers (e.g., test mocks)
             self._cache = None
 
@@ -384,7 +385,9 @@ def _estimate_model_memory(model: Any) -> float:
                 if hasattr(leaf, 'nbytes'):
                     total_bytes += leaf.nbytes
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
     except Exception:
+        logger.debug("operation failed", exc_info=True)
         pass
     return total_bytes / (1024 * 1024)

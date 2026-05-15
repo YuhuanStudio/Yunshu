@@ -741,6 +741,7 @@ class HealthDashboard:
             total = int(r.stdout.strip()) if r.returncode == 0 else 0
             data["gpu_utilization_pct"] = round(active / total * 100, 1) if total else 0
         except Exception:
+            logger.debug("gpu stats collection failed", exc_info=True)
             data["gpu_active_bytes"] = 0
             data["gpu_utilization_pct"] = 0
 
@@ -770,6 +771,7 @@ class HealthDashboard:
                         "loaded": True,
                     })
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
         return data
 
@@ -787,6 +789,7 @@ class HealthDashboard:
             data["error_rate"] = summary.get("error_rate", 0)
             data["avg_latency_ms"] = summary.get("avg_duration_ms", 0)
         except Exception:
+            logger.debug("metrics collection failed", exc_info=True)
             pass
         return data
 
@@ -823,6 +826,7 @@ class HealthDashboard:
                     )
             data["max_pressure"] = max_pressure
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
         return data
 
@@ -843,6 +847,7 @@ class HealthDashboard:
                             stats = entry.engine.get_kv_cache_stats()
                             caches.append(stats)
                         except Exception:
+                            logger.debug("operation failed", exc_info=True)
                             pass
             else:
                 engine = get_engine()
@@ -850,6 +855,7 @@ class HealthDashboard:
                     try:
                         caches.append(engine.get_kv_cache_stats())
                     except Exception:
+                        logger.debug("operation failed", exc_info=True)
                         pass
 
             if caches:
@@ -860,6 +866,7 @@ class HealthDashboard:
                 data["avg_hit_rate"] = hits / total if total > 0 else 0
                 data["total_caches"] = len(caches)
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
         return data
 
@@ -882,6 +889,7 @@ class HealthDashboard:
                                 entry.engine, "_ngram_stats", {}
                             )
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
         return data
 

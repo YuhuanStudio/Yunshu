@@ -219,6 +219,7 @@ class VLMEngine:
             from .vision_encoding import VisionEncoderFactory
             self._vision_encoder_factory = VisionEncoderFactory()
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
         self._mm_prefix_hits = 0
         self._mm_prefix_misses = 0
@@ -527,6 +528,7 @@ class VLMEngine:
                 think_start_id = self._tokenizer.encode("<think")[-1]
                 think_end_id = self._tokenizer.encode("</think")[-1]
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 think_start_id = think_end_id = None
 
             for token_id, _ in generate_step(
@@ -992,6 +994,7 @@ class VLMEngine:
                 think_start_id = self._tokenizer.encode("<think")[-1]
                 think_end_id = self._tokenizer.encode("</think")[-1]
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 think_start_id = think_end_id = None
 
             for _ in range(max_tokens - 1):
@@ -1270,6 +1273,7 @@ class VLMEngine:
             think_start_id = self._tokenizer.encode("<think")[-1]
             think_end_id = self._tokenizer.encode("</think")[-1]
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             think_start_id = think_end_id = None
 
         token_id = current.item()
@@ -1820,6 +1824,7 @@ class VLMEngine:
         try:
             stats["pipeline"] = self._pipeline.get_stats()
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             pass
 
         return stats

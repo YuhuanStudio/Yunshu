@@ -149,6 +149,7 @@ class TokenStringTable:
                 if decoded:
                     self.char_to_ids.setdefault(decoded[0], []).append(token_id)
             except Exception:
+                logger.debug("operation failed", exc_info=True)
                 self.id_to_string[token_id] = token_text
                 if token_text:
                     self.char_to_ids.setdefault(token_text[0], []).append(token_id)
@@ -349,6 +350,7 @@ class BitmaskConstrainedSampler:
         try:
             token_text = self._tokenizer.decode([token_id])
         except Exception:
+            logger.debug("operation failed", exc_info=True)
             token_text = ""
         self._engine.advance(token_text)
 

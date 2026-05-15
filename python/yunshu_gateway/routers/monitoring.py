@@ -591,6 +591,22 @@ async def response_cache_stats() -> dict[str, Any]:
         cache = get_response_cache()
         stats["cache_module"] = cache.get_stats()
     except Exception:
+        logger.debug("operation failed", exc_info=True)
         stats["cache_module"] = {"enabled": False}
 
     return stats
+
+
+@router.get("/inflight-prefix-sharing")
+async def inflight_prefix_sharing_stats() -> dict[str, Any]:
+    """Inflight prefix sharing statistics (SGLang cache_unfinished_req pattern).
+
+    Tracks how many concurrent requests share KV prefix blocks during
+    prefill, reducing redundant computation for shared system prompts.
+    """
+    try:
+        from yunshu_engine.inflight_prefix_sharing import get_inflight_tracker
+        return get_inflight_tracker().get_stats()
+    except Exception:
+        logger.debug("operation failed", exc_info=True)
+        return {"enabled": False}

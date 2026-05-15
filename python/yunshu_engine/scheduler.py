@@ -389,6 +389,7 @@ class BatchedDraftCollection:
                 return None
             return proposer.propose(all_ids)
         except Exception:
+            logger.debug("spec proposer failed", exc_info=True)
             return None
 
     def _collect_mtp_draft(
@@ -402,6 +403,7 @@ class BatchedDraftCollection:
             # a model forward pass which is too expensive for batch collection.
             return None
         except Exception:
+            logger.debug("MTP draft collection failed", exc_info=True)
             return None
 
     def _collect_cross_model_draft(
@@ -903,7 +905,7 @@ class Scheduler:
                         _rope_deltas = self.get_batch_rope_deltas(_uids)
                         self._last_batch_rope_deltas = list(zip(_uids, _rope_deltas))
                 except Exception:
-                    pass
+                    logger.debug("batch rope deltas collection failed", exc_info=True)
 
             # 4. Process prompt responses (prefill completion)
             if prompt_responses:
