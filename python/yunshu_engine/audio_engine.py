@@ -311,37 +311,53 @@ class TTSEngine:
                         audio = np.array(result.audio)
                         wav = _audio_to_wav_bytes(audio, int(sample_rate))
                         segment_text = getattr(result, "text", "")
-                        queue.put_nowait({
-                            "audio": wav,
-                            "text": segment_text,
-                            "is_final": False,
-                        })
+                        try:
+                            queue.put_nowait({
+                                "audio": wav,
+                                "text": segment_text,
+                                "is_final": False,
+                            })
+                        except asyncio.QueueFull:
+                            logger.warning("TTS stream queue full, dropping chunk")
                 else:
                     results = model.generate(**gen_kwargs)
                     for result in results:
                         audio = np.array(result.audio)
                         wav = _audio_to_wav_bytes(audio, int(sample_rate))
                         segment_text = getattr(result, "text", "")
-                        queue.put_nowait({
-                            "audio": wav,
-                            "text": segment_text,
-                            "is_final": False,
-                        })
-                queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                        try:
+                            queue.put_nowait({
+                                "audio": wav,
+                                "text": segment_text,
+                                "is_final": False,
+                            })
+                        except asyncio.QueueFull:
+                            logger.warning("TTS stream queue full, dropping chunk")
+                try:
+                    queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                except asyncio.QueueFull:
+                    pass
             except Exception as e:
                 logger.error(f"TTS stream error: {e}")
-                queue.put_nowait(None)
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(self._executor, _stream_sync)
+        stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            yield chunk
-            if chunk.get("is_final"):
-                break
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+                if chunk.get("is_final"):
+                    break
+        finally:
+            if not stream_task.done():
+                stream_task.cancel()
 
     def list_voices(self) -> list[str]:
         """Return voices available on this TTS model.

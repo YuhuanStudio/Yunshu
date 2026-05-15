@@ -451,131 +451,135 @@ class VLMEngine:
         image_paths.extend(video_frames)
         _enable_thinking = enable_thinking
 
-        # Run through MultimodalPipelineCoordinator for preprocessing tracking
         try:
-            from .staged_pipeline import PipelineRequest
-            pipe_req = PipelineRequest(
-                request_id=kwargs.get("request_id", ""),
-                model_id=self.model_name,
-                images=image_paths if image_paths else None,
-                audio=audio_paths if audio_paths else None,
-                params={"messages": messages},
-            )
-            self._pipeline.process(pipe_req)
-        except Exception:
-            logger.debug("pipeline tracking failed", exc_info=True)
-
-        # Extract advanced parameters from kwargs
-        stop_token_ids = kwargs.get('stop_token_ids') or []
-        thinking_budget = kwargs.get('thinking_budget')
-        reasoning_effort = kwargs.get('reasoning_effort')
-        xtc_probability = kwargs.get('xtc_probability', 0.0)
-        xtc_threshold = kwargs.get('xtc_threshold', 0.0)
-
-        # Resolve reasoning_effort → thinking_budget
-        if thinking_budget is None and reasoning_effort is not None:
-            effort_map = {"low": 2048, "medium": 8192, "high": 32768}
-            thinking_budget = effort_map.get(reasoning_effort, 8192)
-
-        # logprobs is not supported by VLM engine (mlx_vlm.generate() and
-        # model.language_model don't expose per-token logprobs).
-        if logprobs or top_logprobs:
-            logger.warning(
-                "VLMEngine does not support logprobs/top_logprobs — "
-                "parameter ignored. Use BatchedEngine for logprobs support."
-            )
-
-        def _generate_sync():
-            if seed is not None:
-                mx.random.seed(seed)
-
-            if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
-                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking)
-
-            prompt_text = self._format_prompt(messages, enable_thinking=_enable_thinking)
-            input_ids = mx.array(self._tokenizer.encode(prompt_text))
-
-            if self._is_vlm:
-                freq_p = kwargs.get('frequency_penalty', 0.0)
-                pres_p = kwargs.get('presence_penalty', 0.0)
-                lb = kwargs.get('logit_bias', None)
-                js = kwargs.get('json_schema', None)
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, js, enable_thinking=_enable_thinking)
-
-            from mlx_lm.generate import generate_step
-            from mlx_lm.sample_utils import make_sampler
-
-            sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
-            eos_ids = self._get_eos_ids()
-
-            # Build stop token IDs from string stop sequences + explicit stop_token_ids
-            stop_ids = set(eos_ids)
-            if stop:
-                for s in stop:
-                    try:
-                        ids = self._tokenizer.encode(s)
-                        if len(ids) == 1:
-                            stop_ids.add(ids[0])
-                    except Exception:
-                        logger.debug("failed", exc_info=True)
-            if stop_token_ids:
-                stop_ids.update(stop_token_ids)
-
-            tokens = []
-            _in_thinking = False
-            _thinking_tokens = 0
+            # Run through MultimodalPipelineCoordinator for preprocessing tracking
             try:
-                think_start_id = self._tokenizer.encode("<think")[-1]
-                think_end_id = self._tokenizer.encode("</think")[-1]
+                from .staged_pipeline import PipelineRequest
+                pipe_req = PipelineRequest(
+                    request_id=kwargs.get("request_id", ""),
+                    model_id=self.model_name,
+                    images=image_paths if image_paths else None,
+                    audio=audio_paths if audio_paths else None,
+                    params={"messages": messages},
+                )
+                self._pipeline.process(pipe_req)
             except Exception:
-                logger.debug("operation failed", exc_info=True)
-                think_start_id = think_end_id = None
+                logger.debug("pipeline tracking failed", exc_info=True)
 
-            for token_id, _ in generate_step(
-                input_ids, self._model,
-                max_tokens=max_tokens,
-                sampler=sampler,
-            ):
-                tokens.append(token_id)
-                # Track thinking segment boundaries
-                if think_start_id is not None:
-                    if not _in_thinking and token_id == think_start_id:
-                        _in_thinking = True
-                    elif _in_thinking:
-                        _thinking_tokens += 1
-                        if token_id == think_end_id:
-                            _in_thinking = False
-                if token_id in stop_ids:
-                    break
-                # Thinking budget enforcement
-                if thinking_budget is not None and enable_thinking and len(tokens) >= thinking_budget:
-                    break
+            # Extract advanced parameters from kwargs
+            stop_token_ids = kwargs.get('stop_token_ids') or []
+            thinking_budget = kwargs.get('thinking_budget')
+            reasoning_effort = kwargs.get('reasoning_effort')
+            xtc_probability = kwargs.get('xtc_probability', 0.0)
+            xtc_threshold = kwargs.get('xtc_threshold', 0.0)
 
-            return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
+            # Resolve reasoning_effort → thinking_budget
+            if thinking_budget is None and reasoning_effort is not None:
+                effort_map = {"low": 2048, "medium": 8192, "high": 32768}
+                thinking_budget = effort_map.get(reasoning_effort, 8192)
 
-        loop = asyncio.get_running_loop()
-        try:
-            result, reasoning_tokens = await loop.run_in_executor(self._executor, _generate_sync)
-        except Exception:
+            # logprobs is not supported by VLM engine (mlx_vlm.generate() and
+            # model.language_model don't expose per-token logprobs).
+            if logprobs or top_logprobs:
+                logger.warning(
+                    "VLMEngine does not support logprobs/top_logprobs — "
+                    "parameter ignored. Use BatchedEngine for logprobs support."
+                )
+
+            def _generate_sync():
+                if seed is not None:
+                    mx.random.seed(seed)
+
+                if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
+                    return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking)
+
+                prompt_text = self._format_prompt(messages, enable_thinking=_enable_thinking)
+                input_ids = mx.array(self._tokenizer.encode(prompt_text))
+
+                if self._is_vlm:
+                    freq_p = kwargs.get('frequency_penalty', 0.0)
+                    pres_p = kwargs.get('presence_penalty', 0.0)
+                    lb = kwargs.get('logit_bias', None)
+                    js = kwargs.get('json_schema', None)
+                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, js, enable_thinking=_enable_thinking)
+
+                from mlx_lm.generate import generate_step
+                from mlx_lm.sample_utils import make_sampler
+
+                sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
+                eos_ids = self._get_eos_ids()
+
+                # Build stop token IDs from string stop sequences + explicit stop_token_ids
+                stop_ids = set(eos_ids)
+                if stop:
+                    for s in stop:
+                        try:
+                            ids = self._tokenizer.encode(s)
+                            if len(ids) == 1:
+                                stop_ids.add(ids[0])
+                        except Exception:
+                            logger.debug("failed", exc_info=True)
+                if stop_token_ids:
+                    stop_ids.update(stop_token_ids)
+
+                tokens = []
+                _in_thinking = False
+                _thinking_tokens = 0
+                try:
+                    think_start_id = self._tokenizer.encode("<think")[-1]
+                    think_end_id = self._tokenizer.encode("</think")[-1]
+                except Exception:
+                    logger.debug("operation failed", exc_info=True)
+                    think_start_id = think_end_id = None
+
+                for token_id, _ in generate_step(
+                    input_ids, self._model,
+                    max_tokens=max_tokens,
+                    sampler=sampler,
+                ):
+                    tokens.append(token_id)
+                    # Track thinking segment boundaries
+                    if think_start_id is not None:
+                        if not _in_thinking and token_id == think_start_id:
+                            _in_thinking = True
+                        elif _in_thinking:
+                            _thinking_tokens += 1
+                            if token_id == think_end_id:
+                                _in_thinking = False
+                    if token_id in stop_ids:
+                        break
+                    # Thinking budget enforcement
+                    if thinking_budget is not None and enable_thinking and len(tokens) >= thinking_budget:
+                        break
+
+                return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
+
+            loop = asyncio.get_running_loop()
+            try:
+                result, reasoning_tokens = await loop.run_in_executor(self._executor, _generate_sync)
+            except Exception:
+                self._active_count -= 1
+                self._num_requests_processed += 1
+                raise
+
+            elapsed = time.monotonic() - t0
             self._active_count -= 1
             self._num_requests_processed += 1
+            self._total_reasoning_tokens += reasoning_tokens
+
+            prompt_text = self._format_prompt(messages)
+            prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
+            return {
+                "text": result,
+                "finish_reason": "stop",
+                "model": self.model_name,
+                "created": int(time.time()),
+                "reasoning_tokens": reasoning_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": len(self._tokenizer.encode(result)) if result and self._tokenizer else 0,
+            }
+        finally:
             self._cleanup_temp_files()
-            raise
-
-        elapsed = time.monotonic() - t0
-        self._active_count -= 1
-        self._num_requests_processed += 1
-        self._total_reasoning_tokens += reasoning_tokens
-        self._cleanup_temp_files()
-
-        prompt_text = self._format_prompt(messages)
-        prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
-        return {
-            "text": result,
-            "reasoning_tokens": reasoning_tokens,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": len(self._tokenizer.encode(result)) if result and self._tokenizer else 0,
-        }
 
     async def generate_stream(
         self,

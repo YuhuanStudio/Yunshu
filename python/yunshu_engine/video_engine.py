@@ -35,6 +35,7 @@ import io
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,6 +134,7 @@ class VideoEngine:
 
         # Stats tracking
         self._stats = VideoStats()
+        self._stats_lock = threading.Lock()
 
         # LoRA state
         self._lora_adapter_path: str = ""
@@ -316,9 +318,10 @@ class VideoEngine:
         result.duration_s = elapsed
 
         # Update stats
-        self._stats.total_generate_calls += 1
-        self._stats.total_generate_ms += elapsed * 1000.0
-        self._stats.frames_processed += result.num_frames
+        with self._stats_lock:
+            self._stats.total_generate_calls += 1
+            self._stats.total_generate_ms += elapsed * 1000.0
+            self._stats.frames_processed += result.num_frames
 
         logger.info(f"Video gen: {elapsed:.2f}s, {nf} frames, prompt='{prompt[:50]}...'")
         return result
@@ -712,23 +715,34 @@ class VideoEngine:
                     pass
 
     def get_stats(self) -> dict:
+        with self._stats_lock:
+            frames_processed = self._stats.frames_processed
+            frames_streamed = self._stats.frames_streamed
+            batches_processed = self._stats.batches_processed
+            total_generate_calls = self._stats.total_generate_calls
+            total_stream_calls = self._stats.total_stream_calls
+            avg_fps = round(self._stats.avg_fps, 2)
+            avg_decode_fps = round(self._stats.avg_decode_fps, 2)
+            total_generate_ms = round(self._stats.total_generate_ms, 1)
+            total_frame_decode_ms = round(self._stats.total_frame_decode_ms, 1)
+            lora_adapter_id = self._stats.lora_adapter_id
         return {
             "model": self._model_path,
             "model_type": self._model_type,
             "loaded": self.is_loaded,
             "running": self._running,
-            "frames_processed": self._stats.frames_processed,
-            "frames_streamed": self._stats.frames_streamed,
-            "batches_processed": self._stats.batches_processed,
-            "total_generate_calls": self._stats.total_generate_calls,
-            "total_stream_calls": self._stats.total_stream_calls,
-            "avg_fps": round(self._stats.avg_fps, 2),
-            "avg_decode_fps": round(self._stats.avg_decode_fps, 2),
-            "total_generate_ms": round(self._stats.total_generate_ms, 1),
-            "total_frame_decode_ms": round(self._stats.total_frame_decode_ms, 1),
+            "frames_processed": frames_processed,
+            "frames_streamed": frames_streamed,
+            "batches_processed": batches_processed,
+            "total_generate_calls": total_generate_calls,
+            "total_stream_calls": total_stream_calls,
+            "avg_fps": avg_fps,
+            "avg_decode_fps": avg_decode_fps,
+            "total_generate_ms": total_generate_ms,
+            "total_frame_decode_ms": total_frame_decode_ms,
             "lora_loaded": self._lora_loaded,
             "lora_merged": self._lora_merged,
-            "lora_adapter_id": self._stats.lora_adapter_id,
+            "lora_adapter_id": lora_adapter_id,
             "teacache_enabled": self._teacache is not None,
         }
 
@@ -772,7 +786,8 @@ class VideoEngine:
         if not self._running:
             self.start()
 
-        self._stats.total_stream_calls += 1
+        with self._stats_lock:
+            self._stats.total_stream_calls += 1
 
         queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=128)
 
@@ -893,8 +908,9 @@ class VideoEngine:
 
                 # Update stats
                 decode_total_ms = (time.monotonic() - t_decode_start) * 1000.0
-                self._stats.frames_streamed += frames_emitted
-                self._stats.total_frame_decode_ms += decode_total_ms
+                with self._stats_lock:
+                    self._stats.frames_streamed += frames_emitted
+                    self._stats.total_frame_decode_ms += decode_total_ms
 
                 # Signal final frame
                 queue.put_nowait(None)
@@ -1008,7 +1024,8 @@ class VideoEngine:
                 batch_size=len(chunk),
             ))
 
-        self._stats.batches_processed += len(batches)
+        with self._stats_lock:
+            self._stats.batches_processed += len(batches)
         logger.info(
             f"Batched {len(all_frames)} frames into {len(batches)} batches "
             f"(batch_size={batch_size})"
@@ -1112,8 +1129,9 @@ class VideoEngine:
 
             self._lora_loaded = True
             self._lora_adapter_path = str(adapter_dir)
-            self._stats.lora_adapter_id = adapter_dir.name
-            self._stats.lora_loaded = True
+            with self._stats_lock:
+                self._stats.lora_adapter_id = adapter_dir.name
+                self._stats.lora_loaded = True
             logger.info(
                 f"Video LoRA adapter loaded: {adapter_path} "
                 f"(rank={self._lora_rank}, scale={self._lora_scale})"
@@ -1145,8 +1163,9 @@ class VideoEngine:
 
             self._lora_loaded = False
             self._lora_adapter_path = ""
-            self._stats.lora_loaded = False
-            self._stats.lora_adapter_id = ""
+            with self._stats_lock:
+                self._stats.lora_loaded = False
+                self._stats.lora_adapter_id = ""
             logger.info("Video LoRA adapter unloaded, base weights restored")
             return True
         except Exception as e:
@@ -1183,7 +1202,8 @@ class VideoEngine:
 
             self._lora_merged = True
             self._base_model_weights = None  # Can no longer restore
-            self._stats.lora_merged = True
+            with self._stats_lock:
+                self._stats.lora_merged = True
             logger.info("Video LoRA adapter merged into base model")
             return True
         except Exception as e:
