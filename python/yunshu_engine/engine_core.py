@@ -309,13 +309,48 @@ class EngineCore:
         self._adaptive_batch_sizer = AdaptiveBatchSizer()
 
         # Composition scheduler mixins (SGLang §14.1 pattern)
-        from .scheduler_mixins import CompositionScheduler, MetricsMixin, MemoryPressureMixin
+        from .scheduler_mixins import (
+            CompositionScheduler, MetricsMixin, MemoryPressureMixin,
+            ProfilingMixin, DisaggregationMixin, DataParallelMixin,
+            PipelineParallelMixin, SpecDecodeMixin,
+        )
         try:
-            _metrics_mixin = MetricsMixin()
-            _mem_pressure_mixin = MemoryPressureMixin.from_env()
             self._composition_scheduler = CompositionScheduler(self.scheduler)
-            self._composition_scheduler.add_mixin(_metrics_mixin)
-            self._composition_scheduler.add_mixin(_mem_pressure_mixin)
+            self._composition_scheduler.add_mixin(MetricsMixin())
+            self._composition_scheduler.add_mixin(MemoryPressureMixin.from_env())
+
+            # ProfilingMixin — YUNSHU_SCHEDULER_PROFILING=1
+            if os.environ.get("YUNSHU_SCHEDULER_PROFILING", "").strip() == "1":
+                self._composition_scheduler.add_mixin(ProfilingMixin())
+
+            # DisaggregationMixin — YUNSHU_DISAGGREGATED=1 with node lists
+            if os.environ.get("YUNSHU_DISAGGREGATED", "").strip() == "1":
+                prefill_nodes = os.environ.get("YUNSHU_PREFILL_NODES", "").split(",") if os.environ.get("YUNSHU_PREFILL_NODES") else []
+                decode_nodes = os.environ.get("YUNSHU_DECODE_NODES", "").split(",") if os.environ.get("YUNSHU_DECODE_NODES") else []
+                self._composition_scheduler.add_mixin(DisaggregationMixin(
+                    prefill_nodes=[n.strip() for n in prefill_nodes if n.strip()],
+                    decode_nodes=[n.strip() for n in decode_nodes if n.strip()],
+                ))
+
+            # DataParallelMixin — YUNSHU_DATA_PARALLEL=1 with replica count
+            dp_replicas = int(os.environ.get("YUNSHU_DP_REPLICAS", "1"))
+            if dp_replicas > 1:
+                self._composition_scheduler.add_mixin(DataParallelMixin(
+                    num_replicas=dp_replicas,
+                    strategy=os.environ.get("YUNSHU_DP_STRATEGY", "least_loaded"),
+                ))
+
+            # PipelineParallelMixin — YUNSHU_PIPELINE_PARALLEL=1
+            if os.environ.get("YUNSHU_PIPELINE_PARALLEL", "").strip() == "1":
+                self._composition_scheduler.add_mixin(PipelineParallelMixin(
+                    num_stages=int(os.environ.get("YUNSHU_PP_STAGES", "1")),
+                    stage_id=int(os.environ.get("YUNSHU_PP_STAGE_ID", "0")),
+                    micro_batch_size=int(os.environ.get("YUNSHU_PP_MICRO_BATCH", "1")),
+                ))
+
+            # SpecDecodeMixin — YUNSHU_SPEC_DECODE_TRACKING=1
+            if os.environ.get("YUNSHU_SPEC_DECODE_TRACKING", "").strip() == "1":
+                self._composition_scheduler.add_mixin(SpecDecodeMixin())
         except Exception:
             logger.debug("CompositionScheduler setup skipped", exc_info=True)
             self._composition_scheduler = None

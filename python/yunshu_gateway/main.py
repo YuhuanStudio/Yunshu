@@ -182,6 +182,12 @@ def create_app() -> FastAPI:
 
     app.add_middleware(MetricsMiddleware)
 
+    # Response cache middleware: caches non-streaming responses when enabled
+    if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
+        from .middleware.gateway_optimizer import ResponseCacheMiddleware
+        app.add_middleware(ResponseCacheMiddleware)
+        logger.info("ResponseCache middleware registered (YUNSHU_RESPONSE_CACHE=1)")
+
     # Data-parallel middleware: initialize when YUNSHU_DATA_PARALLEL=1
     if os.environ.get("YUNSHU_DATA_PARALLEL", "").lower() in ("1", "true", "yes"):
         from .dp_middleware import setup_data_parallel, DPRouterMiddleware

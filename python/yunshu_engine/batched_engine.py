@@ -773,6 +773,25 @@ class BatchedEngine:
             executor=executor,
         )
         self._engine_core.scheduler.config.model_name = self.model_name
+
+        # Setup memory guard with model dimensions
+        try:
+            model_cfg = getattr(self._model, 'config', self._model) if self._model else None
+            if model_cfg is not None:
+                num_layers = getattr(model_cfg, 'num_hidden_layers', 0)
+                num_kv_heads = getattr(model_cfg, 'num_key_value_heads', 0)
+                head_dim = getattr(model_cfg, 'hidden_size', 0) // max(getattr(model_cfg, 'num_attention_heads', 1), 1)
+                num_attn_heads = getattr(model_cfg, 'num_attention_heads', None)
+                if num_layers and num_kv_heads and head_dim:
+                    self._engine_core.setup_memory_guard(
+                        num_layers=num_layers,
+                        num_kv_heads=num_kv_heads,
+                        head_dim=head_dim,
+                        num_attention_heads=num_attn_heads,
+                    )
+        except Exception:
+            logger.debug("MemoryGuard setup skipped", exc_info=True)
+
         # Wire prefix cache into scheduler for batch-path insert_segments (C16)
         self._engine_core.set_prefix_cache(self._kv_prefix_cache)
         # Wire speculative decoding decoders into the scheduler
