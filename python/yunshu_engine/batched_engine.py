@@ -372,8 +372,6 @@ class BatchedEngine:
         self._streaming_pipeline_enabled = os.environ.get(
             "YUNSHU_STREAMING_PIPELINE", ""
         ).strip() in ("1", "true", "yes")
-        self._streaming_backpressure = None  # lazy init
-        self._batched_detokenizer = None  # lazy init
 
     @property
     def is_loaded(self) -> bool:
@@ -439,7 +437,7 @@ class BatchedEngine:
             if patches:
                 logger.info(f"Model patches applied: {patches}")
         except Exception:
-            logger.debug("Model patches skipped", exc_info=True)
+            logger.warning("Model patches skipped", exc_info=True)
 
         # Detect model architecture optimizations (RoPE scaling, attention type, MoE)
         try:
@@ -456,7 +454,7 @@ class BatchedEngine:
                 f"MoE={moe_opt.get_stats().get('num_experts', 0)} experts"
             )
         except Exception:
-            logger.debug("Model optimization detection skipped", exc_info=True)
+            logger.warning("Model optimization detection skipped", exc_info=True)
 
         # Apply n_confirmed patch for GatedDeltaNet SSM layers (Qwen3.5)
         # Enables zero-cost reject in MTP: restore_rollback instead of refeed
@@ -474,7 +472,7 @@ class BatchedEngine:
             if apply_mtp_patch():
                 logger.info("MTP patch applied — mtp_forward() available")
         except Exception:
-            logger.debug("MTP patch skipped", exc_info=True)
+            logger.warning("MTP patch skipped", exc_info=True)
 
         # Load per-model settings from model_settings.json + env overrides
         self._load_model_settings()
@@ -814,7 +812,7 @@ class BatchedEngine:
                         num_attention_heads=num_attn_heads,
                     )
         except Exception:
-            logger.debug("MemoryGuard setup skipped", exc_info=True)
+            logger.warning("MemoryGuard setup skipped", exc_info=True)
 
         # Setup TurboQuant per-layer mixed-precision KV quantization
         try:
@@ -1048,7 +1046,7 @@ class BatchedEngine:
                             f"{result.original_tokens} tokens (saved {result.tokens_removed})"
                         )
             except Exception:
-                logger.debug("context window truncation skipped", exc_info=True)
+                logger.warning("context window truncation skipped", exc_info=True)
 
         # Speculative decoding path (Phase 4: single-request EAGLE-3)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:

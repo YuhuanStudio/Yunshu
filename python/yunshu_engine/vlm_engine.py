@@ -795,7 +795,7 @@ class VLMEngine:
                     # but we store the state entry so the next call will create one.
                     self._ensure_kv_prefix_state(image_hash)
             except Exception:
-                logger.debug("KV prefix state management failed", exc_info=True)
+                logger.warning("KV prefix state management failed", exc_info=True)
 
         # Trim output at stop sequences if provided
         if stop and isinstance(result, str):
@@ -852,7 +852,7 @@ class VLMEngine:
                 from .json_schema import JsonSchemaConstraint
                 json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
             except Exception:
-                logger.debug("JSON schema constraint init failed", exc_info=True)
+                logger.warning("JSON schema constraint init failed", exc_info=True)
 
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
@@ -1065,7 +1065,7 @@ class VLMEngine:
                         # First time seeing this image — create a state entry
                         self._ensure_kv_prefix_state(image_hash)
                 except Exception:
-                    logger.debug("KV prefix state management failed", exc_info=True)
+                    logger.warning("KV prefix state management failed", exc_info=True)
 
         except Exception as e:
             queue.put_nowait(RequestOutput(
@@ -1116,7 +1116,7 @@ class VLMEngine:
                 from .json_schema import JsonSchemaConstraint
                 json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
             except Exception:
-                logger.debug("JSON schema constraint init failed (stream)", exc_info=True)
+                logger.warning("JSON schema constraint init failed (stream)", exc_info=True)
 
         # Build stop IDs
         stop_ids = set(eos_ids)
