@@ -492,15 +492,15 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
       _cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
       async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
-        yield chunk
+        yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
     except MemoryError:
-        yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n"
-        yield format_openai_done()
+        yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
         return
     except Exception as e:
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
-        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n"
-        yield format_openai_done()
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
         return
     finally:
         if _tracker is not None:

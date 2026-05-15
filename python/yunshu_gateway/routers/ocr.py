@@ -73,6 +73,8 @@ async def extract_text_from_image(
         }
     except HTTPException:
         raise
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"OCR extraction error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="OCR extraction failed")

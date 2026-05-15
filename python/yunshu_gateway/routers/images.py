@@ -89,8 +89,8 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
         )
 
     images_data = []
-    for i in range(req.n):
-        try:
+    try:
+        for i in range(req.n):
             png_bytes = await img_engine.generate_image(
                 prompt=req.prompt,
                 width=width,
@@ -98,19 +98,21 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
                 num_inference_steps=req.num_inference_steps,
                 seed=(req.seed + i) if req.seed is not None else None,
             )
-        except Exception as e:
-            logger.error(f"Image generation error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Image generation failed")
 
-        if req.response_format == "b64_json":
-            b64 = base64.b64encode(png_bytes).decode("ascii")
-            images_data.append({
-                "b64_json": b64,
-            })
-        else:
-            images_data.append({
-                "url": f"data:image/png;base64,{base64.b64encode(png_bytes).decode('ascii')}",
-            })
+            if req.response_format == "b64_json":
+                b64 = base64.b64encode(png_bytes).decode("ascii")
+                images_data.append({
+                    "b64_json": b64,
+                })
+            else:
+                images_data.append({
+                    "url": f"data:image/png;base64,{base64.b64encode(png_bytes).decode('ascii')}",
+                })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
+    except Exception as e:
+        logger.error(f"Image generation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Image generation failed")
 
     return JSONResponse({
         "created": int(time.time()),
@@ -174,6 +176,11 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
                 cancel_event=_img_gen.cancel_event,
             ):
                 yield event.encode("utf-8") if isinstance(event, str) else event
+        except MemoryError:
+            yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        except Exception as e:
+            logger.error(f"Image streaming error: {e}", exc_info=True)
+            yield f"data: {json.dumps({'error': {'message': 'Image generation failed', 'type': 'server_error'}})}\n\n".encode("utf-8")
         finally:
             _img_tracker.unregister(_img_id)
 
@@ -256,6 +263,8 @@ async def create_image_variation(req: ImageVariationsRequest) -> JSONResponse:
             "created": int(time.time()),
             "data": data,
         })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Image variation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Image variation failed")
@@ -332,6 +341,8 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
             "created": int(time.time()),
             "data": data,
         })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Image edit error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Image edit failed")
@@ -408,6 +419,8 @@ async def create_image_inpaint(req: ImageInpaintRequest) -> JSONResponse:
             "created": int(time.time()),
             "data": data,
         })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Image inpaint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Image inpainting failed")
@@ -487,6 +500,8 @@ async def create_image_controlnet(req: ImageControlNetRequest) -> JSONResponse:
             "created": int(time.time()),
             "data": data,
         })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"ControlNet gen error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="ControlNet generation failed")
@@ -560,6 +575,8 @@ async def create_image_depth_guided(req: ImageDepthGuidedRequest) -> JSONRespons
             "created": int(time.time()),
             "data": data,
         })
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Depth-guided gen error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Depth-guided generation failed")

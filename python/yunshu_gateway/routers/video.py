@@ -107,6 +107,8 @@ async def create_video(req: VideoGenerateRequest):
             scheduler=req.scheduler,
             output_format=req.response_format,
         )
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Video generation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Video generation failed")
@@ -181,6 +183,8 @@ async def _stream_video_frames(video_engine, req: VideoGenerateRequest, image_by
 
         # Send done event
         yield f"data: {json.dumps({'created': int(time.time()), 'data': [{'type': 'done'}]})}\n\n"
+    except MemoryError:
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n"
     except Exception as e:
         logger.error(f"Video streaming error: {e}", exc_info=True)
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield f"data: {json.dumps({'error': {'message': 'Video generation failed', 'type': 'server_error'}})}\n\n"

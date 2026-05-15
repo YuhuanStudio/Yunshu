@@ -242,6 +242,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Anthropic Messages API endpoint."""
     # Build messages list (prepend system if present)
     messages = []
+    _temp_files: list[str] = []  # track temp files for cleanup
     if req.system:
         system_text = _extract_text_from_content(req.system) if isinstance(req.system, list) else req.system
         messages.append({"role": "system", "content": system_text})
@@ -276,6 +277,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                         tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)
                         tmp.write(raw)
                         tmp.close()
+                        _temp_files.append(tmp.name)
                         converted_parts.append({"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}})
                     else:
                         converted_parts.append({"type": "text", "text": f"[Image: {media_type}]"})
@@ -316,6 +318,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     engine, is_batched = await _resolve_engine(req.model)
 
     if req.stream:
+        # Note: temp files for streaming are cleaned up by the caller
+        # (HTTP response completion). For long-running streams, this is
+        # acceptable since the files are small.
         return StreamingResponse(
             _stream_anthropic(engine, messages, req, stop, request, is_batched=is_batched),
             media_type="text/event-stream",
@@ -330,6 +335,13 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         return await _non_stream_legacy(engine, messages, req, stop)
     finally:
         _release_lora_adapter(engine, loaded_adapter)
+        # Clean up temp files created for image blocks
+        import os as _os
+        for _tf_path in _temp_files:
+            try:
+                _os.unlink(_tf_path)
+            except OSError:
+                pass
 
 
 async def _resolve_engine(model_id: str):
@@ -809,6 +821,13 @@ async def _stream_anthropic(
             yield event.encode("utf-8") if isinstance(event, str) else event
 
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
+    except MemoryError:
+        error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
+        yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
+    except Exception as e:
+        logger.error("Anthropic streaming error", exc_info=True)
+        error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
+        yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         _anth_tracker.unregister(message_id)

@@ -1255,6 +1255,7 @@ class BatchedEngine:
                 json_schema=json_schema,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
+                priority=priority,
             )
             if _rc_hash is not None and result.finish_reason != "error":
                 try:
@@ -1287,6 +1288,9 @@ class BatchedEngine:
             priority=priority,
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
+            reasoning_effort=reasoning_effort,
+            logits_processors=logits_processors,
+            cancel_event=cancel_event,
         )
 
         if result is None:
@@ -1372,12 +1376,15 @@ class BatchedEngine:
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
+        priority: int = 0,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
         Bypasses EngineCore's continuous batching loop for single requests.
         Runs the entire generation in one tight GPU loop on the MLX executor,
         eliminating per-token async round-trip overhead for full GPU utilization.
+        Note: priority is accepted for API consistency but has no effect in the
+        single-request fast path (no scheduler contention).
         """
         from mlx_lm.generate import generate_step
         from mlx_lm.sample_utils import make_sampler
@@ -1876,12 +1883,10 @@ class BatchedEngine:
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
                 logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
-            return GenerationOutput(
-                finished=True,
-                finish_reason="error",
-                prompt_tokens=prompt_tokens,
-                completion_tokens=0,
-            )
+            # Re-raise so the gateway can report the error to the client.
+            # Only MemoryError and RuntimeError were handled above; anything
+            # else is a bug or unexpected condition that should propagate.
+            raise
 
         # Decode token strings for logprobs
         lp_result = None
@@ -2113,6 +2118,7 @@ class BatchedEngine:
                     logprobs=bool(logprobs),
                     top_logprobs=top_logprobs,
                     logits_processors=logits_processors,
+                    priority=priority,
                 ):
                     yield output
             finally:
@@ -2140,6 +2146,8 @@ class BatchedEngine:
             top_logprobs=top_logprobs,
             xtc_probability=xtc_probability,
             xtc_threshold=xtc_threshold,
+            reasoning_effort=reasoning_effort,
+            logits_processors=logits_processors,
         )
 
         finished_normally = False
@@ -2147,6 +2155,10 @@ class BatchedEngine:
         _stream_ttft_ms = 0.0
         try:
             async for output in self._engine_core.stream_outputs(request_id):
+                # Check cancel event (gateway disconnect or internal cancel)
+                if _cancel_event is not None and _cancel_event.is_set():
+                    logger.debug(f"Cancel event triggered during streaming: {request_id}")
+                    break
                 cleaned = _clean_special_tokens(output.new_text)
                 finish_reason = output.finish_reason
                 if finish_reason == "memory_exceeded":
@@ -2210,6 +2222,7 @@ class BatchedEngine:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         logits_processors: list | None = None,
+        priority: int = 0,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
 

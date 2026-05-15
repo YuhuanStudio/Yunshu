@@ -206,6 +206,8 @@ async def create_speech(req: TTSRequest) -> Response:
             language=req.language,
             seed=req.seed,
         )
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"TTS synthesis error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Speech synthesis failed")
@@ -310,6 +312,11 @@ async def stream_speech(req: TTSRequest, request: Request):
                 cancel_event=_tts_gen.cancel_event,
             ):
                 yield event.encode("utf-8") if isinstance(event, str) else event
+        except MemoryError:
+            yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        except Exception as e:
+            logger.error(f"TTS streaming error: {e}", exc_info=True)
+            yield f"data: {json.dumps({'error': {'message': 'TTS synthesis failed', 'type': 'server_error'}})}\n\n".encode("utf-8")
         finally:
             _tts_tracker.unregister(_tts_id)
 
@@ -392,6 +399,8 @@ async def create_transcription(
         )
     except HTTPException:
         raise
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"ASR transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Audio transcription failed")
@@ -514,8 +523,16 @@ async def voice_pipeline(
         }
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
+    except Exception as e:
+        logger.error(f"Voice pipeline error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Voice pipeline failed")
     finally:
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 # ── STS (Speech-to-Speech) Endpoints ──
@@ -542,12 +559,18 @@ class STSTransformRequest(BaseModel):
 @router.post("/audio/speech-to-speech/enhance")
 async def sts_enhance(req: STSEnhanceRequest, request: Request):
     """Enhance audio quality — noise reduction and dereverberation."""
-    from yunshu_engine.sts_engine import STSEngine
-    engine = _get_sts_engine(request)
-    audio_bytes = base64.b64decode(req.audio)
-    result = await engine.enhance(
-        audio_bytes, method=req.method, noise_floor_db=req.noise_floor_db,
-    )
+    try:
+        from yunshu_engine.sts_engine import STSEngine
+        engine = _get_sts_engine(request)
+        audio_bytes = base64.b64decode(req.audio)
+        result = await engine.enhance(
+            audio_bytes, method=req.method, noise_floor_db=req.noise_floor_db,
+        )
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
+    except Exception as e:
+        logger.error(f"STS enhance error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Audio enhancement failed")
     return {
         "audio": base64.b64encode(result.audio_data).decode("ascii"),
         "sample_rate": result.sample_rate,
@@ -559,29 +582,41 @@ async def sts_enhance(req: STSEnhanceRequest, request: Request):
 @router.post("/audio/speech-to-speech/separate")
 async def sts_separate(req: STSSeparateRequest, request: Request):
     """Separate audio sources — isolate specific sounds."""
-    from yunshu_engine.sts_engine import STSEngine
-    engine = _get_sts_engine(request)
-    audio_bytes = base64.b64decode(req.audio)
-    result = await engine.separate(
-        audio_bytes, source_text=req.source_text, method=req.method,
-    )
-    return {
-        "audio": base64.b64encode(result.audio_data).decode("ascii"),
-        "sample_rate": result.sample_rate,
-        "method": result.method,
-        "metadata": result.metadata,
-    }
+    try:
+        from yunshu_engine.sts_engine import STSEngine
+        engine = _get_sts_engine(request)
+        audio_bytes = base64.b64decode(req.audio)
+        result = await engine.separate(
+            audio_bytes, source_text=req.source_text, method=req.method,
+        )
+        return {
+            "audio": base64.b64encode(result.audio_data).decode("ascii"),
+            "sample_rate": result.sample_rate,
+            "method": result.method,
+            "metadata": result.metadata,
+        }
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
+    except Exception as e:
+        logger.error(f"STS separate error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Audio separation failed")
 
 
 @router.post("/audio/speech-to-speech/transform")
 async def sts_transform(req: STSTransformRequest, request: Request):
     """Transform voice characteristics — pitch shifting, formant modification."""
-    from yunshu_engine.sts_engine import STSEngine
-    engine = _get_sts_engine(request)
-    audio_bytes = base64.b64decode(req.audio)
-    result = await engine.transform(
-        audio_bytes, pitch_shift=req.pitch_shift, formant_ratio=req.formant_ratio,
-    )
+    try:
+        from yunshu_engine.sts_engine import STSEngine
+        engine = _get_sts_engine(request)
+        audio_bytes = base64.b64decode(req.audio)
+        result = await engine.transform(
+            audio_bytes, pitch_shift=req.pitch_shift, formant_ratio=req.formant_ratio,
+        )
+    except MemoryError:
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
+    except Exception as e:
+        logger.error(f"STS transform error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Audio transform failed")
     return {
         "audio": base64.b64encode(result.audio_data).decode("ascii"),
         "sample_rate": result.sample_rate,

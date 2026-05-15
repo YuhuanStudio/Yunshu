@@ -873,6 +873,8 @@ class EngineCore:
         lora_adapter: str | None = None,
         priority: int = 0,
         reasoning_effort: str | None = None,
+        logits_processors: list | None = None,
+        grammar: dict | str | None = None,
         **kwargs,
     ) -> str:
         """Add a generation request. Returns request_id for streaming/abort.
@@ -1184,6 +1186,7 @@ class EngineCore:
             stop_token_ids=stop_token_ids or [],
             seed=seed,
             json_schema=json_schema,
+            grammar=grammar,
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
             logprobs=logprobs,
@@ -1192,6 +1195,7 @@ class EngineCore:
             xtc_probability=kwargs.get('xtc_probability', 0.0),
             xtc_threshold=kwargs.get('xtc_threshold', 0.0),
             reasoning_effort=reasoning_effort,
+            logits_processors=logits_processors,
         )
 
         request = Request(
@@ -1300,38 +1304,52 @@ class EngineCore:
         from .request import RequestOutput
         req_id = await self.add_request(**kwargs)
 
-        # Wait for completion
-        event = self._finished_events.get(req_id)
-        if event:
-            await event.wait()
+        try:
+            # Wait for completion with timeout protection
+            event = self._finished_events.get(req_id)
+            if event:
+                timeout_s = kwargs.get('timeout_seconds') or self.config.request_timeout_seconds
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    logger.warning(f"generate() timeout ({timeout_s}s) for {req_id}")
+                    # Abort the timed-out request so scheduler releases its slot
+                    await self.abort_request(req_id)
+                    return RequestOutput(
+                        request_id=req_id,
+                        finished=True,
+                        finish_reason="timeout",
+                        error=f"Generation timed out after {timeout_s}s",
+                    )
 
-        # Compute TTFT before cleanup (timestamp is removed by _cleanup_request)
-        _start_ts = self._request_timestamps.get(req_id)
-        _ttft_ms = 0.0
-        if _start_ts is not None and _start_ts > 0:
-            _ttft_ms = round((time.monotonic() - _start_ts) * 1000, 1)
+            # Compute TTFT before cleanup (timestamp is removed by _cleanup_request)
+            _start_ts = self._request_timestamps.get(req_id)
+            _ttft_ms = 0.0
+            if _start_ts is not None and _start_ts > 0:
+                _ttft_ms = round((time.monotonic() - _start_ts) * 1000, 1)
 
-        # Drain collector
-        collector = self._output_collectors.get(req_id)
-        result = None
-        if collector:
-            while True:
-                output = collector.get_nowait()
-                if output is None:
-                    break
-                if output.finished:
-                    result = output
-                elif result is None:
-                    result = output
-                else:
-                    result = collector._merge(result, output)
+            # Drain collector
+            collector = self._output_collectors.get(req_id)
+            result = None
+            if collector:
+                while True:
+                    output = collector.get_nowait()
+                    if output is None:
+                        break
+                    if output.finished:
+                        result = output
+                    elif result is None:
+                        result = output
+                    else:
+                        result = collector._merge(result, output)
+
+            # Attach TTFT to result so downstream consumers can use it
+            if result is not None:
+                result.ttft_ms = _ttft_ms
+
+            return result
+        finally:
             self._cleanup_request(req_id)
-
-        # Attach TTFT to result so downstream consumers can use it
-        if result is not None:
-            result.ttft_ms = _ttft_ms
-
-        return result
 
     # ── Engine Loop ──
 

@@ -1227,6 +1227,13 @@ async def _stream_vlm_response(
           cancel_event=_vlm_gen.cancel_event,
       ):
           yield event.encode("utf-8")
+    except MemoryError:
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
+    except Exception as e:
+        logger.error("VLM streaming error", exc_info=True)
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(vlm_engine, loaded_adapter)
       _vlm_tracker.unregister(completion_id)
@@ -1409,6 +1416,13 @@ async def _stream_response_multi(
           cancel_event=gen.cancel_event,
       ):
           yield event.encode("utf-8")
+    except MemoryError:
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
+    except Exception as e:
+        logger.error("Chat multi-choice streaming error", exc_info=True)
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(engine, loaded_adapter)
       tracker.unregister(completion_id)
@@ -1758,6 +1772,13 @@ async def _stream_response(
               except Exception:
                   logger.debug("StreamingResponseBuffer write failed", exc_info=True)
           yield encoded
+    except MemoryError:
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
+    except Exception as e:
+        logger.error("Chat streaming error", exc_info=True)
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(engine, loaded_adapter)
       _tracker.unregister(completion_id)
