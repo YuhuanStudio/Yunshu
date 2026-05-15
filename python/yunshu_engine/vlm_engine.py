@@ -1055,8 +1055,9 @@ class VLMEngine:
         vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
 
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
-        stop_suffix = stop or []
+        stop_suffixes = stop or []
         token_count = 0
+        accumulated = ""  # Accumulate text for multi-token stop suffix matching
         try:
             stream_kwargs: dict = {
                 "max_tokens": max_tokens,
@@ -1083,15 +1084,21 @@ class VLMEngine:
             ):
                 token_count += 1
                 text = result.text if hasattr(result, 'text') else ""
+                accumulated += text
                 finish_reason = None
                 if hasattr(result, 'finish_reason') and result.finish_reason:
                     finish_reason = result.finish_reason
                 elif token_count >= max_tokens:
                     finish_reason = "length"
-                # Check stop suffixes
-                if not finish_reason and stop_suffix:
-                    for s in stop_suffix:
-                        if text.endswith(s):
+                # Check multi-token stop suffixes against accumulated text
+                if not finish_reason and stop_suffixes:
+                    for s in stop_suffixes:
+                        if accumulated.endswith(s):
+                            # Trim the stop suffix from the output
+                            trim_pos = len(accumulated) - len(s)
+                            # Emit only the non-suffix portion as the final token text
+                            text = accumulated[trim_pos:]
+                            accumulated = accumulated[:trim_pos]
                             finish_reason = "stop"
                             break
 

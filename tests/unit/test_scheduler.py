@@ -534,3 +534,128 @@ class TestRequestPreemption:
         sched._preempt_request(req)
 
         assert req.num_computed_tokens == 100  # min(200, 100) = 100
+
+
+class TestCacheLocalityReordering:
+    """Tests for cache-locality request reordering (SGLang/vLLM pattern)."""
+
+    def test_reorder_noop_single_request(self):
+        """Single request is returned as-is."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+        from yunshu_engine.request import Request
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        req = Request(request_id="req-1", prompt="test")
+        requests = [req]
+        result = sched._reorder_by_cache_locality(requests)
+        assert result == requests
+
+    def test_reorder_noop_empty(self):
+        """Empty list is returned as-is."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        assert sched._reorder_by_cache_locality([]) == []
+
+    def test_reorder_groups_by_prefix_hash(self):
+        """Requests with the same prefix hash are grouped together."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+        from yunshu_engine.request import Request
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        # Create requests with different prefix hashes
+        req_a = Request(request_id="req-a", prompt="test a")
+        req_b = Request(request_id="req-b", prompt="test b")
+        req_c = Request(request_id="req-c", prompt="test c")
+
+        # Set prefix hashes: req-a and req-c share the same prefix
+        sched._kv_prefix_hashes["req-a"] = 111
+        sched._kv_prefix_hashes["req-c"] = 111
+        sched._kv_prefix_hashes["req-b"] = 222
+
+        result = sched._reorder_by_cache_locality([req_a, req_b, req_c])
+
+        # req-a and req-c should be consecutive (same prefix hash)
+        ids = [r.request_id for r in result]
+        assert ids.index("req-a") < ids.index("req-b") or ids.index("req-c") < ids.index("req-b")
+        # Both should be in the output
+        assert set(ids) == {"req-a", "req-b", "req-c"}
+
+    def test_reorder_no_prefix_requests_at_end(self):
+        """Requests without prefix hashes are placed at the end."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+        from yunshu_engine.request import Request
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        req_hashed = Request(request_id="req-h", prompt="test h")
+        req_unhashed = Request(request_id="req-u", prompt="test u")
+
+        sched._kv_prefix_hashes["req-h"] = 999
+
+        result = sched._reorder_by_cache_locality([req_unhashed, req_hashed])
+
+        ids = [r.request_id for r in result]
+        assert ids == ["req-h", "req-u"]
+
+    def test_set_kv_prefix_hash(self):
+        """set_kv_prefix_hash stores the hash correctly."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        sched.set_kv_prefix_hash("req-1", 42)
+        assert sched._kv_prefix_hashes["req-1"] == 42
+
+    def test_cleanup_removes_prefix_hash(self):
+        """_cleanup_finished removes prefix hash for finished requests."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+        from yunshu_engine.request import Request, RequestStatus
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        req = Request(request_id="req-done", prompt="test")
+        req.status = RequestStatus.FINISHED_STOPPED
+        sched.running["req-done"] = req
+        sched._kv_prefix_hashes["req-done"] = 123
+
+        sched._cleanup_finished()
+
+        assert "req-done" not in sched._kv_prefix_hashes
+
+    def test_stats_includes_cache_locality(self):
+        """get_stats includes cache_locality stats."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        stats = sched.get_stats()
+        assert "cache_locality" in stats
+        assert stats["cache_locality"]["tracked_prefixes"] == 0
+        assert stats["cache_locality"]["unique_groups"] == 0
+
+        # Add some hashes and check
+        sched._kv_prefix_hashes["r1"] = 10
+        sched._kv_prefix_hashes["r2"] = 10  # Same group
+        sched._kv_prefix_hashes["r3"] = 20  # Different group
+
+        stats = sched.get_stats()
+        assert stats["cache_locality"]["tracked_prefixes"] == 3
+        assert stats["cache_locality"]["unique_groups"] == 2

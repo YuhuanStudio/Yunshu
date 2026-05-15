@@ -561,3 +561,36 @@ async def reasoning_tokens_stats() -> dict[str, Any]:
 
     stats["total_reasoning_tokens"] = total_reasoning
     return stats
+
+
+@router.get("/response-cache")
+async def response_cache_stats() -> dict[str, Any]:
+    """Response cache hit/miss statistics.
+
+    Shows per-engine response cache metrics (hits, misses) and
+    the underlying ResponseCache module stats.
+    """
+    from ..engine import get_engine, get_model_manager
+    stats = {"engines": []}
+
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and entry.engine and hasattr(entry.engine, 'get_stats'):
+                s = entry.engine.get_stats()
+                rc = s.get("response_cache")
+                if rc and (rc.get("hits", 0) > 0 or rc.get("misses", 0) > 0):
+                    stats["engines"].append({
+                        "model_id": entry.model_id,
+                        "response_cache": rc,
+                    })
+
+    # Underlying cache module stats
+    try:
+        from yunshu_engine.gateway_optimizer import get_response_cache
+        cache = get_response_cache()
+        stats["cache_module"] = cache.get_stats()
+    except Exception:
+        stats["cache_module"] = {"enabled": False}
+
+    return stats

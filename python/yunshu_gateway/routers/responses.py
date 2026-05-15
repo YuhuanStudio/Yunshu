@@ -50,6 +50,7 @@ class ResponsesRequest(BaseModel):
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
     stream: bool = False
+    n: int = Field(default=1, ge=1, le=128)
     tools: Optional[list[ResponseTool]] = None
     response_format: Optional[dict] = None
     seed: Optional[int] = None
@@ -62,6 +63,13 @@ class ResponsesRequest(BaseModel):
     logit_bias: Optional[dict[str, float]] = None
     min_p: float = Field(default=0.0, ge=0.0, le=1.0)
     stop: Optional[list[str]] = None
+    stop_token_ids: Optional[list[int]] = None
+    logprobs: bool = False
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
+    spec_decode: bool = False
+    xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    grammar: Optional[dict] = None
     lora_adapter: Optional[str] = None
 
 
@@ -150,8 +158,16 @@ async def create_response(req: ResponsesRequest, request: Request):
             thinking_budget=req.thinking_budget,
             reasoning_effort=req.reasoning_effort,
             stop=req.stop,
-            response_format=chat_response_format,
+            stop_token_ids=req.stop_token_ids,
+            logprobs=req.logprobs,
+            top_logprobs=req.top_logprobs,
+            spec_decode=req.spec_decode,
+            n=req.n,
             stream=req.stream,
+            response_format=chat_response_format,
+            grammar=req.grammar,
+            xtc_probability=req.xtc_probability,
+            xtc_threshold=req.xtc_threshold,
             lora_adapter=req.lora_adapter,
         )
         vlm_json_schema = _parse_response_format(chat_response_format)

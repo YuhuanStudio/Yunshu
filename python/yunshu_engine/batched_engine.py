@@ -1370,6 +1370,7 @@ class BatchedEngine:
             think_start_token = None
             _in_thinking = False
             _thinking_tokens: list[int] = []
+            _stopped_by_suffix = False
 
             # Prefill progress tracking for the fast path
             _prefill_req_id = f"fp-{id(_run)}-{int(time.monotonic()*1e6)}"
@@ -1474,6 +1475,7 @@ class BatchedEngine:
                             if stop_suffixes:
                                 detokenizer.add_token(token)
                                 if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    _stopped_by_suffix = True
                                     break
                     cleanup_rope(model)
                     spec_prefill_done = True
@@ -1519,7 +1521,7 @@ class BatchedEngine:
                             mx.synchronize()
                             break
                         # Thinking budget enforcement: cap thinking tokens
-                        if thinking_budget is not None and enable_thinking:
+                        if thinking_budget is not None and _in_thinking:
                             thinking_tokens_used += 1
                             if thinking_tokens_used >= thinking_budget and think_end_token is not None:
                                 # Force end of thinking phase
@@ -1552,6 +1554,7 @@ class BatchedEngine:
                         if stop_suffixes:
                             detokenizer.add_token(token)
                             if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                _stopped_by_suffix = True
                                 break
 
                         # Track thinking segment boundaries
@@ -1640,7 +1643,7 @@ class BatchedEngine:
                             tlp["bytes"] = []
             lp_result = token_logprobs
 
-        finish_reason = "stop" if tokens and tokens[-1] in stop_ids else "length"
+        finish_reason = "stop" if _stopped_by_suffix or (tokens and tokens[-1] in stop_ids) else "length"
         output_text = _clean_special_tokens(output_text)
 
         # Record TTFT + ITL in Prometheus
@@ -1699,6 +1702,8 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         priority: int = 0,
+        logprobs: bool | int = False,
+        top_logprobs: int | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -1778,6 +1783,8 @@ class BatchedEngine:
                     xtc_threshold=xtc_threshold,
                     json_schema=json_schema,
                     cancel_event=_cancel_event,
+                    logprobs=bool(logprobs),
+                    top_logprobs=top_logprobs,
                 ):
                     yield output
             finally:
@@ -1850,6 +1857,8 @@ class BatchedEngine:
         xtc_threshold: float = 0.0,
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
 
@@ -2011,12 +2020,27 @@ class BatchedEngine:
 
             _lprocs = logits_processors if logits_processors else None
             with _wired_limit_ctx(model):
-                for token, _ in generate_step(
+                for token, _logits in generate_step(
                     ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
                     prompt_cache=cache, logits_processors=_lprocs,
                 ):
                     detokenizer.add_token(token)
                     n_tok += 1
+                    # Compute per-token logprobs (same pattern as _generate_fast)
+                    _lp_entry = None
+                    if logprobs and _logits is not None:
+                        import mlx.core as _mx
+                        _log_probs = _mx.log(_mx.softmax(_logits.astype(_mx.float32), axis=-1))
+                        _tok_lp = float(_log_probs[token])
+                        _lp_entry = {"token_id": int(token), "logprob": _tok_lp}
+                        if top_logprobs and top_logprobs > 0:
+                            _k = min(top_logprobs, _log_probs.shape[0])
+                            _sorted_idx = _mx.argsort(-_log_probs)
+                            _top_k_idx = _sorted_idx[:_k]
+                            _lp_entry["top_logprobs"] = [
+                                {"token_id": int(_top_k_idx[j]), "logprob": float(_log_probs[int(_top_k_idx[j])])}
+                                for j in range(_k)
+                            ]
                     # TokenPipeline: submit GPU stages for tracking
                     if _pipeline is not None and _pipeline.is_running:
                         _ptok = _pipeline.submit_stage1_result(logits=None, token_id=int(token))
@@ -2048,7 +2072,7 @@ class BatchedEngine:
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
-                            _put((new_text, n_tok, True, len(_thinking_tokens)))
+                            _put((new_text, n_tok, True, len(_thinking_tokens), _lp_entry))
                             if _pipeline is not None:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
@@ -2065,7 +2089,7 @@ class BatchedEngine:
                             if token == think_end_token:
                                 _in_thinking = False
                                 self._lookahead_reasoning.check_thinking_state_text("</think")
-                    _put((new_text, n_tok, stop_hit or suffix_hit, len(_thinking_tokens)))
+                    _put((new_text, n_tok, stop_hit or suffix_hit, len(_thinking_tokens), _lp_entry))
                     if stop_hit or suffix_hit:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
@@ -2082,8 +2106,8 @@ class BatchedEngine:
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment
                 if remaining:
-                    _put((remaining, n_tok, False, len(_thinking_tokens)))
-                _put(("", n_tok, True, len(_thinking_tokens)))
+                    _put((remaining, n_tok, False, len(_thinking_tokens), None))
+                _put(("", n_tok, True, len(_thinking_tokens), None))
                 mx.synchronize()
                 # Finish pipeline tracking at end of generation
                 if _pipeline is not None:
@@ -2121,10 +2145,14 @@ class BatchedEngine:
                             finish_reason="memory_limit",
                         )
                     break
-                if len(item) == 4:
+                if len(item) == 5:
+                    new_text, tok_count, done, _reasoning_tokens, _lp_entry = item
+                elif len(item) == 4:
                     new_text, tok_count, done, _reasoning_tokens = item
+                    _lp_entry = None
                 else:
                     new_text, tok_count, done = item
+                    _lp_entry = None
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -2145,6 +2173,17 @@ class BatchedEngine:
                         await asyncio.sleep(_delay / 1000)
 
                 finish_reason = "stop" if done else None
+                # Attach logprobs to output if computed for this token
+                _lp_list = None
+                if _lp_entry is not None:
+                    # Decode token string for the logprob entry
+                    try:
+                        _lp_entry["token"] = tokenizer.decode([_lp_entry["token_id"]])
+                        _lp_entry["bytes"] = list(_lp_entry["token"].encode("utf-8"))
+                    except Exception:
+                        _lp_entry["token"] = ""
+                        _lp_entry["bytes"] = []
+                    _lp_list = [_lp_entry]
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
                     new_text=_clean_special_tokens(new_text),
@@ -2153,6 +2192,7 @@ class BatchedEngine:
                     finished=done,
                     finish_reason=finish_reason,
                     reasoning_tokens=_reasoning_tokens,
+                    logprobs=_lp_list,
                 )
                 if done:
                     break
