@@ -1105,6 +1105,19 @@ class EngineCore:
                         memory_usage=mem_usage,
                         batch_size=len(scheduler_output.outputs),
                     )
+                    # KV compression under memory pressure: compress old blocks
+                    # instead of outright eviction when usage > 85%
+                    if mem_usage > 0.85 and self._kv_compressor is not None:
+                        try:
+                            kv_mgr = getattr(self.scheduler, '_kv_manager', None)
+                            if kv_mgr is not None:
+                                evicted = kv_mgr.memory_pressure_evict(0.90)
+                                if evicted > 0:
+                                    logger.debug(
+                                        f"KV memory pressure eviction: {evicted} blocks"
+                                    )
+                        except Exception:
+                            logger.debug("KV pressure eviction failed", exc_info=True)
                     # Telemetry: record step-level metrics
                     self._telemetry.collect(
                         "engine_step_batch_size",
