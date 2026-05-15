@@ -258,6 +258,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             ct = result.completion_tokens
             finish_reason = result.finish_reason or "stop"
             _reasoning_tokens = getattr(result, 'reasoning_tokens', 0)
+            _cached_tokens = getattr(result, 'cached_tokens', 0)
         else:
             state = await engine.generate(
                 prompt=messages,
@@ -288,6 +289,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             ct = state.completion_token_count
             finish_reason = state.finish_reason or "stop"
             _reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
+            _cached_tokens = getattr(state, 'cached_tokens', 0)
 
         # Extract tool calls
         tool_calls = None
@@ -330,6 +332,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "output_tokens": ct,
                 "total_tokens": pt + ct,
                 **({"output_tokens_details": {"reasoning_tokens": _reasoning_tokens}} if _reasoning_tokens else {}),
+                **({"input_tokens_details": {"cached_tokens": _cached_tokens}} if _cached_tokens else {}),
             },
         })
     finally:
@@ -346,9 +349,11 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
     )
     prompt_tok = 0
     completion_tok = 0
+    reasoning_tok = 0
+    cached_tok = 0
 
     async def _token_source():
-        nonlocal prompt_tok, completion_tok
+        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok
         if is_batched:
             async for output in engine.stream_generate(
                 prompt=messages,
@@ -377,6 +382,10 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
+                if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                    reasoning_tok = output.reasoning_tokens
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tok = max(cached_tok, output.cached_tokens)
                 if output.new_text:
                     completion_tok += 1
                 yield format_openai_chunk(
@@ -412,13 +421,18 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count
-                if hasattr(output, 'token_text') and output.token_text:
+                if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                    reasoning_tok = output.reasoning_tokens
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tok = max(cached_tok, output.cached_tokens)
+                token_text = getattr(output, 'token_text', '')
+                if token_text:
                     completion_tok += 1
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
-                    delta_content=output.new_text,
-                    finish_reason=output.finish_reason,
+                    delta_content=token_text,
+                    finish_reason=getattr(output, 'finish_reason', None),
                 )
 
         if include_usage:
@@ -427,6 +441,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 model=req.model,
                 prompt_tokens=prompt_tok,
                 completion_tokens=completion_tok,
+                reasoning_tokens=reasoning_tok,
+                cached_tokens=cached_tok,
             )
         yield format_openai_done()
 
