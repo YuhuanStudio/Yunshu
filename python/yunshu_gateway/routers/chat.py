@@ -497,6 +497,7 @@ async def _build_multi_choice(
     prompt_tok = 0
     completion_tok = 0
     reasoning_tok = 0
+    cached_tok = 0
     choices = []
 
     async def _gen_one(idx: int):
@@ -579,7 +580,8 @@ async def _build_multi_choice(
 
         _record_metrics(pt, ct)
         _rt = getattr(result, 'reasoning_tokens', 0) if is_batched else 0
-        return idx, pt, ct, _rt, {"index": idx, "message": message, "finish_reason": fr}
+        _ct_cached = getattr(result, 'cached_tokens', 0) if is_batched else 0
+        return idx, pt, ct, _rt, _ct_cached, {"index": idx, "message": message, "finish_reason": fr}
 
     results = await asyncio.gather(
         *[_gen_one(i) for i in range(req.n)], return_exceptions=True,
@@ -592,11 +594,12 @@ async def _build_multi_choice(
             errors.append((idx, r))
             logger.error(f"choice {idx} failed: {r}", exc_info=r)
             continue
-        idx, pt, ct, _rt, choice = r
+        idx, pt, ct, _rt, _ct_cached, choice = r
         choices.append(choice)
         prompt_tok = pt
         completion_tok += ct
         reasoning_tok += _rt
+        cached_tok = max(cached_tok, _ct_cached)
 
     if not choices and errors:
         exc = errors[0][1]
@@ -617,6 +620,8 @@ async def _build_multi_choice(
     }
     if reasoning_tok > 0:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+    if cached_tok > 0:
+        usage["prompt_tokens_details"] = {"cached_tokens": cached_tok}
 
     return JSONResponse({
         "id": completion_id,

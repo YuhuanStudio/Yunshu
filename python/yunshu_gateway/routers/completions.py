@@ -212,7 +212,8 @@ async def create_completion(req: CompletionRequest, request: Request):
 
             if req.echo:
                 text = prompt + text
-            return idx, pt, ct, fr, rt, lp, text
+            _cached = getattr(result, 'cached_tokens', 0)
+            return idx, pt, ct, fr, rt, lp, text, _cached
 
         n = max(req.n, 1)
         if n == 1:
@@ -225,10 +226,11 @@ async def create_completion(req: CompletionRequest, request: Request):
         prompt_tokens = results[0][1]
         total_completion_tokens = sum(r[2] for r in results)
         total_reasoning_tokens = sum(r[4] for r in results)
+        max_cached_tokens = max(r[7] for r in results)
         max_finish_reason = results[0][3]
 
         choices = []
-        for idx, pt, ct, fr, rt, lp, text in results:
+        for idx, pt, ct, fr, rt, lp, text, _cached in results:
             choices.append({
                 "index": idx,
                 "text": text,
@@ -253,6 +255,8 @@ async def create_completion(req: CompletionRequest, request: Request):
         }
         if total_reasoning_tokens:
             usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tokens}
+        if max_cached_tokens > 0:
+            usage["prompt_tokens_details"] = {"cached_tokens": max_cached_tokens}
 
         return JSONResponse({
             "id": completion_id,

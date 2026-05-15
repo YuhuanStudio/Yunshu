@@ -1148,7 +1148,7 @@ class EngineCore:
                         queue_depth=queue_depth,
                         memory_available=_mem_avail,
                         slo_latency_ms=200.0,  # default SLO target
-                        current_latency_ms=(_time.monotonic() - _step_start) * 1000 if '_step_start' in dir() else 0.0,
+                        current_latency_ms=(_time.monotonic() - _step_start) * 1000,
                     )
                     if suggested < self.config.completion_batch_size:
                         self.config.completion_batch_size = suggested
