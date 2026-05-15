@@ -424,6 +424,17 @@ class EngineCore:
             if self._isolation_enabled:
                 logger.info("Process isolation enabled (YUNSHU_PROCESS_ISOLATION=1)")
 
+        # Inference checkpoint/restore (opt-in via YUNSHU_AUTO_CHECKPOINT)
+        self._checkpoint_mgr = None
+        _cp_interval = int(os.environ.get("YUNSHU_CHECKPOINT_INTERVAL", "0"))
+        if _cp_interval > 0:
+            from .checkpoint import InferenceCheckpoint, AutoCheckpointPolicy
+            self._checkpoint_mgr = InferenceCheckpoint(
+                auto_checkpoint_interval=_cp_interval,
+                auto_checkpoint_policy=AutoCheckpointPolicy.EVERY_N_TOKENS,
+            )
+            logger.info(f"Auto-checkpoint enabled: every {_cp_interval} tokens")
+
         # Output parser (model-specific output extraction)
         from .output_parser import parse_output
         self._parse_output = parse_output
@@ -1035,6 +1046,29 @@ class EngineCore:
                         # Budget consumption
                         self._budget_manager.consume(rid, tokens=1)
 
+                # Auto-checkpoint: save inference state periodically for crash recovery
+                if self._checkpoint_mgr is not None:
+                    try:
+                        for req_output in scheduler_output.outputs:
+                            if not req_output.finished and req_output.completion_tokens > 0:
+                                if self._checkpoint_mgr.should_auto_checkpoint(
+                                    req_output.request_id,
+                                    req_output.completion_tokens,
+                                ):
+                                    from .checkpoint import InferenceState
+                                    self._checkpoint_mgr.save(
+                                        req_output.request_id,
+                                        InferenceState(
+                                            request_id=req_output.request_id,
+                                            position=req_output.prompt_tokens + req_output.completion_tokens,
+                                            generated_tokens=[],
+                                            output_text=getattr(req_output, 'output_text', ''),
+                                            model_name=getattr(self.scheduler, 'model_id', ''),
+                                        ),
+                                    )
+                    except Exception:
+                        logger.debug("auto-checkpoint failed", exc_info=True)
+
                 # ── Wave 42: Profiler + auto-tuner + fairness ──
                 try:
                     batch_size = len(scheduler_output.outputs)
@@ -1167,6 +1201,8 @@ class EngineCore:
             content_hash = self._dedup_hashes.pop(request_id, None)
             if content_hash:
                 self._request_dedup.complete(content_hash)
+        if self._checkpoint_mgr is not None:
+            self._checkpoint_mgr.delete(request_id)
         self.scheduler.remove_finished_request(request_id)
 
     def _get_max_seq_len(self) -> int:
@@ -1265,6 +1301,8 @@ class EngineCore:
         stats["memory_aware_scheduler"] = self._memory_aware_scheduler.get_stats().__dict__
         stats["context_window"] = self._context_window_mgr.get_stats()
         stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
+        if self._checkpoint_mgr is not None:
+            stats["checkpoint"] = self._checkpoint_mgr.get_stats()
         stats["kv_migration"] = self._kv_migration.get_stats()
         stats["hybrid_kv"] = self._hybrid_kv.get_stats()
         stats["batch_sampler"] = self._batch_sampler.get_stats()
