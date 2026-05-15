@@ -393,6 +393,16 @@ class EngineCore:
         from .kv_prefix_compression import KVPrefixCompressor, SlidingWindowKVManager
         self._kv_compressor = KVPrefixCompressor()
         self._sliding_window_mgr: SlidingWindowKVManager | None = None
+        # Auto-detect sliding window from model config
+        try:
+            model_cfg = getattr(model, 'config', model) if model else None
+            if model_cfg is not None:
+                sw = getattr(model_cfg, 'sliding_window', None)
+                if sw is not None and sw > 0:
+                    self._sliding_window_mgr = SlidingWindowKVManager(window_size=sw)
+                    logger.info(f"SlidingWindowKVManager enabled: window={sw}")
+        except Exception:
+            logger.debug("sliding window detection skipped", exc_info=True)
 
         # KV migration manager (multi-tier migration with temperature tracking)
         from .kv_migration import KVMigrationManager
@@ -725,6 +735,13 @@ class EngineCore:
         except Exception:
             logger.debug("kv_lifecycle admit failed", exc_info=True)
 
+        # Sliding window KV registration for windowed attention models
+        if self._sliding_window_mgr is not None:
+            try:
+                self._sliding_window_mgr.register_request(req_id)
+            except Exception:
+                logger.debug("sliding window registration failed", exc_info=True)
+
         # ── Wave 43: Memory-aware admission control ──
         try:
             estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
@@ -1045,6 +1062,12 @@ class EngineCore:
                             self._lifecycle_orchestrator.on_decode_start(rid)
                         # Budget consumption
                         self._budget_manager.consume(rid, tokens=1)
+                        # Sliding window tracking
+                        if self._sliding_window_mgr is not None:
+                            try:
+                                self._sliding_window_mgr.on_new_token(rid)
+                            except Exception:
+                                logger.debug("sliding window tracking failed", exc_info=True)
 
                 # Auto-checkpoint: save inference state periodically for crash recovery
                 if self._checkpoint_mgr is not None:
@@ -1203,6 +1226,11 @@ class EngineCore:
                 self._request_dedup.complete(content_hash)
         if self._checkpoint_mgr is not None:
             self._checkpoint_mgr.delete(request_id)
+        if self._sliding_window_mgr is not None:
+            try:
+                self._sliding_window_mgr.remove_request(request_id)
+            except Exception:
+                logger.debug("sliding window cleanup failed", exc_info=True)
         self.scheduler.remove_finished_request(request_id)
 
     def _get_max_seq_len(self) -> int:
@@ -1303,6 +1331,8 @@ class EngineCore:
         stats["kv_prefix_compression"] = self._kv_compressor.get_stats()
         if self._checkpoint_mgr is not None:
             stats["checkpoint"] = self._checkpoint_mgr.get_stats()
+        if self._sliding_window_mgr is not None:
+            stats["sliding_window"] = self._sliding_window_mgr.get_stats()
         stats["kv_migration"] = self._kv_migration.get_stats()
         stats["hybrid_kv"] = self._hybrid_kv.get_stats()
         stats["batch_sampler"] = self._batch_sampler.get_stats()
