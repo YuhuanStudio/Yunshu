@@ -1129,6 +1129,29 @@ class EngineCore:
         self._output_collectors.pop(request_id, None)
         self._stream_states.pop(request_id, None)
         self._finished_events.pop(request_id, None)
+        self._request_timestamps.pop(request_id, None)
+        # Release LoRA adapter if any
+        lora_id = self._request_lora_adapters.pop(request_id, None)
+        if lora_id:
+            try:
+                from .lora_manager import get_lora_manager
+                lora_mgr = get_lora_manager()
+                if lora_mgr is not None:
+                    lora_mgr.unload_adapter(lora_id)
+            except Exception:
+                logger.debug("LoRA cleanup failed", exc_info=True)
+        # Lifecycle + budget + dedup cleanup
+        self._lifecycle_orchestrator.on_request_finished(request_id)
+        self._budget_manager.remove(request_id)
+        self._memory_aware_scheduler.release_memory(request_id)
+        try:
+            self._kv_lifecycle.release(hash(request_id) % (10**9))
+        except Exception:
+            logger.debug("kv_lifecycle release failed", exc_info=True)
+        if self._request_dedup is not None:
+            content_hash = self._dedup_hashes.pop(request_id, None)
+            if content_hash:
+                self._request_dedup.complete(content_hash)
         self.scheduler.remove_finished_request(request_id)
 
     def _get_max_seq_len(self) -> int:
