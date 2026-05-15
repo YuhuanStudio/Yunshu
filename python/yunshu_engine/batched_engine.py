@@ -2883,6 +2883,10 @@ class BatchedEngine:
         current_ids = input_array
         prompt_tokens = len(input_ids)
 
+        # Incremental detokenizer for correct multi-byte UTF-8
+        detokenizer = self._tokenizer.detokenizer
+        detokenizer.reset()
+
         # Prefill both models
         def _prefill():
             self._spec_decoder.target(input_array, cache=target_cache)
@@ -2910,12 +2914,13 @@ class BatchedEngine:
             hit_eos = False
             for token_id in new_tokens:
                 generated_tokens.append(token_id)
+                detokenizer.add_token(token_id)
                 if token_id in eos_ids:
                     hit_eos = True
                     break
 
-            # Yield accepted text
-            chunk_text = _clean_special_tokens(self._tokenizer.decode(new_tokens))
+            # Yield accepted text via incremental detokenizer
+            chunk_text = _clean_special_tokens(detokenizer.last_segment)
             finish_reason = None
             if hit_eos:
                 finish_reason = "stop"
@@ -2936,7 +2941,7 @@ class BatchedEngine:
                     })
 
             yield GenerationOutput(
-                text=_clean_special_tokens(self._tokenizer.decode(generated_tokens)),
+                text=_clean_special_tokens(detokenizer.text),
                 new_text=chunk_text,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=len(generated_tokens),
@@ -2948,6 +2953,7 @@ class BatchedEngine:
             )
 
             if finish_reason is not None:
+                detokenizer.finalize()
                 break
 
             # Feed accepted tokens back
