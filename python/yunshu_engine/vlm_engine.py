@@ -327,6 +327,26 @@ class VLMEngine:
         self._tokenizer = None
         self._processor = None
         self._running = False
+
+        # Clear per-model caches — stale entries from the old model would waste
+        # memory and could return incorrect features if model_name happened to
+        # collide.  The VisionFeatureCache itself is kept alive (its background
+        # writer thread is daemon and shared), but in-memory entries are evicted.
+        if self._vision_cache is not None:
+            with self._vision_cache._memory_lock:
+                self._vision_cache._memory_cache.clear()
+        self._vlm_vision_cache_adapter = None
+        self._kv_prefix_states.clear()
+        self._multimodal_prefix_cache.clear()
+
+        # Reset stats counters
+        self._vlm_vision_hits = 0
+        self._vlm_vision_misses = 0
+        self._vlm_kv_prefix_hits = 0
+        self._vlm_kv_prefix_misses = 0
+        self._mm_prefix_hits = 0
+        self._mm_prefix_misses = 0
+
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache

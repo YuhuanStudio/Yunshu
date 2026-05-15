@@ -521,11 +521,33 @@ async def _build_multi_choice(
         _record_metrics(pt, ct)
         return idx, pt, ct, {"index": idx, "message": message, "finish_reason": fr}
 
-    results = await asyncio.gather(*[_gen_one(i) for i in range(req.n)])
-    for idx, pt, ct, choice in results:
+    results = await asyncio.gather(
+        *[_gen_one(i) for i in range(req.n)], return_exceptions=True,
+    )
+
+    errors = []
+    for r in results:
+        if isinstance(r, BaseException):
+            idx = results.index(r)
+            errors.append((idx, r))
+            logger.error(f"choice {idx} failed: {r}", exc_info=r)
+            continue
+        idx, pt, ct, choice = r
         choices.append(choice)
         prompt_tok = pt
         completion_tok += ct
+
+    if not choices and errors:
+        exc = errors[0][1]
+        if isinstance(exc, MemoryError):
+            return JSONResponse(
+                status_code=507,
+                content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
+            )
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(exc), "type": type(exc).__name__}},
+        )
 
     return JSONResponse({
         "id": completion_id,
@@ -677,64 +699,76 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     engine, req, messages, completion_id, is_batched, json_schema,
                 )
 
-            if is_batched:
-                result = await engine.chat(
-                    messages=messages,
-                    max_tokens=req.max_tokens,
-                    temperature=req.temperature,
-                    top_p=req.top_p,
-                    top_k=req.top_k,
-                    min_p=req.min_p,
-                    repetition_penalty=req.repetition_penalty,
-                    frequency_penalty=req.frequency_penalty,
-                    presence_penalty=req.presence_penalty,
-                    logit_bias=req.logit_bias,
-                    stop=req.stop,
-                    seed=req.seed,
-                    enable_thinking=req.enable_thinking,
-                    json_schema=json_schema,
-                    logprobs=req.logprobs,
-                    spec_decode=req.spec_decode,
-                    thinking_budget=req.thinking_budget,
-                    stop_token_ids=req.stop_token_ids,
-                    reasoning_effort=req.reasoning_effort,
-                    xtc_probability=req.xtc_probability,
-                    xtc_threshold=req.xtc_threshold,
+            try:
+                if is_batched:
+                    result = await engine.chat(
+                        messages=messages,
+                        max_tokens=req.max_tokens,
+                        temperature=req.temperature,
+                        top_p=req.top_p,
+                        top_k=req.top_k,
+                        min_p=req.min_p,
+                        repetition_penalty=req.repetition_penalty,
+                        frequency_penalty=req.frequency_penalty,
+                        presence_penalty=req.presence_penalty,
+                        logit_bias=req.logit_bias,
+                        stop=req.stop,
+                        seed=req.seed,
+                        enable_thinking=req.enable_thinking,
+                        json_schema=json_schema,
+                        logprobs=req.logprobs,
+                        spec_decode=req.spec_decode,
+                        thinking_budget=req.thinking_budget,
+                        stop_token_ids=req.stop_token_ids,
+                        reasoning_effort=req.reasoning_effort,
+                        xtc_probability=req.xtc_probability,
+                        xtc_threshold=req.xtc_threshold,
+                    )
+                    raw_text = result.text
+                    prompt_tok = result.prompt_tokens
+                    completion_tok = result.completion_tokens
+                    finish = result.finish_reason or "stop"
+                    logprobs_data = _format_logprobs(
+                        getattr(result, 'logprobs', None),
+                        getattr(engine, '_tokenizer', None),
+                        req.top_logprobs,
+                    )
+                else:
+                    state = await engine.generate(
+                        prompt=messages,
+                        max_tokens=req.max_tokens,
+                        temperature=req.temperature,
+                        top_p=req.top_p,
+                        top_k=req.top_k,
+                        min_p=req.min_p,
+                        repetition_penalty=req.repetition_penalty,
+                        frequency_penalty=req.frequency_penalty,
+                        presence_penalty=req.presence_penalty,
+                        logit_bias=req.logit_bias,
+                        stop=req.stop,
+                        seed=req.seed,
+                        enable_thinking=req.enable_thinking,
+                        stop_token_ids=req.stop_token_ids,
+                    )
+                    raw_text = state.generated_text
+                    prompt_tok = state.prompt_token_count
+                    completion_tok = state.completion_token_count
+                    finish = state.finish_reason or "stop"
+                    logprobs_data = _format_logprobs(
+                        getattr(state, 'logprobs', None),
+                        getattr(engine, '_tokenizer', None),
+                        req.top_logprobs,
+                    )
+            except MemoryError:
+                return JSONResponse(
+                    status_code=507,
+                    content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
                 )
-                raw_text = result.text
-                prompt_tok = result.prompt_tokens
-                completion_tok = result.completion_tokens
-                finish = result.finish_reason or "stop"
-                logprobs_data = _format_logprobs(
-                    getattr(result, 'logprobs', None),
-                    getattr(engine, '_tokenizer', None),
-                    req.top_logprobs,
-                )
-            else:
-                state = await engine.generate(
-                    prompt=messages,
-                    max_tokens=req.max_tokens,
-                    temperature=req.temperature,
-                    top_p=req.top_p,
-                    top_k=req.top_k,
-                    min_p=req.min_p,
-                    repetition_penalty=req.repetition_penalty,
-                    frequency_penalty=req.frequency_penalty,
-                    presence_penalty=req.presence_penalty,
-                    logit_bias=req.logit_bias,
-                    stop=req.stop,
-                    seed=req.seed,
-                    enable_thinking=req.enable_thinking,
-                    stop_token_ids=req.stop_token_ids,
-                )
-                raw_text = state.generated_text
-                prompt_tok = state.prompt_token_count
-                completion_tok = state.completion_token_count
-                finish = state.finish_reason or "stop"
-                logprobs_data = _format_logprobs(
-                    getattr(state, 'logprobs', None),
-                    getattr(engine, '_tokenizer', None),
-                    req.top_logprobs,
+            except Exception as e:
+                logger.error("engine inference failed", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": {"message": str(e), "type": type(e).__name__}},
                 )
 
             # Extract thinking (oMLX pattern)
@@ -869,7 +903,19 @@ async def _handle_vlm_chat(
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
-    result = await vlm_engine.generate(**gen_kwargs)
+    try:
+        result = await vlm_engine.generate(**gen_kwargs)
+    except MemoryError:
+        return JSONResponse(
+            status_code=507,
+            content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
+        )
+    except Exception as e:
+        logger.error("VLM engine inference failed", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": str(e), "type": type(e).__name__}},
+        )
 
     content = result.get("text", "")
     tok = getattr(vlm_engine, '_tokenizer', None)

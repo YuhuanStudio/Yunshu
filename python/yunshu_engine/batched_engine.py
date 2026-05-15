@@ -3174,7 +3174,15 @@ class BatchedEngine:
                 kwargs = {"tokenize": False, "add_generation_prompt": True}
                 if thinking is not None:
                     kwargs["enable_thinking"] = thinking
-                text = tokenizer.apply_chat_template(clean, **kwargs)
+                try:
+                    text = tokenizer.apply_chat_template(clean, **kwargs)
+                except TypeError as e:
+                    if 'enable_thinking' in str(e):
+                        logger.warning(f"Model {self.model_name} doesn't support enable_thinking, retrying without")
+                        kwargs.pop('enable_thinking', None)
+                        text = tokenizer.apply_chat_template(clean, **kwargs)
+                    else:
+                        raise
                 if text:
                     return text
             except Exception:

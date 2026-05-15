@@ -408,6 +408,7 @@ class EngineCore:
         # Stats
         self._num_requests_processed: int = 0
         self._request_timestamps: dict[str, float] = {}  # req_id → monotonic start time
+        self._request_lora_adapters: dict[str, str] = {}  # req_id → lora_adapter_id
 
     def set_prefix_cache(self, cache: Any) -> None:
         """Set KV prefix cache for batch-path insert_segments (C16)."""
@@ -569,6 +570,7 @@ class EngineCore:
         thinking_budget: int | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        lora_adapter: str | None = None,
         **kwargs,
     ) -> str:
         """Add a generation request. Returns request_id for streaming/abort.
@@ -579,6 +581,18 @@ class EngineCore:
         from .request import Request, SamplingParams
 
         req_id = request_id or f"req-{uuid.uuid4().hex[:8]}"
+
+        # Apply per-request LoRA adapter (load before generation, unload after)
+        loaded_lora = None
+        if lora_adapter:
+            try:
+                from .lora_manager import get_lora_manager
+                lora_mgr = get_lora_manager()
+                if lora_mgr is not None:
+                    loaded_lora = lora_mgr.load_adapter(lora_adapter)
+                    logger.debug(f"LoRA adapter '{lora_adapter}' loaded for request {req_id}")
+            except Exception:
+                logger.debug(f"LoRA adapter load failed: {lora_adapter}", exc_info=True)
 
         # Encode prompt
         if isinstance(prompt, str):
@@ -740,6 +754,8 @@ class EngineCore:
         )
         self._finished_events[req_id] = asyncio.Event()
         self._request_timestamps[req_id] = time.monotonic()
+        if loaded_lora and lora_adapter:
+            self._request_lora_adapters[req_id] = lora_adapter
 
         # Add to scheduler on MLX executor (thread-safe)
         loop = asyncio.get_running_loop()
@@ -943,6 +959,16 @@ class EngineCore:
                     self._signal_finished(rid)
                     self._num_requests_processed += 1
                     self._request_timestamps.pop(rid, None)
+                    # Release per-request LoRA adapter
+                    lora_id = self._request_lora_adapters.pop(rid, None)
+                    if lora_id:
+                        try:
+                            from .lora_manager import get_lora_manager
+                            lora_mgr = get_lora_manager()
+                            if lora_mgr is not None:
+                                lora_mgr.unload_adapter(lora_id)
+                        except Exception:
+                            logger.debug(f"LoRA adapter unload failed: {lora_id}", exc_info=True)
                     # ── Wave 42: Lifecycle + budget + dedup cleanup ──
                     self._lifecycle_orchestrator.on_request_finished(rid)
                     self._budget_manager.remove(rid)
@@ -1098,7 +1124,15 @@ class EngineCore:
                 }
                 if enable_thinking is not None:
                     kwargs["enable_thinking"] = enable_thinking
-                text = self._tokenizer.apply_chat_template(clean, **kwargs)
+                try:
+                    text = self._tokenizer.apply_chat_template(clean, **kwargs)
+                except TypeError as e:
+                    if 'enable_thinking' in str(e):
+                        logger.warning("Model doesn't support enable_thinking, retrying without")
+                        kwargs.pop('enable_thinking', None)
+                        text = self._tokenizer.apply_chat_template(clean, **kwargs)
+                    else:
+                        raise
                 if text:
                     return text
             except Exception:
