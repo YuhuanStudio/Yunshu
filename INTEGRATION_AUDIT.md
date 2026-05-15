@@ -35,7 +35,17 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6032 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6015 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-15 Wave 95 — Inflight Prefix Sharing + Zero Silent Excepts + Dead Code)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 95: Inflight prefix sharing (SGLang) | InflightPrefixTracker: 並行請求 KV 塊共享 — 新請求可匹配正在進行的 prefill 部分前綴，避免重複 prefill。接入 _generate_fast + _stream_generate_fast。20 tests。 | SGLang cache_unfinished_req 模式實現 |
+| Wave 95b: 模型預處理器串流路徑 | ModelPreprocessorRegistry 接入 _stream_generate_fast()（原本只在非串流路徑） | 串流路徑模型特定預處理完整 |
+| Wave 95c: 零 truly silent except | 44 處 `except Exception:` (無 logger) 全部添加 `logger.debug("...", exc_info=True)` — 覆蓋 18 文件 (engine: 14, gateway: 5, mesh: 1) | 全項目可調試性 |
+| Wave 95: 死代碼清理 | batched_engine.py: 移除未用 json import, 移除重複 model= 賦值, 修復 _remaining/_matched/_context_ids 未用變量, 移除 _mx 死 import, 修復 logits/tokens/callback 未用參數 | Pylance 警告大幅減少 |
+| Wave 95: 監控端點 | /gw/monitoring/inflight-prefix-sharing — 追蹤並行 KV 前綴共享統計 (hits/misses/active) | 運維觀測 |
 
 ### 已完成修復 (2026-05-15 Wave 89-92 — Agent Wiring + Scoping Bugs + Parameter Forwarding)
 
