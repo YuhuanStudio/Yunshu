@@ -559,6 +559,7 @@ async def _stream_anthropic(
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     input_tokens = 0
     output_tokens = 0
+    cached_tokens = 0
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
@@ -569,6 +570,11 @@ async def _stream_anthropic(
     tool_use_block_started = False
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
+
+    # Register with request tracker for cancellation support
+    from yunshu_engine.request_tracker import get_request_tracker
+    _anth_tracker = get_request_tracker()
+    _anth_gen = _anth_tracker.register(message_id, req.model)
 
     # message_start event
     msg_start = {
@@ -591,7 +597,7 @@ async def _stream_anthropic(
         thinking_block_started = True
 
     async def _token_source():
-        nonlocal input_tokens, output_tokens, block_index
+        nonlocal input_tokens, output_tokens, block_index, cached_tokens
         nonlocal thinking_block_started, text_block_started, tool_use_block_started
         nonlocal accumulated_text, matched_stop
 
@@ -621,6 +627,7 @@ async def _stream_anthropic(
                 logprobs=getattr(req, 'logprobs', False),
                 top_logprobs=getattr(req, 'top_logprobs', None),
                 logits_processors=getattr(req, 'logits_processors', None),
+                cancel_event=_anth_gen.cancel_event,
             ):
                 parsed = parser.process_chunk(output.new_text)
 
@@ -682,6 +689,8 @@ async def _stream_anthropic(
 
                 if output.prompt_tokens and not input_tokens:
                     input_tokens = output.prompt_tokens
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tokens = max(cached_tokens, output.cached_tokens)
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
@@ -711,6 +720,8 @@ async def _stream_anthropic(
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:
                     input_tokens = output.prompt_token_count
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tokens = max(cached_tokens, output.cached_tokens)
                 parsed = parser.process_chunk(output.token_text)
 
                 # Thinking content (legacy engine path)
@@ -788,12 +799,14 @@ async def _stream_anthropic(
         async for event in with_sse_keepalive(
             _token_source(),
             http_request=request,
+            cancel_event=_anth_gen.cancel_event,
         ):
             yield event.encode("utf-8") if isinstance(event, str) else event
 
         yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
+        _anth_tracker.unregister(message_id)
 
     _record_metrics(input_tokens, output_tokens)
 
