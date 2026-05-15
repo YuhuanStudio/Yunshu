@@ -229,6 +229,7 @@ class ChatCompletionRequest(BaseModel):
     xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     grammar: Optional[dict] = None  # {"type": "json", "schema": {...}} or {"type": "regex", "pattern": "..."}
     lora_adapter: Optional[str] = None  # LoRA adapter ID to apply for this request
+    logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -528,6 +529,7 @@ async def _build_multi_choice(
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -558,6 +560,7 @@ async def _build_multi_choice(
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -802,6 +805,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         xtc_probability=req.xtc_probability,
                         xtc_threshold=req.xtc_threshold,
                         priority=req.priority,
+                        logits_processors=req.logits_processors,
                     )
                     raw_text = result.text
                     prompt_tok = result.prompt_tokens
@@ -839,6 +843,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         logprobs=req.logprobs,
                         top_logprobs=req.top_logprobs,
                         priority=req.priority,
+                        logits_processors=req.logits_processors,
                     )
                     raw_text = state.generated_text
                     prompt_tok = state.prompt_token_count
@@ -1285,6 +1290,7 @@ async def _stream_response_multi(
                     priority=req.priority,
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
+                    logits_processors=req.logits_processors,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1338,6 +1344,7 @@ async def _stream_response_multi(
                     priority=req.priority,
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
+                    logits_processors=req.logits_processors,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1553,6 +1560,7 @@ async def _stream_response(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 spec_decode=req.spec_decode,
+                logits_processors=req.logits_processors,
             ):
                 token_text = output.new_text
                 if output.finish_reason is not None:
@@ -1633,6 +1641,7 @@ async def _stream_response(
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:

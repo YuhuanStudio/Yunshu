@@ -269,7 +269,9 @@ class EngineCore:
         )
         self._prefill_server: ExternalPrefillServer | None = None
         self._prefill_client: ExternalPrefillClient | None = None
+        self._prefill_role: str | None = None
         prefill_role = get_prefill_role()
+        self._prefill_role = prefill_role
         if prefill_role == "server":
             prefill_config = ExternalPrefillConfig.from_env()
             self._prefill_server = ExternalPrefillServer(
@@ -280,6 +282,23 @@ class EngineCore:
             prefill_config = ExternalPrefillConfig.from_env()
             self._prefill_client = ExternalPrefillClient(prefill_config)
             logger.info("ExternalPrefillClient configured (remote prefill)")
+
+        # KV transfer server (receives KV blocks on decode nodes, §12.2)
+        self._kv_transfer_server: Any | None = None
+        try:
+            from .kv_transfer import KVTransferServer, KVTransferConfig, is_kv_transfer_enabled
+            if is_kv_transfer_enabled():
+                kv_xfer_config = KVTransferConfig.from_env()
+                self._kv_transfer_server = KVTransferServer(
+                    kv_xfer_config,
+                    kv_cache_manager=self._kv_manager,
+                )
+                logger.info(
+                    "KVTransferServer configured on port %d",
+                    kv_xfer_config.listen_port,
+                )
+        except Exception:
+            logger.debug("KV transfer server setup skipped", exc_info=True)
 
         # ── Wave 42: 實現-整合 wiring ──
 
@@ -660,6 +679,14 @@ class EngineCore:
             )
             logger.info("ExternalPrefillServer started")
 
+        # Start KV transfer server if configured (decode node receives KV blocks)
+        if self._kv_transfer_server is not None:
+            try:
+                await self._kv_transfer_server.start()
+                logger.info("KVTransferServer started")
+            except Exception:
+                logger.debug("KV transfer server start failed", exc_info=True)
+
         logger.info("EngineCore started")
 
         # Checkpoint recovery: restore in-flight requests from previous crash
@@ -765,6 +792,13 @@ class EngineCore:
                 await self._prefill_server.stop()
             except Exception:
                 logger.debug("prefill server stop failed", exc_info=True)
+
+        # Stop KV transfer server
+        if self._kv_transfer_server is not None:
+            try:
+                await self._kv_transfer_server.stop()
+            except Exception:
+                logger.debug("kv transfer server stop failed", exc_info=True)
 
         # Signal all active collectors with sentinel
         for collector in self._output_collectors.values():
@@ -1867,6 +1901,9 @@ class EngineCore:
             stats["external_prefill_server"] = self._prefill_server.get_stats()
         if self._prefill_client is not None:
             stats["external_prefill_client"] = self._prefill_client.get_stats()
+        # §12.2: KV transfer server stats (decode node)
+        if self._kv_transfer_server is not None:
+            stats["kv_transfer_server"] = self._kv_transfer_server.get_stats()
         # ── Wave 42: Wired module stats ──
         stats["lifecycle"] = self._lifecycle_orchestrator.get_stats()
         stats["budget"] = self._budget_manager.get_stats()

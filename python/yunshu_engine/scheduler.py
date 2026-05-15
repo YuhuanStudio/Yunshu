@@ -470,6 +470,9 @@ class SchedulerConfig:
     batch_spec_prefill_keep_rate: float = 0.20  # Fraction of tokens to keep
     # Spec-aware batch scheduling
     spec_overhead_per_request: float = 0.1  # Slot overhead per spec-active request
+    # SCHED-3: Starvation prevention aging
+    aging_weight: float = 0.1  # Age bonus per second in waiting queue (higher = less starvation)
+    aging_enabled: bool = True  # Enable/disable aging in scheduling
 
 
 class _LogitsProcessorSampler:
@@ -1052,6 +1055,22 @@ class Scheduler:
             to_insert.append(req)
 
         # No need to sort — the heap maintains order (FCFS or PRIORITY)
+
+        # SCHED-3: Apply aging to prevent starvation of low-priority requests.
+        # Requests that have waited a long time get an age bonus that boosts
+        # their effective priority, eventually overtaking newer high-priority requests.
+        # The age bonus is: age_seconds * aging_weight, added to the request's
+        # original priority for scheduling purposes.
+        if self.config.aging_enabled and len(to_insert) > 1:
+            aging_weight = self.config.aging_weight
+            _aged_insert = []
+            for _req in to_insert:
+                _submit = getattr(_req, '_submit_time', now)
+                _age = max(0.0, now - _submit)
+                _effective_priority = _req.sampling_params.priority + _age * aging_weight
+                _aged_insert.append((_effective_priority, _req))
+            _aged_insert.sort(key=lambda x: -x[0])  # Higher effective priority first
+            to_insert = [_req for _, _req in _aged_insert]
 
         # Cache-locality reordering: sort to_insert by KV prefix hash so
         # requests sharing the same system prompt / conversation prefix are
@@ -2206,6 +2225,13 @@ class Scheduler:
             frequency_penalty=sp.frequency_penalty if sp.frequency_penalty != 0.0 else None,
             logit_bias=getattr(sp, 'logit_bias', None),
         )
+
+        # SAMP-2: Append user-provided custom logits processors
+        custom_procs = getattr(sp, 'logits_processors', None)
+        if custom_procs:
+            if logits_processors is None:
+                logits_processors = []
+            logits_processors.extend(custom_procs)
 
         if logits_processors:
             # Wrap sampler to apply logits processors before sampling.

@@ -76,6 +76,9 @@ class SamplingParams:
     xtc_threshold: float = 0.0
     # Structured output (JSON schema constrained generation)
     json_schema: dict | str | None = None
+    # Custom user-provided logits processors (SAMP-2)
+    # Each processor is a callable(tokens: list[int], logits: mx.array) -> mx.array
+    logits_processors: list | None = None
 
 
 @dataclass

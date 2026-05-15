@@ -73,6 +73,31 @@ class GenerationOutput:
 _PROGRESSIVE_QUANT_INTERVAL = 256
 
 
+def _create_prompt_cache_with_quant(model, kv_quant_bits: int | None = None, kv_quant_group_size: int = 64):
+    """KV-5: Create a prompt cache with optional immediate KV quantization.
+
+    When kv_quant_bits is set (4 or 8), wraps each KV cache layer in a
+    QuantizedKVCache so quantization is applied from the first token rather
+    than only after progressive quantization kicks in. This provides maximum
+    memory savings for long-context generation.
+
+    When kv_quant_bits is None, falls back to standard make_prompt_cache.
+    """
+    from mlx_lm.models.cache import make_prompt_cache
+    cache = make_prompt_cache(model)
+
+    if kv_quant_bits is not None and kv_quant_bits < 16:
+        try:
+            from mlx_lm.models.cache import QuantizedKVCache
+            for i, c in enumerate(cache):
+                if hasattr(c, 'to_quantized'):
+                    cache[i] = c.to_quantized(group_size=kv_quant_group_size, bits=kv_quant_bits)
+        except (ImportError, Exception) as e:
+            logger.debug(f"QuantizedKVCache wrapping failed, using standard cache: {e}")
+
+    return cache
+
+
 def _maybe_quantize_kv_cache(
     prompt_cache: list,
     quantized_kv_start: int,
@@ -578,6 +603,9 @@ class BatchedEngine:
                 logger.warning(f"EngineCore auto-start failed ({e}), falling back to fast-path only")
                 self._engine_core = None
 
+        # KV-5: Apply auto-tuner KV quantization recommendation if available
+        self._apply_auto_tuner_kv_quant()
+
         # Initialize Metal kernel manager for custom GPU kernels
         # (paged attention, GEMV, KIVI 2-bit KV compression)
         # Enable via YUNSHU_METAL_KERNELS=1 env var.
@@ -771,6 +799,31 @@ class BatchedEngine:
 
     def get_settings(self):
         return self._settings
+
+    def _apply_auto_tuner_kv_quant(self) -> None:
+        """KV-5: Apply auto-tuner's kv_quantization_bits recommendation.
+
+        Checks the AutoTuner's current params for KV quantization recommendation
+        and updates the engine's _kv_quant_bits if the auto-tuner suggests
+        quantization that isn't already configured. This enables adaptive KV
+        quantization based on observed memory pressure.
+
+        Priority: env var > model settings > auto_tuner recommendation.
+        """
+        # Only apply if KV quantization isn't already explicitly configured
+        if self._kv_quant_bits is not None:
+            return  # Already configured via env var or model settings
+
+        # Check EngineCore's auto-tuner if available
+        if self._engine_core is not None:
+            auto_tuner = getattr(self._engine_core, '_auto_tuner', None)
+            if auto_tuner is not None:
+                recommended_bits = auto_tuner.params.kv_quantization_bits
+                if recommended_bits < 16:  # 16 means no quantization
+                    self._kv_quant_bits = recommended_bits
+                    logger.info(
+                        f"KV-5: Auto-tuner recommends {recommended_bits}-bit KV quantization"
+                    )
 
     def _init_lora(self):
         """Initialize LoRA adapter manager after model load."""
@@ -1043,6 +1096,7 @@ class BatchedEngine:
         xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
         priority: int = 0,
+        logits_processors: list | None = None,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -1200,6 +1254,7 @@ class BatchedEngine:
                 xtc_threshold=xtc_threshold,
                 json_schema=json_schema,
                 cancel_event=cancel_event,
+                logits_processors=logits_processors,
             )
             if _rc_hash is not None and result.finish_reason != "error":
                 try:
@@ -1310,6 +1365,7 @@ class BatchedEngine:
         xtc_threshold: float = 0.0,
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
+        logits_processors: list | None = None,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -1392,6 +1448,8 @@ class BatchedEngine:
             except Exception:
                 logger.warning("Grammar constraint setup failed, falling back to unconstrained", exc_info=True)
 
+        # SAMP-2: Save user-provided custom logits processors before building internal list
+        _custom_logits_processors = logits_processors or []
         logits_processors = []
         if repetition_penalty != 1.0:
             def _rep_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -1419,6 +1477,10 @@ class BatchedEngine:
                     logits[..., tid] += bias
                 return logits
             logits_processors.append(_logit_bias_proc)
+
+        # SAMP-2: Include user-provided custom logits processors
+        if _custom_logits_processors:
+            logits_processors.extend(_custom_logits_processors)
 
         def _run():
             import mlx.core as mx
@@ -1484,7 +1546,7 @@ class BatchedEngine:
             if self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             cached_kv, _, matched = prefix_cache.get(ids)
-            cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
+            cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             if cached_kv is not None:
                 cached_tokens = matched
                 ids_to_prefill = ids[matched:]
@@ -1602,7 +1664,7 @@ class BatchedEngine:
                 except Exception:
                     logger.warning("SpecPrefill failed, falling back to standard prefill", exc_info=True)
                     if not tokens:
-                        cache = make_prompt_cache(model)
+                        cache = _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
                         ids_to_prefill = ids
 
             if not spec_prefill_done:
@@ -1914,6 +1976,7 @@ class BatchedEngine:
         priority: int = 0,
         logprobs: bool | int = False,
         top_logprobs: int | None = None,
+        logits_processors: list | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -2023,6 +2086,7 @@ class BatchedEngine:
                     cancel_event=_cancel_event,
                     logprobs=bool(logprobs),
                     top_logprobs=top_logprobs,
+                    logits_processors=logits_processors,
                 ):
                     yield output
             finally:
@@ -2109,6 +2173,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        logits_processors: list | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
 
@@ -2188,6 +2253,7 @@ class BatchedEngine:
                 logger.warning("Grammar constraint setup failed in streaming", exc_info=True)
 
         # Build logits processors for penalty/bias params
+        _custom_logits_processors = logits_processors or []
         logits_processors = []
         if repetition_penalty != 1.0:
             def _repetition_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -2215,6 +2281,10 @@ class BatchedEngine:
                     logits[..., tid] += bias
                 return logits
             logits_processors.append(_logit_bias_proc)
+
+        # SAMP-2: Include user-provided custom logits processors
+        if _custom_logits_processors:
+            logits_processors.extend(_custom_logits_processors)
 
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.
@@ -2296,7 +2366,7 @@ class BatchedEngine:
             if self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             cached_kv, _, matched = prefix_cache.get(ids)
-            cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
+            cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
             _stream_cached_tokens = matched
             _cached_tokens_box[0] = _stream_cached_tokens
