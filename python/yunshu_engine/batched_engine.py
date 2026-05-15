@@ -3710,6 +3710,12 @@ class BatchedEngine:
         # Prompt cache stats (exact-match KV state reuse)
         if hasattr(self, '_prompt_cache') and self._prompt_cache is not None:
             stats["prompt_cache"] = self._prompt_cache.get_stats()
+        # Inflight prefix sharing stats (SGLang cache_unfinished_req pattern)
+        try:
+            from .inflight_prefix_sharing import get_inflight_tracker
+            stats["inflight_prefix_sharing"] = get_inflight_tracker().get_stats()
+        except Exception:
+            stats["inflight_prefix_sharing"] = {"enabled": False}
         return stats
 
     def get_kv_cache_stats(self) -> dict:
