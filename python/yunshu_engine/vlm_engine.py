@@ -221,6 +221,13 @@ class VLMEngine:
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
 
+        # Wave 61: MultimodalPipelineCoordinator — unified 7-stage pipeline
+        from .staged_pipeline import (
+            MultimodalPipelineCoordinator, PipelineStage, PipelineRequest,
+        )
+        self._pipeline = MultimodalPipelineCoordinator()
+        self._register_pipeline_processors()
+
         # Wave 43: Async concurrent VLM engine (opt-in via YUNSHU_VLM_ASYNC=1)
         self._async_core = None
         import yunshu_engine.vlm_async_engine as _vae  # ensure module is loaded
@@ -243,6 +250,46 @@ class VLMEngine:
     @property
     def has_vision(self) -> bool:
         return self._has_vision
+
+    def _register_pipeline_processors(self) -> None:
+        """Register VLM-specific processors into MultimodalPipelineCoordinator."""
+        from .staged_pipeline import PipelineStage
+
+        def _text_preprocess(inputs, config):
+            data = inputs.get("request") if isinstance(inputs, dict) else inputs
+            if data is None:
+                return inputs
+            messages = data.params.get("messages", [])
+            text = data.text
+            if not text and messages:
+                for msg in reversed(messages):
+                    content = msg.get("content", "")
+                    if isinstance(content, str) and content.strip():
+                        text = content
+                        break
+            return {"text": text, "messages": messages}
+
+        def _image_preprocess(inputs, config):
+            data = inputs.get("request") if isinstance(inputs, dict) else inputs
+            if data is None or not data.images:
+                return None
+            return {"image_paths": data.images}
+
+        def _audio_preprocess(inputs, config):
+            data = inputs.get("request") if isinstance(inputs, dict) else inputs
+            if data is None or not data.audio:
+                return None
+            return {"audio_paths": data.audio}
+
+        self._pipeline.register_processor(
+            PipelineStage.TEXT_PREPROCESS, "text", _text_preprocess,
+        )
+        self._pipeline.register_processor(
+            PipelineStage.IMAGE_PREPROCESS, "image", _image_preprocess,
+        )
+        self._pipeline.register_processor(
+            PipelineStage.AUDIO_PREPROCESS, "audio", _audio_preprocess,
+        )
 
     def load(self) -> None:
         """Load model and tokenizer with mlx-lm/mlx-vlm fallback.
@@ -387,6 +434,20 @@ class VLMEngine:
         image_paths.extend(video_frames)
         self._enable_thinking = enable_thinking
 
+        # Run through MultimodalPipelineCoordinator for preprocessing tracking
+        try:
+            from .staged_pipeline import PipelineRequest
+            pipe_req = PipelineRequest(
+                request_id=kwargs.get("request_id", ""),
+                model_id=self.model_name,
+                images=image_paths if image_paths else None,
+                audio=audio_paths if audio_paths else None,
+                params={"messages": messages},
+            )
+            self._pipeline.process(pipe_req)
+        except Exception:
+            logger.debug("pipeline tracking failed", exc_info=True)
+
         # Extract advanced parameters from kwargs
         stop_token_ids = kwargs.get('stop_token_ids') or []
         thinking_budget = kwargs.get('thinking_budget')
@@ -483,6 +544,22 @@ class VLMEngine:
             raise RuntimeError("Engine not started")
 
         self._enable_thinking = enable_thinking
+
+        # Pipeline tracking for streaming path
+        try:
+            image_paths_stream = await self._extract_images(messages)
+            audio_paths_stream = await self._extract_audio(messages)
+            from .staged_pipeline import PipelineRequest
+            pipe_req = PipelineRequest(
+                request_id=kwargs.get("request_id", ""),
+                model_id=self.model_name,
+                images=image_paths_stream if image_paths_stream else None,
+                audio=audio_paths_stream if audio_paths_stream else None,
+                params={"messages": messages},
+            )
+            self._pipeline.process(pipe_req)
+        except Exception:
+            logger.debug("pipeline tracking (stream) failed", exc_info=True)
 
         import uuid
         req_id = f"vlm-{uuid.uuid4().hex[:8]}"
@@ -1573,5 +1650,11 @@ class VLMEngine:
             stats["vision_cache_ssd_loads"] = vc_stats.get("ssd_loads", 0)
             stats["vision_cache_saves"] = vc_stats.get("saves", 0)
             stats["vision_cache_errors"] = vc_stats.get("errors", 0)
+
+        # Merge MultimodalPipelineCoordinator stats
+        try:
+            stats["pipeline"] = self._pipeline.get_stats()
+        except Exception:
+            pass
 
         return stats
