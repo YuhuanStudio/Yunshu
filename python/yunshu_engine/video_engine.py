@@ -176,12 +176,41 @@ class VideoEngine:
         return self._running
 
     def _detect_model_type(self) -> str:
-        """Detect video model type from path."""
+        """Detect video model type from path and config."""
         path_lower = self._model_path.lower()
-        if "wan" in path_lower:
-            return "wan_2_2"
+
+        # Config-based detection (more reliable)
+        config_path = os.path.join(self._model_path, "config.json")
+        if os.path.isfile(config_path):
+            try:
+                cfg = json.loads(open(config_path).read())
+                model_type = cfg.get("model_type", "").lower()
+                if model_type:
+                    return model_type
+            except Exception:
+                logger.debug("video config read failed", exc_info=True)
+
+        # Path-based fallback
+        if "cogvideo" in path_lower:
+            return "cogvideox"
+        if "hunyuan" in path_lower:
+            return "hunyuan_video"
+        if "mochi" in path_lower:
+            return "mochi"
+        if "cogview" in path_lower:
+            return "cogview4"
+        if "sora" in path_lower:
+            return "open_sora"
+        if "pyramid" in path_lower:
+            return "pyramid_flow"
+        if "animate" in path_lower:
+            return "animatediff"
+        if "stable_video" in path_lower or "svd" in path_lower:
+            return "stable_video_diffusion"
         if "ltx" in path_lower:
             return "ltx_2"
+        if "wan" in path_lower:
+            return "wan_2_2"
         return "wan_2_2"  # Default to Wan
 
     def start(self) -> None:
@@ -417,6 +446,28 @@ class VideoEngine:
                     output_path=output_path,
                 )
             else:
+                # Dynamic model import: try mlx_video.models.{type}.generate
+                try:
+                    module_name = self._model_type
+                    module_path = f"mlx_video.models.{module_name}.generate"
+                    gen_module = __import__(module_path, fromlist=["generate_video"])
+                    gen_fn = getattr(gen_module, "generate_video")
+                    gen_fn(
+                        model_dir=model_dir,
+                        prompt=prompt,
+                        negative_prompt=negative_prompt,
+                        image=image_path,
+                        width=width,
+                        height=height,
+                        num_frames=num_frames,
+                        steps=steps,
+                        guide_scale=guide_scale,
+                        seed=seed,
+                        output_path=output_path,
+                    )
+                except (ImportError, AttributeError) as e:
+                    logger.error(f"Unsupported model type {self._model_type}: {e}")
+                    return None
                 logger.error(f"Unsupported model type: {self._model_type}")
                 return None
 
