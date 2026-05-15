@@ -510,39 +510,47 @@ class TestFinalizeRequestIdempotency:
         core._finished_events[req_id] = MagicMock()
         core._request_timestamps[req_id] = 12345.0
 
-        # First call — should clean up
+        # First call — _finalize_request cleans scheduler-side only
         core._finalize_request(req_id)
 
-        # Verify state is gone
+        # Consumer-side state remains (only _cleanup_request removes it)
+        assert req_id in core._output_collectors
+        assert req_id in core._stream_states
+        assert req_id in core._finished_events
+        assert req_id in core._request_timestamps
+
+        # _cleanup_request cleans everything
+        core._cleanup_request(req_id)
+
+        # Now verify all state is gone
         assert req_id not in core._output_collectors
         assert req_id not in core._stream_states
         assert req_id not in core._finished_events
         assert req_id not in core._request_timestamps
 
-        # Second call — should not raise
+        # Second _finalize_request — should not raise (idempotent)
         core._finalize_request(req_id)
 
         # State still empty
         assert req_id not in core._output_collectors
-        assert req_id not in core._stream_states
-        assert req_id not in core._finished_events
-        assert req_id not in core._request_timestamps
 
     def test_triple_finalize_state_clean(self):
-        """Calling _finalize_request three times leaves clean state."""
+        """Calling _cleanup_request leaves clean state and is idempotent."""
         core = self._make_engine_core()
         req_id = "test-req-triple"
 
         core._output_collectors[req_id] = MagicMock()
         core._request_timestamps[req_id] = 99.0
 
-        core._finalize_request(req_id)
-        core._finalize_request(req_id)
-        core._finalize_request(req_id)
+        core._cleanup_request(req_id)
 
         assert req_id not in core._output_collectors
         assert req_id not in core._request_timestamps
         assert len(core._output_collectors) == 0
+
+        # Subsequent calls are no-ops
+        core._cleanup_request(req_id)
+        core._cleanup_request(req_id)
 
 
 # ── 6. abort_request removes all state ──
@@ -725,10 +733,23 @@ class TestEngineLoopErrorDelivery:
                     error=f"Scheduler step error: {error}",
                 ))
                 coll.put(None)  # sentinel
+            core._signal_finished(rid)
             core._finalize_request(rid)
 
-        # Verify the collector received the error output before being cleaned up
-        # Since _finalize_request pops the collector, we verify it was removed
+        # _finalize_request only cleans scheduler-side state.
+        # Consumer-side state (collectors, events) remains for the consumer
+        # to drain via _cleanup_request.
+        # Verify the collector received the error output.
+        coll_after = core._output_collectors.get(req_id)
+        assert coll_after is not None
+        # The collector should have the error output buffered
+        output = coll_after.get_nowait()
+        assert output is not None
+        assert output.finished
+        assert output.finish_reason == "error"
+
+        # Full cleanup via _cleanup_request (consumer-side)
+        core._cleanup_request(req_id)
         assert req_id not in core._output_collectors
         assert req_id not in core._request_timestamps
         assert req_id not in core._finished_events
@@ -747,7 +768,8 @@ class TestEngineLoopErrorDelivery:
             coll = core._output_collectors.get(rid)
             # coll is None — no put attempted
             assert coll is None
+            core._signal_finished(rid)
             core._finalize_request(rid)
 
-        # Should not raise, and state is clean
-        assert req_id not in core._output_collectors
+        # Should not raise, and _finalize_request is idempotent
+        # Consumer-side state was never set up, so nothing to check

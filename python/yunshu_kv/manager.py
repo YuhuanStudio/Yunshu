@@ -108,7 +108,7 @@ class KVCacheManager:
         self._warm_tier: KVWarmTier | None = KVWarmTier(KVTierConfig())
         # RadixTree for prefix sharing (C8: SGLang RadixAttention pattern)
         from .radix_attention import RadixTree
-        self._radix_tree = RadixTree()
+        self._radix_tree = RadixTree(block_size=config.block_size)
         self._request_nodes: dict[str, Any] = {}  # request_id → RadixNode
 
     @property
@@ -180,6 +180,10 @@ class KVCacheManager:
         # 2. Look up cached blocks
         matched_blocks: list[KVBlock] = []
         matched_hashes: list[int] = []
+        # Warm-tier promoted blocks have ref_count=1 already (from allocate());
+        # we must NOT touch them again, or ref_count becomes 2 and the block
+        # leaks when the request is freed.
+        _warm_promoted_blocks: set[int] = set()
 
         for h in block_hashes:
             self._total_lookups += 1
@@ -196,7 +200,8 @@ class KVCacheManager:
                     # Re-allocate a hot block and copy the promoted data
                     new_block = self.block_pool.allocate(1)[0]
                     new_block.block_hash = h
-                    new_block.ref_count = 1
+                    # ref_count is already 1 from allocate(); do NOT touch again
+                    _warm_promoted_blocks.add(id(new_block))
                     matched_blocks.append(new_block)
                     matched_hashes.append(h)
                     continue
@@ -206,9 +211,11 @@ class KVCacheManager:
 
         num_matched_tokens = len(matched_blocks) * self.config.block_size
 
-        # 3. Touch (increase ref count) for all matched blocks
+        # 3. Touch (increase ref count) for cache-hit blocks only.
+        #    Warm-tier promoted blocks already have ref_count=1 from allocate().
         for block in matched_blocks:
-            self.block_pool.touch(block)
+            if id(block) not in _warm_promoted_blocks:
+                self.block_pool.touch(block)
 
         # 4. Allocate new blocks for the unmatched portion
         remaining_tokens = token_ids[num_matched_tokens:]
@@ -525,15 +532,18 @@ class KVCacheManager:
     def load_prefix(self, path: str) -> KVBlock:
         """Load a previously saved prefix block from disk.
 
-        The block's KV data is written into the current KV cache tensors
-        at the block's original ``block_id``. A new block is allocated in
-        the pool and registered in the prefix cache.
+        Allocates a fresh block from the pool and copies the deserialized
+        KV data into it. The original block_id from disk is NOT reused --
+        it may already be in use by another request.
 
         Args:
             path: File path to read.
 
         Returns:
-            The loaded KVBlock (now in the prefix cache).
+            The loaded KVBlock (allocated from pool, registered in prefix cache).
+
+        Raises:
+            ValueError: If no free blocks are available.
         """
         from .serialization import KVCacheSerializer
 
@@ -541,17 +551,21 @@ class KVCacheManager:
             data = f.read()
 
         serializer = KVCacheSerializer()
-        block, key_data, value_data = serializer.deserialize_block(data)
+        old_block, key_data, value_data = serializer.deserialize_block(data)
 
-        # Write data into cache tensors
-        self._key_cache[block.block_id] = key_data
-        self._value_cache[block.block_id] = value_data
+        # Allocate a fresh block from the pool instead of reusing old block_id
+        new_block = self.block_pool.allocate(1)[0]
 
-        # Register in prefix cache
-        if block.block_hash is not None:
-            self.block_pool.cache_block(block, block.block_hash)
+        # Write data into cache tensors at the NEW block's slot
+        if self._key_cache is not None and self._value_cache is not None:
+            self._key_cache[new_block.block_id] = key_data
+            self._value_cache[new_block.block_id] = value_data
 
-        return block
+        # Register in prefix cache with the hash from disk
+        if old_block.block_hash is not None:
+            self.block_pool.cache_block(new_block, old_block.block_hash)
+
+        return new_block
 
     def save_all_cached(self, path: str) -> None:
         """Save the entire prefix cache to disk.
@@ -590,8 +604,9 @@ class KVCacheManager:
     def load_cached(self, path: str) -> int:
         """Load a previously saved prefix cache from disk.
 
-        Deserializes all blocks, writes their KV data into cache tensors,
-        and registers them in the prefix cache.
+        Deserializes all blocks, allocates fresh blocks from the pool for
+        each, copies KV data into the new slots, and registers them in
+        the prefix cache. The original block_ids from disk are NOT reused.
 
         Args:
             path: File path to read.
@@ -618,13 +633,25 @@ class KVCacheManager:
             frame = data[offset : offset + frame_len]
             offset += frame_len
 
-            block, key_data, value_data = serializer.deserialize_block(frame)
+            old_block, key_data, value_data = serializer.deserialize_block(frame)
 
-            self._key_cache[block.block_id] = key_data
-            self._value_cache[block.block_id] = value_data
+            # Allocate a fresh block instead of reusing old block_id
+            try:
+                new_block = self.block_pool.allocate(1)[0]
+            except ValueError:
+                logger.warning(
+                    "load_cached: ran out of free blocks after loading %d/%d",
+                    loaded, num_cached,
+                )
+                break
 
-            if block.block_hash is not None:
-                self.block_pool.cache_block(block, block.block_hash)
+            # Write data into cache tensors at the new block's slot
+            if self._key_cache is not None and self._value_cache is not None:
+                self._key_cache[new_block.block_id] = key_data
+                self._value_cache[new_block.block_id] = value_data
+
+            if old_block.block_hash is not None:
+                self.block_pool.cache_block(new_block, old_block.block_hash)
 
             loaded += 1
 

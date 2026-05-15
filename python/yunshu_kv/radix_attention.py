@@ -91,11 +91,12 @@ class RadixTree:
     - evict(n_bytes) → freed blocks
     """
 
-    def __init__(self, eviction_strategy: str = "lru") -> None:
+    def __init__(self, eviction_strategy: str = "lru", block_size: int = 64) -> None:
         self.root = RadixNode()
         self._total_nodes = 0
         self._total_ref_count = 0
         self._eviction_strategy = eviction_strategy  # lru, lfu, fifo
+        self._block_size = block_size
         self._eviction_stats = {"lru": 0, "lfu": 0, "fifo": 0, "total_freed_blocks": 0}
 
     @property
@@ -172,22 +173,28 @@ class RadixTree:
         Returns:
             The new intermediate node containing the shared prefix.
         """
+        # Convert token-based split_pos to block-based index.
+        # Each block covers self._block_size tokens, so we must slice the
+        # blocks and block_hashes lists at the block boundary, not the
+        # token boundary.
+        split_block_idx = split_pos // self._block_size
+
         # Create the intermediate node with the shared prefix
         new_node = RadixNode(
             token_ids=child.token_ids[:split_pos],
-            blocks=child.blocks[:split_pos] if len(child.blocks) > split_pos else list(child.blocks),
-            block_hashes=child.block_hashes[:split_pos] if len(child.block_hashes) > split_pos else list(child.block_hashes),
+            blocks=child.blocks[:split_block_idx] if len(child.blocks) > split_block_idx else list(child.blocks),
+            block_hashes=child.block_hashes[:split_block_idx] if len(child.block_hashes) > split_block_idx else list(child.block_hashes),
             parent=parent,
         )
 
         # Shorten the original child to the suffix
         child.token_ids = child.token_ids[split_pos:]
-        if len(child.blocks) > split_pos:
-            child.blocks = child.blocks[split_pos:]
+        if len(child.blocks) > split_block_idx:
+            child.blocks = child.blocks[split_block_idx:]
         else:
             child.blocks = []
-        if len(child.block_hashes) > split_pos:
-            child.block_hashes = child.block_hashes[split_pos:]
+        if len(child.block_hashes) > split_block_idx:
+            child.block_hashes = child.block_hashes[split_block_idx:]
         else:
             child.block_hashes = []
 
@@ -258,8 +265,10 @@ class RadixTree:
                 # split_node now holds the shared prefix
                 # Recurse: insert remaining new tokens as child of split_node
                 remaining_new = token_ids[match_len:]
-                remaining_blocks = blocks[match_len:] if len(blocks) > match_len else []
-                remaining_hashes = block_hashes[match_len:] if len(block_hashes) > match_len else []
+                # Convert token offset to block offset for slicing
+                match_block_idx = match_len // self._block_size
+                remaining_blocks = blocks[match_block_idx:] if len(blocks) > match_block_idx else []
+                remaining_hashes = block_hashes[match_block_idx:] if len(block_hashes) > match_block_idx else []
                 return self.insert(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
             else:
                 # New tokens are a prefix of or equal to existing child

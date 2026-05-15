@@ -434,7 +434,11 @@ def test_finalize_request_idempotent():
 
 
 def test_finalize_request_cleans_all_state():
-    """_finalize_request removes ALL entries from internal dicts."""
+    """_cleanup_request removes ALL entries from internal dicts.
+
+    _finalize_request only cleans scheduler-side resources.
+    _cleanup_request calls _finalize_request then also cleans consumer-side state.
+    """
     core = _make_engine_core()
 
     req_id = "req-002"
@@ -445,14 +449,27 @@ def test_finalize_request_cleans_all_state():
     core._kv_prefix_hashes[req_id] = 42
     core._request_lora_adapters[req_id] = "lora-adapter-1"
 
+    # _finalize_request only cleans scheduler-side, NOT consumer-side
     core._finalize_request(req_id)
+    assert req_id not in core._request_lora_adapters
+    # Consumer-side state should still be present after _finalize_request
+    assert req_id in core._output_collectors
+    assert req_id in core._finished_events
+
+    # _cleanup_request cleans everything (scheduler + consumer)
+    core._output_collectors[req_id] = MagicMock()
+    core._stream_states[req_id] = MagicMock()
+    core._finished_events[req_id] = asyncio.Event()
+    core._request_timestamps[req_id] = 5678.9
+    core._kv_prefix_hashes[req_id] = 42
+
+    core._cleanup_request(req_id)
 
     assert req_id not in core._output_collectors
     assert req_id not in core._stream_states
     assert req_id not in core._finished_events
     assert req_id not in core._request_timestamps
     assert req_id not in core._kv_prefix_hashes
-    assert req_id not in core._request_lora_adapters
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +531,7 @@ async def test_engine_loop_exception_puts_error_output():
                 error=f"Scheduler step error: {error}",
             ))
             c.put(None)  # sentinel
+        core._signal_finished(rid)
         core._finalize_request(rid)
 
     # Collector should have the error output
@@ -526,5 +544,9 @@ async def test_engine_loop_exception_puts_error_output():
     sentinel = collector.get_nowait()
     assert sentinel is None
 
-    # Request should be fully cleaned up
+    # _finalize_request only cleans scheduler-side; collector remains for consumer
+    assert req_id in core._output_collectors
+
+    # Full cleanup via _cleanup_request (consumer-side)
+    core._cleanup_request(req_id)
     assert req_id not in core._output_collectors

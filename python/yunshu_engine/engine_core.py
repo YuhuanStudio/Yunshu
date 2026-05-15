@@ -1232,6 +1232,28 @@ class EngineCore:
             self._executor, self.scheduler.add_request, request
         )
 
+        # Check if the scheduler rejected the request (queue full, etc.)
+        # If rejected, generate error output immediately so resources are
+        # cleaned up via the normal finalize path.
+        from .request import RequestStatus
+        if RequestStatus.is_finished(request.status):
+            error_reason = request.finish_reason or "rejected"
+            from .request import RequestOutput
+            collector = self._output_collectors.get(req_id)
+            if collector is not None:
+                collector.put(RequestOutput(
+                    request_id=req_id,
+                    finished=True,
+                    finish_reason=error_reason,
+                    error=f"Request rejected by scheduler: {error_reason}",
+                    prompt_tokens=num_prompt_tokens,
+                    completion_tokens=0,
+                ))
+                collector.put(None)  # sentinel
+            self._signal_finished(req_id)
+            self._cleanup_request(req_id)
+            return req_id
+
         # Wake engine loop from idle sleep (event-driven scheduling)
         if self._wake_event is not None:
             self._wake_event.set()
@@ -1252,13 +1274,15 @@ class EngineCore:
                 error="Request aborted",
             ))
             collector.put(None)  # sentinel
-        self._finalize_request(request_id)
+        self._signal_finished(request_id)
+        self._cleanup_request(request_id)
 
     async def abort_all_requests(self) -> None:
         """Abort all active requests (error recovery)."""
         failed_ids = self.scheduler.fail_all_requests()
         for req_id in failed_ids:
-            self._finalize_request(req_id)
+            self._signal_finished(req_id)
+            self._cleanup_request(req_id)
 
     async def stream_outputs(self, request_id: str) -> AsyncIterator[Any]:
         """Stream outputs for a request (oMLX/vLLM pattern).
@@ -1523,6 +1547,7 @@ class EngineCore:
                 logger.info("Engine loop cancelled, failing all in-flight requests")
                 failed = self.scheduler.fail_all_requests()
                 for req_id in failed:
+                    self._signal_finished(req_id)
                     self._finalize_request(req_id)
                 raise
             except Exception as e:
@@ -1539,6 +1564,7 @@ class EngineCore:
                             error=f"Scheduler step error: {e}",
                         ))
                         collector.put(None)  # sentinel
+                    self._signal_finished(req_id)
                     self._finalize_request(req_id)
                 await asyncio.sleep(0.1)
                 continue
@@ -1626,8 +1652,13 @@ class EngineCore:
                                     )
                                     shadow_collector.put(shadow_output)
                                     shadow_collector.put(None)  # sentinel
+                                    # Signal shadow finished before finalize
+                                    self._signal_finished(shadow_id)
                                     self._finalize_request(shadow_id)
-                    # Finalize: release ALL resources for this request
+                    # Signal request completion before finalize so generate()
+                    # consumers waiting on the event can wake up.
+                    self._signal_finished(rid)
+                    # Finalize: release scheduler-side resources for this request
                     self._finalize_request(rid)
 
             # Update adaptive batch scheduler metrics
@@ -1817,15 +1848,18 @@ class EngineCore:
         self._kv_prefix_hashes.pop(request_id, None)
 
     def _finalize_request(self, request_id: str) -> None:
-        """Release ALL per-request resources (engine-side + consumer-side).
+        """Release scheduler-side per-request resources (NOT consumer-side state).
 
         Called from:
         - Engine loop finish path (normal completion)
         - abort_request() / abort_all_requests()
         - Engine loop exception handlers
-        - Consumer-side _cleanup_request() (idempotent)
+        - Consumer-side _cleanup_request() (which also pops consumer state)
 
         This is idempotent: safe to call multiple times.
+        Consumer-side state (collectors, events, stream states, timestamps)
+        is only removed by _cleanup_request() to ensure generate() and
+        stream_outputs() can drain the collector after this call.
         """
         _block_id = hash(request_id) % (10**9)
         # Inflight prefix sharing
@@ -1872,21 +1906,24 @@ class EngineCore:
                 self._sliding_window_mgr.remove_request(request_id)
             except Exception:
                 logger.debug("sliding window cleanup failed", exc_info=True)
-        # Consumer-side state
-        self._output_collectors.pop(request_id, None)
-        self._stream_states.pop(request_id, None)
-        self._finished_events.pop(request_id, None)
-        self._request_timestamps.pop(request_id, None)
-        self._kv_prefix_hashes.pop(request_id, None)
         # Remove from scheduler
         self.scheduler.remove_finished_request(request_id)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request state (consumer-side entry point).
 
-        Delegates to _finalize_request which is idempotent.
+        Called from stream_outputs() finally block and generate() finally block.
+        Releases scheduler-side resources via _finalize_request, then removes
+        consumer-side state (collector, event, stream state, timestamps).
         """
         self._finalize_request(request_id)
+        # Consumer-side state: only removed here so that generate() and
+        # stream_outputs() can drain the collector before cleanup.
+        self._output_collectors.pop(request_id, None)
+        self._stream_states.pop(request_id, None)
+        self._finished_events.pop(request_id, None)
+        self._request_timestamps.pop(request_id, None)
+        self._kv_prefix_hashes.pop(request_id, None)
 
     def _get_max_seq_len(self) -> int:
         """Get the model's maximum sequence length from config."""

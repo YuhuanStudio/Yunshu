@@ -637,6 +637,9 @@ class Scheduler:
         # UIDs to remove from BatchGenerator (thinking budget overflow, etc.)
         self._uids_to_remove: list[int] = []
 
+        # Requests that failed to insert (error outputs generated in step())
+        self._failed_insert_ids: list[str] = []
+
         # BatchGenerator integration
         self._batch_gen = None
         self._uid_to_req: dict[int, str] = {}
@@ -1008,11 +1011,29 @@ class Scheduler:
         # 2. Insert waiting requests
         self._schedule_waiting()
 
+        # 2b. Generate error outputs for requests that failed to insert.
+        # These never reach the BatchGenerator, so they won't produce output
+        # in step 3+. Without synthetic error outputs, EngineCore would never
+        # call _finalize_request for them, leaking per-request resources.
+        outputs = []
+        if self._failed_insert_ids:
+            for fail_id in self._failed_insert_ids:
+                fail_req = self.requests.get(fail_id)
+                outputs.append(RequestOutput(
+                    request_id=fail_id,
+                    finished=True,
+                    finish_reason="error",
+                    error=f"Request {fail_id} failed to insert into batch generator",
+                    prompt_tokens=getattr(fail_req, 'num_prompt_tokens', 0) if fail_req else 0,
+                    completion_tokens=0,
+                ))
+            self._failed_insert_ids.clear()
+
         if self._batch_gen is None:
-            return SchedulerOutput(outputs=[])
+            return SchedulerOutput(outputs=outputs)
 
         # 3. Run one BatchGenerator step (prefill + first decode)
-        outputs = []
+        # Note: outputs may already contain error outputs from failed inserts (step 2b).
         try:
             prompt_responses, gen_responses = self._batch_gen.next()
 
@@ -1157,6 +1178,10 @@ class Scheduler:
             if timeout > 0 and (now - submit) > timeout:
                 req.status = RequestStatus.FINISHED_TIMEOUT
                 req.finish_reason = "timeout"
+                self.finished_ids.add(req.request_id)
+                # Track timed-out request so step() generates an error output
+                # for EngineCore to finalize (otherwise resources leak).
+                self._failed_insert_ids.append(req.request_id)
                 logger.warning(f"Request {req.request_id} timed out after {now - submit:.0f}s in waiting queue")
                 continue
             to_insert.append(req)
@@ -1485,6 +1510,9 @@ class Scheduler:
                 # Signal completion so callers don't hang
                 self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
                 self.finished_ids.add(req.request_id)
+                # Track failed insert so step() generates an error output for
+                # EngineCore to finalize (otherwise resources leak).
+                self._failed_insert_ids.append(req.request_id)
 
     def _run_external_prefill(self, req: Request) -> bool:
         """Run external prefill for a request.
@@ -2041,6 +2069,9 @@ class Scheduler:
 
             req = self.running.get(req_id)
             if req is None:
+                # Request was aborted or preempted between steps — clean up
+                # the stale UID mapping to prevent repeated lookups.
+                self._uid_to_req.pop(uid, None)
                 continue
 
             is_stop = resp.finish_reason == "stop"
@@ -2175,6 +2206,9 @@ class Scheduler:
                 self._thinking_state.pop(req_id, None)
                 # Cleanup speculative decoding state
                 self._cleanup_spec_state(req_id)
+                # Clean up chunked prefill state (request may finish while
+                # still in the middle of chunked prefill, e.g. thinking budget overflow)
+                self._pending_prefill.pop(req_id, None)
                 # H2O: Remove attention score tracking for finished request
                 if self._attention_score_tracker is not None:
                     self._attention_score_tracker.remove_request(req_id)
@@ -3068,6 +3102,7 @@ class Scheduler:
         self._thinking_state.clear()
         self._pending_abort_ids.clear()
         self._uids_to_remove.clear()
+        self._failed_insert_ids.clear()
         self._pending_prefill.clear()
         # Reset attention score tracker
         if self._attention_score_tracker is not None:

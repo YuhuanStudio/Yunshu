@@ -103,11 +103,15 @@ class TestRadixTreeSplit:
         assert r2 == []
 
     def test_split_with_blocks(self):
-        """Split correctly divides blocks between new_node and original child."""
+        """Split correctly divides blocks between new_node and original child.
+
+        Uses block_size=1 so that each token maps to exactly one block,
+        making the block split at the same boundary as the token split.
+        """
         from yunshu_kv.radix_attention import RadixTree, RadixNode
         from yunshu_kv.block import KVBlock
 
-        tree = RadixTree()
+        tree = RadixTree(block_size=1)
         blocks = [KVBlock(block_id=i) for i in range(3)]
         hashes = [100, 200, 300]
 

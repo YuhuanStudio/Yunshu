@@ -337,6 +337,10 @@ class ThinkingSegmentSubstore:
         conv_segs = self._segments.get(segment.conversation_id, [])
         if segment in conv_segs:
             conv_segs.remove(segment)
+        else:
+            # Segment was already removed (e.g., by per-conversation and
+            # global eviction targeting the same entry). Avoid undercounting.
+            return
         self._total_segments -= 1
         # Reclaim memory from KV data
         if segment.kv_data is not None:
