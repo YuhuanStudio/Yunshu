@@ -500,29 +500,45 @@ class VLMEngine:
                 stop_ids.update(stop_token_ids)
 
             tokens = []
+            _in_thinking = False
+            _thinking_tokens = 0
+            try:
+                think_start_id = self._tokenizer.encode("<think")[-1]
+                think_end_id = self._tokenizer.encode("</think")[-1]
+            except Exception:
+                think_start_id = think_end_id = None
+
             for token_id, _ in generate_step(
                 input_ids, self._model,
                 max_tokens=max_tokens,
                 sampler=sampler,
             ):
                 tokens.append(token_id)
+                # Track thinking segment boundaries
+                if think_start_id is not None:
+                    if not _in_thinking and token_id == think_start_id:
+                        _in_thinking = True
+                    elif _in_thinking:
+                        _thinking_tokens += 1
+                        if token_id == think_end_id:
+                            _in_thinking = False
                 if token_id in stop_ids:
                     break
                 # Thinking budget enforcement
                 if thinking_budget is not None and enable_thinking and len(tokens) >= thinking_budget:
                     break
 
-            return self._tokenizer.decode(tokens, skip_special_tokens=True)
+            return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
 
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(self._executor, _generate_sync)
+        result, reasoning_tokens = await loop.run_in_executor(self._executor, _generate_sync)
 
         elapsed = time.monotonic() - t0
         self._active_count -= 1
         self._num_requests_processed += 1
         self._cleanup_temp_files()
 
-        return {"text": result, "finish_reason": "stop", "elapsed": elapsed}
+        return {"text": result, "finish_reason": "stop", "elapsed": elapsed, "reasoning_tokens": reasoning_tokens}
 
     async def generate_stream(
         self,
@@ -804,7 +820,7 @@ class VLMEngine:
         except Exception:
             logger.debug("multimodal prefix cache store failed", exc_info=True)
 
-        return result.text if hasattr(result, 'text') else str(result)
+        return result.text if hasattr(result, 'text') else str(result), 0
 
     # ── VLM text generation (for mlx-vlm models) ──
 
@@ -880,7 +896,7 @@ class VLMEngine:
 
             tokens = [current.item()]
             if current.item() in stop_ids:
-                return self._tokenizer.decode(tokens, skip_special_tokens=True)
+                return self._tokenizer.decode(tokens, skip_special_tokens=True), 0
 
             for _ in range(max_tokens - 1):
                 output = lm(current[None], cache=cache)
@@ -918,7 +934,7 @@ class VLMEngine:
                 if current.item() in stop_ids:
                     break
 
-        return self._tokenizer.decode(tokens, skip_special_tokens=True)
+        return self._tokenizer.decode(tokens, skip_special_tokens=True), 0
 
     def _stream_vlm_vision(
         self,
