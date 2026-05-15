@@ -775,6 +775,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 )
 
             try:
+                _reasoning_tok = 0
+                _cached_tok = 0
                 if is_batched:
                     result = await engine.chat(
                         messages=messages,
@@ -805,6 +807,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     prompt_tok = result.prompt_tokens
                     completion_tok = result.completion_tokens
                     finish = result.finish_reason or "stop"
+                    _reasoning_tok = getattr(result, 'reasoning_tokens', 0)
+                    _cached_tok = getattr(result, 'cached_tokens', 0)
                     logprobs_data = _format_logprobs(
                         getattr(result, 'logprobs', None),
                         getattr(engine, '_tokenizer', None),
@@ -840,6 +844,8 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     prompt_tok = state.prompt_token_count
                     completion_tok = state.completion_token_count
                     finish = state.finish_reason or "stop"
+                    _reasoning_tok = getattr(state, 'reasoning_tokens', 0)
+                    _cached_tok = getattr(state, 'cached_tokens', 0)
                     logprobs_data = _format_logprobs(
                         getattr(state, 'logprobs', None),
                         getattr(engine, '_tokenizer', None),
@@ -901,6 +907,16 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 tool_calls=tool_calls if tool_calls else None,
                 logprobs=logprobs_data,
             )
+
+            # Attach reasoning_tokens and cached_tokens to usage
+            if _reasoning_tok:
+                response_body.setdefault("usage", {})["completion_tokens_details"] = {
+                    "reasoning_tokens": _reasoning_tok,
+                }
+            if _cached_tok:
+                response_body.setdefault("usage", {})["prompt_tokens_details"] = {
+                    "cached_tokens": _cached_tok,
+                }
 
             # Attach MCP tool execution results (if any were executed)
             if mcp_results:

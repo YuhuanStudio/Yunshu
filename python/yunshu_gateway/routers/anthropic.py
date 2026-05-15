@@ -356,11 +356,13 @@ async def _resolve_engine(model_id: str):
 
 async def _non_stream_batched(engine, messages, req, stop):
     """Non-streaming response via BatchedEngine."""
+    from fastapi.responses import JSONResponse
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
 
-    result = await engine.chat(
+    try:
+        result = await engine.chat(
         messages=messages,
         max_tokens=effective_max_tokens,
         temperature=req.temperature,
@@ -383,6 +385,17 @@ async def _non_stream_batched(engine, messages, req, stop):
         priority=getattr(req, 'priority', 0),
         json_schema=getattr(req, 'json_schema', None),
     )
+    except MemoryError:
+        return JSONResponse(
+            status_code=507,
+            content={"type": "error", "error": {"type": "overloaded_error", "message": "Insufficient GPU memory"}},
+        )
+    except Exception as e:
+        logger.error(f"Anthropic batched generation error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"type": "error", "error": {"type": "api_error", "message": str(e)}},
+        )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     _record_metrics(result.prompt_tokens, result.completion_tokens)
 
@@ -433,33 +446,46 @@ async def _non_stream_batched(engine, messages, req, stop):
 
 async def _non_stream_legacy(engine, messages, req, stop):
     """Non-streaming response via Engine or BatchedEngine."""
+    from fastapi.responses import JSONResponse
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
     effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
-    result = await engine.generate(
-        prompt=messages,
-        max_tokens=effective_max_tokens,
-        temperature=req.temperature,
-        top_p=req.top_p,
-        top_k=req.top_k,
-        min_p=getattr(req, 'min_p', 0.0),
-        repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
-        frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
-        presence_penalty=getattr(req, 'presence_penalty', 0.0),
-        logit_bias=getattr(req, 'logit_bias', None),
-        stop=stop,
-        seed=getattr(req, 'seed', None),
-        enable_thinking=enable_thinking,
-        thinking_budget=budget_tokens,
-        reasoning_effort=getattr(req, 'reasoning_effort', None),
-        stop_token_ids=getattr(req, 'stop_token_ids', None),
-        spec_decode=getattr(req, 'spec_decode', False),
-        xtc_probability=getattr(req, 'xtc_probability', 0.0),
-        xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-        priority=getattr(req, 'priority', 0),
-        json_schema=getattr(req, 'json_schema', None),
-    )
+    try:
+        result = await engine.generate(
+            prompt=messages,
+            max_tokens=effective_max_tokens,
+            temperature=req.temperature,
+            top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=getattr(req, 'min_p', 0.0),
+            repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
+            frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
+            presence_penalty=getattr(req, 'presence_penalty', 0.0),
+            logit_bias=getattr(req, 'logit_bias', None),
+            stop=stop,
+            seed=getattr(req, 'seed', None),
+            enable_thinking=enable_thinking,
+            thinking_budget=budget_tokens,
+            reasoning_effort=getattr(req, 'reasoning_effort', None),
+            stop_token_ids=getattr(req, 'stop_token_ids', None),
+            spec_decode=getattr(req, 'spec_decode', False),
+            xtc_probability=getattr(req, 'xtc_probability', 0.0),
+            xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+            priority=getattr(req, 'priority', 0),
+            json_schema=getattr(req, 'json_schema', None),
+        )
+    except MemoryError:
+        return JSONResponse(
+            status_code=507,
+            content={"type": "error", "error": {"type": "overloaded_error", "message": "Insufficient GPU memory"}},
+        )
+    except Exception as e:
+        logger.error(f"Anthropic legacy generation error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"type": "error", "error": {"type": "api_error", "message": str(e)}},
+        )
     # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
     prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
     completion_toks = getattr(result, 'completion_tokens', 0) or getattr(result, 'completion_token_count', 0)
@@ -646,6 +672,8 @@ async def _stream_anthropic(
                 priority=getattr(req, 'priority', 0),
                 json_schema=getattr(req, 'json_schema', None),
             ):
+                if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:
+                    input_tokens = output.prompt_token_count
                 parsed = parser.process_chunk(output.token_text)
 
                 # Thinking content (legacy engine path)
