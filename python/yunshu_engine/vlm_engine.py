@@ -960,14 +960,32 @@ class VLMEngine:
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
         eos_ids = self._get_eos_ids()
 
-        # JSON schema constraint
+        # JSON schema / grammar constraint
         json_constraint = None
         if json_schema is not None:
             try:
-                from .json_schema import JsonSchemaConstraint
-                json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+                if isinstance(json_schema, dict) and json_schema.get("type") in ("regex", "choice", "cfg"):
+                    # Non-JSON grammar type — use ConstraintFactory dispatch
+                    from .grammar_constraint import ConstraintFactory
+                    gtype = json_schema["type"]
+                    if gtype == "regex":
+                        grammar = json_schema.get("pattern", "")
+                    elif gtype == "choice":
+                        grammar = json_schema.get("choices", [])
+                    elif gtype == "cfg":
+                        grammar = json_schema.get("grammar", "")
+                    else:
+                        grammar = None
+                    if grammar is not None:
+                        json_constraint = ConstraintFactory.create(gtype, grammar, self._tokenizer)
+                elif isinstance(json_schema, str) and json_schema == "json_object":
+                    from .json_schema import JsonSchemaConstraint
+                    json_constraint = JsonSchemaConstraint(None, self._tokenizer)
+                else:
+                    from .json_schema import JsonSchemaConstraint
+                    json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
             except Exception:
-                logger.warning("JSON schema constraint init failed", exc_info=True)
+                logger.warning("Grammar constraint init failed", exc_info=True)
 
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
@@ -1253,14 +1271,31 @@ class VLMEngine:
         eos_ids = self._get_eos_ids()
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
-        # JSON schema constraint
+        # JSON schema / grammar constraint (streaming path)
         json_constraint = None
         if json_schema is not None:
             try:
-                from .json_schema import JsonSchemaConstraint
-                json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+                if isinstance(json_schema, dict) and json_schema.get("type") in ("regex", "choice", "cfg"):
+                    from .grammar_constraint import ConstraintFactory
+                    gtype = json_schema["type"]
+                    if gtype == "regex":
+                        grammar = json_schema.get("pattern", "")
+                    elif gtype == "choice":
+                        grammar = json_schema.get("choices", [])
+                    elif gtype == "cfg":
+                        grammar = json_schema.get("grammar", "")
+                    else:
+                        grammar = None
+                    if grammar is not None:
+                        json_constraint = ConstraintFactory.create(gtype, grammar, self._tokenizer)
+                elif isinstance(json_schema, str) and json_schema == "json_object":
+                    from .json_schema import JsonSchemaConstraint
+                    json_constraint = JsonSchemaConstraint(None, self._tokenizer)
+                else:
+                    from .json_schema import JsonSchemaConstraint
+                    json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
             except Exception:
-                logger.warning("JSON schema constraint init failed (stream)", exc_info=True)
+                logger.warning("Grammar constraint init failed (stream)", exc_info=True)
 
         # Build stop IDs
         stop_ids = set(eos_ids)

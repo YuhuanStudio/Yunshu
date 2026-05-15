@@ -2042,6 +2042,7 @@ class Scheduler:
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
             self._thinking_state.pop(req_id, None)
+            self._pending_prefill.pop(req_id, None)
             self._cleanup_spec_state(req_id)
 
         self._pending_abort_ids.clear()
@@ -2163,6 +2164,10 @@ class Scheduler:
                 self.running.pop(req_id, None)
                 self.finished_ids.add(req_id)
                 self._kv_prefix_hashes.pop(req_id, None)
+                # Clean up chunked prefill state for finished/aborted requests.
+                # Without this, _pending_prefill leaks when a request finishes
+                # while still in the middle of chunked prefill.
+                self._pending_prefill.pop(req_id, None)
                 # §12.2: Evict encoder cache entry for finished request.
                 # The encoder output is no longer needed once the decoder
                 # has completed generation.
