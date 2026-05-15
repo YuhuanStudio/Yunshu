@@ -424,8 +424,6 @@ class EngineCore:
         # KV migration manager (multi-tier migration with temperature tracking)
         from .kv_migration import KVMigrationManager
         self._kv_migration = KVMigrationManager()
-        self._kv_migration.start()
-        logger.info("KVMigrationManager background thread started")
 
         # Mamba/Hybrid KV cache (SSM state management)
         from .mamba_cache import HybridKVCache
@@ -648,6 +646,12 @@ class EngineCore:
                 logger.debug("KV offload manager start failed", exc_info=True)
         self._loop_task = asyncio.get_running_loop().create_task(self._engine_loop())
 
+        # Start KV migration background thread
+        try:
+            self._kv_migration.start()
+        except Exception:
+            logger.debug("KV migration start failed", exc_info=True)
+
         # Start external prefill server if configured
         if self._prefill_server is not None:
             asyncio.get_running_loop().create_task(
@@ -753,10 +757,6 @@ class EngineCore:
                 self._composition_scheduler.shutdown()
             except Exception:
                 logger.debug("composition scheduler shutdown failed", exc_info=True)
-        try:
-            self._profiler.stop_profiling()
-        except Exception:
-            logger.debug("profiler stop failed", exc_info=True)
 
         # Stop external prefill server
         if self._prefill_server is not None:
@@ -1193,12 +1193,13 @@ class EngineCore:
                 error="Request aborted",
             ))
             collector.put(None)  # sentinel
+        self._finalize_request(request_id)
 
     async def abort_all_requests(self) -> None:
         """Abort all active requests (error recovery)."""
         failed_ids = self.scheduler.fail_all_requests()
         for req_id in failed_ids:
-            self._signal_finished(req_id)
+            self._finalize_request(req_id)
 
     async def stream_outputs(self, request_id: str) -> AsyncIterator[Any]:
         """Stream outputs for a request (oMLX/vLLM pattern).
@@ -1422,13 +1423,13 @@ class EngineCore:
                 logger.info("Engine loop cancelled, failing all in-flight requests")
                 failed = self.scheduler.fail_all_requests()
                 for req_id in failed:
-                    self._signal_finished(req_id)
+                    self._finalize_request(req_id)
                 raise
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
                 failed = self.scheduler.fail_all_requests()
                 for req_id in failed:
-                    self._signal_finished(req_id)
+                    self._finalize_request(req_id)
                 await asyncio.sleep(0.1)
                 continue
 
@@ -1466,9 +1467,8 @@ class EngineCore:
                         stream_state.mark_sent(req_output.completion_tokens)
 
                 if req_output.finished:
-                    self._signal_finished(rid)
                     self._num_requests_processed += 1
-                    # FairnessTracker: record completion before timestamp is popped
+                    # FairnessTracker: record completion before finalize pops timestamp
                     _start_ts = self._request_timestamps.get(rid)
                     if _start_ts is not None:
                         try:
@@ -1477,7 +1477,6 @@ class EngineCore:
                             )
                         except Exception:
                             logger.debug("fairness record_completion failed", exc_info=True)
-                    self._request_timestamps.pop(rid, None)
                     # Checkpoint: save final state for crash recovery
                     if self._checkpoint_mgr is not None:
                         try:
@@ -1489,36 +1488,17 @@ class EngineCore:
                             ))
                         except Exception:
                             logger.debug("checkpoint save failed", exc_info=True)
-                    # Release per-request LoRA adapter
-                    lora_id = self._request_lora_adapters.pop(rid, None)
-                    if lora_id:
-                        try:
-                            from .lora_manager import get_lora_manager
-                            lora_mgr = get_lora_manager()
-                            if lora_mgr is not None:
-                                lora_mgr.unload_adapter(lora_id)
-                        except Exception:
-                            logger.debug(f"LoRA adapter unload failed: {lora_id}", exc_info=True)
-                    # ── Wave 42: Lifecycle + budget + dedup cleanup ──
-                    self._lifecycle_orchestrator.on_request_finished(rid)
-                    self._budget_manager.remove(rid)
-                    self._memory_aware_scheduler.release_memory(rid)
-                    try:
-                        self._kv_lifecycle.release(hash(rid) % (10**9))
-                    except Exception:
-                        logger.debug("kv_lifecycle release failed", exc_info=True)
+                    # Dedup fan-out: deliver output to shadow requests before finalize
                     if self._request_dedup is not None:
-                        content_hash = self._dedup_hashes.pop(rid, None)
+                        content_hash = self._dedup_hashes.get(rid)
                         if content_hash:
                             all_ids = self._request_dedup.complete(content_hash)
-                            # Fan out output to shadow requests
                             from .request import RequestOutput as _RO
                             for shadow_id in all_ids:
                                 if shadow_id == rid:
                                     continue
                                 shadow_collector = self._output_collectors.get(shadow_id)
                                 if shadow_collector is not None:
-                                    # Rewrite request_id for the shadow
                                     shadow_output = _RO(
                                         request_id=shadow_id,
                                         new_token_ids=req_output.new_token_ids,
@@ -1534,11 +1514,9 @@ class EngineCore:
                                     )
                                     shadow_collector.put(shadow_output)
                                     shadow_collector.put(None)  # sentinel
-                                    self._dedup_hashes.pop(shadow_id, None)
-                                    self._dedup_shadows.pop(shadow_id, None)
-                                    shadow_event = self._finished_events.get(shadow_id)
-                                    if shadow_event is not None:
-                                        shadow_event.set()
+                                    self._finalize_request(shadow_id)
+                    # Finalize: release ALL resources for this request
+                    self._finalize_request(rid)
 
             # Update adaptive batch scheduler metrics
             if scheduler_output.outputs:
@@ -1726,20 +1704,25 @@ class EngineCore:
         # Clean up prefix hash tracking
         self._kv_prefix_hashes.pop(request_id, None)
 
-    def _cleanup_request(self, request_id: str) -> None:
-        """Remove per-request output management state."""
-        self._output_collectors.pop(request_id, None)
-        self._stream_states.pop(request_id, None)
-        self._finished_events.pop(request_id, None)
-        self._request_timestamps.pop(request_id, None)
-        self._kv_prefix_hashes.pop(request_id, None)
-        # Inflight prefix sharing: unregister
+    def _finalize_request(self, request_id: str) -> None:
+        """Release ALL per-request resources (engine-side + consumer-side).
+
+        Called from:
+        - Engine loop finish path (normal completion)
+        - abort_request() / abort_all_requests()
+        - Engine loop exception handlers
+        - Consumer-side _cleanup_request() (idempotent)
+
+        This is idempotent: safe to call multiple times.
+        """
+        _block_id = hash(request_id) % (10**9)
+        # Inflight prefix sharing
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
             get_inflight_tracker().unregister(request_id)
         except Exception:
             logger.debug("inflight prefix unregister failed", exc_info=True)
-        # Release LoRA adapter if any
+        # Release LoRA adapter
         lora_id = self._request_lora_adapters.pop(request_id, None)
         if lora_id:
             try:
@@ -1749,33 +1732,49 @@ class EngineCore:
                     lora_mgr.unload_adapter(lora_id)
             except Exception:
                 logger.debug("LoRA cleanup failed", exc_info=True)
-        # Lifecycle + budget + dedup cleanup
+        # Lifecycle + budget + memory + KV lifecycle
         self._lifecycle_orchestrator.on_request_finished(request_id)
         self._budget_manager.remove(request_id)
         self._memory_aware_scheduler.release_memory(request_id)
-        _block_id = hash(request_id) % (10**9)
         try:
             self._kv_lifecycle.release(_block_id)
         except Exception:
             logger.debug("kv_lifecycle release failed", exc_info=True)
-        # KV migration: unregister block from tier tracking
+        # KV migration
         try:
             self._kv_migration.unregister_block(_block_id)
         except Exception:
             logger.debug("kv_migration unregister failed", exc_info=True)
+        # Dedup
         if self._request_dedup is not None:
             content_hash = self._dedup_hashes.pop(request_id, None)
             self._dedup_shadows.pop(request_id, None)
             if content_hash:
                 self._request_dedup.complete(content_hash)
+        # Checkpoint
         if self._checkpoint_mgr is not None:
             self._checkpoint_mgr.delete(request_id)
+        # Sliding window
         if self._sliding_window_mgr is not None:
             try:
                 self._sliding_window_mgr.remove_request(request_id)
             except Exception:
                 logger.debug("sliding window cleanup failed", exc_info=True)
+        # Consumer-side state
+        self._output_collectors.pop(request_id, None)
+        self._stream_states.pop(request_id, None)
+        self._finished_events.pop(request_id, None)
+        self._request_timestamps.pop(request_id, None)
+        self._kv_prefix_hashes.pop(request_id, None)
+        # Remove from scheduler
         self.scheduler.remove_finished_request(request_id)
+
+    def _cleanup_request(self, request_id: str) -> None:
+        """Remove per-request state (consumer-side entry point).
+
+        Delegates to _finalize_request which is idempotent.
+        """
+        self._finalize_request(request_id)
 
     def _get_max_seq_len(self) -> int:
         """Get the model's maximum sequence length from config."""

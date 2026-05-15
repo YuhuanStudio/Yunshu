@@ -216,21 +216,23 @@ async def create_response(req: ResponsesRequest, request: Request):
     from .chat import _apply_lora_adapter, _release_lora_adapter
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
 
-    try:
-        if req.stream:
-            return StreamingResponse(
-                _stream_response(engine, req, messages, response_id, json_schema),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
+    # Streaming: must return before the try/finally releases LoRA.
+    # LoRA lifecycle is managed inside _stream_response's finally block.
+    if req.stream:
+        return StreamingResponse(
+            _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
-        # Non-streaming
+    # Non-streaming: LoRA is released in the finally block below.
+    try:
         from yunshu_engine.batched_engine import BatchedEngine
         is_batched = isinstance(engine, BatchedEngine)
 
         if is_batched:
-            result = await engine.generate(
-                prompt=messages,
+            result = await engine.chat(
+                messages=messages,
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
@@ -348,10 +350,11 @@ async def create_response(req: ResponsesRequest, request: Request):
         _release_lora_adapter(engine, loaded_adapter)
 
 
-async def _stream_response(engine, req, messages, response_id, json_schema):
+async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None):
     """SSE streaming for Responses API."""
     from ..streaming import with_sse_keepalive, format_openai_done, format_openai_usage_chunk
     from yunshu_engine.batched_engine import BatchedEngine
+    from .chat import _release_lora_adapter
     is_batched = isinstance(engine, BatchedEngine)
     include_usage = (
         req.stream_options is not None and req.stream_options.get("include_usage", False)
@@ -361,11 +364,23 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
     reasoning_tok = 0
     cached_tok = 0
 
-    async def _token_source():
+    # Register with request tracker for cancellation support
+    import uuid as _uuid
+    _stream_id = f"resp-{_uuid.uuid4().hex[:8]}"
+    _tracker = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _tracker = get_request_tracker()
+        _tracker.register(_stream_id, req.model or "")
+    except Exception:
+        _tracker = None
+
+    try:
+      async def _token_source():
         nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok
         if is_batched:
-            async for output in engine.stream_generate(
-                prompt=messages,
+            async for output in engine.stream_chat(
+                messages=messages,
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
@@ -406,8 +421,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                     logprobs=_chunk_lp,
                 )
         else:
-            async for output in engine.generate_stream(
-                prompt=messages,
+            async for output in engine.stream_chat(
+                messages=messages,
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
@@ -459,5 +474,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
             )
         yield format_openai_done()
 
-    async for chunk in with_sse_keepalive(_token_source()):
+      async for chunk in with_sse_keepalive(_token_source()):
         yield chunk
+    finally:
+        if _tracker is not None:
+            try:
+                _tracker.unregister(_stream_id)
+            except Exception:
+                pass
+        if loaded_adapter is not None:
+            _release_lora_adapter(engine, loaded_adapter)

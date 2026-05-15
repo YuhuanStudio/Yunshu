@@ -328,10 +328,9 @@ class TestEngineCore:
         core = EngineCore(None, _FakeTokenizer(), executor=_fake_executor())
         req_id = await core.add_request(prompt="Hello", max_tokens=10)
         await core.abort_request(req_id)
-        # Collector should have received error + sentinel
-        collector = core._output_collectors.get(req_id)
-        # After abort, collector gets error output + sentinel
-        assert collector._sentinel is True
+        # After abort, all per-request state is cleaned up
+        assert req_id not in core._output_collectors
+        assert req_id not in core._finished_events
 
     @pytest.mark.asyncio
     async def test_get_stats(self):
