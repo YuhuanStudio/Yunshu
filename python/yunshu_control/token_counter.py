@@ -59,20 +59,50 @@ def estimate_cost(
     completion_tokens: int,
     model_id: str = "",
 ) -> dict:
-    """Estimate cost for a request (Phase 2: actual billing)."""
-    # Placeholder pricing — will be configurable per-model in Phase 2
+    """Estimate cost for a request based on common model pricing.
+
+    Pricing is per-million tokens (USD). Models matched by substring.
+    For local/self-hosted models, cost represents compute-equivalent value.
+    """
     pricing = {
-        "default": {"prompt": 0.0, "completion": 0.0},
+        # OpenAI models
+        "gpt-4o": {"prompt": 2.50, "completion": 10.00},
+        "gpt-4o-mini": {"prompt": 0.15, "completion": 0.60},
+        "gpt-4-turbo": {"prompt": 10.00, "completion": 30.00},
+        "gpt-3.5-turbo": {"prompt": 0.50, "completion": 1.50},
+        # Anthropic models
+        "claude-sonnet": {"prompt": 3.00, "completion": 15.00},
+        "claude-haiku": {"prompt": 0.25, "completion": 1.25},
+        "claude-opus": {"prompt": 15.00, "completion": 75.00},
+        # Open source (self-hosted equivalent)
+        "llama": {"prompt": 0.05, "completion": 0.10},
+        "qwen": {"prompt": 0.05, "completion": 0.10},
+        "mistral": {"prompt": 0.10, "completion": 0.20},
+        "deepseek": {"prompt": 0.14, "completion": 0.28},
+        "gemma": {"prompt": 0.05, "completion": 0.10},
+        "phi": {"prompt": 0.03, "completion": 0.06},
+        # Default for local/self-hosted
+        "default": {"prompt": 0.05, "completion": 0.10},
     }
 
-    model_pricing = pricing.get(model_id, pricing["default"])
+    model_lower = model_id.lower()
+    model_pricing = pricing.get(model_lower, None)
+    if model_pricing is None:
+        # Try substring match
+        for key, val in pricing.items():
+            if key in model_lower:
+                model_pricing = val
+                break
+        if model_pricing is None:
+            model_pricing = pricing["default"]
+
     prompt_cost = prompt_tokens * model_pricing["prompt"] / 1_000_000
     completion_cost = completion_tokens * model_pricing["completion"] / 1_000_000
 
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
-        "prompt_cost_usd": prompt_cost,
-        "completion_cost_usd": completion_cost,
-        "total_cost_usd": prompt_cost + completion_cost,
+        "prompt_cost_usd": round(prompt_cost, 6),
+        "completion_cost_usd": round(completion_cost, 6),
+        "total_cost_usd": round(prompt_cost + completion_cost, 6),
     }

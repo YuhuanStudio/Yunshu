@@ -12,6 +12,7 @@ through a standardized protocol, enabling tool-calling workflows.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -38,11 +39,13 @@ class MCPTool:
         name: Tool identifier (unique within the server).
         description: Human-readable description of what the tool does.
         input_schema: JSON Schema dict describing the tool's input parameters.
+        handler: Optional async callable that takes (arguments: dict) -> str.
     """
 
     name: str
     description: str
     input_schema: dict = field(default_factory=dict)
+    handler: Any = None  # async callable: (arguments: dict) -> str
 
     def to_dict(self) -> dict:
         """Serialize to MCP tool definition format."""
@@ -97,15 +100,7 @@ class MCPSession:
         return self._initialized
 
     def handle_message(self, message: dict) -> dict:
-        """Dispatch an incoming MCP JSON-RPC message to the correct handler.
-
-        Args:
-            message: A JSON-RPC 2.0 message dict with 'method', optional 'params',
-                     and optional 'id'.
-
-        Returns:
-            A JSON-RPC 2.0 response dict.
-        """
+        """Dispatch an incoming MCP JSON-RPC message to the correct handler."""
         method = message.get("method", "")
         params = message.get("params")
         req_id = message.get("id")
@@ -152,11 +147,7 @@ class MCPSession:
         return _rpc_response({"tools": tools}, req_id)
 
     def _handle_tools_call(self, params: dict | None, req_id: Any) -> dict:
-        """Handle tools/call request — execute a tool.
-
-        In this base implementation, returns a stub success response.
-        Subclasses or external tool executors override actual execution.
-        """
+        """Handle tools/call request — execute a tool."""
         if params is None:
             return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing params", req_id)
 
@@ -170,19 +161,41 @@ class MCPSession:
                 req_id,
             )
 
-        # Stub: return success with echoed arguments
-        return _rpc_response(
-            {
-                "content": [
+        tool = self._tool_registry[tool_name]
+        if tool.handler is not None:
+            try:
+                result_text = tool.handler(arguments)
+                if asyncio.iscoroutine(result_text):
+                    result_text = asyncio.run(result_text)
+                return _rpc_response(
                     {
-                        "type": "text",
-                        "text": f"Tool '{tool_name}' executed successfully.",
+                        "content": [
+                            {"type": "text", "text": str(result_text)},
+                        ],
+                        "isError": False,
                     },
-                ],
-                "isError": False,
-            },
-            req_id,
-        )
+                    req_id,
+                )
+            except Exception as e:
+                return _rpc_response(
+                    {
+                        "content": [
+                            {"type": "text", "text": f"Error: {e}"},
+                        ],
+                        "isError": True,
+                    },
+                    req_id,
+                )
+        else:
+            return _rpc_response(
+                {
+                    "content": [
+                        {"type": "text", "text": f"[stub] Tool '{tool_name}' acknowledged. No handler registered."},
+                    ],
+                    "isError": False,
+                },
+                req_id,
+            )
 
     def register_tool(self, tool: MCPTool) -> None:
         """Register a single tool with this session."""
@@ -338,13 +351,31 @@ async def _handle_tools_call(params: dict | None, req_id: int | str | None) -> d
     elif tool_name == "generate_image":
         return await _tool_generate_image(arguments, req_id)
     elif tool_name in _extra_tools_registry:
-        # Stub execution for dynamically registered tools
-        return _rpc_response({
-            "content": [
-                {"type": "text", "text": f"Tool '{tool_name}' executed successfully."},
-            ],
-            "isError": False,
-        }, req_id)
+        tool = _extra_tools_registry[tool_name]
+        if tool.handler is not None:
+            try:
+                import asyncio
+                result_text = await tool.handler(arguments)
+                return _rpc_response({
+                    "content": [
+                        {"type": "text", "text": str(result_text)},
+                    ],
+                    "isError": False,
+                }, req_id)
+            except Exception as e:
+                return _rpc_response({
+                    "content": [
+                        {"type": "text", "text": f"Tool execution error: {e}"},
+                    ],
+                    "isError": True,
+                }, req_id)
+        else:
+            return _rpc_response({
+                "content": [
+                    {"type": "text", "text": f"Tool '{tool_name}' has no handler registered. Define a handler when registering the tool."},
+                ],
+                "isError": True,
+            }, req_id)
     else:
         return _rpc_error(JSONRPCError.METHOD_NOT_FOUND, f"Unknown tool: {tool_name}", req_id)
 
