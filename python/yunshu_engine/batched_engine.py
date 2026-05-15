@@ -1569,6 +1569,7 @@ class BatchedEngine:
         reasoning_effort: str | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        priority: int = 0,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
