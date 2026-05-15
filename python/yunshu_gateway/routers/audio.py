@@ -121,6 +121,9 @@ class TTSRequest(BaseModel):
     # Voice cloning parameters (mlx-audio pattern)
     ref_audio: Optional[str] = None  # Reference audio path for voice cloning
     ref_text: Optional[str] = None  # Reference text for voice cloning
+    # Additional mlx-audio parameters
+    language: Optional[str] = None  # Language code for multilingual TTS
+    seed: Optional[int] = None  # Random seed for reproducibility
     # Segmented streaming (oMLX pattern: 300-char chunks)
     segment_size: int = Field(default=300, ge=50, le=2000)
 
@@ -200,6 +203,8 @@ async def create_speech(req: TTSRequest) -> Response:
             max_tokens=req.max_tokens,
             ref_audio=req.ref_audio,
             ref_text=req.ref_text,
+            language=req.language,
+            seed=req.seed,
         )
     except Exception as e:
         logger.error(f"TTS synthesis error: {e}", exc_info=True)
@@ -272,6 +277,8 @@ async def stream_speech(req: TTSRequest, request: Request):
                 max_tokens=req.max_tokens,
                 ref_audio=req.ref_audio,
                 ref_text=req.ref_text,
+                language=req.language,
+                seed=req.seed,
             ):
                 if chunk.get("is_final"):
                     if seg_idx == len(segments) - 1:
