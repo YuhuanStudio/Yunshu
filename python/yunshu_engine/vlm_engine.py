@@ -501,7 +501,7 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, js, enable_thinking=_enable_thinking)
+                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, stop_token_ids=stop_token_ids, repetition_penalty=repetition_penalty, frequency_penalty=freq_p, presence_penalty=pres_p, logit_bias=lb, json_schema=js, enable_thinking=_enable_thinking, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
 
                 from mlx_lm.generate import generate_step
                 from mlx_lm.sample_utils import make_sampler
@@ -597,6 +597,9 @@ class VLMEngine:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         cancel_event: Any = None,
+        stop_token_ids: list[int] | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation: yields RequestOutput per token."""
@@ -646,7 +649,7 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if has_images or has_audio:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
                     return
 
                 prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
@@ -657,16 +660,16 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
                     return
 
                 from mlx_lm.generate import generate_step
                 from mlx_lm.sample_utils import make_sampler
 
-                sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+                sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
                 eos_ids = self._get_eos_ids()
 
-                # Build stop token IDs
+                # Build stop token IDs from string sequences + explicit stop_token_ids
                 stop_ids = set(eos_ids)
                 if stop:
                     for s in stop:
@@ -676,6 +679,8 @@ class VLMEngine:
                                 stop_ids.add(ids[0])
                         except Exception:
                             logger.debug("failed", exc_info=True)
+                if stop_token_ids:
+                    stop_ids.update(stop_token_ids)
 
                 has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
                 if has_detokenizer:
@@ -938,12 +943,15 @@ class VLMEngine:
         top_k: int = 0,
         min_p: float = 0.0,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         json_schema: dict | None = None,
         enable_thinking: bool | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -957,7 +965,7 @@ class VLMEngine:
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
         eos_ids = self._get_eos_ids()
 
         # JSON schema / grammar constraint
@@ -989,7 +997,7 @@ class VLMEngine:
 
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
-        # Build stop IDs from string sequences
+        # Build stop IDs from string sequences + explicit stop_token_ids
         stop_ids = set(eos_ids)
         if stop:
             for s in stop:
@@ -999,6 +1007,8 @@ class VLMEngine:
                         stop_ids.add(ids[0])
                 except Exception:
                     logger.debug("failed", exc_info=True)
+        if stop_token_ids:
+            stop_ids.update(stop_token_ids)
 
         with mx.stream(generation_stream):
             # SpecPrefill: for long text prompts, use attention-based sparse
@@ -1093,6 +1103,8 @@ class VLMEngine:
         audio_paths: list[str] | None = None,
         enable_thinking: bool | None = None,
         cancel_event: Any = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate().
 
@@ -1141,7 +1153,7 @@ class VLMEngine:
                     image_hash[:8],
                 )
 
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
         stop_suffixes = stop or []
         token_count = 0
         accumulated = ""  # Accumulate text for multi-token stop suffix matching
@@ -1255,6 +1267,9 @@ class VLMEngine:
         json_schema: dict | None = None,
         enable_thinking: bool | None = None,
         cancel_event: asyncio.Event | None = None,
+        stop_token_ids: list[int] | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1267,7 +1282,7 @@ class VLMEngine:
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
         eos_ids = self._get_eos_ids()
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 
@@ -1297,7 +1312,7 @@ class VLMEngine:
             except Exception:
                 logger.warning("Grammar constraint init failed (stream)", exc_info=True)
 
-        # Build stop IDs
+        # Build stop IDs + explicit stop_token_ids
         stop_ids = set(eos_ids)
         stop_suffixes = []
         if stop:
@@ -1310,6 +1325,8 @@ class VLMEngine:
                         stop_suffixes.append(s)
                 except Exception:
                     logger.debug("failed", exc_info=True)
+        if stop_token_ids:
+            stop_ids.update(stop_token_ids)
 
         has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
         if has_detokenizer:

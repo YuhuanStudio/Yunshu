@@ -120,6 +120,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
 
     PUBLIC_PATHS = {"/health", "/health/ready", "/health/live", "/docs", "/openapi.json", "/redoc", "/metrics"}
+    # Prefixes that are exempt from rate limiting (monitoring, admin health)
+    PUBLIC_PREFIXES = ("/api/v1/gw/monitoring/", "/api/v1/admin/hardware", "/api/v1/admin/memory", "/api/v1/admin/metrics")
 
     def __init__(self, app, rpm: int | None = None):
         super().__init__(app)
@@ -148,6 +150,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+        if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
 
         # Check RBAC key-level rate limit first

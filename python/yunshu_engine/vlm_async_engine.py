@@ -51,6 +51,18 @@ class VLMRequestConfig:
     logit_bias: dict[int, float] | None = None
     json_schema: dict | str | None = None
     tools: list[dict] | None = None
+    stop_token_ids: list[int] | None = None
+    min_p: float = 0.0
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.0
+    stop: list[str] = field(default_factory=list)
+    enable_thinking: bool | None = None
+    stream: bool = False
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    logit_bias: dict[int, float] | None = None
+    json_schema: dict | str | None = None
+    tools: list[dict] | None = None
 
 
 @dataclass
@@ -166,6 +178,10 @@ class VLMAsyncEngineCore:
         logit_bias: dict[int, float] | None = None,
         json_schema: dict | str | None = None,
         tools: list[dict] | None = None,
+        stop_token_ids: list[int] | None = None,
+        min_p: float = 0.0,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
         **kwargs,
     ) -> str:
         """Add a VLM generation request. Returns request_id."""
@@ -191,6 +207,10 @@ class VLMAsyncEngineCore:
             logit_bias=logit_bias,
             json_schema=json_schema,
             tools=tools,
+            stop_token_ids=stop_token_ids,
+            min_p=min_p,
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
         )
 
         state = _VLMRequestState(
@@ -250,14 +270,18 @@ class VLMAsyncEngineCore:
             temperature=config.temperature,
             top_p=config.top_p,
             top_k=config.top_k,
+            min_p=config.min_p,
             seed=config.seed,
             repetition_penalty=config.repetition_penalty,
             stop=config.stop,
+            stop_token_ids=config.stop_token_ids,
             enable_thinking=config.enable_thinking,
             frequency_penalty=config.frequency_penalty,
             presence_penalty=config.presence_penalty,
             logit_bias=config.logit_bias,
             json_schema=config.json_schema,
+            xtc_probability=config.xtc_probability,
+            xtc_threshold=config.xtc_threshold,
         )
 
         text = result.get("text", "")
@@ -286,14 +310,18 @@ class VLMAsyncEngineCore:
             temperature=config.temperature,
             top_p=config.top_p,
             top_k=config.top_k,
+            min_p=config.min_p,
             seed=config.seed,
             repetition_penalty=config.repetition_penalty,
             stop=config.stop,
+            stop_token_ids=config.stop_token_ids,
             enable_thinking=config.enable_thinking,
             frequency_penalty=config.frequency_penalty,
             presence_penalty=config.presence_penalty,
             logit_bias=config.logit_bias,
             json_schema=config.json_schema,
+            xtc_probability=config.xtc_probability,
+            xtc_threshold=config.xtc_threshold,
         ):
             if state.done:
                 break

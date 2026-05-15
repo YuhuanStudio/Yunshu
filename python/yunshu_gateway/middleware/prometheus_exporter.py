@@ -331,6 +331,16 @@ class PrometheusMetrics:
             "Total chunked prefill chunks processed",
         )
 
+        # ITL gauges (set from monitoring.py prometheus_export endpoint)
+        self._gauges["itl_p50_ms"] = _Gauge(
+            "yunshu_itl_p50_ms",
+            "Inter-token latency p50 in milliseconds",
+        )
+        self._gauges["itl_p99_ms"] = _Gauge(
+            "yunshu_itl_p99_ms",
+            "Inter-token latency p99 in milliseconds",
+        )
+
         # Scheduler monitoring gauges (MON-2/4/5)
         self._gauges["scheduler_waiting_queue_depth"] = _Gauge(
             "yunshu_scheduler_waiting_queue_depth",

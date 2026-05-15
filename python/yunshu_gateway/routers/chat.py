@@ -1134,6 +1134,12 @@ async def _stream_vlm_response(
     """SSE streaming for VLM engine (oMLX with_sse_keepalive pattern)."""
     loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
 
+    # Register with request tracker for cancellation support (before _token_source
+    # so cancel_event is available to pass into the engine)
+    from yunshu_engine.request_tracker import get_request_tracker
+    _vlm_tracker = get_request_tracker()
+    _vlm_gen = _vlm_tracker.register(completion_id, req.model)
+
     async def _token_source():
         nonlocal loaded_adapter
         first_chunk = True
@@ -1168,6 +1174,7 @@ async def _stream_vlm_response(
             top_logprobs=req.top_logprobs,
             spec_decode=req.spec_decode,
             priority=req.priority,
+            cancel_event=_vlm_gen.cancel_event,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
@@ -1215,11 +1222,6 @@ async def _stream_vlm_response(
             )
 
         yield format_openai_done()
-
-    # Register with request tracker for cancellation support
-    from yunshu_engine.request_tracker import get_request_tracker
-    _vlm_tracker = get_request_tracker()
-    _vlm_gen = _vlm_tracker.register(completion_id, req.model)
     try:
       async for event in with_sse_keepalive(
           _token_source(),

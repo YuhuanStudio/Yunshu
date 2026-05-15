@@ -1,6 +1,8 @@
 """OpenAI Models API compatible router."""
 
+import asyncio
 import logging
+import threading
 import time
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +13,10 @@ from pydantic import BaseModel
 from ..engine import get_engine, get_model_manager
 
 router = APIRouter(tags=["models"])
+
+# Guard against concurrent load/unload of the same model
+_model_ops_lock = threading.Lock()
+_model_ops_inflight: set[str] = set()
 
 
 class LoadModelRequest(BaseModel):
@@ -92,44 +98,65 @@ async def get_model(model_id: str) -> dict:
 @router.post("/models/load")
 async def load_model(req: LoadModelRequest) -> dict:
     """Load a model (supports both single-engine and multi-model modes)."""
-    manager = get_model_manager()
+    # Guard against concurrent load/unload of the same model
+    with _model_ops_lock:
+        if req.model in _model_ops_inflight:
+            raise HTTPException(status_code=409, detail=f"Model '{req.model}' is already being loaded or unloaded")
+        _model_ops_inflight.add(req.model)
 
-    if manager is not None:
-        try:
-            engine = await manager.get_engine(req.model)
-            if hasattr(engine, 'is_running') and not engine.is_running:
-                await engine.start()
-            return {"status": "loaded", "model": req.model}
-        except KeyError:
-            raise HTTPException(status_code=404, detail=f"Model '{req.model}' not registered")
-        except Exception as e:
-            logger.error(f"Model load error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Model loading failed")
+    try:
+        manager = get_model_manager()
 
-    # Single-engine mode
-    engine = get_engine()
-    if engine is None:
-        raise HTTPException(status_code=503, detail="Engine not initialized")
+        if manager is not None:
+            try:
+                engine = await manager.get_engine(req.model)
+                if hasattr(engine, 'is_running') and not engine.is_running:
+                    await engine.start()
+                return {"status": "loaded", "model": req.model}
+            except KeyError:
+                raise HTTPException(status_code=404, detail=f"Model '{req.model}' not registered")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Model load error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail="Model loading failed")
 
-    import asyncio
-    from yunshu_engine.mlx_executor import get_mlx_executor
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(get_mlx_executor(), engine.load, req.model)
-    await engine.start()
+        # Single-engine mode
+        engine = get_engine()
+        if engine is None:
+            raise HTTPException(status_code=503, detail="Engine not initialized")
 
-    return {"status": "loaded", "model": req.model}
+        from yunshu_engine.mlx_executor import get_mlx_executor
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(get_mlx_executor(), engine.load, req.model)
+        await engine.start()
+
+        return {"status": "loaded", "model": req.model}
+    finally:
+        with _model_ops_lock:
+            _model_ops_inflight.discard(req.model)
 
 
 @router.post("/models/unload/{model_id}")
 async def unload_model(model_id: str) -> dict:
     """Unload a model and release memory."""
-    manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(status_code=400, detail="Multi-model mode not active")
+    # Guard against concurrent load/unload of the same model
+    with _model_ops_lock:
+        if model_id in _model_ops_inflight:
+            raise HTTPException(status_code=409, detail=f"Model '{model_id}' is already being loaded or unloaded")
+        _model_ops_inflight.add(model_id)
 
-    entry = manager.get_entry(model_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+    try:
+        manager = get_model_manager()
+        if manager is None:
+            raise HTTPException(status_code=400, detail="Multi-model mode not active")
 
-    await manager.unload_model(model_id)
-    return {"status": "unloaded", "model": model_id}
+        entry = manager.get_entry(model_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+
+        await manager.unload_model(model_id)
+        return {"status": "unloaded", "model": model_id}
+    finally:
+        with _model_ops_lock:
+            _model_ops_inflight.discard(model_id)

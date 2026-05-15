@@ -77,13 +77,13 @@ async def list_models(request: Request, _=Depends(require_permission("can_view_a
     manager = get_model_manager()
 
     if manager is not None:
-        for mid, entry in manager._entries.items():
+        for entry in manager.list_entries():
             models.append(ModelResponse(
-                model_id=mid,
+                model_id=entry.model_id,
                 model_type=entry.model_type.value if hasattr(entry.model_type, 'value') else str(entry.model_type),
                 status="loaded" if entry.is_loaded else "registered",
                 size_bytes=entry.estimated_bytes,
-                pinned=entry.pinned,
+                pinned=entry.is_pinned,
             ))
     else:
         engine = get_engine()
@@ -176,7 +176,7 @@ async def unload_model(req: ModelUnloadRequest, request: Request, _=Depends(requ
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    entry = manager._entries.get(req.model_id)
+    entry = manager.get_entry(req.model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model_id}' not found")
 
@@ -205,14 +205,17 @@ async def delete_model(model_id: str, request: Request, _=Depends(require_permis
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
 
-    entry = manager._entries.get(model_id)
+    entry = manager.get_entry(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
     if entry.is_loaded:
         raise HTTPException(status_code=409, detail="Unload the model first")
 
-    del manager._entries[model_id]
+    try:
+        manager.unregister_model(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"status": "deleted", "model_id": model_id}
 
 
@@ -269,7 +272,7 @@ async def get_model_settings(model_id: str, _=Depends(require_permission("can_vi
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not available")
 
-    entry = manager._entries.get(model_id)
+    entry = manager.get_entry(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model not registered: {model_id}")
 
@@ -301,7 +304,7 @@ async def update_model_settings(
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not available")
 
-    entry = manager._entries.get(model_id)
+    entry = manager.get_entry(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model not registered: {model_id}")
 
@@ -551,9 +554,9 @@ async def get_kv_cache_stats(_=Depends(require_permission("can_view_admin"))):
     # Try ModelManager path
     manager = get_model_manager()
     if manager is not None:
-        for mid, entry in manager._entries.items():
-            if entry.is_loaded and hasattr(entry, "_engine"):
-                eng = entry._engine
+        for entry in manager.list_entries():
+            if entry.is_loaded and hasattr(entry, "engine") and entry.engine is not None:
+                eng = entry.engine
                 if hasattr(eng, "get_kv_cache_stats"):
                     return eng.get_kv_cache_stats()
 
@@ -785,9 +788,9 @@ async def get_radix_tree_stats(_=Depends(require_permission("can_view_admin"))):
 
     manager = get_model_manager()
     if manager is not None:
-        for mid, entry in manager._entries.items():
-            if entry.is_loaded and hasattr(entry, "_engine"):
-                eng = entry._engine
+        for entry in manager.list_entries():
+            if entry.is_loaded and hasattr(entry, "engine") and entry.engine is not None:
+                eng = entry.engine
                 if hasattr(eng, "get_radix_tree_stats"):
                     return eng.get_radix_tree_stats()
 
@@ -843,7 +846,7 @@ async def get_system_info(_=Depends(require_permission("can_view_admin"))):
                 "is_loaded": entry.is_loaded,
                 "engine_type": entry.engine_type,
             })
-        info["memory"] = manager.memory_usage()
+        info["memory"] = manager.memory_usage
     engine = get_engine()
     if engine and engine.is_loaded:
         info["current_model"] = engine.model_name

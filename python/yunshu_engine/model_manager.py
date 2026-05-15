@@ -596,6 +596,21 @@ class ModelManager:
         """Return all registered model entries."""
         return list(self._entries.values())
 
+    def unregister_model(self, model_id: str) -> bool:
+        """Remove a model registration (must not be loaded).
+
+        Returns True if the model was removed, False if not found.
+        Raises ValueError if the model is still loaded.
+        """
+        entry = self._entries.get(model_id)
+        if entry is None:
+            return False
+        if entry.is_loaded:
+            raise ValueError(f"Cannot unregister loaded model '{model_id}'. Unload first.")
+        del self._entries[model_id]
+        logger.info("Unregistered model: %s", model_id)
+        return True
+
     def discover_models(self, models_dir: str) -> int:
         """Scan a directory for model subdirectories and auto-register them.
 

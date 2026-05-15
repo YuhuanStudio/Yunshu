@@ -38,6 +38,12 @@ def _collect_engines(default_engine, model_manager) -> list[tuple[str, Any]]:
     return engines
 
 
+def _collect_engines_from_globals() -> list[tuple[str, Any]]:
+    """Convenience wrapper that reads engine/manager from gateway globals."""
+    from ..engine import get_engine, get_model_manager
+    return _collect_engines(get_engine(), get_model_manager())
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -307,7 +313,8 @@ async def prometheus_export() -> str:
                     if core is not None:
                         pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
                         pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
-                        pm.set_gauge("compute_utilization_pct", core.get_compute_utilization())
+                        pm.set_gauge("compute_utilization_pct",
+                            core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0)
                         pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0))
                 except Exception:
                     logger.debug("scheduler monitoring gauge population failed", exc_info=True)
@@ -378,7 +385,7 @@ async def spec_decode_stats() -> dict[str, Any]:
                     info["spec_stats"] = getattr(decoder, '_stats', {})
                 if ngram is not None:
                     info["ngram_stats"] = getattr(entry.engine, '_ngram_stats', {})
-                if mtp is not None:
+                if mtp is not None and hasattr(mtp, 'stats'):
                     s = mtp.stats
                     info["mtp_stats"] = {
                         "accepts": s.accepts,
@@ -496,14 +503,18 @@ async def data_parallel_stats() -> dict[str, Any]:
 @router.get("/per-model")
 async def per_model_stats() -> dict[str, Any]:
     """Per-model request statistics."""
-    from yunshu_engine.server_metrics import get_server_metrics
-    metrics = get_server_metrics()
-    model_ids = list(getattr(metrics, '_per_model', {}).keys())
-    result = {}
-    for mid in model_ids:
-        result[mid] = metrics.get_snapshot(model_id=mid)
-    result["_summary"] = metrics.get_snapshot()
-    return result
+    try:
+        from yunshu_engine.server_metrics import get_server_metrics
+        metrics = get_server_metrics()
+        model_ids = list(getattr(metrics, '_per_model', {}).keys())
+        result = {}
+        for mid in model_ids:
+            result[mid] = metrics.get_snapshot(model_id=mid)
+        result["_summary"] = metrics.get_snapshot()
+        return result
+    except Exception:
+        logger.debug("per-model stats unavailable", exc_info=True)
+        return {"error": "server metrics not available", "engines": []}
 
 
 @router.get("/thinking-segments")
@@ -559,8 +570,12 @@ async def ane_embedding_stats() -> dict[str, Any]:
     Reports ANE availability, CoreML model compilation status, inference
     count, and average latency. Enabled via YUNSHU_ANE_EMBEDDINGS=1.
     """
-    from yunshu_engine.ane_embedding import get_ane_embedding_stats
-    return get_ane_embedding_stats()
+    try:
+        from yunshu_engine.ane_embedding import get_ane_embedding_stats
+        return get_ane_embedding_stats()
+    except Exception:
+        logger.debug("ane_embedding module unavailable", exc_info=True)
+        return {"enabled": False, "error": "ane_embedding module not available"}
 
 
 @router.get("/external-prefill")
@@ -571,8 +586,12 @@ async def external_prefill_stats() -> dict[str, Any]:
     Includes server stats (requests served, avg prefill time, bytes transferred)
     and client stats (requests sent, avg latency, success rate).
     """
-    from yunshu_engine.external_prefill import get_external_prefill_stats
-    return get_external_prefill_stats()
+    try:
+        from yunshu_engine.external_prefill import get_external_prefill_stats
+        return get_external_prefill_stats()
+    except Exception:
+        logger.debug("external_prefill module unavailable", exc_info=True)
+        return {"enabled": False, "error": "external_prefill module not available"}
 
 
 @router.get("/health-dashboard")
@@ -583,9 +602,15 @@ async def health_dashboard() -> dict[str, Any]:
     memory guard, KV cache, and spec decode into a single
     health score report.
     """
-    from yunshu_engine.tracing import get_health_dashboard
-    dashboard = get_health_dashboard()
-    return dashboard.get_report()
+    try:
+        from yunshu_engine.tracing import get_health_dashboard
+        dashboard = get_health_dashboard()
+        if dashboard is None:
+            return {"enabled": False, "reason": "health dashboard not initialized"}
+        return dashboard.get_report()
+    except Exception:
+        logger.debug("health dashboard unavailable", exc_info=True)
+        return {"enabled": False, "error": "health dashboard module not available"}
 
 
 @router.get("/reasoning-tokens")
@@ -744,7 +769,7 @@ async def attention_eviction_stats() -> dict[str, Any]:
     and heuristic vs real attention weight update counts.
     """
     try:
-        engines = _collect_engines()
+        engines = _collect_engines_from_globals()
         results = []
         for model_id, engine in engines:
             if hasattr(engine, '_engine_core') and engine._engine_core is not None:

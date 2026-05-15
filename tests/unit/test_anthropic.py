@@ -190,7 +190,7 @@ class TestAnthropicTool:
     def test_tool_defaults(self):
         tool = AnthropicTool(name="test_tool")
         assert tool.name == "test_tool"
-        assert tool.type == "custom"
+        assert tool.type is None  # Not part of Anthropic spec for user-defined tools
         assert tool.description is None
         assert tool.input_schema is None
 
@@ -202,11 +202,19 @@ class TestAnthropicTool:
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
             },
-            type="custom",
         )
         assert tool.name == "search"
         assert tool.description == "Search the web"
         assert tool.input_schema is not None
+        assert tool.type is None  # User-defined tools have no type
+
+    def test_server_side_tool_with_type(self):
+        """Server-side tools (web_search, computer, etc.) carry a type field."""
+        tool = AnthropicTool(
+            name="web_search",
+            type="web_search_20250305",
+        )
+        assert tool.type == "web_search_20250305"
 
 
 # ── Message Format Conversion Tests ──
@@ -298,7 +306,7 @@ class TestAnthropicResponseFormat:
 
         # The response should have these fields
         expected_fields = {
-            "id", "type", "role", "content", "model", "stop_reason", "usage"
+            "id", "type", "role", "content", "model", "stop_reason", "stop_sequence", "usage"
         }
         # Build a mock response to validate structure
         mock_response = {
@@ -308,6 +316,7 @@ class TestAnthropicResponseFormat:
             "content": [{"type": "text", "text": "Hello!"}],
             "model": "claude-3",
             "stop_reason": "end_turn",
+            "stop_sequence": None,
             "usage": {"input_tokens": 5, "output_tokens": 3},
         }
 
@@ -333,10 +342,33 @@ class TestAnthropicResponseFormat:
         assert isinstance(block["text"], str)
 
     def test_thinking_content_block(self):
-        """Thinking content block should have type 'thinking'."""
-        block = {"type": "thinking", "thinking": "reasoning content"}
+        """Thinking content block should have type 'thinking' and signature."""
+        block = {"type": "thinking", "thinking": "reasoning content", "signature": "yunshu-reasoning"}
         assert block["type"] == "thinking"
         assert isinstance(block["thinking"], str)
+        assert "signature" in block
+
+    def test_stop_reason_mapping(self):
+        """Internal finish reasons should map to Anthropic stop_reason values."""
+        from yunshu_gateway.routers.anthropic import _map_stop_reason
+        assert _map_stop_reason("stop") == "end_turn"
+        assert _map_stop_reason("length") == "max_tokens"
+        assert _map_stop_reason("tool_calls") == "tool_use"
+        assert _map_stop_reason(None, matched_stop="END") == "stop_sequence"
+        assert _map_stop_reason(None, has_tool_calls=True) == "tool_use"
+        assert _map_stop_reason(None) == "end_turn"
+        assert _map_stop_reason("unknown") == "end_turn"
+
+    def test_usage_has_cache_fields(self):
+        """Usage should include cache_creation_input_tokens and cache_read_input_tokens."""
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 80,
+            "cache_read_input_tokens": 20,
+        }
+        assert "cache_creation_input_tokens" in usage
+        assert "cache_read_input_tokens" in usage
 
 
 # ── Streaming Event Tests ──
@@ -363,6 +395,7 @@ class TestAnthropicStreamingEvents:
                 "type": "message_start",
                 "message": {"id": "msg_test", "type": "message", "role": "assistant",
                             "content": [], "model": "claude-3", "stop_reason": None,
+                            "stop_sequence": None,
                             "usage": {"input_tokens": 0, "output_tokens": 0}},
             },
             "content_block_start": {
@@ -372,7 +405,7 @@ class TestAnthropicStreamingEvents:
             "content_block_stop": {"type": "content_block_stop", "index": 0},
             "message_delta": {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn"},
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
                 "usage": {"output_tokens": 42},
             },
             "message_stop": {"type": "message_stop"},

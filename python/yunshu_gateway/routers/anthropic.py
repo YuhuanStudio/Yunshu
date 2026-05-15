@@ -34,6 +34,32 @@ from ..streaming import (
 router = APIRouter(tags=["anthropic"])
 
 
+# ── Anthropic stop_reason mapping ──
+# Internal: "stop", "length", "tool_calls"
+# Anthropic: "end_turn", "max_tokens", "stop_sequence", "tool_use"
+
+_FINISH_REASON_MAP = {
+    "stop": "end_turn",
+    "length": "max_tokens",
+    "tool_calls": "tool_use",
+}
+
+
+def _map_stop_reason(
+    finish_reason: str | None,
+    matched_stop: str | None = None,
+    has_tool_calls: bool = False,
+) -> str:
+    """Map internal finish_reason to Anthropic stop_reason."""
+    if has_tool_calls:
+        return "tool_use"
+    if matched_stop:
+        return "stop_sequence"
+    if finish_reason in _FINISH_REASON_MAP:
+        return _FINISH_REASON_MAP[finish_reason]
+    return "end_turn"
+
+
 def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
     """Record token counts to the metrics middleware."""
     try:
@@ -52,20 +78,31 @@ class AnthropicMessage(BaseModel):
     content: Optional[str | list[dict]] = None
 
 
-class AnthropicToolFunction(BaseModel):
-    name: str
-    description: Optional[str] = None
-    input_schema: Optional[dict] = None
-
-
 class AnthropicTool(BaseModel):
+    """Anthropic tool definition.
+
+    Per the Anthropic Messages API spec, tools have: name, description,
+    input_schema. The ``type`` field is NOT part of the Anthropic spec —
+    Anthropic server-side tools (web_search, computer, etc.) carry versioned
+    types like ``web_search_20250305`` but user-defined tools have no type.
+    """
     name: str
     description: Optional[str] = None
     input_schema: Optional[dict] = None
-    type: str = "custom"
+    type: Optional[str] = None  # Server-side tools set this; user tools omit it
 
 
 class AnthropicMessagesRequest(BaseModel):
+    """Anthropic Messages API request model.
+
+    Native Anthropic fields: model, messages, max_tokens, temperature, top_p,
+    top_k, stream, stop_sequences, system, thinking, metadata, tools,
+    tool_choice.
+
+    Extended fields (Yunshu-specific, not in the Anthropic spec) are marked
+    with comments and forwarded to the engine for additional functionality.
+    """
+    # ── Anthropic-native fields ──
     model: str
     messages: list[AnthropicMessage]
     max_tokens: int = 1024
@@ -79,8 +116,9 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: Optional[dict] = None
     tools: Optional[list[AnthropicTool]] = None
     tool_choice: Optional[dict | str] = None
+
+    # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: Optional[str] = None
-    # Sampling parameters (forwarded to engine)
     min_p: float = 0.0
     repetition_penalty: float = 1.0
     frequency_penalty: float = 0.0
@@ -97,6 +135,9 @@ class AnthropicMessagesRequest(BaseModel):
     logprobs: bool = False
     top_logprobs: Optional[int] = None
     logits_processors: Optional[list] = None
+    # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
+    response_format: Optional[dict] = None
+    chat_template_kwargs: Optional[dict] = None
 
 
 # ── Content block helpers ──
@@ -315,7 +356,19 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
 
     # Resolve engine
-    engine, is_batched = await _resolve_engine(req.model)
+    try:
+        engine, is_batched = await _resolve_engine(req.model)
+    except HTTPException as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={
+                "type": "error",
+                "error": {
+                    "type": "not_found_error" if e.status_code == 404 else "overloaded_error",
+                    "message": e.detail,
+                },
+            },
+        )
 
     if req.stream:
         # Note: temp files for streaming are cleaned up by the caller
@@ -425,7 +478,7 @@ async def _non_stream_batched(engine, messages, req, stop):
         from ..streaming import extract_thinking
         thinking_text, visible_text = extract_thinking(result.text)
         if thinking_text:
-            content.append({"type": "thinking", "thinking": thinking_text})
+            content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
 
     text_block: dict = {"type": "text", "text": visible_text}
 
@@ -441,16 +494,14 @@ async def _non_stream_batched(engine, messages, req, stop):
 
     content.append(text_block)
 
-    stop_reason = result.finish_reason or "end_turn"
-    if stop_reason == "stop":
-        stop_reason = "end_turn"
     matched_stop = None
     if stop and visible_text:
         for seq in stop:
             if visible_text.rstrip().endswith(seq.rstrip()):
-                stop_reason = "stop_sequence"
                 matched_stop = seq
                 break
+
+    stop_reason = _map_stop_reason(result.finish_reason, matched_stop)
 
     cache_creation = getattr(result, 'prompt_tokens', 0) - getattr(result, 'cached_tokens', 0)
     cache_read = getattr(result, 'cached_tokens', 0)
@@ -462,6 +513,7 @@ async def _non_stream_batched(engine, messages, req, stop):
         "content": content,
         "model": req.model,
         "stop_reason": stop_reason,
+        "stop_sequence": matched_stop,
         "usage": {
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
@@ -469,8 +521,6 @@ async def _non_stream_batched(engine, messages, req, stop):
             "cache_read_input_tokens": max(0, cache_read),
         },
     }
-    if matched_stop:
-        resp["stop_sequence"] = matched_stop
     return JSONResponse(resp)
 
 
@@ -534,7 +584,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
         from ..streaming import extract_thinking
         thinking_text, visible_text = extract_thinking(text)
         if thinking_text:
-            content.append({"type": "thinking", "thinking": thinking_text})
+            content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
     text_block: dict = {"type": "text", "text": visible_text}
 
     # Include logprobs in the text content block if requested
@@ -547,13 +597,24 @@ async def _non_stream_legacy(engine, messages, req, stop):
 
     content.append(text_block)
 
+    # Check for matched stop sequences
+    matched_stop = None
+    if stop and visible_text:
+        for seq in stop:
+            if visible_text.rstrip().endswith(seq.rstrip()):
+                matched_stop = seq
+                break
+
+    stop_reason = _map_stop_reason(finish_reason, matched_stop)
+
     return JSONResponse({
         "id": message_id,
         "type": "message",
         "role": "assistant",
         "content": content,
         "model": req.model,
-        "stop_reason": "end_turn" if finish_reason == "stop" else (finish_reason or "end_turn"),
+        "stop_reason": stop_reason,
+        "stop_sequence": matched_stop,
         "usage": {
             "input_tokens": prompt_toks,
             "output_tokens": completion_toks,
@@ -598,6 +659,7 @@ async def _stream_anthropic(
             "content": [],
             "model": req.model,
             "stop_reason": None,
+            "stop_sequence": None,
             "usage": {"input_tokens": 0, "output_tokens": 0},
         },
     }
@@ -605,7 +667,7 @@ async def _stream_anthropic(
 
     # content_block_start for thinking (if enabled)
     if enable_thinking:
-        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n".encode("utf-8")
+        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n".encode("utf-8")
         thinking_block_started = True
 
     async def _token_source():
@@ -646,7 +708,7 @@ async def _stream_anthropic(
                 # Thinking content
                 if enable_thinking and parsed["thinking"]:
                     if not thinking_block_started:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': parsed['thinking']}})}\n\n"
@@ -739,7 +801,7 @@ async def _stream_anthropic(
                 # Thinking content (legacy engine path)
                 if enable_thinking and parsed["thinking"]:
                     if not thinking_block_started:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': parsed['thinking']}})}\n\n"
@@ -796,13 +858,11 @@ async def _stream_anthropic(
         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
 
         # message_delta (stop + usage)
-        stop_reason = "end_turn"
-        if matched_stop:
-            stop_reason = "stop_sequence"
+        stop_reason = _map_stop_reason(None, matched_stop, has_tool_calls=tool_use_block_started)
         cache_creation = max(0, input_tokens - cached_tokens)
         delta_data = {
             "type": "message_delta",
-            "delta": {"stop_reason": stop_reason},
+            "delta": {"stop_reason": stop_reason, "stop_sequence": matched_stop},
             "usage": {
                 "output_tokens": output_tokens,
                 "cache_creation_input_tokens": cache_creation,
@@ -864,12 +924,25 @@ def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] |
 
 @router.post("/messages/count_tokens")
 async def count_tokens(req: AnthropicMessagesRequest) -> dict:
-    """Token counting endpoint (Anthropic compatible)."""
-    engine, _ = await _resolve_engine(req.model)
+    """Token counting endpoint (Anthropic compatible).
+
+    Returns Anthropic-format errors on failure:
+      {"type": "error", "error": {"type": "...", "message": "..."}}
+    """
+    try:
+        engine, _ = await _resolve_engine(req.model)
+    except HTTPException as e:
+        return JSONResponse(
+            status_code=e.status_code,
+            content={"type": "error", "error": {"type": "not_found_error" if e.status_code == 404 else "api_error", "message": e.detail}},
+        )
 
     tokenizer = getattr(engine, '_tokenizer', None)
     if tokenizer is None:
-        raise HTTPException(status_code=503, detail="No tokenizer available")
+        return JSONResponse(
+            status_code=503,
+            content={"type": "error", "error": {"type": "overloaded_error", "message": "No tokenizer available"}},
+        )
 
     text_parts = []
     if req.system:
