@@ -2073,6 +2073,10 @@ class BatchedEngine:
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
                             _put((new_text, n_tok, True, len(_thinking_tokens), _lp_entry))
+                            detokenizer.finalize()
+                            _remaining = detokenizer.last_segment
+                            if _remaining:
+                                _put((_remaining, n_tok, False, len(_thinking_tokens), None))
                             if _pipeline is not None:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
@@ -2094,6 +2098,10 @@ class BatchedEngine:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
                             _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
+                        detokenizer.finalize()
+                        _remaining = detokenizer.last_segment
+                        if _remaining:
+                            _put((_remaining, n_tok, False, len(_thinking_tokens), None))
                         if _pipeline is not None:
                             _pipeline.finish()
                         prefix_cache.add(ids, cache)
@@ -2991,6 +2999,10 @@ class BatchedEngine:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
                             _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
                             if stop_hit or suffix_hit:
+                                detokenizer.finalize()
+                                _remaining = detokenizer.last_segment
+                                if _remaining:
+                                    _put((_remaining, n_tok, False))
                                 prefix_cache.add(ids, cache)
                                 mx.synchronize()
                                 _put(_sentinel)
@@ -3071,6 +3083,10 @@ class BatchedEngine:
                     if self._adaptive_spec is not None:
                         self._adaptive_spec.record_step(n_draft, accepted)
                     if stopped:
+                        detokenizer.finalize()
+                        _remaining = detokenizer.last_segment
+                        if _remaining:
+                            _put((_remaining, n_tok, False))
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
                         _put(_sentinel)

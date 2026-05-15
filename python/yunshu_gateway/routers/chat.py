@@ -1040,6 +1040,7 @@ async def _stream_vlm_response(
         vlm_prompt_tok = 0
         vlm_completion_tok = 0
         vlm_reasoning_tok = 0
+        vlm_last_finish_reason = None
         include_usage = (
             req.stream_options is not None and req.stream_options.include_usage
         )
@@ -1069,14 +1070,24 @@ async def _stream_vlm_response(
                 vlm_completion_tok += 1
             if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                 vlm_reasoning_tok = output.reasoning_tokens
+            if output.finish_reason is not None:
+                vlm_last_finish_reason = output.finish_reason
             yield format_openai_chunk(
                 completion_id=completion_id,
                 model=req.model,
                 delta_content=output.token_text,
-                finish_reason=output.finish_reason,
+                finish_reason=None,  # intermediate: always None
                 include_role=first_chunk,
             )
             first_chunk = False
+
+        # Final chunk with finish_reason
+        yield format_openai_chunk(
+            completion_id=completion_id,
+            model=req.model,
+            delta_content="",
+            finish_reason=vlm_last_finish_reason or "stop",
+        )
 
         if include_usage:
             tok = getattr(vlm_engine, '_tokenizer', None)
@@ -1128,9 +1139,10 @@ async def _stream_response_multi(
     )
     total_prompt_tok = 0
     total_completion_tok = 0
+    total_reasoning_tok = 0
 
     async def _token_source():
-        nonlocal total_prompt_tok, total_completion_tok
+        nonlocal total_prompt_tok, total_completion_tok, total_reasoning_tok
         for choice_idx in range(req.n):
             if gen.cancel_event.is_set():
                 yield _format_choice_chunk(
@@ -1139,6 +1151,8 @@ async def _stream_response_multi(
                 break
             first_chunk_for_choice = True
             choice_completion_tok = 0
+            choice_finish_reason = None  # track actual finish_reason from engine
+            choice_reasoning_tok = 0  # track per-choice reasoning tokens
 
             if is_batched:
                 stream = engine.stream_chat(
@@ -1172,12 +1186,18 @@ async def _stream_response_multi(
                         return
                     if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                         total_prompt_tok = output.prompt_tokens
+                    if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                        choice_reasoning_tok = output.reasoning_tokens
                     token_text = output.new_text
                     if token_text:
                         choice_completion_tok += 1
+                    # Only set finish_reason on the final token from engine
+                    fr = output.finish_reason
+                    if fr is not None:
+                        choice_finish_reason = fr
                     yield _format_choice_chunk(
                         completion_id, req.model, choice_idx,
-                        token_text, output.finish_reason,
+                        token_text, None,  # intermediate: always None
                         include_role=first_chunk_for_choice,
                     )
                     first_chunk_for_choice = False
@@ -1213,22 +1233,29 @@ async def _stream_response_multi(
                         return
                     if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                         total_prompt_tok = output.prompt_token_count
+                    if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                        choice_reasoning_tok = output.reasoning_tokens
                     token_text = getattr(output, 'token_text', '')
                     if token_text:
                         choice_completion_tok += 1
+                    # Only set finish_reason on the final token from engine
+                    fr = getattr(output, 'finish_reason', None)
+                    if fr is not None:
+                        choice_finish_reason = fr
                     yield _format_choice_chunk(
                         completion_id, req.model, choice_idx,
-                        token_text, getattr(output, 'finish_reason', None),
+                        token_text, None,  # intermediate: always None
                         include_role=first_chunk_for_choice,
                     )
                     first_chunk_for_choice = False
 
             total_completion_tok += choice_completion_tok
+            total_reasoning_tok += choice_reasoning_tok
 
-            # Emit finish for this choice if not already sent
+            # Emit final chunk with actual finish_reason for this choice
             yield _format_choice_chunk(
                 completion_id, req.model, choice_idx,
-                "", "stop",
+                "", choice_finish_reason or "stop",
             )
 
         if include_usage:
@@ -1237,6 +1264,7 @@ async def _stream_response_multi(
                 model=req.model,
                 prompt_tokens=total_prompt_tok,
                 completion_tokens=total_completion_tok,
+                reasoning_tokens=total_reasoning_tok,
             )
         yield format_openai_done()
 
@@ -1349,6 +1377,7 @@ async def _stream_response(
     async def _token_source():
         nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok
         first_chunk = True
+        last_finish_reason = None  # track actual finish_reason from engine
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -1374,7 +1403,8 @@ async def _stream_response(
                 priority=req.priority,
             ):
                 token_text = output.new_text
-                finish_reason = output.finish_reason
+                if output.finish_reason is not None:
+                    last_finish_reason = output.finish_reason
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
@@ -1403,7 +1433,7 @@ async def _stream_response(
                         completion_id=completion_id,
                         model=req.model,
                         delta_content=token_text,
-                        finish_reason=finish_reason,
+                        finish_reason=None,  # intermediate: always None
                         include_role=first_chunk,
                     )
                     first_chunk = False
@@ -1438,6 +1468,8 @@ async def _stream_response(
                     completion_tok += 1
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                     reasoning_tok = output.reasoning_tokens
+                if output.finish_reason is not None:
+                    last_finish_reason = output.finish_reason
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
                 if output.current_state == "reasoning":
                     yield format_openai_chunk(
@@ -1445,7 +1477,7 @@ async def _stream_response(
                         model=req.model,
                         delta_content="",
                         thinking_content=output.token_text,
-                        finish_reason=output.finish_reason,
+                        finish_reason=None,  # intermediate: always None
                         include_role=first_chunk,
                     )
                     first_chunk = False
@@ -1471,7 +1503,7 @@ async def _stream_response(
                             completion_id=completion_id,
                             model=req.model,
                             delta_content=token_text,
-                            finish_reason=output.finish_reason,
+                            finish_reason=None,  # intermediate: always None
                             include_role=first_chunk,
                         )
                         first_chunk = False
@@ -1494,7 +1526,7 @@ async def _stream_response(
         if has_emitted_tool_call:
             final_reason = "tool_calls"
         else:
-            final_reason = finish_reason or "stop"
+            final_reason = last_finish_reason or "stop"
         yield format_openai_chunk(
             completion_id=completion_id,
             model=req.model,
