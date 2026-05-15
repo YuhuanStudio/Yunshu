@@ -212,7 +212,8 @@ async def create_completion(req: CompletionRequest, request: Request):
 
             if req.echo:
                 text = prompt + text
-            _cached = getattr(result, 'cached_tokens', 0)
+            _gen_result = result if is_batched else state
+            _cached = getattr(_gen_result, 'cached_tokens', 0)
             return idx, pt, ct, fr, rt, lp, text, _cached
 
         n = max(req.n, 1)
