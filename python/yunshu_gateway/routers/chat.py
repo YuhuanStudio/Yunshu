@@ -1210,9 +1210,10 @@ async def _stream_response_multi(
     total_prompt_tok = 0
     total_completion_tok = 0
     total_reasoning_tok = 0
+    total_cached_tok = 0
 
     async def _token_source():
-        nonlocal total_prompt_tok, total_completion_tok, total_reasoning_tok
+        nonlocal total_prompt_tok, total_completion_tok, total_reasoning_tok, total_cached_tok
         for choice_idx in range(req.n):
             if gen.cancel_event.is_set():
                 yield _format_choice_chunk(
@@ -1258,6 +1259,8 @@ async def _stream_response_multi(
                         total_prompt_tok = output.prompt_tokens
                     if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                         choice_reasoning_tok = output.reasoning_tokens
+                    if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                        total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = output.new_text
                     if token_text:
                         choice_completion_tok += 1
@@ -1305,6 +1308,8 @@ async def _stream_response_multi(
                         total_prompt_tok = output.prompt_token_count
                     if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                         choice_reasoning_tok = output.reasoning_tokens
+                    if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                        total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = getattr(output, 'token_text', '')
                     if token_text:
                         choice_completion_tok += 1
@@ -1335,6 +1340,7 @@ async def _stream_response_multi(
                 prompt_tokens=total_prompt_tok,
                 completion_tokens=total_completion_tok,
                 reasoning_tokens=total_reasoning_tok,
+                cached_tokens=total_cached_tok,
             )
         yield format_openai_done()
 
@@ -1408,6 +1414,7 @@ async def _stream_response(
     prompt_tok = 0
     completion_tok = 0
     reasoning_tok = 0
+    cached_tok = 0
 
     def _format_tool_call_chunk(tc, idx: int) -> str:
         """Format a tool_call as an OpenAI streaming chunk with delta."""
@@ -1445,7 +1452,7 @@ async def _stream_response(
         logger.debug("StreamingResponseBuffer creation failed", exc_info=True)
 
     async def _token_source():
-        nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok
+        nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok, cached_tok
         first_chunk = True
         last_finish_reason = None  # track actual finish_reason from engine
 
@@ -1479,6 +1486,8 @@ async def _stream_response(
                     prompt_tok = output.prompt_tokens
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                     reasoning_tok = output.reasoning_tokens
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tok = max(cached_tok, output.cached_tokens)
                 if token_text:
                     completion_tok += 1
 
@@ -1538,6 +1547,8 @@ async def _stream_response(
                     completion_tok += 1
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                     reasoning_tok = output.reasoning_tokens
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tok = max(cached_tok, output.cached_tokens)
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
@@ -1612,6 +1623,7 @@ async def _stream_response(
                 prompt_tokens=prompt_tok,
                 completion_tokens=completion_tok,
                 reasoning_tokens=reasoning_tok,
+                cached_tokens=cached_tok,
             )
 
         yield format_openai_done()

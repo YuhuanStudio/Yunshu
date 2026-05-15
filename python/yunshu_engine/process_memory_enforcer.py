@@ -173,7 +173,7 @@ class ProcessMemoryEnforcer:
                 sync_and_clear_cache,
             )
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("post-eviction GPU cache clear failed", exc_info=True)
 
     def get_status(self) -> dict:
         current = mx.get_active_memory() if self._running else 0

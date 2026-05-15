@@ -285,10 +285,11 @@ async def _stream_completion(
     completion_tok = 0
     # Track reasoning tokens per-choice to avoid overwrite across n>1 choices
     reasoning_tok_per_choice: dict[int, int] = {}
+    cached_tok = 0
     n = max(req.n, 1)
 
     async def _stream_choice(choice_idx: int):
-        nonlocal prompt_tok, completion_tok
+        nonlocal prompt_tok, completion_tok, cached_tok
         if req.echo:
             yield format_openai_chunk(
                 completion_id=completion_id,
@@ -329,6 +330,8 @@ async def _stream_completion(
                     completion_tok += 1
                 _choice_reasoning = getattr(output, 'reasoning_tokens', 0)
                 reasoning_tok_per_choice[choice_idx] = _choice_reasoning
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tok = max(cached_tok, output.cached_tokens)
                 # Format logprobs for this token if present
                 _chunk_logprobs = None
                 if output.logprobs:
@@ -392,6 +395,7 @@ async def _stream_completion(
                 prompt_tokens=prompt_tok,
                 completion_tokens=completion_tok,
                 reasoning_tokens=_total_reasoning,
+                cached_tokens=cached_tok,
             )
 
         yield format_openai_done()

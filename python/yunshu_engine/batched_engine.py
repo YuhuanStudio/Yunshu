@@ -52,7 +52,7 @@ def _wired_limit_ctx(model):
                 mx.synchronize()
                 mx.set_wired_limit(old_limit)
             except Exception:
-                logger.debug("failed", exc_info=True)
+                logger.debug("wired limit restore failed", exc_info=True)
 
 
 @dataclass
@@ -126,7 +126,7 @@ def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store) -> 
             kv_data=None,
         )
     except Exception:
-        logger.debug("failed", exc_info=True)
+        logger.debug("thinking segment store failed", exc_info=True)
 
 
 def _build_constrained_sampler(sampler, json_schema, tokenizer):
@@ -1445,7 +1445,7 @@ class BatchedEngine:
                     think_end_token = tokenizer.encode("</think")[-1]
                     think_start_token = tokenizer.encode("<think")[-1]
                 except Exception:
-                    logger.debug("failed", exc_info=True)
+                    logger.debug("thinking token encode failed", exc_info=True)
 
             # Prompt cache: try exact-match KV lookup by messages hash
             _pc_hit = False
@@ -1964,7 +1964,7 @@ class BatchedEngine:
                     try:
                         _tracker.unregister(_stream_req_id)
                     except Exception:
-                        logger.debug("failed", exc_info=True)
+                        logger.debug("request tracker cleanup failed", exc_info=True)
             return
 
         # Engine loop path: continuous batching with scheduler
@@ -2010,7 +2010,7 @@ class BatchedEngine:
                 try:
                     await self._engine_core.abort_request(request_id)
                 except Exception:
-                    logger.debug("failed", exc_info=True)
+                    logger.debug("stream abort failed", exc_info=True)
 
     async def _stream_generate_fast(
         self,
@@ -2197,7 +2197,7 @@ class BatchedEngine:
                     think_end_token = tokenizer.encode("</think")[-1]
                     think_start_token = tokenizer.encode("<think")[-1]
                 except Exception:
-                    logger.debug("failed", exc_info=True)
+                    logger.debug("thinking token encode failed", exc_info=True)
 
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
@@ -2207,6 +2207,8 @@ class BatchedEngine:
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
+            _stream_cached_tokens = matched
+            _cached_tokens_box[0] = _stream_cached_tokens
 
             # Inflight prefix sharing (SGLang pattern)
             _inflight_entry = None
@@ -2221,8 +2223,30 @@ class BatchedEngine:
                         cache = _inflight_entry.kv_cache_ref
                         shared_len = min(len(_inflight_entry.token_ids), len(ids))
                         ids_to_prefill = ids[shared_len:]
+                        _stream_cached_tokens = shared_len
+                        _cached_tokens_box[0] = shared_len
                 except Exception:
                     logger.debug("inflight prefix lookup failed in streaming", exc_info=True)
+
+            # Register our prefill as in-flight for concurrent requests to share
+            _inflight_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().register(
+                    _inflight_req_id,
+                    [int(t) for t in ids],
+                    cache,
+                    self.model_name or "",
+                )
+            except Exception:
+                logger.debug("inflight prefix register failed in streaming", exc_info=True)
+
+            def _unregister_inflight():
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(_inflight_req_id)
+                except Exception:
+                    logger.debug("inflight prefix unregister failed in streaming", exc_info=True)
 
             _lprocs = logits_processors if logits_processors else None
             with _wired_limit_ctx(model):
@@ -2256,6 +2280,7 @@ class BatchedEngine:
                         mx.synchronize()
                         if _pipeline is not None:
                             _pipeline.finish()
+                        _unregister_inflight()
                         return
                     # Prefill complete on first token — remove from progress tracker
                     if _first_token:
@@ -2287,6 +2312,7 @@ class BatchedEngine:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
                             mx.synchronize()
+                            _unregister_inflight()
                             return
                     # Track thinking segment boundaries in streaming
                     if think_start_token is not None:
@@ -2312,6 +2338,7 @@ class BatchedEngine:
                             _pipeline.finish()
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
+                        _unregister_inflight()
                         return
                 # Store thinking segment at end of generation
                 if _thinking_tokens and self._thinking_store is not None:
@@ -2329,6 +2356,7 @@ class BatchedEngine:
                 # Clean up prefill progress entry (may persist if first token wasn't reached)
                 if _prefill_tracker is not None:
                     _prefill_tracker.remove(_prefill_req_id)
+                _unregister_inflight()
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
@@ -2337,6 +2365,7 @@ class BatchedEngine:
         accumulated = ""
         n_tok = 0
         _reasoning_tokens = 0
+        _cached_tokens_box = [0]  # Mutable box for inner _run_inner to set
         try:
             while True:
                 try:
@@ -2408,6 +2437,7 @@ class BatchedEngine:
                     finish_reason=finish_reason,
                     reasoning_tokens=_reasoning_tokens,
                     logprobs=_lp_list,
+                    cached_tokens=_cached_tokens_box[0],
                 )
                 if done:
                     break
@@ -3407,7 +3437,7 @@ class BatchedEngine:
                 pm.set_gauge("mtp_acceptance_rate", s.accepts / s.total_cycles)
                 pm.set_gauge("mtp_total_cycles", s.total_cycles)
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("MTP metrics export failed", exc_info=True)
 
         return GenerationOutput(
             text=output_text,
@@ -3590,7 +3620,7 @@ class BatchedEngine:
             from yunshu_engine.message_adapter import adapt_messages
             messages = adapt_messages(messages, self.model_name)
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("message adapter failed", exc_info=True)
 
         if tokenizer and hasattr(tokenizer, "apply_chat_template"):
             try:

@@ -443,14 +443,14 @@ class ANEEmbeddingProcessor:
             from transformers import AutoTokenizer
             return AutoTokenizer.from_pretrained(self._config.model_name)
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("transformers tokenizer load failed", exc_info=True)
         try:
             from mlx_lm.utils import load_tokenizer
             path = Path(self._config.model_name)
             if path.exists():
                 return load_tokenizer(path)
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("mlx tokenizer load failed", exc_info=True)
         return None
 
     # ── Status ────────────────────────────────────────────────────────────────

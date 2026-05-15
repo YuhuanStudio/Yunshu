@@ -674,6 +674,7 @@ def format_openai_usage_chunk(
     prompt_tokens: int,
     completion_tokens: int,
     reasoning_tokens: int = 0,
+    cached_tokens: int = 0,
 ) -> str:
     """Format final SSE chunk with usage stats (stream_options.include_usage).
 
@@ -687,6 +688,8 @@ def format_openai_usage_chunk(
     }
     if reasoning_tokens > 0:
         usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    if cached_tokens > 0:
+        usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",

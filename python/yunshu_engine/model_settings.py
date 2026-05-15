@@ -128,7 +128,7 @@ class ModelSettings:
                         elif field_type in ("bool", bool):
                             value = bool(value)
                     except Exception:
-                        logger.debug("failed", exc_info=True)
+                        logger.debug("settings field type coercion failed", exc_info=True)
                     setattr(self, key, value)
                     changed.append(key)
         return changed
@@ -190,7 +190,7 @@ def load_model_settings(model_path: str, model_id: str, use_adaptive: bool = Tru
                             pass
                     env_overrides[field_name] = val
                 except Exception:
-                    logger.debug("failed", exc_info=True)
+                    logger.debug("env var parsing failed", exc_info=True)
 
     if env_overrides:
         changed = settings.apply_overrides(env_overrides)

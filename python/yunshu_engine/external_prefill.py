@@ -435,7 +435,7 @@ class ExternalPrefiller:
             if gen_mod is not None and hasattr(gen_mod, "generation_stream"):
                 return gen_mod.generation_stream
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("MLX generation stream lookup failed", exc_info=True)
         return None
 
     def _preflight_memory_check(

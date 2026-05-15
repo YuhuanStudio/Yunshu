@@ -712,10 +712,13 @@ class EngineCore:
             try:
                 collector.put(None)
             except Exception:
-                logger.debug("failed", exc_info=True)
+                logger.debug("collector sentinel put failed", exc_info=True)
         for event in self._finished_events.values():
             event.set()
 
+        # Clean up all running requests (inflight prefix sharing, etc.)
+        for req_id in list(self._output_collectors.keys()):
+            self._cleanup_request(req_id)
         self._output_collectors.clear()
         self._stream_states.clear()
         self._finished_events.clear()
@@ -731,7 +734,7 @@ class EngineCore:
         try:
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
-            logger.debug("failed", exc_info=True)
+            logger.debug("cache clear on executor failed", exc_info=True)
 
         logger.info("EngineCore stopped")
 
@@ -1513,10 +1516,9 @@ class EngineCore:
                         except Exception:
                             logger.debug("spec prefill attempt failed", exc_info=True)
                 except Exception:
-                    logger.debug("failed", exc_info=True)
+                    logger.debug("memory telemetry collection failed", exc_info=True)
 
             await asyncio.sleep(0)
-
     def _compute_prefix_hash_for_request(self, req_id: str, prompt_token_ids: list[int]) -> int | None:
         """Compute and store a KV prefix hash for a request.
 
