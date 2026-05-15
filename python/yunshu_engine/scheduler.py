@@ -1200,21 +1200,49 @@ class Scheduler:
                     except Exception as e:
                         logger.debug(f"Thinking KV lookup failed for {req.request_id}: {e}")
 
-                # ── Sarathi-style hybrid chunked prefill ──
-                # When active generation is running, insert only a chunk of
-                # tokens to interleave prefill with decode for better latency.
+                # ── Chunked prefill: split long prompts across steps ──
+                # Two modes:
+                # 1. Sarathi-style (enable_hybrid_prefill=True): Always chunk
+                #    when decode requests are running, use hybrid_chunk_size.
+                # 2. Standard chunked (SCHED-2): When prompt exceeds
+                #    prefill_chunk_size, chunk to avoid monopolising the batch.
+                #    This interleaves prefill chunks with decode even without
+                #    the full Sarathi mode, reducing head-of-line blocking.
                 tokens_to_insert = req.prompt_token_ids
+                effective_chunk_size = 0
+                should_chunk = False
+
                 if (
                     self.config.enable_hybrid_prefill
                     and self._has_active_requests()
                     and len(tokens_to_insert) > self.config.hybrid_chunk_size
                 ):
-                    chunk = tokens_to_insert[:self.config.hybrid_chunk_size]
-                    remaining = tokens_to_insert[self.config.hybrid_chunk_size:]
+                    # Sarathi-style: aggressive chunking for latency
+                    effective_chunk_size = self.config.hybrid_chunk_size
+                    should_chunk = True
+                elif (
+                    not self.config.enable_hybrid_prefill
+                    and self.config.prefill_chunk_size > 0
+                    and len(tokens_to_insert) > self.config.prefill_chunk_size
+                ):
+                    # SCHED-2: Standard chunked prefill — split long prompts
+                    # that exceed prefill_chunk_size even without hybrid mode.
+                    # This prevents a single long prefill from starving
+                    # running decode requests for multiple consecutive steps.
+                    effective_chunk_size = self.config.prefill_chunk_size
+                    should_chunk = True
+
+                if should_chunk and effective_chunk_size > 0:
+                    chunk = tokens_to_insert[:effective_chunk_size]
+                    remaining = tokens_to_insert[effective_chunk_size:]
                     # Store remaining tokens for subsequent steps
                     self._pending_prefill[req.request_id] = {
                         'remaining_tokens': remaining,
                         'batch_uid': None,
+                        # Track chunking mode for _process_pending_prefill
+                        'chunk_size': effective_chunk_size,
+                        'total_prompt_len': len(tokens_to_insert),
+                        'offset': effective_chunk_size,
                     }
                     tokens_to_insert = chunk
 
@@ -1433,23 +1461,63 @@ class Scheduler:
     def _preempt_request(self, request: Request) -> None:
         """Preempt a running request and return it to the waiting queue.
 
-        vLLM block-level preemption pattern:
-        1. Free KV resources (remove from BatchGenerator)
-        2. Preserve cached prefix tokens (RadixTree maintains these)
-        3. Only reset computed tokens beyond the cached prefix
-        4. Set status to PREEMPTED
-        5. Put back at front of waiting queue for re-scheduling
+        vLLM block-level preemption with partial recomputation (SCHED-1):
+        1. Extract KV cache from BatchGenerator before removal
+        2. Save the prompt prefix portion to the KV prefix cache
+        3. Preserve cached prefix tokens (RadixTree maintains these)
+        4. Only reset computed tokens beyond the cached prefix
+        5. Set status to PREEMPTED
+        6. Put back at front of waiting queue for re-scheduling
 
         When the request is re-scheduled, the prefix cache will be checked
         and only the uncached tail needs re-prefilling, significantly
         reducing re-prefill overhead compared to whole-request preemption.
         """
         uid = request.batch_uid
+
+        # SCHED-1: Extract KV cache before removal so we can save the prefix.
+        # BatchGenerator.remove(uids, return_prompt_caches=True) returns
+        # {uid: (cache_list, tokens_list)} for generation-stage requests,
+        # or {uid: (cache_list, tokens)} for prompt-stage requests.
+        extracted_caches = {}
         if uid is not None and self._batch_gen is not None:
             try:
-                self._batch_gen.remove([uid])
+                extracted_caches = self._batch_gen.remove([uid], return_prompt_caches=True)
             except Exception as e:
-                logger.debug(f"Failed to remove preempted UID {uid}: {e}")
+                # Fallback: remove without cache extraction if API differs
+                logger.debug(f"Failed to extract cache for preempted UID {uid}: {e}")
+                try:
+                    self._batch_gen.remove([uid])
+                except Exception as e2:
+                    logger.debug(f"Failed to remove preempted UID {uid}: {e2}")
+
+        # SCHED-1: Save the prompt prefix portion of the KV cache to the
+        # prefix cache.  Only the prompt tokens (not generated tokens) are
+        # saved because the prefix cache keys off prompt token sequences.
+        saved_prefix = 0
+        if (
+            self._prefix_cache is not None
+            and uid in extracted_caches
+            and request.prompt_token_ids
+        ):
+            try:
+                import mlx.core as mx
+                cache_and_tokens = extracted_caches[uid]
+                if cache_and_tokens is not None:
+                    cache_data = cache_and_tokens[0]
+                    tokens_data = cache_and_tokens[1]
+                    # Only save if we got valid cache data and the request
+                    # has generated enough tokens to make caching worthwhile
+                    if cache_data and request.num_prompt_tokens >= 32:
+                        prompt_ids = mx.array(request.prompt_token_ids)
+                        self._prefix_cache.add(prompt_ids, cache_data)
+                        saved_prefix = len(request.prompt_token_ids)
+                        logger.info(
+                            f"Saved KV prefix cache for preempted request "
+                            f"{request.request_id}: {saved_prefix} prompt tokens"
+                        )
+            except Exception:
+                logger.debug("Failed to save KV prefix during preemption", exc_info=True)
 
         self._uid_to_req.pop(uid, None)
         self._detokenizers.pop(request.request_id, None)
@@ -1458,9 +1526,11 @@ class Scheduler:
         self._pending_prefill.pop(request.request_id, None)
         self._cleanup_spec_state(request.request_id)
 
-        # Block-level preemption: check how many prefix tokens are cached
-        cached_prefix = 0
-        if self._prefix_cache is not None and request.prompt_token_ids:
+        # Block-level preemption: check how many prefix tokens are cached.
+        # If SCHED-1 saved the prefix above, this will find it immediately.
+        # Otherwise, fall back to checking existing prefix cache entries.
+        cached_prefix = max(saved_prefix, 0)
+        if cached_prefix == 0 and self._prefix_cache is not None and request.prompt_token_ids:
             try:
                 import mlx.core as mx
                 ids_arr = mx.array(request.prompt_token_ids)
@@ -1517,19 +1587,22 @@ class Scheduler:
         return retracted
 
     def _process_pending_prefill(self) -> None:
-        """Process pending partial prefill chunks (Sarathi-style hybrid pattern).
+        """Process pending partial prefill chunks.
 
-        On each scheduler step, when there are pending prefill requests
-        (requests whose prompt was too long and got chunked), we feed
-        token chunks into the BatchGenerator.
+        Handles two chunked-prefill modes:
 
-        When enable_hybrid_prefill is True (Sarathi-style), we process
-        exactly ONE pending prefill chunk per step to interleave with
-        decode steps. This prevents long prefills from starving running
-        generation requests.
+        1. Sarathi-style hybrid (enable_hybrid_prefill=True): Process
+           exactly ONE pending prefill chunk per step to interleave with
+           decode steps. Prevents long prefills from starving generation.
 
-        When hybrid prefill is off (default), all pending chunks are
-        fed at once for maximum throughput.
+        2. Standard chunked prefill (SCHED-2): When a prompt exceeded
+           prefill_chunk_size, continue feeding chunks on each step.
+           Also interleaves with decode (one chunk per step) to avoid
+           head-of-line blocking.  Chunk size is tracked per-request
+           in the pending_prefill state dict.
+
+        When hybrid prefill is off and no standard chunking is active,
+        all pending chunks are fed at once for maximum throughput.
         """
         if not self._pending_prefill:
             return
@@ -1557,19 +1630,28 @@ class Scheduler:
             if self._batch_gen is None:
                 continue
 
-            # Sarathi-style: only one pending prefill chunk per step to
-            # ensure decode steps are interleaved for latency.
+            # Determine chunking mode and interleave limit.
+            # SCHED-2: standard chunked prefill also limits to 1 chunk per
+            # step when decode requests are running, matching Sarathi-style
+            # interleaving semantics for fairness.
+            is_sarathi = self.config.enable_hybrid_prefill
+            is_standard_chunked = state.get('chunk_size') is not None
+
             if (
-                self.config.enable_hybrid_prefill
+                (is_sarathi or is_standard_chunked)
                 and self._has_active_requests()
                 and chunks_fed >= 1
             ):
+                # One chunk per step when decode is active → interleave
                 # Remaining chunks will be fed on subsequent steps.
-                # Each step feeds at most one chunk → decode → repeat.
                 break
 
-            # Feed one chunk
-            chunk_size = self.config.hybrid_chunk_size
+            # Determine chunk size:
+            # - SCHED-2 standard: use the per-request chunk_size from state
+            # - Sarathi hybrid: use hybrid_chunk_size from config
+            # - Legacy fallback: hybrid_chunk_size
+            chunk_size = state.get('chunk_size') or self.config.hybrid_chunk_size
+
             # Use semantic chunk boundaries when optimizer is available
             if self._chunked_prefill_optimizer is not None and len(remaining) > chunk_size:
                 try:
@@ -1584,6 +1666,10 @@ class Scheduler:
                     logger.debug("semantic chunking fallback", exc_info=True)
             chunk = remaining[:chunk_size]
             state['remaining_tokens'] = remaining[chunk_size:]
+
+            # SCHED-2: update offset tracker for progress reporting
+            if 'offset' in state:
+                state['offset'] += len(chunk)
 
             try:
                 sp = req.sampling_params
@@ -1601,17 +1687,22 @@ class Scheduler:
                 self._uid_to_req[uids[0]] = req_id
                 chunks_fed += 1
 
+                total_prompt = state.get('total_prompt_len', 0)
+                offset = state.get('offset', len(chunk))
+
                 if not state['remaining_tokens']:
                     completed_ids.append(req_id)
                     logger.debug(
                         f"Chunked prefill complete for {req_id}: "
-                        f"final chunk {len(chunk)} tokens"
+                        f"final chunk {len(chunk)} tokens "
+                        f"(total={total_prompt})"
                     )
                 else:
                     logger.debug(
                         f"Chunked prefill step for {req_id}: "
-                        f"{len(chunk)} tokens, "
-                        f"{len(state['remaining_tokens'])} remaining"
+                        f"{len(chunk)} tokens at offset {offset}, "
+                        f"{len(state['remaining_tokens'])} remaining "
+                        f"of {total_prompt}"
                     )
             except Exception as e:
                 logger.error(
@@ -2086,7 +2177,10 @@ class Scheduler:
 
     def _make_sampler(self, sp: SamplingParams):
         from mlx_lm.sample_utils import make_sampler, make_logits_processors
-        # Seed: if specified, set MLX global RNG seed for reproducibility
+        # Seed handling: mlx-lm's make_sampler() does NOT accept a seed parameter.
+        # Instead, we set the MLX global RNG seed before sampler creation so that
+        # the categorical_sampling call inside the sampler closure uses the
+        # specified seed. This ensures reproducibility per-request.
         if sp.seed is not None:
             import mlx.core as mx
             mx.random.seed(sp.seed)

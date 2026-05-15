@@ -271,6 +271,36 @@ async def prometheus_export() -> str:
                 except Exception:
                     logger.debug("failed", exc_info=True)
 
+                # KV cache block gauges (paged KV from engine_core)
+                try:
+                    kv_stats = entry.engine.get_kv_cache_stats()
+                    paged = kv_stats.get("paged_kv", {})
+                    if paged.get("enabled"):
+                        pm.set_gauge("kv_cache_blocks_used", paged.get("used_blocks", 0))
+                        pm.set_gauge("kv_cache_blocks_total", paged.get("total_blocks", 0))
+                    # KV prefix cache gauges
+                    prefix = kv_stats.get("prefix_cache", {})
+                    if prefix:
+                        pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0))
+                        pm.set_gauge("kv_prefix_cache_hits", prefix.get("hits", 0))
+                        pm.set_gauge("kv_prefix_cache_misses", prefix.get("misses", 0))
+                except Exception:
+                    logger.debug("KV cache gauge population failed", exc_info=True)
+
+                # RadixTree gauges
+                try:
+                    radix_stats = entry.engine.get_radix_tree_stats()
+                    if radix_stats.get("enabled"):
+                        pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0))
+                        pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0))
+                        evictions = radix_stats.get("evictions", {})
+                        pm.set_gauge("radix_evictions_lru", evictions.get("lru", 0))
+                        pm.set_gauge("radix_evictions_lfu", evictions.get("lfu", 0))
+                        pm.set_gauge("radix_evictions_fifo", evictions.get("fifo", 0))
+                        pm.set_gauge("radix_evictions_freed_blocks", radix_stats.get("freed_blocks", 0))
+                except Exception:
+                    logger.debug("RadixTree gauge population failed", exc_info=True)
+
     return pm.generate()
 
 

@@ -2252,6 +2252,10 @@ class BatchedEngine:
             finally:
                 _put(_sentinel)
 
+        _stream_gen_t0 = time.perf_counter()  # TTFT timing for streaming fast path
+        _stream_ttft_recorded = [False]  # mutable box to track first-token observation
+        _stream_ttft_box = [0.0]  # mutable box for TTFT value
+
         def _run_inner():
             import mlx.core as mx
             from mlx_lm.models.cache import make_prompt_cache
@@ -2366,6 +2370,10 @@ class BatchedEngine:
                     # Prefill complete on first token — remove from progress tracker
                     if _first_token:
                         _first_token = False
+                        # Record TTFT for Prometheus
+                        if not _stream_ttft_recorded[0]:
+                            _stream_ttft_recorded[0] = True
+                            _stream_ttft_box[0] = time.perf_counter() - _stream_gen_t0
                         if _prefill_tracker is not None:
                             _prefill_tracker.update(
                                 _prefill_req_id, prompt_tokens, prompt_tokens,
@@ -2497,6 +2505,16 @@ class BatchedEngine:
                     _delay = _backpressure.get_delay_ms(_q.qsize())
                     if _delay > 0:
                         await asyncio.sleep(_delay / 1000)
+
+                # Record TTFT in Prometheus on first token
+                if _stream_ttft_recorded[0] and _stream_ttft_box[0] > 0:
+                    try:
+                        from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                        pm = get_prometheus_metrics()
+                        pm.observe_histogram("ttft_seconds", _stream_ttft_box[0])
+                    except Exception:
+                        logger.debug("streaming TTFT prometheus recording failed", exc_info=True)
+                    _stream_ttft_recorded[0] = False  # only observe once
 
                 finish_reason = "stop" if done else None
                 # Attach logprobs to output if computed for this token
@@ -2995,8 +3013,10 @@ class BatchedEngine:
             self._spec_decoder.draft(input_array, cache=draft_cache)
 
         await loop.run_in_executor(executor, _prefill)
+        _spec_gen_t0 = time.perf_counter()  # TTFT timing starts after prefill
 
         try:
+          _spec_ttft_recorded = False
           while len(generated_tokens) < max_tokens:
             def _spec_step():
                 draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache)
@@ -3054,6 +3074,17 @@ class BatchedEngine:
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
             )
+
+            # Record TTFT in Prometheus after first yield
+            if not _spec_ttft_recorded:
+                _spec_ttft_recorded = True
+                _spec_ttft_s = time.perf_counter() - _spec_gen_t0
+                try:
+                    from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                    pm = get_prometheus_metrics()
+                    pm.observe_histogram("ttft_seconds", _spec_ttft_s)
+                except Exception:
+                    logger.debug("spec streaming TTFT prometheus recording failed", exc_info=True)
 
             if finish_reason is not None:
                 detokenizer.finalize()
@@ -3314,6 +3345,15 @@ class BatchedEngine:
                     "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
                 })
 
+        # Record TTFT in Prometheus for n-gram spec path
+        if ttft_s > 0:
+            try:
+                from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                pm = get_prometheus_metrics()
+                pm.observe_histogram("ttft_seconds", ttft_s)
+            except Exception:
+                logger.debug("TTFT prometheus recording failed in n-gram spec path", exc_info=True)
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -3560,6 +3600,8 @@ class BatchedEngine:
 
         accumulated = ""
         n_tok = 0
+        _ng_ttft_recorded = False
+        _ng_gen_t0 = time.perf_counter()
         try:
             while True:
                 try:
@@ -3581,6 +3623,17 @@ class BatchedEngine:
                     _delay = _backpressure.get_delay_ms(_q.qsize())
                     if _delay > 0:
                         await asyncio.sleep(_delay / 1000)
+
+                # Record TTFT in Prometheus on first token
+                if not _ng_ttft_recorded and n_tok == 1:
+                    _ng_ttft_recorded = True
+                    _ng_ttft_s = time.perf_counter() - _ng_gen_t0
+                    try:
+                        from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                        pm = get_prometheus_metrics()
+                        pm.observe_histogram("ttft_seconds", _ng_ttft_s)
+                    except Exception:
+                        logger.debug("N-gram streaming TTFT prometheus recording failed", exc_info=True)
 
                 finish_reason = "stop" if done else None
 
@@ -3674,7 +3727,9 @@ class BatchedEngine:
         def _run():
             return mtp_decoder.generate(input_ids, max_tokens=max_tokens)
 
+        _mtp_gen_t0 = time.perf_counter()
         token_ids = await loop.run_in_executor(executor, _run)
+        _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
 
         # Truncate at stop tokens
         hit_stop = False
@@ -3689,7 +3744,7 @@ class BatchedEngine:
 
         finish_reason = "stop" if hit_stop else "length"
 
-        # Record MTP stats in Prometheus
+        # Record MTP stats + TTFT in Prometheus
         try:
             from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
             pm = get_prometheus_metrics()
@@ -3697,6 +3752,7 @@ class BatchedEngine:
             if s.total_cycles > 0:
                 pm.set_gauge("mtp_acceptance_rate", s.accepts / s.total_cycles)
                 pm.set_gauge("mtp_total_cycles", s.total_cycles)
+            pm.observe_histogram("ttft_seconds", _mtp_ttft_s)
         except Exception:
             logger.debug("MTP metrics export failed", exc_info=True)
 
@@ -3895,6 +3951,8 @@ class BatchedEngine:
 
         accumulated = ""
         n_tok = 0
+        _mtp_ttft_recorded = False
+        _mtp_gen_t0 = time.perf_counter()
         try:
             while True:
                 # Check cancel_event from consumer side
@@ -3919,6 +3977,17 @@ class BatchedEngine:
                     _delay = _backpressure.get_delay_ms(_q.qsize())
                     if _delay > 0:
                         await asyncio.sleep(_delay / 1000)
+
+                # Record TTFT in Prometheus on first token
+                if not _mtp_ttft_recorded and n_tok == 1:
+                    _mtp_ttft_recorded = True
+                    _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
+                    try:
+                        from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                        pm = get_prometheus_metrics()
+                        pm.observe_histogram("ttft_seconds", _mtp_ttft_s)
+                    except Exception:
+                        logger.debug("MTP streaming TTFT prometheus recording failed", exc_info=True)
 
                 finish_reason = "stop" if done else None
 
