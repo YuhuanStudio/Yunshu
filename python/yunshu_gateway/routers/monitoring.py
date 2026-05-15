@@ -610,3 +610,74 @@ async def inflight_prefix_sharing_stats() -> dict[str, Any]:
     except Exception:
         logger.debug("operation failed", exc_info=True)
         return {"enabled": False}
+
+
+@router.get("/request-coalescer")
+async def request_coalescer_stats() -> dict[str, Any]:
+    """Request coalescing statistics (batch simultaneous requests for same model).
+
+    Shows how many requests were batched together within the coalescing
+    window (default 5ms), reducing per-request overhead.
+    """
+    try:
+        from yunshu_engine.gateway_optimizer import get_request_coalescer
+        coalescer = get_request_coalescer()
+        return coalescer.get_stats()
+    except Exception:
+        logger.debug("operation failed", exc_info=True)
+        return {"enabled": False}
+
+
+@router.get("/token-scheduler")
+async def token_scheduler_stats() -> dict[str, Any]:
+    """Token-level scheduler statistics (WFQ token budget + priority inversion).
+
+    Shows token budget allocation stats, fairness metrics, and priority
+    inversion detection/resolution counts.
+    """
+    try:
+        from yunshu_engine.engine_core import EngineCore
+        # Access the singleton engine core's scheduler stats
+        engine = None
+        try:
+            from ..engine import get_engine
+            engine = get_engine()
+        except Exception:
+            pass
+        if engine is not None and hasattr(engine, '_engine_core'):
+            core = engine._engine_core
+            if core is not None:
+                return {
+                    "token_scheduler": core._token_scheduler.get_stats(),
+                    "priority_inversion": core._priority_guard.get_stats(),
+                    "fairness": core._fairness_tracker.get_stats(),
+                }
+        return {"enabled": False, "reason": "engine_core not active"}
+    except Exception:
+        logger.debug("operation failed", exc_info=True)
+        return {"enabled": False}
+
+
+@router.get("/kv-migration")
+async def kv_migration_stats() -> dict[str, Any]:
+    """KV migration statistics (multi-tier GPU/CPU/SSD block management).
+
+    Shows how many KV blocks have been migrated between tiers,
+    per-tier capacity usage, and temperature distribution.
+    """
+    try:
+        from yunshu_engine.engine_core import EngineCore
+        engine = None
+        try:
+            from ..engine import get_engine
+            engine = get_engine()
+        except Exception:
+            pass
+        if engine is not None and hasattr(engine, '_engine_core'):
+            core = engine._engine_core
+            if core is not None:
+                return core._kv_migration.get_stats()
+        return {"enabled": False, "reason": "engine_core not active"}
+    except Exception:
+        logger.debug("operation failed", exc_info=True)
+        return {"enabled": False}

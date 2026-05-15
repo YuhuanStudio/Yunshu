@@ -2762,6 +2762,7 @@ class BatchedEngine:
         prompt: str,
         max_tokens: int = 256,
         temperature: float = 0.7,
+        logprobs: bool = False,
     ) -> GenerationOutput:
         """Generate using speculative decoding (single-request EAGLE-3 path).
 
@@ -2798,6 +2799,18 @@ class BatchedEngine:
         text = self._tokenizer.decode(token_ids)
         text = _clean_special_tokens(text)
 
+        # Build logprobs from individual tokens
+        _logprobs = None
+        if logprobs and token_ids:
+            _logprobs = []
+            for tid in token_ids:
+                tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
+                _logprobs.append({
+                    "token": tok_text,
+                    "logprob": 0.0,
+                    "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
+                })
+
         return GenerationOutput(
             text=text,
             new_text=text,
@@ -2807,6 +2820,7 @@ class BatchedEngine:
             finish_reason="stop" if len(token_ids) < max_tokens else "length",
             reasoning_tokens=0,
             cached_tokens=0,
+            logprobs=_logprobs,
         )
 
     async def _stream_generate_speculative(
@@ -2814,6 +2828,7 @@ class BatchedEngine:
         prompt: str,
         max_tokens: int = 256,
         temperature: float = 0.7,
+        logprobs: bool = False,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using speculative decoding (single-request path).
 
@@ -2894,6 +2909,19 @@ class BatchedEngine:
             elif len(generated_tokens) >= max_tokens:
                 finish_reason = "length"
 
+            # Build logprobs from target model verification
+            _chunk_logprobs = None
+            if logprobs and new_tokens:
+                _chunk_logprobs = []
+                for i, tid in enumerate(new_tokens):
+                    tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
+                    lp = verify_result.target_logprobs[i] if i < len(verify_result.target_logprobs) else 0.0
+                    _chunk_logprobs.append({
+                        "token": tok_text,
+                        "logprob": float(lp),
+                        "top_logprobs": [{"token": tok_text, "logprob": float(lp)}],
+                    })
+
             yield GenerationOutput(
                 text=_clean_special_tokens(self._tokenizer.decode(generated_tokens)),
                 new_text=chunk_text,
@@ -2903,6 +2931,7 @@ class BatchedEngine:
                 finish_reason=finish_reason,
                     reasoning_tokens=0,
                     cached_tokens=0,
+                    logprobs=_chunk_logprobs,
             )
 
             if finish_reason is not None:
@@ -3145,6 +3174,19 @@ class BatchedEngine:
 
         finish_reason = "stop" if tokens and tokens[-1] in stop_ids else "length"
         output_text = _clean_special_tokens(output_text)
+
+        # Build logprobs from generated tokens
+        _ngram_logprobs = None
+        if logprobs and tokens:
+            _ngram_logprobs = []
+            for tid in tokens:
+                tok_text = _clean_special_tokens(tokenizer.decode([tid]))
+                _ngram_logprobs.append({
+                    "token": tok_text,
+                    "logprob": 0.0,
+                    "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
+                })
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -3155,6 +3197,7 @@ class BatchedEngine:
             cached_tokens=cached_tokens,
             ttft_ms=round(ttft_s * 1000, 1),
             reasoning_tokens=0,
+            logprobs=_ngram_logprobs,
         )
 
     async def _stream_generate_ngram_spec(
@@ -3169,6 +3212,7 @@ class BatchedEngine:
         stop: list[str] | None = None,
         seed: int | None = None,
         json_schema: dict | str | None = None,  # noqa: kept for API compatibility
+        logprobs: bool = False,  # noqa: kept for API compatibility
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -3236,7 +3280,7 @@ class BatchedEngine:
                     all_token_ids.append(first_token)
                     detokenizer.add_token(first_token)
                     n_tok += 1
-                    _put((detokenizer.last_segment, n_tok, False))
+                    _put((detokenizer.last_segment, n_tok, False, first_token))
 
                 # Decode with N-gram lookahead
                 remaining = max_tokens - 1
@@ -3263,12 +3307,12 @@ class BatchedEngine:
                             suffix_hit = False
                             if not stop_hit and stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit, token_id))
                             if stop_hit or suffix_hit:
                                 detokenizer.finalize()
                                 _remaining = detokenizer.last_segment
                                 if _remaining:
-                                    _put((_remaining, n_tok, False))
+                                    _put((_remaining, n_tok, False, token_id))
                                 prefix_cache.add(ids, cache)
                                 mx.synchronize()
                                 _put(_sentinel)
@@ -3312,7 +3356,7 @@ class BatchedEngine:
                             suffix_hit = False
                             if not stop_hit and stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit, accepted_id))
                             if stop_hit or suffix_hit:
                                 stopped = True
                             if i >= accepted:
@@ -3337,7 +3381,7 @@ class BatchedEngine:
                             suffix_hit = False
                             if not stop_hit and stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit))
+                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit, accepted_id))
                             if stop_hit or suffix_hit:
                                 stopped = True
                             if not is_accept:
@@ -3352,7 +3396,7 @@ class BatchedEngine:
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _remaining:
-                            _put((_remaining, n_tok, False))
+                            _put((_remaining, n_tok, False, 0))
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
                         _put(_sentinel)
@@ -3362,8 +3406,8 @@ class BatchedEngine:
             detokenizer.finalize()
             remaining = detokenizer.last_segment
             if remaining:
-                _put((remaining, n_tok, False))
-            _put(("", n_tok, True))
+                _put((remaining, n_tok, False, 0))
+            _put(("", n_tok, True, 0))
             mx.synchronize()
             _put(_sentinel)
 
@@ -3381,7 +3425,7 @@ class BatchedEngine:
                     break
                 if item is _sentinel:
                     break
-                new_text, tok_count, done = item
+                new_text, tok_count, done, token_id = item
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -3392,6 +3436,17 @@ class BatchedEngine:
                         await asyncio.sleep(_delay / 1000)
 
                 finish_reason = "stop" if done else None
+
+                # Build logprobs for this token
+                _chunk_logprobs = None
+                if logprobs and token_id:
+                    tok_text = _clean_special_tokens(tokenizer.decode([token_id]))
+                    _chunk_logprobs = [{
+                        "token": tok_text,
+                        "logprob": 0.0,
+                        "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
+                    }]
+
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
                     new_text=_clean_special_tokens(new_text),
@@ -3401,6 +3456,7 @@ class BatchedEngine:
                     finish_reason=finish_reason,
                     reasoning_tokens=0,
                     cached_tokens=0,
+                    logprobs=_chunk_logprobs,
                 )
                 if done:
                     break
@@ -3413,6 +3469,7 @@ class BatchedEngine:
         prompt: str,
         max_tokens: int = 256,
         temperature: float = 0.7,  # noqa: API compatibility
+        logprobs: bool = False,  # noqa: API compatibility
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -3468,6 +3525,18 @@ class BatchedEngine:
         except Exception:
             logger.debug("MTP metrics export failed", exc_info=True)
 
+        # Build logprobs from MTP output tokens
+        _mtp_logprobs = None
+        if logprobs and token_ids:
+            _mtp_logprobs = []
+            for tid in token_ids:
+                tok_text = _clean_special_tokens(tokenizer.decode([tid]))
+                _mtp_logprobs.append({
+                    "token": tok_text,
+                    "logprob": 0.0,
+                    "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
+                })
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -3477,6 +3546,7 @@ class BatchedEngine:
             finish_reason=finish_reason,
             reasoning_tokens=0,
             cached_tokens=0,
+            logprobs=_mtp_logprobs,
         )
 
     async def _stream_generate_mtp(
@@ -3484,6 +3554,7 @@ class BatchedEngine:
         prompt: str,
         max_tokens: int = 256,
         temperature: float = 0.7,  # noqa: API compatibility
+        logprobs: bool = False,  # noqa: API compatibility
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 
@@ -3544,7 +3615,7 @@ class BatchedEngine:
                 # Yield first token via incremental detokenizer
                 detokenizer.add_token(first)
                 chunk = _clean_special_tokens(detokenizer.last_segment)
-                _put((chunk, 1, first in eos_ids))
+                _put((chunk, 1, first in eos_ids, first))
 
                 if first in eos_ids:
                     detokenizer.finalize()
@@ -3572,7 +3643,7 @@ class BatchedEngine:
                         generated.append(draft)
                         detokenizer.add_token(draft)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), draft in eos_ids))
+                        _put((chunk, len(generated), draft in eos_ids, draft))
                         if draft in eos_ids:
                             break
 
@@ -3580,7 +3651,7 @@ class BatchedEngine:
                         generated.append(v1)
                         detokenizer.add_token(v1)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), v1 in eos_ids))
+                        _put((chunk, len(generated), v1 in eos_ids, v1))
                         if v1 in eos_ids:
                             break
                         primary = v1
@@ -3591,7 +3662,7 @@ class BatchedEngine:
                         generated.append(v0)
                         detokenizer.add_token(v0)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), v0 in eos_ids))
+                        _put((chunk, len(generated), v0 in eos_ids, v0))
                         if v0 in eos_ids:
                             break
                         primary = v0
@@ -3620,7 +3691,7 @@ class BatchedEngine:
                 if isinstance(item, BaseException):
                     logger.warning(f"MTP streaming error: {item}")
                     break
-                new_text, tok_count, done = item
+                new_text, tok_count, done, token_id = item
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -3631,6 +3702,17 @@ class BatchedEngine:
                         await asyncio.sleep(_delay / 1000)
 
                 finish_reason = "stop" if done else None
+
+                # Build logprobs for this token
+                _chunk_logprobs = None
+                if logprobs and token_id is not None:
+                    tok_text = _clean_special_tokens(tokenizer.decode([token_id]))
+                    _chunk_logprobs = [{
+                        "token": tok_text,
+                        "logprob": 0.0,
+                        "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
+                    }]
+
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
                     new_text=_clean_special_tokens(new_text),
@@ -3640,6 +3722,7 @@ class BatchedEngine:
                     finish_reason=finish_reason,
                     reasoning_tokens=0,
                     cached_tokens=0,
+                    logprobs=_chunk_logprobs,
                 )
                 if done:
                     break

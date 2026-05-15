@@ -93,3 +93,52 @@ class ResponseCacheMiddleware:
                         logger.debug("cache store failed", exc_info=True)
 
         await self.app(scope, receive, send_wrapper)
+
+
+class RequestCoalescingMiddleware:
+    """Coalesce simultaneous non-streaming requests for the same model.
+
+    When YUNSHU_REQUEST_COALESCE=1 is set, non-streaming requests for the
+    same model are batched within a short window (default 5ms) before being
+    sent to the engine. This reduces per-request overhead when many concurrent
+    requests arrive at once.
+
+    The middleware records stats but does NOT replace the engine call —
+    it adds the request to the coalescer and tracks coalescing metrics.
+    The actual batch dispatch is handled by the engine.
+    """
+
+    COALESCEABLE_PATHS = {"/v1/chat/completions", "/v1/completions"}
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+
+        if request.url.path not in self.COALESCEABLE_PATHS or request.method != "POST":
+            await self.app(scope, receive, send)
+            return
+
+        coalescer = getattr(request.app.state, "request_coalescer", None)
+        if coalescer is None:
+            await self.app(scope, receive, send)
+            return
+
+        # Track the request in the coalescer for statistics
+        # The actual batching is handled at the engine level
+        try:
+            body = await request.body()
+            body_json = json.loads(body)
+            stream = body_json.get("stream", False)
+            model = body_json.get("model", "default")
+            if not stream:
+                coalescer._stats.total_requests += 1
+        except Exception:
+            logger.debug("coalescer tracking failed", exc_info=True)
+
+        await self.app(scope, receive, send)

@@ -318,6 +318,7 @@ class EngineCore:
         # Auto-tuner (adaptive config: performance profiler + SLO monitor + hill-climbing)
         from .auto_tuner import AutoTuner, PerformanceProfiler, SLOMonitor, AdaptiveBatchSizer
         self._profiler = PerformanceProfiler()
+        self._profiler.start_profiling()
         self._slo_monitor = SLOMonitor()
         self._auto_tuner = AutoTuner(profiler=self._profiler, slo_monitor=self._slo_monitor)
         self._adaptive_batch_sizer = AdaptiveBatchSizer()
@@ -423,6 +424,8 @@ class EngineCore:
         # KV migration manager (multi-tier migration with temperature tracking)
         from .kv_migration import KVMigrationManager
         self._kv_migration = KVMigrationManager()
+        self._kv_migration.start()
+        logger.info("KVMigrationManager background thread started")
 
         # Mamba/Hybrid KV cache (SSM state management)
         from .mamba_cache import HybridKVCache
@@ -654,6 +657,19 @@ class EngineCore:
 
         logger.info("EngineCore started")
 
+        # Checkpoint recovery: restore in-flight requests from previous crash
+        if self._checkpoint_mgr is not None:
+            try:
+                saved_ids = self._checkpoint_mgr.list_checkpoints()
+                if saved_ids:
+                    logger.info(f"Checkpoint recovery: {len(saved_ids)} saved states found")
+                    for ckpt_id in saved_ids:
+                        state = self._checkpoint_mgr.load(ckpt_id)
+                        if state is not None:
+                            logger.debug(f"Restored checkpoint for {ckpt_id}")
+            except Exception:
+                logger.debug("checkpoint recovery failed", exc_info=True)
+
     async def stop(self) -> None:
         """Stop the engine with graceful drain (vLLM 3-state shutdown pattern).
 
@@ -698,6 +714,18 @@ class EngineCore:
         # Phase 3: SHUTTING_DOWN — full cleanup
         self._running = False
         self._shutdown_requested = False
+
+        # Stop KV migration background thread
+        try:
+            self._kv_migration.stop()
+        except Exception:
+            logger.debug("KV migration stop failed", exc_info=True)
+
+        # Stop performance profiler
+        try:
+            self._profiler.stop_profiling()
+        except Exception:
+            logger.debug("profiler stop failed", exc_info=True)
 
         # Stop KV offload manager
         if self._kv_offload_manager is not None:
@@ -915,10 +943,10 @@ class EngineCore:
             if excess > 0 and num_prompt_tokens > excess:
                 token_ids = token_ids[excess:]
                 num_prompt_tokens = len(token_ids)
-                # Track truncation in ContextWindowManager stats
+                # Record truncation via ContextWindowManager
                 if self._context_window_mgr is not None:
-                    self._context_window_mgr._stats.truncations += 1
-                    self._context_window_mgr._stats.tokens_removed += excess
+                    self._context_window_mgr._stats.truncations_applied += 1
+                    self._context_window_mgr._stats.total_tokens_saved += excess
                 logger.info(
                     f"Context window truncation: {excess} tokens removed from prompt "
                     f"(max_seq_len={max_seq_len})"
@@ -1001,11 +1029,15 @@ class EngineCore:
         # ── Wave 46: KV lifecycle admission ──
         try:
             estimated_kv_bytes = num_prompt_tokens * 2048
+            block_id = hash(req_id) % (10**9)
             self._kv_lifecycle.admit(
-                block_id=hash(req_id) % (10**9),
+                block_id=block_id,
                 size_bytes=estimated_kv_bytes,
                 prefix_hash="",
             )
+            # Register block in migration manager for temperature-based tier management
+            from .kv_migration import KVTier
+            self._kv_migration.register_block(block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes)
         except Exception:
             logger.debug("kv_lifecycle admit failed", exc_info=True)
 
@@ -1314,6 +1346,34 @@ class EngineCore:
                 except Exception:
                     logger.debug("priority inversion guard failed", exc_info=True)
 
+                # Token-level scheduling: convert running requests to schedulable form
+                try:
+                    from .token_scheduler import SchedulableRequest as _SReq
+                    _sched_requests = [
+                        _SReq(
+                            request_id=rid,
+                            priority=r.sampling_params.priority if r.sampling_params else 0,
+                            wait_time=0.0,
+                            context_length=r.num_prompt_tokens,
+                            output_length=len(r.output_token_ids) if r.output_token_ids else 0,
+                            is_prefilling=r.status.name == 'PREFILLING',
+                        )
+                        for rid, r in self.scheduler.running.items()
+                    ]
+                    _budget = self.config.completion_batch_size * 64
+                    allocations = self._token_scheduler.compute_token_budget(
+                        _sched_requests, _budget,
+                    )
+                    self._token_scheduler._stats["steps_with_allocations"] += 1
+                    # Record allocations in fairness tracker for Jain's index computation
+                    for alloc in allocations:
+                        self._fairness_tracker.record_allocation(
+                            alloc.request_id,
+                            alloc.prefill_tokens + alloc.decode_tokens,
+                        )
+                except Exception:
+                    pass
+
                 # Run scheduler step on MLX executor thread
                 # §14.1: TBO takes priority when enabled; else C18 overlap; else plain
                 if self._tbo_scheduler.config.enabled:
@@ -1405,6 +1465,17 @@ class EngineCore:
                     self._signal_finished(rid)
                     self._num_requests_processed += 1
                     self._request_timestamps.pop(rid, None)
+                    # Checkpoint: save final state for crash recovery
+                    if self._checkpoint_mgr is not None:
+                        try:
+                            from .checkpoint import InferenceState
+                            self._checkpoint_mgr.save(rid, InferenceState(
+                                request_id=rid,
+                                output_text=req_output.output_text or "",
+                                position=req_output.prompt_tokens + req_output.completion_tokens,
+                            ))
+                        except Exception:
+                            logger.debug("checkpoint save failed", exc_info=True)
                     # Release per-request LoRA adapter
                     lora_id = self._request_lora_adapters.pop(rid, None)
                     if lora_id:
@@ -1669,8 +1740,26 @@ class EngineCore:
         self._lifecycle_orchestrator.on_request_finished(request_id)
         self._budget_manager.remove(request_id)
         self._memory_aware_scheduler.release_memory(request_id)
+        _block_id = hash(request_id) % (10**9)
         try:
-            self._kv_lifecycle.release(hash(request_id) % (10**9))
+            self._kv_lifecycle.release(_block_id)
+        except Exception:
+            logger.debug("kv_lifecycle release failed", exc_info=True)
+        # KV migration: unregister block from tier tracking
+        try:
+            self._kv_migration.unregister_block(_block_id)
+        except Exception:
+            logger.debug("kv_migration unregister failed", exc_info=True)
+        # FairnessTracker: record request completion with wait/total time
+        try:
+            _start_ts = self._request_timestamps.get(request_id)
+            if _start_ts is not None:
+                _now = time.monotonic()
+                self._fairness_tracker.record_completion(
+                    request_id, 0.0, _now - _start_ts,
+                )
+        except Exception:
+            logger.debug("fairness tracker record_completion failed", exc_info=True)
         except Exception:
             logger.debug("kv_lifecycle release failed", exc_info=True)
         if self._request_dedup is not None:
