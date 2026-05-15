@@ -83,10 +83,6 @@ class TestEngineCoreWave43Wiring:
         core = _make_core()
         assert core._batch_sampler is not None
 
-    def test_batch_stop_checker_created(self):
-        core = _make_core()
-        assert core._batch_stop_checker is not None
-
     def test_sliding_window_mgr_none_by_default(self):
         core = _make_core()
         assert core._sliding_window_mgr is None

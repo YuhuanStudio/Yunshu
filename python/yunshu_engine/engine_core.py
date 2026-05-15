@@ -428,15 +428,9 @@ class EngineCore:
         from .mamba_cache import HybridKVCache
         self._hybrid_kv = HybridKVCache()
 
-        # Batch sampler (vectorized batch sampling + logits processing + stop checking)
-        from .batch_sampler import BatchSampler, BatchStopChecker
+        # Batch sampler (vectorized batch sampling + logits processing)
+        from .batch_sampler import BatchSampler
         self._batch_sampler = BatchSampler()
-        # TODO: BatchStopChecker operates on mx.array token_ids + StopConfig,
-        # which are scheduler-level internals (SequenceStateMachine already handles
-        # stop detection in _process_responses). Wiring it here would duplicate logic.
-        # Enable when vectorized batch-level stop checking is needed above the
-        # per-request state machine (e.g., for GPU-side stop token matching).
-        self._batch_stop_checker = BatchStopChecker()
 
         # Model optimizations (RoPE scaling, attention type detection, MoE efficiency)
         from .model_optimizations import (

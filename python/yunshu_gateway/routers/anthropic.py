@@ -621,7 +621,21 @@ async def _stream_anthropic(
                 json_schema=getattr(req, 'json_schema', None),
             ):
                 parsed = parser.process_chunk(output.token_text)
+
+                # Thinking content (legacy engine path)
+                if enable_thinking and parsed["thinking"]:
+                    if not thinking_block_started:
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n"
+                        thinking_block_started = True
+                    output_tokens += 1
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': parsed['thinking']}})}\n\n"
+
                 if parsed["visible"]:
+                    # Close thinking block if transitioning to text
+                    if thinking_block_started and not text_block_started:
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
+                        block_index += 1
+                        thinking_block_started = False
                     if not text_block_started:
                         text_block_started = True
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"

@@ -1401,6 +1401,27 @@ def _format_choice_chunk(
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
+def _format_chat_logprobs(logprobs_list: list[dict] | None) -> dict | None:
+    """Format per-token logprobs from GenerationOutput into OpenAI Chat format."""
+    if not logprobs_list:
+        return None
+    content = []
+    for lp_entry in logprobs_list:
+        if not isinstance(lp_entry, dict):
+            continue
+        top_lps = lp_entry.get("top_logprobs", [])
+        decoded_top = [
+            {"token": tlp.get("token", ""), "logprob": tlp.get("logprob", 0.0)}
+            for tlp in top_lps
+        ]
+        content.append({
+            "token": lp_entry.get("token", ""),
+            "logprob": lp_entry.get("logprob", 0.0),
+            "top_logprobs": decoded_top,
+        })
+    return {"content": content} if content else None
+
+
 async def _stream_response(
     engine,
     messages: list[dict],
@@ -1512,6 +1533,8 @@ async def _stream_response(
                 if token_text:
                     completion_tok += 1
 
+                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
+
                 if use_tool_streamer and tool_streamer and token_text:
                     # Run through tool call streamer
                     outputs = tool_streamer.process_token(token_text)
@@ -1522,6 +1545,7 @@ async def _stream_response(
                                 model=req.model,
                                 delta_content=out.text,
                                 include_role=first_chunk,
+                                logprobs=_chunk_lp,
                             )
                             first_chunk = False
                         elif out.tool_call:
@@ -1535,6 +1559,7 @@ async def _stream_response(
                         delta_content=token_text,
                         finish_reason=None,  # intermediate: always None
                         include_role=first_chunk,
+                        logprobs=_chunk_lp,
                     )
                     first_chunk = False
         else:
@@ -1574,6 +1599,7 @@ async def _stream_response(
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
+                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
                 if output.current_state == "reasoning":
                     yield format_openai_chunk(
@@ -1583,6 +1609,7 @@ async def _stream_response(
                         thinking_content=output.token_text,
                         finish_reason=None,  # intermediate: always None
                         include_role=first_chunk,
+                        logprobs=_chunk_lp,
                     )
                     first_chunk = False
                 else:
@@ -1596,6 +1623,7 @@ async def _stream_response(
                                     model=req.model,
                                     delta_content=out.text,
                                     include_role=first_chunk,
+                                    logprobs=_chunk_lp,
                                 )
                                 first_chunk = False
                             elif out.tool_call:
@@ -1609,6 +1637,7 @@ async def _stream_response(
                             delta_content=token_text,
                             finish_reason=None,  # intermediate: always None
                             include_role=first_chunk,
+                            logprobs=_chunk_lp,
                         )
                         first_chunk = False
 
