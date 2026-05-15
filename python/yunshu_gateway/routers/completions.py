@@ -248,8 +248,10 @@ async def _stream_completion(
     )
     prompt_tok = 0
     completion_tok = 0
+    reasoning_tok = 0
 
     async def _token_source():
+        nonlocal reasoning_tok
         if req.echo:
             yield format_openai_chunk(
                 completion_id=completion_id,
@@ -286,6 +288,7 @@ async def _stream_completion(
                     prompt_tok = output.prompt_tokens
                 if output.new_text:
                     completion_tok += 1
+                reasoning_tok = getattr(output, 'reasoning_tokens', 0)
                 yield format_openai_chunk(
                     completion_id=completion_id,
                     model=req.model,
@@ -328,6 +331,7 @@ async def _stream_completion(
                 model=req.model,
                 prompt_tokens=prompt_tok,
                 completion_tokens=completion_tok,
+                reasoning_tokens=reasoning_tok,
             )
 
         yield format_openai_done()

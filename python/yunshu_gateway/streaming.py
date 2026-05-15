@@ -672,23 +672,27 @@ def format_openai_usage_chunk(
     model: str,
     prompt_tokens: int,
     completion_tokens: int,
+    reasoning_tokens: int = 0,
 ) -> str:
     """Format final SSE chunk with usage stats (stream_options.include_usage).
 
     OpenAI sends a final chunk with usage when stream_options.include_usage=True.
     The chunk has an empty delta and the usage field at the top level.
     """
+    usage = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+    if reasoning_tokens > 0:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": model,
         "choices": [],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "usage": usage,
     }
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
