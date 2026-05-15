@@ -18,7 +18,6 @@ This is the engine that ModelManager and the gateway routers use.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -656,7 +655,7 @@ class BatchedEngine:
             )
             self._deltanet_inverter = None
 
-    def _on_prefix_cache_eviction(self, prompt_tokens, cache) -> None:
+    def _on_prefix_cache_eviction(self, _prompt_tokens, cache) -> None:
         """Pre-eviction callback: capture DeltaNet state before KV cache is dropped.
 
         Called by KVPrefixCache._remove_entry() when an entry is evicted.
@@ -693,7 +692,7 @@ class BatchedEngine:
             except Exception:
                 logger.debug("DeltaNet inversion failed for evicted layer", exc_info=True)
 
-    def invert_evicted_state(self, prompt_tokens: list[int] | None = None) -> list:
+    def invert_evicted_state(self, _prompt_tokens: list[int] | None = None) -> list:
         """Trigger DeltaNet state inversion for evicted or current SSM states.
 
         Manually triggers inversion of captured SSM intermediates. Useful for
@@ -1394,7 +1393,6 @@ class BatchedEngine:
             logits_processors.append(_rep_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
-                import mlx.core as _mx
                 counts = {}
                 for t in tokens:
                     counts[int(t)] = counts.get(int(t), 0) + 1
@@ -1404,7 +1402,7 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
-            def _logit_bias_proc(tokens, logits, biases=logit_bias):
+            def _logit_bias_proc(_tokens, logits, biases=logit_bias):
                 for tid, bias in biases.items():
                     logits[..., tid] += bias
                 return logits
@@ -1473,22 +1471,54 @@ class BatchedEngine:
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-            cached_kv, _remaining, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
-
             if cached_kv is not None:
-                # Only prefill remaining tokens after cache hit
                 cached_tokens = matched
                 ids_to_prefill = ids[matched:]
             else:
                 ids_to_prefill = ids
+
+            # Inflight prefix sharing (SGLang pattern): check for in-flight
+            # prefills with matching prefix to share partial KV blocks
+            _inflight_entry = None
+            if cached_kv is None:
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    _tracker = get_inflight_tracker()
+                    _inflight_entry = _tracker.find_prefix(
+                        [int(t) for t in ids], self.model_name or ""
+                    )
+                    if _inflight_entry is not None and _inflight_entry.kv_cache_ref is not None:
+                        cache = _inflight_entry.kv_cache_ref
+                        shared_len = min(len(_inflight_entry.token_ids), len(ids))
+                        cached_tokens = shared_len
+                        ids_to_prefill = ids[shared_len:]
+                        logger.debug(
+                            "inflight prefix reuse: %d tokens from req=%s",
+                            shared_len, _inflight_entry.request_id[:12],
+                        )
+                except Exception:
+                    logger.debug("inflight prefix lookup failed", exc_info=True)
+
+            # Register our prefill as in-flight for concurrent requests to share
+            _inflight_req_id = f"fp-{id(_run)}-{int(time.monotonic()*1e6)}"
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().register(
+                    _inflight_req_id,
+                    [int(t) for t in ids],
+                    cache,
+                    self.model_name or "",
+                )
+            except Exception:
+                logger.debug("inflight prefix register failed", exc_info=True)
 
             # Thinking segment KV lookup — reuse reasoning KV from prior turns
             if self._thinking_store is not None and enable_thinking:
                 try:
                     import hashlib as _hl
                     _conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
-                    _context_ids = [int(t) for t in ids]
                     _conv_segs = self._thinking_store.get_conversation_segments(_conv_id)
                     if _conv_segs:
                         _best = max(_conv_segs, key=lambda s: s.last_accessed)
@@ -1711,6 +1741,14 @@ class BatchedEngine:
 
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
+
+            # Unregister from inflight prefix tracker
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_inflight_req_id)
+            except Exception:
+                logger.debug("inflight prefix unregister failed", exc_info=True)
+
             return tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _itl_samples, _thinking_tokens
 
         from .mlx_executor import get_mlx_executor
@@ -2073,7 +2111,6 @@ class BatchedEngine:
             logits_processors.append(_repetition_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
-                import mlx.core as _mx
                 counts = {}
                 for t in tokens:
                     counts[int(t)] = counts.get(int(t), 0) + 1
@@ -2083,7 +2120,7 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
-            def _logit_bias_proc(tokens, logits, biases=logit_bias):
+            def _logit_bias_proc(_tokens, logits, biases=logit_bias):
                 for tid, bias in biases.items():
                     logits[..., tid] += bias
                 return logits
@@ -2151,13 +2188,13 @@ class BatchedEngine:
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-            cached_kv, _remaining, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
             _lprocs = logits_processors if logits_processors else None
             with _wired_limit_ctx(model):
-                for token, _logits in generate_step(
+                for token, logits in generate_step(
                     ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
                     prompt_cache=cache, logits_processors=_lprocs,
                 ):
@@ -2165,9 +2202,9 @@ class BatchedEngine:
                     n_tok += 1
                     # Compute per-token logprobs (same pattern as _generate_fast)
                     _lp_entry = None
-                    if logprobs and _logits is not None:
+                    if logprobs and logits is not None:
                         import mlx.core as _mx
-                        _log_probs = _mx.log(_mx.softmax(_logits.astype(_mx.float32), axis=-1))
+                        _log_probs = _mx.log(_mx.softmax(logits.astype(_mx.float32), axis=-1))
                         _tok_lp = float(_log_probs[token])
                         _lp_entry = {"token_id": int(token), "logprob": _tok_lp}
                         if top_logprobs and top_logprobs > 0:
@@ -2459,7 +2496,7 @@ class BatchedEngine:
                 ids = mx.array(self._tokenizer.encode(text))
                 prefix_cache = self._kv_prefix_cache
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-                cached_kv, _, matched = prefix_cache.get(ids)
+                cached_kv, _, __ = prefix_cache.get(ids)
                 if cached_kv is not None:
                     return 0  # Already cached
                 cache = make_prompt_cache(self._model)
@@ -2799,12 +2836,12 @@ class BatchedEngine:
         top_p: float = 1.0,
         top_k: int = 0,
         min_p: float = 0.0,
-        repetition_penalty: float = 1.0,
+        repetition_penalty: float = 1.0,  # noqa: API compatibility
         stop: list[str] | None = None,
         seed: int | None = None,
-        logprobs: bool = False,
-        top_logprobs: int | None = None,
-        json_schema: dict | str | None = None,
+        logprobs: bool = False,  # noqa: API compatibility
+        top_logprobs: int | None = None,  # noqa: API compatibility
+        json_schema: dict | str | None = None,  # noqa: API compatibility
     ) -> GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -2898,7 +2935,7 @@ class BatchedEngine:
             # Prefill with KV prefix cache
             prefix_cache = self._kv_prefix_cache
             prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-            cached_kv, _remaining, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
@@ -3038,10 +3075,10 @@ class BatchedEngine:
         top_p: float = 1.0,
         top_k: int = 0,
         min_p: float = 0.0,
-        repetition_penalty: float = 1.0,
+        repetition_penalty: float = 1.0,  # noqa: kept for API compatibility
         stop: list[str] | None = None,
         seed: int | None = None,
-        json_schema: dict | str | None = None,
+        json_schema: dict | str | None = None,  # noqa: kept for API compatibility
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -3090,7 +3127,7 @@ class BatchedEngine:
 
             prefix_cache = self._kv_prefix_cache
             prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-            cached_kv, _rem, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
@@ -3100,7 +3137,7 @@ class BatchedEngine:
 
             with _wired_limit_ctx(model):
                 # Prefill + first token
-                for token, logits in generate_step(
+                for token, _logits in generate_step(
                     ids_to_prefill, model, max_tokens=1, sampler=sampler,
                     prompt_cache=cache,
                 ):
@@ -3122,7 +3159,7 @@ class BatchedEngine:
 
                     if n_draft == 0:
                         step_input = mx.array([tokens[-1]]).reshape(1, -1)
-                        for token, logits in generate_step(
+                        for token, _logits in generate_step(
                             step_input, model, max_tokens=1, sampler=sampler,
                             prompt_cache=cache,
                         ):
@@ -3283,7 +3320,7 @@ class BatchedEngine:
         self,
         prompt: str,
         max_tokens: int = 256,
-        temperature: float = 0.7,
+        temperature: float = 0.7,  # noqa: API compatibility
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -3296,7 +3333,6 @@ class BatchedEngine:
         loop = asyncio.get_running_loop()
 
         tokenizer = self._tokenizer
-        model = self._model
         mtp_decoder = self._mtp_decoder
 
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
@@ -3353,7 +3389,7 @@ class BatchedEngine:
         self,
         prompt: str,
         max_tokens: int = 256,
-        temperature: float = 0.7,
+        temperature: float = 0.7,  # noqa: API compatibility
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 
