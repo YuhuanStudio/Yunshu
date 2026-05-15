@@ -666,6 +666,14 @@ class Scheduler:
         # Batched draft collection (collect drafts from all strategies for all running)
         self._draft_collector = BatchedDraftCollection()
 
+        # Batch composer (vLLM/SGLang pattern: ScheduleBatch → ForwardBatch)
+        from .forward_batch import BatchComposer
+        self._batch_composer = BatchComposer(
+            max_batch_size=self.config.max_num_seqs,
+            max_prefill_slots=self.config.prefill_batch_size if hasattr(self.config, 'prefill_batch_size') else 8,
+            max_decode_slots=self.config.max_num_seqs,
+        )
+
     def _init_batch_generator(self) -> None:
         """Create BatchGenerator on first use (lazy init)."""
         if self._batch_gen is not None:
@@ -1018,6 +1026,32 @@ class Scheduler:
             except Exception:
                 logger.debug("memory guard check failed in scheduling", exc_info=True)
                 pass  # Memory guard is best-effort
+
+        # Track batch composition via BatchComposer (vLLM/SGLang pattern)
+        if to_insert:
+            from .forward_batch import RequestSlot
+            pending_slots = [
+                RequestSlot(
+                    request_id=req.request_id,
+                    prompt_tokens=req.prompt_token_ids or [],
+                    max_tokens=req.sampling_params.max_tokens if req.sampling_params else 512,
+                    priority=req.sampling_params.priority if req.sampling_params else 0,
+                    is_prefill=True,
+                    num_prompt_tokens=len(req.prompt_token_ids or []),
+                    arrival_time=getattr(req, '_submit_time', now),
+                )
+                for req in to_insert
+            ]
+            active_slots = [
+                RequestSlot(
+                    request_id=rid,
+                    prompt_tokens=[],
+                    is_prefill=False,
+                    priority=r.sampling_params.priority if r.sampling_params else 0,
+                )
+                for rid, r in self.running.items()
+            ]
+            self._batch_composer.compose(pending_slots, active_slots)
 
         for req in to_insert:
             try:
