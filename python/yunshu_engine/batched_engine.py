@@ -1204,9 +1204,10 @@ class BatchedEngine:
             )
             if has_multimodal and self._preprocessor_registry is not None:
                 try:
-                    preprocessor = self._preprocessor_registry.detect(
-                        self.model_name, model
-                    )
+                    model_config = {"model_type": self.model_name or ""}
+                    if hasattr(model, 'config') and hasattr(model.config, 'model_type'):
+                        model_config["model_type"] = model.config.model_type
+                    preprocessor = self._preprocessor_registry.detect(model_config)
                     if preprocessor is not None:
                         from .model_preprocessor import PreprocessedInput
                         processed = preprocessor.preprocess(prompt, tokenizer)

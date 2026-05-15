@@ -194,6 +194,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             prompt_tokens = state.prompt_token_count
             completion_tokens = state.completion_token_count
             finish_reason = state.finish_reason or "stop"
+            reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
             logprobs_data = None
             if req.logprobs > 0:
                 logprobs_data = _format_logprobs(
@@ -228,6 +229,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
+                **({"completion_tokens_details": {"reasoning_tokens": reasoning_tokens}} if reasoning_tokens else {}),
             },
         })
     finally:

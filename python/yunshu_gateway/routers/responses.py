@@ -211,6 +211,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             pt = state.prompt_token_count
             ct = state.completion_token_count
             finish_reason = state.finish_reason or "stop"
+            _reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
 
         # Extract tool calls
         tool_calls = None
@@ -252,6 +253,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "input_tokens": pt,
                 "output_tokens": ct,
                 "total_tokens": pt + ct,
+                **({"output_tokens_details": {"reasoning_tokens": _reasoning_tokens}} if _reasoning_tokens else {}),
             },
         })
     finally:
