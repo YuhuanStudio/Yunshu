@@ -1284,10 +1284,12 @@ async def _stream_response_multi(
                     fr = output.finish_reason
                     if fr is not None:
                         choice_finish_reason = fr
+                    _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                     yield _format_choice_chunk(
                         completion_id, req.model, choice_idx,
                         token_text, None,  # intermediate: always None
                         include_role=first_chunk_for_choice,
+                        logprobs=_chunk_lp,
                     )
                     first_chunk_for_choice = False
             else:
@@ -1335,10 +1337,12 @@ async def _stream_response_multi(
                     fr = getattr(output, 'finish_reason', None)
                     if fr is not None:
                         choice_finish_reason = fr
+                    _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                     yield _format_choice_chunk(
                         completion_id, req.model, choice_idx,
                         token_text, None,  # intermediate: always None
                         include_role=first_chunk_for_choice,
+                        logprobs=_chunk_lp,
                     )
                     first_chunk_for_choice = False
 
@@ -1381,22 +1385,26 @@ def _format_choice_chunk(
     delta_content: str,
     finish_reason: Optional[str],
     include_role: bool = False,
+    logprobs: Optional[dict] = None,
 ) -> str:
     """Format an SSE chunk for a specific choice index."""
     delta: dict[str, Any] = {}
     if include_role:
         delta["role"] = "assistant"
     delta["content"] = delta_content
+    choice: dict[str, Any] = {
+        "index": index,
+        "delta": delta,
+        "finish_reason": finish_reason,
+    }
+    if logprobs:
+        choice["logprobs"] = logprobs
     chunk = {
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": model,
-        "choices": [{
-            "index": index,
-            "delta": delta,
-            "finish_reason": finish_reason,
-        }],
+        "choices": [choice],
     }
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
