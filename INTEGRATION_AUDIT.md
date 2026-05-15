@@ -66,6 +66,24 @@
 | Wave 104: Engine loop tracker 洩漏 | stream_generate engine loop 路徑永不呼叫 _tracker.unregister() — 每個 engine-loop 請求永久洩漏 tracker 條目。修復: finally 塊添加清理 | 請求追蹤器無限增長問題根除 |
 | Wave 104: N-gram cancel_event | _stream_generate_ngram_spec 新增 cancel_event 參數 + 每次迭代檢查 | 取消的 n-gram 請求不再浪費 GPU |
 
+### 已完成修復 (2026-05-16 Wave 105-107 — Architecture Gap Completion)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 105: Gateway tracker 註冊 | chat 單選串流 + completions 串流新增 request tracker 註冊/取消；chat 多選串流 tracker.unregister 移入 finally；responses 串流傳遞 http_request | 全串流端點取消支持 + 斷線偵測 |
+| Wave 105: Engine core 參數轉發 | reasoning_effort 轉發到 SamplingParams；request_timeout_seconds 轉發到 SchedulerConfig | 參數完整性 |
+| Wave 105: Engine loop 錯誤輸出 | 持續錯誤時每個失敗請求收到 error RequestOutput（之前消費者只看到空白結束） | 終端用戶收到有意義的錯誤 |
+| Wave 105: 10 新測試 | spec decode 路徑（fallback, stop tokens, cancel, inflight cleanup）+ _finalize_request（idempotent, all-state, abort）+ engine loop error output | 零覆蓋路徑現有測試 |
+| Wave 106: Video _stats 執行緒安全 | threading.Lock 包裹所有 7 個 _stats 變更 + get_stats() 讀取 | 多執行緒計數器不再損壞 |
+| Wave 106: VLM temp file 泄漏修復 | generate() 重構 try/finally 確保 _cleanup_temp_files() 總是呼叫 | 暫存檔不再洩漏 |
+| Wave 106: VLM 輸出欄位 | generate() 返回 dict 新增 finish_reason, model, created | OpenAI 相容性 |
+| Wave 106: Audio cancel | synthesize_stream 儲存 executor future + finally 取消 + queue.Full 處理 | 客戶斷線不阻塞 GPU |
+| Wave 107: Preemption KV prefix save | _preempt_request() 在釋放 KV 前提取並存入 prefix cache — 重調度時部分復用而非全部重 prefill | vLLM 模式部分重計算 |
+| Wave 107: Chunked prefill scaffolding | _schedule_waiting() 按 prefill_chunk_size 分段長 prompt，_pending_prefills 追蹤 offset/total | Sarathi 模式交錯 prefill/decode |
+| Wave 107: Grammar constraints | 新增 make_grammar_constraint() + RegexConstraint + ChoiceConstraint 分派 | 結構化輸出不限 JSON schema |
+| Wave 107: TTFT 全路徑監控 | 6 個額外生成路徑添加 observe_histogram("ttft_seconds") | TTFT 延遲直方圖完整覆蓋 |
+| Wave 107: KV cache Prometheus gauges | kv_cache_blocks_used/total, prefix_cache entries/hits/misses, radix tree stats | KV 快取利用率可觀測 |
+
 ### 已完成修復 (2026-05-16 Wave 99 — Production Wiring + Agent Audit Deep Fixes)
 
 | 修復 | 描述 | 影響 |
