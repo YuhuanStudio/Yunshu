@@ -209,7 +209,7 @@ class TestBatchedEngineMTPRouting:
         # Track which method was called
         called = {"mtp": False}
 
-        async def _fake_mtp(prompt, max_tokens, temperature):
+        async def _fake_mtp(prompt, max_tokens, temperature, **kwargs):
             called["mtp"] = True
             from yunshu_engine.batched_engine import GenerationOutput
             return GenerationOutput(text="test", finished=True, finish_reason="stop")

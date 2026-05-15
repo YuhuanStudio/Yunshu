@@ -1141,6 +1141,10 @@ class BatchedEngine:
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                logprobs=logprobs,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
             )
 
         # MTP speculative decoding (built-in multi-token prediction heads)
@@ -1149,6 +1153,10 @@ class BatchedEngine:
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                logprobs=logprobs,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
+                seed=seed,
             )
 
         # N-gram speculative decoding (model-free, CPU-based proposal)
@@ -1930,46 +1938,73 @@ class BatchedEngine:
             yield guard_rejection
             return
 
+        # Register with request tracker for cancellation support (all paths)
+        import uuid as _uuid
+        _stream_req_id = f"stream-{_uuid.uuid4().hex[:8]}"
+        try:
+            from .request_tracker import get_request_tracker
+            _tracker = get_request_tracker()
+            _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
+            _cancel_event = _active_gen.cancel_event
+        except Exception:
+            logger.debug("request tracker registration failed", exc_info=True)
+            _cancel_event = None
+            _tracker = None
+
         # Speculative decoding path (Phase 4)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
-            async for output in self._stream_generate_speculative(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-            ):
-                yield output
+            try:
+                async for output in self._stream_generate_speculative(
+                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                    logprobs=logprobs, stop=stop, stop_token_ids=stop_token_ids,
+                    seed=seed,
+                ):
+                    yield output
+            finally:
+                if _tracker is not None:
+                    try:
+                        _tracker.unregister(_stream_req_id)
+                    except Exception:
+                        logger.debug("request tracker cleanup failed", exc_info=True)
             return
 
         # MTP speculative decoding streaming (built-in multi-token prediction)
         if spec_decode and self._mtp_decoder is not None and not _use_engine_loop:
-            async for output in self._stream_generate_mtp(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-            ):
-                yield output
+            try:
+                async for output in self._stream_generate_mtp(
+                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                    logprobs=logprobs, stop=stop, stop_token_ids=stop_token_ids,
+                    seed=seed, cancel_event=_cancel_event,
+                ):
+                    yield output
+            finally:
+                if _tracker is not None:
+                    try:
+                        _tracker.unregister(_stream_req_id)
+                    except Exception:
+                        logger.debug("request tracker cleanup failed", exc_info=True)
             return
 
         # N-gram speculative decoding streaming (model-free)
         if spec_decode and self._ngram_proposer is not None and not _use_engine_loop:
-            async for output in self._stream_generate_ngram_spec(
-                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
-                top_p=top_p, top_k=top_k, min_p=min_p,
-                repetition_penalty=repetition_penalty, stop=stop, seed=seed,
-            ):
-                yield output
+            try:
+                async for output in self._stream_generate_ngram_spec(
+                    prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    repetition_penalty=repetition_penalty, stop=stop,
+                    stop_token_ids=stop_token_ids, seed=seed,
+                ):
+                    yield output
+            finally:
+                if _tracker is not None:
+                    try:
+                        _tracker.unregister(_stream_req_id)
+                    except Exception:
+                        logger.debug("request tracker cleanup failed", exc_info=True)
             return
 
         # Fast path: bypass EngineCore for single-request streaming
         if not _use_engine_loop:
-            # Register with request tracker for cancellation support
-            import uuid as _uuid
-            _stream_req_id = f"stream-{_uuid.uuid4().hex[:8]}"
-            try:
-                from .request_tracker import get_request_tracker
-                _tracker = get_request_tracker()
-                _active_gen = _tracker.register(_stream_req_id, self.model_name or "")
-                _cancel_event = _active_gen.cancel_event
-            except Exception:
-                logger.debug("request tracker registration failed", exc_info=True)
-                _cancel_event = None
-
             try:
                 async for output in self._stream_generate_fast(
                     prompt=prompt, max_tokens=max_tokens, temperature=temperature,
@@ -1990,7 +2025,7 @@ class BatchedEngine:
                 ):
                     yield output
             finally:
-                if _cancel_event is not None:
+                if _tracker is not None:
                     try:
                         _tracker.unregister(_stream_req_id)
                     except Exception:
@@ -2776,6 +2811,9 @@ class BatchedEngine:
         max_tokens: int = 256,
         temperature: float = 0.7,
         logprobs: bool = False,
+        stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
     ) -> GenerationOutput:
         """Generate using speculative decoding (single-request EAGLE-3 path).
 
@@ -2787,6 +2825,7 @@ class BatchedEngine:
             # Fall back to standard generation if no decoder
             return await self.generate(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                stop=stop, stop_token_ids=stop_token_ids, seed=seed,
             )
 
         from .mlx_executor import get_mlx_executor
@@ -2796,21 +2835,53 @@ class BatchedEngine:
         # Tokenize prompt
         input_ids = self._tokenizer.encode(prompt)
         import mlx.core as mx
+
+        if seed is not None:
+            mx.random.seed(seed)
+
         input_array = mx.array(input_ids).reshape(1, -1)
 
+        # Build EOS + stop token sets
+        eos_ids = set()
+        if hasattr(self._tokenizer, 'eos_token_id'):
+            eid = self._tokenizer.eos_token_id
+            if isinstance(eid, (list, tuple)):
+                eos_ids.update(eid)
+            elif eid is not None:
+                eos_ids.add(eid)
+        if stop_token_ids:
+            eos_ids.update(stop_token_ids)
+        if stop:
+            for s in stop:
+                try:
+                    ids = self._tokenizer.encode(s)
+                    if len(ids) == 1:
+                        eos_ids.add(ids[0])
+                except Exception:
+                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+
         # Run speculative generation on the MLX executor thread
+        # Use incremental detokenizer for correct multi-byte UTF-8
+        detokenizer = self._tokenizer.detokenizer
+        detokenizer.reset()
+
         def _run_spec():
-            return self._spec_decoder.generate(
+            token_ids = self._spec_decoder.generate(
                 input_ids=input_array,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+            # Apply stop token truncation
+            for i, tid in enumerate(token_ids):
+                detokenizer.add_token(tid)
+                if tid in eos_ids:
+                    return token_ids[:i + 1], True
+            return token_ids, False
 
-        token_ids = await loop.run_in_executor(executor, _run_spec)
+        token_ids, hit_stop = await loop.run_in_executor(executor, _run_spec)
+        detokenizer.finalize()
 
-        # Detokenize
-        text = self._tokenizer.decode(token_ids)
-        text = _clean_special_tokens(text)
+        text = _clean_special_tokens(detokenizer.text)
 
         # Build logprobs from individual tokens
         _logprobs = None
@@ -2830,7 +2901,7 @@ class BatchedEngine:
             prompt_tokens=len(input_ids),
             completion_tokens=len(token_ids),
             finished=True,
-            finish_reason="stop" if len(token_ids) < max_tokens else "length",
+            finish_reason="stop" if hit_stop or len(token_ids) < max_tokens else "length",
             reasoning_tokens=0,
             cached_tokens=0,
             logprobs=_logprobs,
@@ -2842,6 +2913,9 @@ class BatchedEngine:
         max_tokens: int = 256,
         temperature: float = 0.7,
         logprobs: bool = False,
+        stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using speculative decoding (single-request path).
 
@@ -2852,6 +2926,7 @@ class BatchedEngine:
             # Fall back to standard streaming
             async for output in self.stream_generate(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                stop=stop, stop_token_ids=stop_token_ids, seed=seed,
             ):
                 yield output
             return
@@ -2863,9 +2938,13 @@ class BatchedEngine:
         # Tokenize prompt
         input_ids = self._tokenizer.encode(prompt)
         import mlx.core as mx
+
+        if seed is not None:
+            mx.random.seed(seed)
+
         input_array = mx.array(input_ids).reshape(1, -1)
 
-        # Get EOS IDs
+        # Get EOS IDs + stop tokens
         eos_ids = set()
         if hasattr(self._tokenizer, 'eos_token_id'):
             eid = self._tokenizer.eos_token_id
@@ -2873,6 +2952,16 @@ class BatchedEngine:
                 eos_ids.update(eid)
             elif eid is not None:
                 eos_ids.add(eid)
+        if stop_token_ids:
+            eos_ids.update(stop_token_ids)
+        if stop:
+            for s in stop:
+                try:
+                    ids = self._tokenizer.encode(s)
+                    if len(ids) == 1:
+                        eos_ids.add(ids[0])
+                except Exception:
+                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
 
         # Run speculative steps on executor thread, yielding after each step
         from mlx_lm.models.cache import make_prompt_cache
@@ -3235,6 +3324,7 @@ class BatchedEngine:
         min_p: float = 0.0,
         repetition_penalty: float = 1.0,  # noqa: kept for API compatibility
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         json_schema: dict | str | None = None,  # noqa: kept for API compatibility
         logprobs: bool = False,  # noqa: kept for API compatibility
@@ -3255,6 +3345,8 @@ class BatchedEngine:
 
         stop_ids = set()
         stop_suffixes = []
+        if stop_token_ids:
+            stop_ids.update(stop_token_ids)
         if stop:
             for s in stop:
                 try:
@@ -3507,6 +3599,9 @@ class BatchedEngine:
         max_tokens: int = 256,
         temperature: float = 0.7,  # noqa: API compatibility
         logprobs: bool = False,  # noqa: API compatibility
+        stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -3515,6 +3610,7 @@ class BatchedEngine:
         Best for Qwen3.5 and other models with GatedDeltaNet SSM layers.
         """
         from .mlx_executor import get_mlx_executor
+        import mlx.core as mx
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
@@ -3531,16 +3627,7 @@ class BatchedEngine:
         input_ids = tokenizer.encode(text)
         prompt_tokens = len(input_ids)
 
-        def _run():
-            return mtp_decoder.generate(input_ids, max_tokens=max_tokens)
-
-        token_ids = await loop.run_in_executor(executor, _run)
-
-        output_text = _clean_special_tokens(
-            tokenizer.decode(token_ids, skip_special_tokens=True)
-        )
-
-        finish_reason = "length"
+        # Build EOS + stop token sets
         eos_ids = set()
         if hasattr(tokenizer, 'eos_token_id'):
             eid = tokenizer.eos_token_id
@@ -3548,8 +3635,41 @@ class BatchedEngine:
                 eos_ids.update(eid)
             elif eid is not None:
                 eos_ids.add(eid)
-        if token_ids and token_ids[-1] in eos_ids:
-            finish_reason = "stop"
+        if stop_token_ids:
+            eos_ids.update(stop_token_ids)
+        if stop:
+            for s in stop:
+                try:
+                    ids = tokenizer.encode(s)
+                    if len(ids) == 1:
+                        eos_ids.add(ids[0])
+                except Exception:
+                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+
+        if seed is not None:
+            mx.random.seed(seed)
+
+        # Use incremental detokenizer for correct multi-byte UTF-8
+        detokenizer = tokenizer.detokenizer
+        detokenizer.reset()
+
+        def _run():
+            return mtp_decoder.generate(input_ids, max_tokens=max_tokens)
+
+        token_ids = await loop.run_in_executor(executor, _run)
+
+        # Truncate at stop tokens
+        hit_stop = False
+        for i, tid in enumerate(token_ids):
+            detokenizer.add_token(tid)
+            if tid in eos_ids:
+                token_ids = token_ids[:i + 1]
+                hit_stop = True
+                break
+        detokenizer.finalize()
+        output_text = _clean_special_tokens(detokenizer.text)
+
+        finish_reason = "stop" if hit_stop else "length"
 
         # Record MTP stats in Prometheus
         try:
@@ -3592,6 +3712,10 @@ class BatchedEngine:
         max_tokens: int = 256,
         temperature: float = 0.7,  # noqa: API compatibility
         logprobs: bool = False,  # noqa: API compatibility
+        stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 
@@ -3623,6 +3747,38 @@ class BatchedEngine:
                 eos_ids.update(eid)
             elif eid is not None:
                 eos_ids.add(eid)
+        if stop_token_ids:
+            eos_ids.update(stop_token_ids)
+        if stop:
+            for s in stop:
+                try:
+                    ids = tokenizer.encode(s)
+                    if len(ids) == 1:
+                        eos_ids.add(ids[0])
+                except Exception:
+                    logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+
+        if seed is not None:
+            mx.random.seed(seed)
+
+        # Inflight prefix sharing: register for concurrent KV block sharing
+        _inflight_req_id = f"mtp-s-{id(self)}-{int(time.monotonic()*1e6)}"
+        try:
+            from .inflight_prefix_sharing import get_inflight_tracker
+            get_inflight_tracker().register(
+                _inflight_req_id,
+                token_ids=input_ids,
+                kv_cache_ref=None,
+            )
+        except Exception:
+            logger.debug("MTP inflight prefix register failed", exc_info=True)
+
+        def _unregister_inflight():
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_inflight_req_id)
+            except Exception:
+                logger.debug("MTP inflight prefix unregister failed", exc_info=True)
 
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue()
@@ -3662,6 +3818,10 @@ class BatchedEngine:
                 from .n_confirmed_patch import clear_rollback, restore_rollback
 
                 while len(generated) < max_tokens:
+                    # Check cancel_event
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+
                     # MTP draft
                     draft = mtp_decoder._mtp_draft(primary_h, primary)
 
@@ -3719,6 +3879,9 @@ class BatchedEngine:
         n_tok = 0
         try:
             while True:
+                # Check cancel_event from consumer side
+                if cancel_event is not None and cancel_event.is_set():
+                    break
                 try:
                     item = await asyncio.wait_for(_q.get(), timeout=120)
                 except asyncio.TimeoutError:
@@ -3765,6 +3928,7 @@ class BatchedEngine:
                 if done:
                     break
         finally:
+            _unregister_inflight()
             if not future.done():
                 future.cancel()
 
