@@ -678,14 +678,14 @@
 
 | # | 模塊 | 管線調用者 (非測試) | 狀態 |
 |---|------|---------------------|------|
-| 1 | adaptive_batch.py | 零調用者 | **DEAD** |
+| 1 | adaptive_batch.py | AdaptiveBatchScheduler → EngineCore | **WIRED** ✅ |
 | 2 | ane_embedding.py | YUNSHU_ANE_EMBEDDINGS=1 啟用 | **WIRED** ✅ (Wave 30) |
 | 3 | audio_engine.py | model_manager, gateway/audio, gateway/mcp | WIRED |
 | 4 | batched_engine.py | gateway/chat, gateway/completions, gateway/main | **WIRED** (主要生產引擎) |
 | 5 | benchmark.py | gateway/bench (/bench/model + /bench/batch endpoints) | **WIRED** ✅ |
 | 5b | bfcl_eval.py | gateway/bench (/bench/bfcl-eval endpoint) | **WIRED** ✅ |
 | 5c | roofline.py | gateway/bench (/bench/roofline-model endpoint) | **WIRED** ✅ |
-| 6 | bfcl_eval.py | 零調用者 | **DEAD** |
+| 6 | bfcl_eval.py | ~~零調用者~~ → gateway/bench (/bench/bfcl-eval) | **WIRED** ✅ (同 #5b) |
 | 7 | deltanet_inversion.py | 僅 scripts/test_inversion.py | **DEAD** (研究性質) |
 | 8 | engine.py (legacy) | model_manager, gateway/engine, 所有 router | WIRED* |
 | 9 | engine_core.py | batched_engine, engine | WIRED |
@@ -715,14 +715,14 @@
 | 31 | prefill_progress.py | engine_core, api/admin | WIRED |
 | 32 | process_memory_enforcer.py | gateway/main | WIRED |
 | 33 | request.py | output_collector, paged_scheduler, engine_core, engine, scheduler | WIRED |
-| 34 | roofline.py | 僅 scripts/ (bench router 有自己的實現) | **DEAD** |
+| 34 | roofline.py | ~~僅 scripts/~~ → gateway/bench (/bench/roofline-model) | **WIRED** ✅ (同 #5c) |
 | 35 | scheduler.py | engine_core | WIRED** |
 | 36 | server_metrics.py | engine_core, engine, gateway/main, chat, api/admin | WIRED |
 | 37 | settings.py | 已刪除 | **DELETED** |
 | 38 | spec_prefill.py | batched_engine (_generate_fast) | **WIRED** ✅ |
 | 39 | speculative_decoder.py | batched_engine (detect_spec_heads), scheduler | WIRED** |
 | 40 | ssd_kv_cache.py | kv_prefix_cache (enable_ssd_cache via YUNSHU_SSD_CACHE) | **WIRED** ✅ |
-| 41 | telemetry.py | 零調用者 | **DEAD** |
+| 41 | telemetry.py | TelemetryCollector → EngineCore | **WIRED** ✅ |
 | 42 | text_utils.py | vlm_engine | WIRED |
 | 43 | thinking_budget.py | scheduler (2 import sites) | WIRED** |
 | 44 | tool_call_streamer.py | gateway/routers/chat | WIRED |

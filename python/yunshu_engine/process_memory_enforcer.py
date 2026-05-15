@@ -118,42 +118,44 @@ class ProcessMemoryEnforcer:
 
         # Evict LRU models until under limit
         while mx.get_active_memory() > self._max_bytes:
-            victim = self._manager._find_lru_victim()
-            if victim is None:
-                # Check for loading models — request abort
-                aborted_any = False
-                for entry in self._manager._entries.values():
-                    if entry.is_loading:
-                        logger.warning(f"Aborting load of '{entry.model_id}' — memory limit")
-                        # For Yunshu, is_loading is a flag — the loading coroutine
-                        # should check this and abort
-                        aborted_any = True
-                if not aborted_any:
-                    logger.warning("Memory limit exceeded but no models to evict")
-                break
+            async with self._manager._lock:
+                victim = self._manager._find_lru_victim()
+                if victim is None:
+                    # Check for loading models — request abort
+                    aborted_any = False
+                    for entry in list(self._manager._entries.values()):
+                        if entry.is_loading:
+                            logger.warning(f"Aborting load of '{entry.model_id}' — memory limit")
+                            aborted_any = True
+                    if not aborted_any:
+                        logger.warning("Memory limit exceeded but no models to evict")
+                    break
 
-            loaded_non_pinned = [
-                e for e in self._manager._entries.values()
-                if e.is_loaded and not e.is_pinned
-            ]
+                loaded_non_pinned = [
+                    e for e in self._manager._entries.values()
+                    if e.is_loaded and not e.is_pinned
+                ]
 
-            if len(loaded_non_pinned) > 1:
-                # Multiple models: evict LRU victim entirely
-                logger.warning(f"Evicting '{victim.model_id}' to enforce memory limit")
-                await self._manager.unload_model(victim.model_id)
-            else:
-                # Single model: abort requests, keep loaded (frees KV cache)
-                if victim.engine and hasattr(victim.engine, 'has_active_requests'):
-                    if victim.engine.has_active_requests():
-                        logger.warning(
-                            f"Aborting active requests on '{victim.model_id}' "
-                            f"due to memory pressure (model kept loaded)"
-                        )
-                        # Signal abort
-                        if hasattr(victim.engine, '_abort_set'):
-                            for rid in list(victim.engine._active.keys()):
-                                victim.engine._abort_set.add(rid)
-                break
+                if len(loaded_non_pinned) > 1:
+                    # Multiple models: evict LRU victim entirely
+                    victim_id = victim.model_id
+                else:
+                    victim_id = None
+                    # Single model: abort requests, keep loaded (frees KV cache)
+                    if victim.engine and hasattr(victim.engine, 'has_active_requests'):
+                        if victim.engine.has_active_requests():
+                            logger.warning(
+                                f"Aborting active requests on '{victim.model_id}' "
+                                f"due to memory pressure (model kept loaded)"
+                            )
+                            if hasattr(victim.engine, '_abort_set'):
+                                for rid in list(victim.engine._active.keys()):
+                                    victim.engine._abort_set.add(rid)
+                    break
+
+            if victim_id:
+                logger.warning(f"Evicting '{victim_id}' to enforce memory limit")
+                await self._manager.unload_model(victim_id)
 
         # Force GC + cache clear after eviction (oMLX pattern: on MLX executor)
         gc.collect()
