@@ -352,9 +352,16 @@ async def _non_stream_batched(engine, messages, req, stop):
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
+        min_p=getattr(req, 'min_p', 0.0),
+        repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
+        frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
+        presence_penalty=getattr(req, 'presence_penalty', 0.0),
+        logit_bias=getattr(req, 'logit_bias', None),
         stop=stop,
+        seed=getattr(req, 'seed', None),
         enable_thinking=enable_thinking,
         thinking_budget=budget_tokens,
+        reasoning_effort=getattr(req, 'reasoning_effort', None),
     )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     _record_metrics(result.prompt_tokens, result.completion_tokens)
@@ -415,9 +422,16 @@ async def _non_stream_legacy(engine, messages, req, stop):
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
+        min_p=getattr(req, 'min_p', 0.0),
+        repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
+        frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
+        presence_penalty=getattr(req, 'presence_penalty', 0.0),
+        logit_bias=getattr(req, 'logit_bias', None),
         stop=stop,
+        seed=getattr(req, 'seed', None),
         enable_thinking=enable_thinking,
         thinking_budget=budget_tokens,
+        reasoning_effort=getattr(req, 'reasoning_effort', None),
     )
     # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
     prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
@@ -493,9 +507,16 @@ async def _stream_anthropic(
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
+                min_p=getattr(req, 'min_p', 0.0),
+                repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
+                frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
+                presence_penalty=getattr(req, 'presence_penalty', 0.0),
+                logit_bias=getattr(req, 'logit_bias', None),
                 stop=stop,
+                seed=getattr(req, 'seed', None),
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
+                reasoning_effort=getattr(req, 'reasoning_effort', None),
             ):
                 parsed = parser.process_chunk(output.new_text)
 
@@ -564,9 +585,16 @@ async def _stream_anthropic(
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
+                min_p=getattr(req, 'min_p', 0.0),
+                repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
+                frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
+                presence_penalty=getattr(req, 'presence_penalty', 0.0),
+                logit_bias=getattr(req, 'logit_bias', None),
                 stop=stop,
+                seed=getattr(req, 'seed', None),
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
+                reasoning_effort=getattr(req, 'reasoning_effort', None),
             ):
                 parsed = parser.process_chunk(output.token_text)
                 if parsed["visible"]:
