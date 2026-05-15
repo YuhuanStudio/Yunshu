@@ -80,6 +80,20 @@ class AnthropicMessagesRequest(BaseModel):
     tools: Optional[list[AnthropicTool]] = None
     tool_choice: Optional[dict | str] = None
     lora_adapter: Optional[str] = None
+    # Sampling parameters (forwarded to engine)
+    min_p: float = 0.0
+    repetition_penalty: float = 1.0
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    logit_bias: Optional[dict[str, float]] = None
+    seed: Optional[int] = None
+    reasoning_effort: Optional[str] = None
+    stop_token_ids: Optional[list[int]] = None
+    spec_decode: bool = False
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.0
+    priority: int = 0
+    json_schema: Optional[dict] = None
 
 
 # ── Content block helpers ──
