@@ -1801,6 +1801,14 @@ class BatchedEngine:
         _backpressure = StreamingBackpressureController(max_queue_size=100)
         _batched_detok = BatchedDetokenizer(tokenizer)
 
+        # TokenPipeline for GPU/CPU overlap — activated via YUNSHU_STREAMING_PIPELINE=1
+        _pipeline = None
+        if self._streaming_pipeline_enabled:
+            from .streaming_optimizer import TokenPipeline, PipelineConfig
+            _pipeline = TokenPipeline(PipelineConfig(enable_overlap=True))
+            _pipeline.start_pipeline(request=None)
+            logger.debug("TokenPipeline active for streaming fast path")
+
         tokenizer = self._tokenizer
         model = self._model
 
@@ -1944,9 +1952,15 @@ class BatchedEngine:
                 ):
                     detokenizer.add_token(token)
                     n_tok += 1
+                    # TokenPipeline: submit GPU stages for tracking
+                    if _pipeline is not None and _pipeline.is_running:
+                        _ptok = _pipeline.submit_stage1_result(logits=None, token_id=int(token))
+                        _ptok = _pipeline.submit_stage2_result(_ptok, sampled_id=int(token))
                     # Check cancellation
                     if cancel_event is not None and cancel_event.is_set():
                         mx.synchronize()
+                        if _pipeline is not None:
+                            _pipeline.finish()
                         return
                     # Prefill complete on first token — remove from progress tracker
                     if _first_token:
@@ -1970,6 +1984,8 @@ class BatchedEngine:
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
                             _put((new_text, n_tok, True))
+                            if _pipeline is not None:
+                                _pipeline.finish()
                             prefix_cache.add(ids, cache)
                             mx.synchronize()
                             return
@@ -1989,6 +2005,8 @@ class BatchedEngine:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
                             _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
+                        if _pipeline is not None:
+                            _pipeline.finish()
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
                         return
@@ -2002,6 +2020,9 @@ class BatchedEngine:
                     _put((remaining, n_tok, False))
                 _put(("", n_tok, True))
                 mx.synchronize()
+                # Finish pipeline tracking at end of generation
+                if _pipeline is not None:
+                    _pipeline.finish()
                 # Clean up prefill progress entry (may persist if first token wasn't reached)
                 if _prefill_tracker is not None:
                     _prefill_tracker.remove(_prefill_req_id)
@@ -2038,6 +2059,16 @@ class BatchedEngine:
                 accumulated += new_text
                 n_tok = tok_count
 
+                # TokenPipeline: run stage 3 overlap for stats tracking
+                if _pipeline is not None and _pipeline.is_running:
+                    await _pipeline.run_stage3_overlap(
+                        _pipeline._current,
+                        detokenize_fn=lambda _tid, _t=new_text: _t,
+                    )
+                    await _pipeline.next_token(
+                        detokenize_fn=lambda _tid, _t=new_text: _t,
+                    )
+
                 # Streaming backpressure: slow down if client can't keep up
                 if _backpressure.check_backpressure(_q.qsize()):
                     _delay = _backpressure.get_delay_ms(_q.qsize())
@@ -2056,6 +2087,13 @@ class BatchedEngine:
                 if done:
                     break
         finally:
+            # Stop pipeline and log stats
+            if _pipeline is not None:
+                _pipeline.stop()
+                logger.info(
+                    "TokenPipeline stats: %s",
+                    _pipeline.get_stats(),
+                )
             if not future.done():
                 future.cancel()
 

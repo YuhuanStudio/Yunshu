@@ -1292,7 +1292,20 @@ class ImageGenEngine:
             logger.info("DFlash Block Diffusion enabled")
 
         # Wave 43: Diffusion scheduler + pipeline registry
-        from .diffusion_infra import DiffusionScheduler
+        from .diffusion_infra import DiffusionScheduler, SchedulerType
+        self._diffusion_scheduler_type: SchedulerType | None = None
+        scheduler_env = os.environ.get("YUNSHU_DIFFUSION_SCHEDULER", "").strip().lower()
+        if scheduler_env:
+            scheduler_map = {s.value: s for s in SchedulerType}
+            if scheduler_env in scheduler_map:
+                self._diffusion_scheduler_type = scheduler_map[scheduler_env]
+                logger.info(f"DiffusionScheduler override: {self._diffusion_scheduler_type.value}")
+            else:
+                logger.warning(
+                    f"Unknown YUNSHU_DIFFUSION_SCHEDULER={scheduler_env!r}, "
+                    f"expected one of {list(scheduler_map.keys())}"
+                )
+        # Default scheduler instance (always available, used only when env var is set)
         self._diffusion_scheduler = DiffusionScheduler()
         from .image_pipeline import PipelineType
         self._pipeline_type = PipelineType
@@ -1876,6 +1889,38 @@ class ImageGenEngine:
         # 8. Convert to PNG
         return self._to_png(image)
 
+    def _resolve_sigmas(
+        self,
+        num_steps: int,
+        width: int,
+        height: int,
+    ) -> mx.array:
+        """Resolve the sigma schedule, using DiffusionScheduler when opt-in env var is set.
+
+        Default path: _compute_sigmas() with resolution-dependent mu-shift for FLUX models.
+        Opt-in path (YUNSHU_DIFFUSION_SCHEDULER set): DiffusionScheduler.sigmas converted
+        to mx.array.  The scheduler is re-created with the request's num_steps so the
+        sigma count matches the denoising loop.
+        """
+        if self._diffusion_scheduler_type is not None:
+            from .diffusion_infra import DiffusionScheduler, SchedulerType
+            scheduler = DiffusionScheduler(
+                num_inference_steps=num_steps,
+                scheduler_type=self._diffusion_scheduler_type,
+            )
+            sigma_list = scheduler.sigmas  # list[float]
+            # Append a 0 sentinel (the default _compute_sigmas always appends a trailing 0)
+            sigma_list.append(0.0)
+            sigmas = mx.array(sigma_list, dtype=mx.float32)
+            logger.info(
+                f"Using DiffusionScheduler ({self._diffusion_scheduler_type.value}): "
+                f"{num_steps} steps, sigmas range [{sigma_list[0]:.4f}, {sigma_list[-2]:.4f}]"
+            )
+            return sigmas
+
+        # Default: resolution-dependent mu-shift for FLUX/Z-Image models
+        return _compute_sigmas(num_steps, width, height)
+
     def _run_pipeline(self, prompt, width, height, num_steps, seed) -> bytes:
         """Run the full diffusion pipeline synchronously."""
         # 1. Tokenize with chat template (mflux pattern: enable_thinking + add_generation_prompt)
@@ -1912,7 +1957,7 @@ class ImageGenEngine:
         ).astype(mx.float16)
 
         # 4. Compute sigma schedule
-        sigmas = _compute_sigmas(num_steps, width, height)
+        sigmas = self._resolve_sigmas(num_steps, width, height)
 
         # 5. Denoising loop
         if self._teacache is not None:

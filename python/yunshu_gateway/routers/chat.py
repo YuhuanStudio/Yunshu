@@ -37,6 +37,7 @@ from ..streaming import (
     run_with_disconnect_guard,
 )
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
+from yunshu_engine.gateway_optimizer import get_streaming_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -1248,6 +1249,13 @@ async def _stream_response(
         }
         return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
+    # Per-request streaming buffer for zero-alloc SSE ring buffering
+    _stream_buf = None
+    try:
+        _stream_buf = get_streaming_buffer()
+    except Exception:
+        logger.debug("StreamingResponseBuffer creation failed", exc_info=True)
+
     async def _token_source():
         nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok
         first_chunk = True
@@ -1416,6 +1424,27 @@ async def _stream_response(
           _token_source(),
           http_request=request,
       ):
-          yield event.encode("utf-8")
+          encoded = event.encode("utf-8")
+          # Best-effort write to streaming buffer
+          if _stream_buf is not None:
+              try:
+                  _stream_buf.write(encoded)
+              except Exception:
+                  logger.debug("StreamingResponseBuffer write failed", exc_info=True)
+          yield encoded
     finally:
       _release_lora_adapter(engine, loaded_adapter)
+      # Log buffer stats at debug level
+      if _stream_buf is not None:
+          try:
+              stats = _stream_buf.get_stats()
+              logger.debug(
+                  "StreamingResponseBuffer stats: writes=%d, bytes=%d, flushes=%d, "
+                  "utilization=%.1f%%",
+                  stats["write_count"],
+                  stats["bytes_written"],
+                  stats["flush_count"],
+                  stats["utilization_pct"],
+              )
+          except Exception:
+              logger.debug("StreamingResponseBuffer stats logging failed", exc_info=True)
