@@ -427,10 +427,45 @@ class ASREngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        # VAD pre-check: skip transcription if no speech detected
+        if self._vad is not None:
+            try:
+                import numpy as np
+                with open(audio_path, "rb") as f:
+                    raw = f.read()
+                # Try to detect WAV header and extract raw PCM
+                if raw[:4] == b"RIFF" and len(raw) > 44:
+                    pcm = raw[44:]
+                else:
+                    pcm = raw
+                samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                if len(samples) > 0 and not self._vad.is_speech(samples):
+                    logger.debug("VAD: no speech detected, skipping transcription")
+                    return {"text": "", "language": language or "und", "segments": [], "duration": 0.0}
+            except Exception:
+                logger.debug("VAD pre-check failed, continuing with transcription", exc_info=True)
+
+        # LID: auto-detect language if not specified
+        detected_lang = language
+        if language is None:
+            try:
+                from .lid import detect_language_from_audio
+                with open(audio_path, "rb") as f:
+                    audio_bytes = f.read()
+                lid_result = detect_language_from_audio(audio_bytes)
+                if lid_result.language != "und" and lid_result.confidence > 0.3:
+                    detected_lang = lid_result.language
+                    logger.debug(f"LID detected language: {detected_lang} (confidence={lid_result.confidence})")
+            except Exception:
+                logger.debug("LID failed, using default language", exc_info=True)
+
         model = self._model
 
         def _transcribe_sync() -> dict:
-            result = model.generate(audio_path, **kwargs)
+            gen_kwargs = dict(kwargs)
+            if detected_lang:
+                gen_kwargs.setdefault("language", detected_lang)
+            result = model.generate(audio_path, **gen_kwargs)
 
             if hasattr(result, "text"):
                 raw_lang = getattr(result, "language", None)

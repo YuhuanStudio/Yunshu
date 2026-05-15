@@ -81,3 +81,45 @@ async def profile_status():
         "active": _profiling_active,
         "elapsed_seconds": round(elapsed, 3) if _profiling_active else None,
     })
+
+
+@router.get("/profile/engine", response_model=None)
+async def engine_profiling_stats():
+    """Get engine-level profiling stats from PerformanceProfiler + ProfilingMixin."""
+    from ..engine import get_engine, get_model_manager
+    from yunshu_engine.batched_engine import BatchedEngine
+
+    results = []
+    manager = get_model_manager()
+    engines = []
+
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+                engines.append((entry.model_id, entry.engine))
+    else:
+        engine = get_engine()
+        if engine and isinstance(engine, BatchedEngine):
+            engines.append((engine.model_name, engine))
+
+    for model_id, engine in engines:
+        info = {"model_id": model_id}
+        stats = getattr(engine, 'get_stats', lambda: {})()
+        if "profiler" in stats:
+            info["profiler"] = stats["profiler"]
+        if "auto_tuner" in stats:
+            info["auto_tuner"] = stats["auto_tuner"]
+        if "slo" in stats:
+            info["slo"] = stats["slo"]
+
+        # Check for CompositionScheduler profiling mixin
+        core = getattr(engine, '_engine_core', None)
+        if core is not None:
+            cs = getattr(core, '_composition_scheduler', None)
+            if cs is not None:
+                mixin_stats = cs.get_stats()
+                if "ProfilingMixin" in mixin_stats:
+                    info["scheduler_profiling"] = mixin_stats["ProfilingMixin"]
+        results.append(info)
+
+    return JSONResponse({"engines": results})
