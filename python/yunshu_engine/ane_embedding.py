@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 import os
 import platform
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field

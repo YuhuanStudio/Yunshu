@@ -14,7 +14,6 @@ Integration points:
 from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
 from collections import deque
