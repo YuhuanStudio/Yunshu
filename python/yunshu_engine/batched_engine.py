@@ -243,6 +243,11 @@ class BatchedEngine:
         self._gpu_rejection_sampler = GPURejectionSampler()
         self._gpu_rejection_enabled = should_enable_gpu_rejection()
 
+        # Spec draft verifier: production-grade draft verification with
+        # KV cache trimming and bonus token emission
+        from .spec_draft_verifier import SpecDraftVerifier
+        self._spec_draft_verifier = SpecDraftVerifier(track_stats=True)
+
         # Adaptive speculative decode controller (opt-in via YUNSHU_ADAPTIVE_SPEC=1)
         self._adaptive_spec = None
 
@@ -2711,85 +2716,52 @@ class BatchedEngine:
                                 break
                         continue
 
-                    # C10: Batch verify all K draft tokens in one forward pass
+                    # C10: Batch verify all K draft tokens via SpecDraftVerifier
                     self._ngram_stats["proposals"] += 1
                     self._ngram_stats["total_draft"] += n_draft
-                    accepted = 0
 
-                    # Feed all draft tokens to the model in one batch forward
-                    draft_arr = mx.array(draft_ids[:n_draft]).reshape(1, -1)
-                    # Use the model directly for batch forward (bypass generate_step)
-                    batch_logits = model(draft_arr, cache=cache)
-                    if hasattr(batch_logits, 'logits'):
-                        batch_logits = batch_logits.logits
+                    # Use SpecDraftVerifier for proper batch verification:
+                    # 1. One forward pass populates KV cache for all K positions
+                    # 2. Consecutive prefix match finds acceptance boundary
+                    # 3. KV cache trimmed to remove rejected entries
+                    # 4. Bonus token emitted from rejection point
+                    result = self._spec_draft_verifier.verify(
+                        model=model,
+                        draft_ids=draft_ids[:n_draft],
+                        prompt_cache=cache,
+                    )
 
-                    # GPU-accelerated rejection sampling when enabled
-                    if self._gpu_rejection_enabled:
-                        from .gpu_rejection import GPURejectionSampler as _GRS
-                        rej_result = self._gpu_rejection_sampler.verify_greedy(
-                            batch_logits[0, :n_draft], draft_ids[:n_draft]
-                        )
-                        accepted = rej_result.accepted_count
+                    # Emit accepted tokens
+                    _stopped = False
+                    for tid in result.accepted_tokens:
+                        tokens.append(tid)
+                        all_token_ids.append(tid)
+                        remaining -= 1
+                        if tid in stop_ids:
+                            tokens.pop()
+                            _stopped = True
+                            break
+                        detokenizer.add_token(tid)
+                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            _stopped = True
+                            break
 
-                        # Append accepted tokens
-                        for i in range(accepted):
-                            tid = draft_ids[i]
-                            tokens.append(tid)
-                            all_token_ids.append(tid)
-                            remaining -= 1
-                            if tid in stop_ids:
-                                tokens.pop()
-                                break
-                            detokenizer.add_token(tid)
-                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                break
+                    # Emit bonus token (model's own prediction at rejection/last point)
+                    if not _stopped and result.bonus_token is not None and remaining > 0:
+                        bonus = result.bonus_token
+                        tokens.append(bonus)
+                        all_token_ids.append(bonus)
+                        remaining -= 1
+                        if bonus not in stop_ids:
+                            detokenizer.add_token(bonus)
+                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            pass
 
-                        # Resample at rejection point
-                        if accepted < n_draft and remaining > 0:
-                            bonus = _GRS.compute_bonus_token(batch_logits[0, :n_draft], accepted)
-                            tokens.append(bonus)
-                            all_token_ids.append(bonus)
-                            remaining -= 1
-                            if bonus not in stop_ids:
-                                detokenizer.add_token(bonus)
-                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                pass
-                    else:
-                        # CPU sequential fallback: compare model's argmax at each position with draft
-                        for i in range(n_draft):
-                            model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
-                            draft_id = draft_ids[i]
-
-                            if model_pick == draft_id:
-                                tokens.append(draft_id)
-                                all_token_ids.append(draft_id)
-                                accepted += 1
-                                remaining -= 1
-                                if draft_id in stop_ids:
-                                    tokens.pop()
-                                    break
-                                detokenizer.add_token(draft_id)
-                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                    break
-                            else:
-                                # Reject: resample from model's distribution at this position
-                                resampled = model_pick
-                                tokens.append(resampled)
-                                all_token_ids.append(resampled)
-                                remaining -= 1
-                                if resampled in stop_ids:
-                                    tokens.pop()
-                                    break
-                                detokenizer.add_token(resampled)
-                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                    break
-                                break  # Stop verifying rest of drafts
-
-                    self._ngram_stats["accepted"] += accepted
+                    self._ngram_stats["accepted"] += result.accepted_count
 
                     # Feed back to adaptive spec controller
                     if self._adaptive_spec is not None:
-                        self._adaptive_spec.record_step(n_draft, accepted)
+                        self._adaptive_spec.record_step(n_draft, result.accepted_count)
 
             # Cache KV state
             if self._kv_quant_bits is not None:

@@ -2,11 +2,9 @@
 
 __all__ = [
     "BatchedEngine",
-    "Engine",
     "EngineConfig",
     "GenerationOutput",
     "RequestOutput",
-    "RequestState",
 ]
 
 
@@ -14,11 +12,9 @@ def __getattr__(name):
     """Lazy imports for heavy modules — only loaded when accessed."""
     _lazy = {
         "BatchedEngine": ".batched_engine",
-        "Engine": ".engine",
-        "EngineConfig": ".engine",
+        "EngineConfig": ".types",
         "GenerationOutput": ".batched_engine",
         "RequestOutput": ".request",
-        "RequestState": ".engine",
         "AsyncEngineCore": ".engine_core",
         "EngineCore": ".engine_core",
         "EngineCoreConfig": ".engine_core",

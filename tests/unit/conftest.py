@@ -38,7 +38,7 @@ def _fast_drain():
 @pytest.fixture
 def mock_engine():
     """A minimal mock Engine that simulates a loaded+running state."""
-    from yunshu_engine.engine import EngineConfig
+    from yunshu_engine.types import EngineConfig
 
     engine = MagicMock()
     engine._model_name = "test-model"
@@ -66,7 +66,7 @@ def set_engine(mock_engine):
 
     Uses the engine module's set_engine/get_engine pattern.
     """
-    from yunshu_engine.engine import set_engine as _set_engine
+    from yunshu_gateway.engine import set_engine as _set_engine
 
     _set_engine(mock_engine)
     yield mock_engine
