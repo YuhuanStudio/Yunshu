@@ -102,7 +102,15 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     return messages
 
 
-def _parse_response_format(rf: dict | None) -> dict | None:
+def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict | None:
+    if grammar is not None:
+        gtype = grammar.get("type")
+        if gtype == "json":
+            schema = grammar.get("schema")
+            if schema:
+                return schema
+            return {}
+        return grammar
     if rf is None:
         return None
     rf_type = rf.get("type")
@@ -118,7 +126,7 @@ def _parse_response_format(rf: dict | None) -> dict | None:
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     messages = _convert_to_messages(req)
-    json_schema = _parse_response_format(req.response_format)
+    json_schema = _parse_response_format(req.response_format, req.grammar)
 
     engine = get_engine()
     if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):
@@ -236,6 +244,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             pt = result.prompt_tokens
             ct = result.completion_tokens
             finish_reason = result.finish_reason or "stop"
+            _reasoning_tokens = getattr(result, 'reasoning_tokens', 0)
         else:
             state = await engine.generate(
                 prompt=messages,
@@ -270,8 +279,8 @@ async def create_response(req: ResponsesRequest, request: Request):
         # Extract tool calls
         tool_calls = None
         if req.tools:
-            from .chat import extract_tool_calls, clean_tool_call_markup
-            tool_calls = extract_tool_calls(text)
+            from .chat import extract_tool_calls_model_aware, clean_tool_call_markup
+            tool_calls = extract_tool_calls_model_aware(text, req.model)
             if tool_calls:
                 text = clean_tool_call_markup(text)
                 finish_reason = "tool_calls"
