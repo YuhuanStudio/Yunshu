@@ -3529,6 +3529,8 @@ class BatchedEngine:
             try:
                 ids = mx.array(input_ids)
                 cache = make_prompt_cache(model)
+                detokenizer = tokenizer.detokenizer
+                detokenizer.reset()
 
                 # Prefill
                 out, hidden = model(ids.reshape(1, -1), cache=cache, return_hidden=True)
@@ -3539,11 +3541,13 @@ class BatchedEngine:
                 primary = first
                 primary_h = hidden[:, -1:, :]
 
-                # Yield first token
-                chunk = _clean_special_tokens(tokenizer.decode([first]))
+                # Yield first token via incremental detokenizer
+                detokenizer.add_token(first)
+                chunk = _clean_special_tokens(detokenizer.last_segment)
                 _put((chunk, 1, first in eos_ids))
 
                 if first in eos_ids:
+                    detokenizer.finalize()
                     _put(_sentinel)
                     return
 
@@ -3566,14 +3570,16 @@ class BatchedEngine:
                         # Accept
                         clear_rollback(cache)
                         generated.append(draft)
-                        chunk = _clean_special_tokens(tokenizer.decode([draft]))
+                        detokenizer.add_token(draft)
+                        chunk = _clean_special_tokens(detokenizer.last_segment)
                         _put((chunk, len(generated), draft in eos_ids))
                         if draft in eos_ids:
                             break
 
                         # Bonus token
                         generated.append(v1)
-                        chunk = _clean_special_tokens(tokenizer.decode([v1]))
+                        detokenizer.add_token(v1)
+                        chunk = _clean_special_tokens(detokenizer.last_segment)
                         _put((chunk, len(generated), v1 in eos_ids))
                         if v1 in eos_ids:
                             break
@@ -3583,13 +3589,15 @@ class BatchedEngine:
                         # Reject: restore rollback (zero-cost)
                         restore_rollback(cache)
                         generated.append(v0)
-                        chunk = _clean_special_tokens(tokenizer.decode([v0]))
+                        detokenizer.add_token(v0)
+                        chunk = _clean_special_tokens(detokenizer.last_segment)
                         _put((chunk, len(generated), v0 in eos_ids))
                         if v0 in eos_ids:
                             break
                         primary = v0
                         primary_h = verify_h[:, 0:1, :]
 
+                detokenizer.finalize()
                 _put(_sentinel)
             except Exception as e:
                 _put(e)
