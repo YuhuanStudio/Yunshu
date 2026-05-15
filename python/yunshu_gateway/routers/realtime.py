@@ -236,6 +236,7 @@ class RealtimeSession:
         self.session = SessionConfig()
         self.conversation = Conversation(f"conv_{uuid.uuid4().hex[:16]}")
         self._active_response: Optional[asyncio.Task] = None
+        self._cancel_event: Optional[asyncio.Event] = None
         self._audio_buffer = bytearray()
         # VAD state
         self._vad_speaking = False
@@ -278,8 +279,10 @@ class RealtimeSession:
         except WebSocketDisconnect:
             logger.info("Realtime client disconnected")
         except Exception as e:
-            logger.error(f"Realtime session error: {e}")
+            logger.error(f"Realtime session error: {e}", exc_info=True)
         finally:
+            if self._cancel_event is not None:
+                self._cancel_event.set()
             if self._active_response and not self._active_response.done():
                 self._active_response.cancel()
 
@@ -423,6 +426,8 @@ class RealtimeSession:
         config: dict,
     ) -> None:
         """Generate a response and stream deltas back."""
+        # Create cancel_event so engine can check for cancellation
+        self._cancel_event = asyncio.Event()
         try:
             messages = self._build_messages()
             if not messages:
@@ -449,9 +454,9 @@ class RealtimeSession:
             full_text = ""
 
             # Extract session-level generation parameters
-            _stop = config.get("stop") or self.session_config.get("stop")
-            _stop_token_ids = config.get("stop_token_ids") or self.session_config.get("stop_token_ids")
-            _thinking_budget = config.get("thinking_budget") or self.session_config.get("thinking_budget")
+            _stop = config.get("stop") or getattr(self.session, 'stop', None)
+            _stop_token_ids = config.get("stop_token_ids")
+            _thinking_budget = config.get("thinking_budget")
             _priority = config.get("priority", 0)
 
             if is_batched:
@@ -459,12 +464,20 @@ class RealtimeSession:
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    top_p=self.session_config.get("top_p", 1.0),
-                    enable_thinking=self.session_config.get("enable_thinking", False),
+                    top_p=getattr(self.session, 'top_p', 1.0),
+                    top_k=getattr(self.session, 'top_k', 0),
+                    min_p=getattr(self.session, 'min_p', 0.0),
+                    repetition_penalty=getattr(self.session, 'repetition_penalty', 1.0),
+                    frequency_penalty=getattr(self.session, 'frequency_penalty', 0.0),
+                    presence_penalty=getattr(self.session, 'presence_penalty', 0.0),
+                    logit_bias=getattr(self.session, 'logit_bias', None),
+                    enable_thinking=getattr(self.session, 'enable_thinking', False),
                     thinking_budget=_thinking_budget,
                     stop=_stop,
                     stop_token_ids=_stop_token_ids,
+                    seed=getattr(self.session, 'seed', None),
                     priority=_priority,
+                    cancel_event=self._cancel_event,
                 ):
                     if output.new_text:
                         full_text += output.new_text
@@ -484,11 +497,19 @@ class RealtimeSession:
                     prompt=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
-                    top_p=self.session_config.get("top_p", 1.0),
-                    enable_thinking=self.session_config.get("enable_thinking", False),
+                    top_p=getattr(self.session, 'top_p', 1.0),
+                    top_k=getattr(self.session, 'top_k', 0),
+                    min_p=getattr(self.session, 'min_p', 0.0),
+                    repetition_penalty=getattr(self.session, 'repetition_penalty', 1.0),
+                    frequency_penalty=getattr(self.session, 'frequency_penalty', 0.0),
+                    presence_penalty=getattr(self.session, 'presence_penalty', 0.0),
+                    logit_bias=getattr(self.session, 'logit_bias', None),
+                    enable_thinking=getattr(self.session, 'enable_thinking', False),
                     thinking_budget=_thinking_budget,
                     stop=_stop,
                     stop_token_ids=_stop_token_ids,
+                    seed=getattr(self.session, 'seed', None),
+                    cancel_event=self._cancel_event,
                 ):
                     if output.token_text:
                         full_text += output.token_text
@@ -598,8 +619,23 @@ class RealtimeSession:
                     "status": "cancelled",
                 },
             ))
+        except MemoryError:
+            logger.error("Realtime generation OOM", exc_info=True)
+            await self.send_event(_event(
+                RealtimeEvent.ERROR,
+                error={"message": "Out of GPU memory", "type": "memory_error"},
+            ))
+            await self.send_event(_event(
+                RealtimeEvent.RESPONSE_DONE,
+                response={
+                    "id": response_id,
+                    "object": "realtime.response",
+                    "status": "failed",
+                    "error": "Out of GPU memory",
+                },
+            ))
         except Exception as e:
-            logger.error(f"Realtime generation error: {e}")
+            logger.error(f"Realtime generation error: {e}", exc_info=True)
             await self.send_event(_event(
                 RealtimeEvent.ERROR,
                 error={"message": str(e), "type": "server_error"},
@@ -615,6 +651,7 @@ class RealtimeSession:
             ))
         finally:
             self._active_response = None
+            self._cancel_event = None
 
     async def _handle_response_cancel(self, event: dict) -> None:
         """Handle response.cancel — abort current generation with audio truncation.
@@ -623,6 +660,9 @@ class RealtimeSession:
         sends response.audio.done to signal the client to truncate playback.
         """
         if self._active_response and not self._active_response.done():
+            # Signal the cancel_event so the engine can stop mid-generation
+            if self._cancel_event is not None:
+                self._cancel_event.set()
             self._active_response.cancel()
             # Signal audio truncation so client stops playback immediately
             await self.send_event(_event(

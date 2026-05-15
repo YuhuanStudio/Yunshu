@@ -1312,7 +1312,9 @@ class BatchedEngine:
             logger.debug("output_parser failed", exc_info=True)
 
         # Reasoning parser: model-specific reasoning extraction with token count
-        # Supplements output_parser with per-model reasoning token counting
+        # Supplements output_parser with per-model reasoning token counting.
+        # Fall back to scheduler-computed reasoning_tokens when parser returns 0.
+        _reasoning_tok = getattr(result, 'reasoning_tokens', 0) or 0
         try:
             from .reasoning_parser import get_reasoning_parser
             rp = get_reasoning_parser(self.model_name)
@@ -1321,6 +1323,9 @@ class BatchedEngine:
                 _reasoning_tok = rp_out.reasoning_tokens
         except Exception:
             logger.debug("reasoning_parser failed", exc_info=True)
+
+        # TTFT from engine_core (computed before request cleanup)
+        _ttft_ms = getattr(result, 'ttft_ms', 0.0)
 
         engine_loop_result = GenerationOutput(
             text=output_text,
@@ -1332,6 +1337,7 @@ class BatchedEngine:
             reasoning_tokens=_reasoning_tok,
             cached_tokens=getattr(result, 'cached_tokens', 0),
             logprobs=getattr(result, 'logprobs', None),
+            ttft_ms=_ttft_ms,
         )
         if _rc_hash is not None and engine_loop_result.finish_reason != "error":
             try:
@@ -2119,6 +2125,7 @@ class BatchedEngine:
 
         # Engine loop path: continuous batching with scheduler
         await self._ensure_engine_core()
+        _stream_t0 = time.perf_counter()
         request_id = await self._engine_core.add_request(
             prompt=prompt, max_tokens=max_tokens, temperature=temperature,
             top_p=top_p, top_k=top_k, min_p=min_p,
@@ -2136,12 +2143,20 @@ class BatchedEngine:
         )
 
         finished_normally = False
+        _first_token = True
+        _stream_ttft_ms = 0.0
         try:
             async for output in self._engine_core.stream_outputs(request_id):
                 cleaned = _clean_special_tokens(output.new_text)
                 finish_reason = output.finish_reason
                 if finish_reason == "memory_exceeded":
                     finish_reason = "memory_limit"
+                # Compute TTFT on first streamed output
+                _ttft_ms = 0.0
+                if _first_token:
+                    _stream_ttft_ms = round((time.perf_counter() - _stream_t0) * 1000, 1)
+                    _ttft_ms = _stream_ttft_ms
+                    _first_token = False
                 gen_output = GenerationOutput(
                     text=_clean_special_tokens(output.output_text),
                     new_text=cleaned,
@@ -2152,6 +2167,7 @@ class BatchedEngine:
                     reasoning_tokens=getattr(output, 'reasoning_tokens', 0),
                     cached_tokens=getattr(output, 'cached_tokens', 0),
                     logprobs=getattr(output, 'logprobs', None),
+                    ttft_ms=_ttft_ms,
                 )
                 if output.finished:
                     finished_normally = True

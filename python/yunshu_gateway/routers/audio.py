@@ -237,6 +237,13 @@ async def stream_speech(req: TTSRequest, request: Request):
     if tts_engine is None:
         raise HTTPException(status_code=404, detail="No TTS engine available")
 
+    # Register with request tracker for cancellation support
+    import uuid as _uuid
+    _tts_id = f"tts-{_uuid.uuid4().hex[:24]}"
+    from yunshu_engine.request_tracker import get_request_tracker
+    _tts_tracker = get_request_tracker()
+    _tts_gen = _tts_tracker.register(_tts_id, req.model)
+
     async def _audio_stream():
         # Emit a WAV header in the first event so the client can construct
         # a playable stream.  data_size=0 signals "unknown length" which most
@@ -265,6 +272,9 @@ async def stream_speech(req: TTSRequest, request: Request):
             segments = [text]
 
         for seg_idx, segment in enumerate(segments):
+            if _tts_gen.cancel_event.is_set():
+                yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+                return
             async for chunk in tts_engine.synthesize_stream(
                 text=segment,
                 voice=req.voice,
@@ -280,6 +290,9 @@ async def stream_speech(req: TTSRequest, request: Request):
                 language=req.language,
                 seed=req.seed,
             ):
+                if _tts_gen.cancel_event.is_set():
+                    yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+                    return
                 if chunk.get("is_final"):
                     if seg_idx == len(segments) - 1:
                         yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -287,8 +300,21 @@ async def stream_speech(req: TTSRequest, request: Request):
                 pcm_b64 = base64.b64encode(chunk["audio"]).decode("ascii")
                 yield f"data: {json.dumps({'type': 'audio', 'audio': pcm_b64, 'text': chunk.get('text', ''), 'segment': seg_idx})}\n\n"
 
+    from ..streaming import with_sse_keepalive
+
+    async def _wrapped_stream():
+        try:
+            async for event in with_sse_keepalive(
+                _audio_stream(),
+                http_request=request,
+                cancel_event=_tts_gen.cancel_event,
+            ):
+                yield event.encode("utf-8") if isinstance(event, str) else event
+        finally:
+            _tts_tracker.unregister(_tts_id)
+
     return StreamingResponse(
-        _audio_stream(),
+        _wrapped_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -452,9 +478,27 @@ async def voice_pipeline(
 
     try:
         if stream:
+            # Register with request tracker for cancellation support
+            import uuid as _uuid
+            _vp_id = f"vp-{_uuid.uuid4().hex[:24]}"
+            from yunshu_engine.request_tracker import get_request_tracker
+            _vp_tracker = get_request_tracker()
+            _vp_gen = _vp_tracker.register(_vp_id, llm_model)
+            from ..streaming import with_sse_keepalive
+
             async def _event_stream():
-                async for event in pipeline.process_stream(tmp_path):
-                    yield f"data: {json.dumps({'stage': event.stage, 'data': event.data if isinstance(event.data, str) else ''})}\n\n"
+                try:
+                    async for event in with_sse_keepalive(
+                        (
+                            f"data: {json.dumps({'stage': e.stage, 'data': e.data if isinstance(e.data, str) else ''})}\n\n"
+                            async for e in pipeline.process_stream(tmp_path)
+                        ),
+                        http_request=request,
+                        cancel_event=_vp_gen.cancel_event,
+                    ):
+                        yield event.encode("utf-8") if isinstance(event, str) else event
+                finally:
+                    _vp_tracker.unregister(_vp_id)
 
             return StreamingResponse(
                 _event_stream(),

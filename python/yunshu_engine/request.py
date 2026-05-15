@@ -101,6 +101,7 @@ class RequestOutput:
     current_state: str = "normal"
     error: str | None = None
     cached_tokens: int = 0
+    ttft_ms: float = 0.0
 
     # Backward compat aliases for legacy Engine path
     @property

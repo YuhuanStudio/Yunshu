@@ -1305,6 +1305,12 @@ class EngineCore:
         if event:
             await event.wait()
 
+        # Compute TTFT before cleanup (timestamp is removed by _cleanup_request)
+        _start_ts = self._request_timestamps.get(req_id)
+        _ttft_ms = 0.0
+        if _start_ts is not None and _start_ts > 0:
+            _ttft_ms = round((time.monotonic() - _start_ts) * 1000, 1)
+
         # Drain collector
         collector = self._output_collectors.get(req_id)
         result = None
@@ -1320,6 +1326,10 @@ class EngineCore:
                 else:
                     result = collector._merge(result, output)
             self._cleanup_request(req_id)
+
+        # Attach TTFT to result so downstream consumers can use it
+        if result is not None:
+            result.ttft_ms = _ttft_ms
 
         return result
 

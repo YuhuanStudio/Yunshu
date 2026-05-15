@@ -87,6 +87,8 @@ class RequestOutputCollector:
         _reasoning = (existing.reasoning_tokens or 0) + (new.reasoning_tokens or 0)
         # Take max cached_tokens (monotonic, not cumulative)
         _cached = max(existing.cached_tokens or 0, new.cached_tokens or 0)
+        # Preserve TTFT: use existing if set (first-token timing), else new
+        _ttft = existing.ttft_ms or new.ttft_ms or 0.0
         return RequestOutput(
             request_id=new.request_id,
             new_token_ids=existing.new_token_ids + new.new_token_ids,
@@ -102,6 +104,7 @@ class RequestOutputCollector:
             reasoning_tokens=_reasoning,
             cached_tokens=_cached,
             error=new.error or existing.error,
+            ttft_ms=_ttft,
         )
 
     def clear(self) -> None:

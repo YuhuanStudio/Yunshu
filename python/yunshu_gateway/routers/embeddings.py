@@ -56,6 +56,9 @@ async def create_embedding(req: EmbeddingRequest):
 
     try:
         embeddings = await _generate_embeddings(engine, texts, model_id=req.model)
+    except MemoryError:
+        logger.error("Embedding generation OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Embedding error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Embedding generation failed")

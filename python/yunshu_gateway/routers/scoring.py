@@ -43,6 +43,9 @@ async def create_pooling(req: PoolingRequest):
 
     try:
         raw = await _get_hidden_states(engine, texts, req.pooling_type)
+    except MemoryError:
+        logger.error("Pooling OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Pooling error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Pooling failed")
@@ -97,6 +100,9 @@ async def create_score(req: ScoreRequest):
     try:
         emb_a = await _get_embeddings(engine, texts_a)
         emb_b = await _get_embeddings(engine, texts_b)
+    except MemoryError:
+        logger.error("Score OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Score error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Scoring failed")
@@ -141,6 +147,9 @@ async def create_rerank(req: RerankRequest):
         # Build query+doc pairs and compute embeddings
         query_emb = (await _get_embeddings(engine, [req.query]))[0]
         doc_embs = await _get_embeddings(engine, req.documents)
+    except MemoryError:
+        logger.error("Rerank OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Rerank error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Reranking failed")
@@ -202,6 +211,9 @@ async def classify_input(req: "ClassifyRequest"):
 
     try:
         input_emb = (await _get_embeddings(engine, [req.input]))[0]
+    except MemoryError:
+        logger.error("Classify OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory")
     except Exception as e:
         logger.error(f"Classify error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Classification failed")

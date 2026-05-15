@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -119,7 +119,7 @@ async def create_image(req: ImageGenerateRequest) -> JSONResponse:
 
 
 @router.post("/images/generations/stream")
-async def stream_image_generation(req: ImageGenerateRequest):
+async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     """Stream image generation progress as SSE events."""
     manager = get_model_manager()
     if manager is None:
@@ -136,6 +136,13 @@ async def stream_image_generation(req: ImageGenerateRequest):
     if img_engine is None:
         raise HTTPException(status_code=404, detail="No image generation engine available")
 
+    # Register with request tracker for cancellation support
+    import uuid as _uuid
+    _img_id = f"img-{_uuid.uuid4().hex[:24]}"
+    from yunshu_engine.request_tracker import get_request_tracker
+    _img_tracker = get_request_tracker()
+    _img_gen = _img_tracker.register(_img_id, req.model)
+
     async def _progress_stream():
         async for chunk in img_engine.generate_image_stream(
             prompt=req.prompt,
@@ -145,6 +152,9 @@ async def stream_image_generation(req: ImageGenerateRequest):
             seed=req.seed,
             preview_interval=req.preview_interval,
         ):
+            if _img_gen.cancel_event.is_set():
+                yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+                return
             if chunk.get("is_final") and chunk.get("image"):
                 b64 = base64.b64encode(chunk["image"]).decode("ascii")
                 yield f"data: {json.dumps({'step': chunk['step'], 'progress': 1.0, 'image': b64, 'is_final': True})}\n\n"
@@ -154,8 +164,21 @@ async def stream_image_generation(req: ImageGenerateRequest):
             elif not chunk.get("is_final"):
                 yield f"data: {json.dumps({'step': chunk['step'], 'total_steps': chunk['total_steps'], 'progress': chunk['progress'], 'is_final': False})}\n\n"
 
+    from ..streaming import with_sse_keepalive
+
+    async def _wrapped_stream():
+        try:
+            async for event in with_sse_keepalive(
+                _progress_stream(),
+                http_request=request,
+                cancel_event=_img_gen.cancel_event,
+            ):
+                yield event.encode("utf-8") if isinstance(event, str) else event
+        finally:
+            _img_tracker.unregister(_img_id)
+
     return StreamingResponse(
-        _progress_stream(),
+        _wrapped_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
