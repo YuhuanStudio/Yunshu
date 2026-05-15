@@ -1113,6 +1113,7 @@ async def _stream_response_multi(
                     stop=req.stop,
                     seed=(req.seed + choice_idx) if req.seed is not None else None,
                     enable_thinking=req.enable_thinking,
+                    stop_token_ids=req.stop_token_ids,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
