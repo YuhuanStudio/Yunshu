@@ -58,6 +58,14 @@
 | Wave 103: VLM _cleanup_temp_files | os.unlink 呼叫目錄路徑失敗。修復: 區分檔案/目錄使用 shutil.rmtree | VLM 暫存檔正確清理 |
 | Wave 103: VLM _stream_vlm_text cancel_event | 新增 cancel_event 參數 + per-iteration 檢查 + try/except 錯誤輸出 | VLM 文字串流可取消 + 錯誤可見 |
 
+### 已完成修復 (2026-05-16 Wave 104 — CRITICAL Streaming Scope + Engine Loop Tracker Leak)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 104: CRITICAL _unregister_inflight 作用域 | _unregister_inflight 定義在 _run_inner 內但從 _run 例外處理器呼叫 — 早期例外觸發 NameError，遮蔽原始錯誤，洩漏 inflight prefix。修復: 提升至 _run 層級 | 串流早期錯誤正確傳播 + 資源不洩漏 |
+| Wave 104: Engine loop tracker 洩漏 | stream_generate engine loop 路徑永不呼叫 _tracker.unregister() — 每個 engine-loop 請求永久洩漏 tracker 條目。修復: finally 塊添加清理 | 請求追蹤器無限增長問題根除 |
+| Wave 104: N-gram cancel_event | _stream_generate_ngram_spec 新增 cancel_event 參數 + 每次迭代檢查 | 取消的 n-gram 請求不再浪費 GPU |
+
 ### 已完成修復 (2026-05-16 Wave 99 — Production Wiring + Agent Audit Deep Fixes)
 
 | 修復 | 描述 | 影響 |
