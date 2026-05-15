@@ -53,6 +53,20 @@
 | Wave 96c: Responses API 追蹤 + 轉發 | Structured tracing (get_inference_tracer) + priority/user 參數轉發 VLM handler | 與 chat/completions 一致 |
 | Wave 96d: Completions.py NameError | `_gen_one` 中 `result` 只在 is_batched path 定義但無條件引用 cached_tokens — 非批次路徑會 NameError | 路由修復 |
 
+### 已完成修復 (2026-05-16 Wave 98 — Resource Leaks + Parameter Forwarding + Preprocessor Safety + 3-State Shutdown)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 98: Engine core 資源洩漏 | budget/dedup shadow/memory guard 3 個早期返回路徑洩漏 budget entry、inflight prefix、lifecycle、KV lifecycle、sliding window registration。全部修復 | 全路徑資源正確清理 |
+| Wave 98: CancelledError 處理 | stream_outputs 吞沒 CancelledError（不 re-raise）。engine loop CancelledError 跳過 fail_all_requests（BaseException 非 Exception）。修復: 兩處均正確處理 | 關機/取消安全性 |
+| Wave 98: Batched engine inflight prefix 洩漏 | _generate_fast 和 _stream_generate_fast 的 OOM/exception 路徑不清理 inflight prefix。修復: 所有 except 路徑呼叫 unregister | GPU 生成錯誤路徑不洩漏 |
+| Wave 98: VLM engine 資源洩漏 | generate() 無 try/finally — OOM 時 _active_count 和 temp files 不清理。generate_stream() 永不清理 temp files。ffmpeg 失敗時 tmpdir 洩漏。全部修復 | VLM 錯誤路徑資源安全 |
+| Wave 98: 3-state shutdown | stop() 使用 vLLM RUNNING→REQUESTED→SHUTTING_DOWN 模式：先拒絕新請求，等待 drain (可配置超時)，再強制停止 | 優雅關閉不丟失請求 |
+| Wave 98: Gateway 參數轉發 | chat.py: 6 路徑補齊 logprobs/top_logprobs/spec_decode。completions.py: legacy streaming 補齊 logprobs。anthropic.py: 4 路徑補齊 stop_token_ids/spec_decode/xtc/priority/json_schema | API 參數完整性 |
+| Wave 98: VLM 參數轉發 | chat.py VLM 路徑補齊 min_p/priority/logprobs/top_logprobs/spec_decode (之前 5 參數靜默丟棄) | VLM 請求採樣控制完整 |
+| Wave 98: 模型預處理器安全 | 8 個佔位預處理器返回空 token_ids (防止假 token 替換真實 prompt)。佔位預處理器僅在輸入已包含真實 token 時透傳 | 防止靜默推理損壞 |
+| Wave 98: Engine loop 輸出欄位 | engine loop non-streaming 補齊 cached_tokens + logprobs。engine loop streaming 補齊 logprobs | 輸出欄位完整 |
+
 ### 已完成修復 (2026-05-15 Wave 97 — Streaming Path Deep Audit + Output Field Completeness)
 
 | 修復 | 描述 | 影響 |
