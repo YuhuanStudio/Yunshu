@@ -416,10 +416,14 @@ class VLMEngine:
         temperature: float = 0.7,
         top_p: float = 1.0,
         top_k: int = 0,
+        min_p: float = 0.0,
         seed: int | None = None,
         repetition_penalty: float = 1.0,
         stop: list[str] | None = None,
         enable_thinking: bool | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        priority: int = 0,
         **kwargs,
     ) -> dict[str, Any]:
         """Non-streaming generation. Supports image input for VLM models."""
@@ -461,6 +465,14 @@ class VLMEngine:
             effort_map = {"low": 2048, "medium": 8192, "high": 32768}
             thinking_budget = effort_map.get(reasoning_effort, 8192)
 
+        # logprobs is not supported by VLM engine (mlx_vlm.generate() and
+        # model.language_model don't expose per-token logprobs).
+        if logprobs or top_logprobs:
+            logger.warning(
+                "VLMEngine does not support logprobs/top_logprobs — "
+                "parameter ignored. Use BatchedEngine for logprobs support."
+            )
+
         def _generate_sync():
             if seed is not None:
                 mx.random.seed(seed)
@@ -476,12 +488,12 @@ class VLMEngine:
                 pres_p = kwargs.get('presence_penalty', 0.0)
                 lb = kwargs.get('logit_bias', None)
                 js = kwargs.get('json_schema', None)
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p, lb, js, enable_thinking=_enable_thinking)
+                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, js, enable_thinking=_enable_thinking)
 
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
 
-            sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
+            sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
             eos_ids = self._get_eos_ids()
 
             # Build stop token IDs from string stop sequences + explicit stop_token_ids
@@ -554,16 +566,26 @@ class VLMEngine:
         temperature: float = 0.7,
         top_p: float = 1.0,
         top_k: int = 0,
+        min_p: float = 0.0,
         seed: int | None = None,
         stop: list[str] | None = None,
         enable_thinking: bool | None = None,
         repetition_penalty: float = 1.0,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation: yields RequestOutput per token."""
         messages = prompt or messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+
+        # logprobs is not supported by VLM engine
+        if logprobs or top_logprobs:
+            logger.warning(
+                "VLMEngine does not support logprobs/top_logprobs — "
+                "parameter ignored. Use BatchedEngine for logprobs support."
+            )
 
         # Extract images/audio once, reuse for both pipeline and generation
         image_paths = await self._extract_images(messages)
@@ -600,7 +622,7 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if has_images or has_audio:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, stop, audio_paths=audio_paths, enable_thinking=enable_thinking)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking)
                     return
 
                 prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
@@ -611,13 +633,13 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking)
                     return
 
                 from mlx_lm.generate import generate_step
                 from mlx_lm.sample_utils import make_sampler
 
-                sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+                sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
                 eos_ids = self._get_eos_ids()
 
                 # Build stop token IDs
@@ -858,6 +880,7 @@ class VLMEngine:
         temperature: float,
         top_p: float,
         top_k: int = 0,
+        min_p: float = 0.0,
         stop: list[str] | None = None,
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
@@ -878,7 +901,7 @@ class VLMEngine:
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
         eos_ids = self._get_eos_ids()
 
         # JSON schema constraint
@@ -990,6 +1013,7 @@ class VLMEngine:
         req_id: str,
         queue: asyncio.Queue,
         top_k: int = 0,
+        min_p: float = 0.0,
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
         enable_thinking: bool | None = None,
@@ -1030,7 +1054,7 @@ class VLMEngine:
         # Track vision feature cache hits/misses via adapter stats
         vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
 
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
         stop_suffix = stop or []
         token_count = 0
         try:
@@ -1122,6 +1146,7 @@ class VLMEngine:
         req_id: str,
         queue: asyncio.Queue,
         top_k: int = 0,
+        min_p: float = 0.0,
         stop: list[str] | None = None,
         repetition_penalty: float = 1.0,
         frequency_penalty: float = 0.0,
@@ -1141,7 +1166,7 @@ class VLMEngine:
 
         lm = self._model.language_model
         cache = make_prompt_cache(lm)
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0)
+        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
         eos_ids = self._get_eos_ids()
         has_penalty = repetition_penalty != 1.0 or frequency_penalty != 0.0 or presence_penalty != 0.0 or logit_bias
 

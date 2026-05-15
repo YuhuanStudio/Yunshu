@@ -117,24 +117,45 @@ async def create_response(req: ResponsesRequest, request: Request):
             raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found: {e}")
 
     # Check for VLM/audio routing
-    from .chat import _has_images, _has_audio
+    from .chat import _has_images, _has_audio, _parse_response_format
     has_media = _has_images(messages) or _has_audio(messages)
     if has_media:
         from .chat import _handle_vlm_chat
-        from .chat import ChatCompletionRequest
+        from .chat import ChatCompletionRequest, ChatMessage
+        # Build ChatMessage list from dict messages
+        chat_messages = []
+        for m in messages:
+            chat_messages.append(ChatMessage(
+                role=m.get("role", "user"),
+                content=m.get("content", ""),
+            ))
+        # Convert response_format to the format chat.py expects
+        chat_response_format = None
+        if req.response_format:
+            chat_response_format = req.response_format
         chat_req = ChatCompletionRequest(
             model=req.model,
-            messages=messages,
+            messages=chat_messages,
             max_tokens=req.max_output_tokens,
             temperature=req.temperature,
             top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=req.min_p,
+            repetition_penalty=req.repetition_penalty,
+            frequency_penalty=req.frequency_penalty,
+            presence_penalty=req.presence_penalty,
+            logit_bias=req.logit_bias,
             seed=req.seed,
             enable_thinking=req.enable_thinking,
+            thinking_budget=req.thinking_budget,
+            reasoning_effort=req.reasoning_effort,
             stop=req.stop,
-            stream=False,
+            response_format=chat_response_format,
+            stream=req.stream,
             lora_adapter=req.lora_adapter,
         )
-        return await _handle_vlm_chat(chat_req, messages, request)
+        vlm_json_schema = _parse_response_format(chat_response_format)
+        return await _handle_vlm_chat(chat_req, messages, request, json_schema=vlm_json_schema)
 
     # Inject tool definitions
     if req.tools:
