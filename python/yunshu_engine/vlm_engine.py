@@ -653,7 +653,7 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -760,7 +760,10 @@ class VLMEngine:
             except Exception as e:
                 logger.error(f"VLM stream error: {e}")
             finally:
-                queue.put_nowait(None)
+                try:
+                    queue.put_nowait(None)
+                except Exception:
+                    pass
 
         self._active_count += 1
         loop = asyncio.get_running_loop()
@@ -1229,6 +1232,7 @@ class VLMEngine:
         logit_bias: dict[int, float] | None = None,
         json_schema: dict | None = None,
         enable_thinking: bool | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1314,7 +1318,17 @@ class VLMEngine:
             return
 
         tokens_list = []
-        for _ in range(max_tokens - 1):
+        try:
+          for _ in range(max_tokens - 1):
+            if cancel_event is not None and cancel_event.is_set():
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text="",
+                    finish_reason="cancel",
+                    finished=True,
+                    completion_tokens=token_count,
+                ))
+                return
             output = lm(current[None], cache=cache)
             logits = output.logits[:, -1, :]
 
@@ -1393,23 +1407,32 @@ class VLMEngine:
                         ))
                 return
 
-        # Max tokens reached — finalize detokenizer
-        if has_detokenizer:
-            remaining = detokenizer.finalize()
-            if remaining:
-                queue.put_nowait(RequestOutput(
-                    request_id=req_id,
-                    new_text=remaining,
-                    finish_reason=None,
-                    finished=False,
-                ))
-        queue.put_nowait(RequestOutput(
-            request_id=req_id,
-            new_text="",
-            finish_reason="length",
-            finished=True,
-            completion_tokens=token_count,
-        ))
+          # Max tokens reached — finalize detokenizer
+          if has_detokenizer:
+              remaining = detokenizer.finalize()
+              if remaining:
+                  queue.put_nowait(RequestOutput(
+                      request_id=req_id,
+                      new_text=remaining,
+                      finish_reason=None,
+                      finished=False,
+                  ))
+          queue.put_nowait(RequestOutput(
+              request_id=req_id,
+              new_text="",
+              finish_reason="length",
+              finished=True,
+              completion_tokens=token_count,
+          ))
+        except Exception as e:
+            logger.error(f"VLM text streaming error: {e}", exc_info=True)
+            queue.put_nowait(RequestOutput(
+                request_id=req_id,
+                new_text="",
+                finish_reason="error",
+                finished=True,
+                error=str(e),
+            ))
 
     # ── Prompt Formatting ──
 
@@ -1647,10 +1670,14 @@ class VLMEngine:
         return tmp.name
 
     def _cleanup_temp_files(self) -> None:
+        import shutil
         if self._temp_files:
             for path in self._temp_files:
                 try:
-                    os.unlink(path)
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        os.unlink(path)
                 except OSError:
                     pass
             self._temp_files.clear()

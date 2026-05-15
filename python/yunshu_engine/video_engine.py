@@ -184,7 +184,8 @@ class VideoEngine:
         config_path = os.path.join(self._model_path, "config.json")
         if os.path.isfile(config_path):
             try:
-                cfg = json.loads(open(config_path).read())
+                with open(config_path) as f:
+                    cfg = json.loads(f.read())
                 model_type = cfg.get("model_type", "").lower()
                 if model_type:
                     return model_type
@@ -580,10 +581,13 @@ class VideoEngine:
 
     def _encode_frames_to_mp4(self, frames: list, fps: int) -> bytes:
         """Encode a list of frames (np arrays or PIL images) to MP4 bytes."""
-        try:
-            import subprocess
-            import tempfile
+        import subprocess
+        import tempfile
+        import shutil
 
+        tmp_path = None
+        frame_dir = None
+        try:
             fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
             os.close(fd)
 
@@ -612,17 +616,22 @@ class VideoEngine:
                 tmp_path,
             ], capture_output=True, check=True)
 
-            data = Path(tmp_path).read_bytes()
-            os.unlink(tmp_path)
+            return Path(tmp_path).read_bytes()
 
-            # Cleanup frame images
-            import shutil
-            shutil.rmtree(frame_dir, ignore_errors=True)
-
-            return data
         except Exception as e:
             logger.error(f"MP4 encoding failed: {e}", exc_info=True)
             return b""
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            if frame_dir and os.path.isdir(frame_dir):
+                try:
+                    shutil.rmtree(frame_dir)
+                except Exception:
+                    pass
 
     def _fallback_generation(
         self,
@@ -663,34 +672,44 @@ class VideoEngine:
 
     def _extract_frames(self, video_data: bytes) -> list[bytes]:
         """Extract individual frames from MP4 as PNG bytes."""
-        try:
-            import tempfile
-            import subprocess
+        import tempfile
+        import shutil
+        import subprocess
 
+        tmp_path = None
+        frame_dir = None
+        try:
             fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
             os.close(fd)
             with open(tmp_path, "wb") as f:
                 f.write(video_data)
 
-            # Use ffmpeg to extract frames
             frame_dir = tempfile.mkdtemp()
             subprocess.run(
                 ["ffmpeg", "-i", tmp_path, "-f", "image2", f"{frame_dir}/frame_%04d.png", "-y"],
                 capture_output=True, check=True,
             )
-            os.unlink(tmp_path)
 
             frames = []
             for f in sorted(os.listdir(frame_dir)):
                 if f.endswith(".png"):
                     frames.append(Path(os.path.join(frame_dir, f)).read_bytes())
-                    os.unlink(os.path.join(frame_dir, f))
-            os.rmdir(frame_dir)
             return frames
 
         except Exception as e:
-            logger.error(f"Frame extraction failed: {e}")
+            logger.error(f"Frame extraction failed: {e}", exc_info=True)
             return []
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            if frame_dir and os.path.isdir(frame_dir):
+                try:
+                    shutil.rmtree(frame_dir)
+                except Exception:
+                    pass
 
     def get_stats(self) -> dict:
         return {
