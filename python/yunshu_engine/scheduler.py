@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -590,13 +591,36 @@ class Scheduler:
         # N-gram speculative decoding (model-free, available in batch path)
         self._ngram_proposer: NgramProposer | None = None
         if self.config.ngram_spec_enabled:
-            self._ngram_proposer = NgramProposer(NgramConfig(
-                min_n=self.config.ngram_spec_min_n,
-                max_n=self.config.ngram_spec_max_n,
-                k=self.config.ngram_spec_k,
-                mode=self.config.ngram_spec_mode,
-                max_model_len=self.config.max_kv_size or 32768,
-            ))
+            # GPU-accelerated N-gram proposer (opt-in via YUNSHU_GPU_NGRAM=1)
+            if os.environ.get("YUNSHU_GPU_NGRAM", "").strip() in ("1", "true", "yes"):
+                try:
+                    from .gpu_ngram import GPUNgramProposer, GPUNgramConfig
+                    gpu_config = GPUNgramConfig(
+                        min_n=self.config.ngram_spec_min_n,
+                        max_n=self.config.ngram_spec_max_n,
+                        k=self.config.ngram_spec_k,
+                        max_model_len=self.config.max_kv_size or 32768,
+                        gpu_fallback=True,
+                    )
+                    self._ngram_proposer = GPUNgramProposer(gpu_config)
+                    logger.info("GPU-accelerated N-gram proposer enabled (YUNSHU_GPU_NGRAM=1)")
+                except Exception:
+                    logger.debug("GPU N-gram init failed, falling back to CPU", exc_info=True)
+                    self._ngram_proposer = NgramProposer(NgramConfig(
+                        min_n=self.config.ngram_spec_min_n,
+                        max_n=self.config.ngram_spec_max_n,
+                        k=self.config.ngram_spec_k,
+                        mode=self.config.ngram_spec_mode,
+                        max_model_len=self.config.max_kv_size or 32768,
+                    ))
+            else:
+                self._ngram_proposer = NgramProposer(NgramConfig(
+                    min_n=self.config.ngram_spec_min_n,
+                    max_n=self.config.ngram_spec_max_n,
+                    k=self.config.ngram_spec_k,
+                    mode=self.config.ngram_spec_mode,
+                    max_model_len=self.config.max_kv_size or 32768,
+                ))
 
         # Speculative decoding — batch-path draft/verify state
         # Maps request_id → list[int] of draft token IDs from the spec decoder.
