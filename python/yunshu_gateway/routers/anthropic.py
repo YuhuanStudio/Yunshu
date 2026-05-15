@@ -787,10 +787,15 @@ async def _stream_anthropic(
         stop_reason = "end_turn"
         if matched_stop:
             stop_reason = "stop_sequence"
+        cache_creation = max(0, input_tokens - cached_tokens)
         delta_data = {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason},
-            "usage": {"output_tokens": output_tokens},
+            "usage": {
+                "output_tokens": output_tokens,
+                "cache_creation_input_tokens": cache_creation,
+                "cache_read_input_tokens": max(0, cached_tokens),
+            },
         }
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
 

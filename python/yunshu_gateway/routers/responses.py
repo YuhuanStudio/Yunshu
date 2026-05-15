@@ -383,10 +383,11 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     import uuid as _uuid
     _stream_id = f"resp-{_uuid.uuid4().hex[:8]}"
     _tracker = None
+    _tracker_gen = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
         _tracker = get_request_tracker()
-        _tracker.register(_stream_id, req.model or "")
+        _tracker_gen = _tracker.register(_stream_id, req.model or "")
     except Exception:
         _tracker = None
 
@@ -489,7 +490,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             )
         yield format_openai_done()
 
-      async for chunk in with_sse_keepalive(_token_source(), http_request=request):
+      _cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
+      async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
         yield chunk
     except MemoryError:
         yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n"
