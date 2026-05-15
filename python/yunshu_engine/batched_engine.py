@@ -313,6 +313,7 @@ class BatchedEngine:
         # Thinking Segment KV Substore — reasoning token KV cache reuse
         # Enable via YUNSHU_THINKING_CACHE=1
         self._thinking_store = None
+        self._total_reasoning_tokens = 0
         if os.environ.get("YUNSHU_THINKING_CACHE", "").strip() in ("1", "true", "yes"):
             from yunshu_kv.thinking_segment import ThinkingSegmentSubstore, ThinkingSegmentConfig
             _thinking_cfg = ThinkingSegmentConfig(
@@ -1612,6 +1613,7 @@ class BatchedEngine:
             ttft_ms=round(ttft_s * 1000, 1),
             reasoning_tokens=len(_thinking_tokens),
         )
+        self._total_reasoning_tokens += len(_thinking_tokens)
 
     async def stream_generate(
         self,
@@ -3400,6 +3402,7 @@ class BatchedEngine:
         # Wave 42: Model preprocessor registry stats
         if hasattr(self, '_preprocessor_registry') and self._preprocessor_registry is not None:
             stats["model_preprocessor"] = self._preprocessor_registry.get_stats()
+        stats["reasoning_tokens"] = self._total_reasoning_tokens
         return stats
 
     def get_kv_cache_stats(self) -> dict:

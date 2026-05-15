@@ -533,3 +533,31 @@ async def health_dashboard() -> dict[str, Any]:
     from yunshu_engine.tracing import get_health_dashboard
     dashboard = get_health_dashboard()
     return dashboard.get_report()
+
+
+@router.get("/reasoning-tokens")
+async def reasoning_tokens_stats() -> dict[str, Any]:
+    """Reasoning token usage across all engines.
+
+    Reports thinking/reasoning token counts from BatchedEngine
+    and VLM engine stats.
+    """
+    from ..engine import get_engine, get_model_manager
+    stats = {"engines": []}
+    total_reasoning = 0
+
+    manager = get_model_manager()
+    if manager is not None:
+        for entry in manager.list_entries():
+            if entry.is_loaded and entry.engine and hasattr(entry.engine, 'get_stats'):
+                s = entry.engine.get_stats()
+                rt = s.get("reasoning_tokens", 0)
+                if rt > 0:
+                    total_reasoning += rt
+                    stats["engines"].append({
+                        "model_id": entry.model_id,
+                        "reasoning_tokens": rt,
+                    })
+
+    stats["total_reasoning_tokens"] = total_reasoning
+    return stats
