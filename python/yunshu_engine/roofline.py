@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Apple Silicon Roofline Model — predict LLM inference throughput bounds.
 
 .. deprecated:: This module is not used in the production pipeline. Kept for reference only.
@@ -14,15 +15,12 @@ Usage::
     report = rm.compute_gemm_roofline(M=1, N=4096, K=4096)
     rm.plot_roofline("roofline.png")
 """
-from __future__ import annotations
 
 import logging
-import math
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
-from yunshu_engine.utils.hardware import get_chip_name, parse_chip_info
+from yunshu_engine.utils.hardware import get_chip_name
 
 logger = logging.getLogger(__name__)
 

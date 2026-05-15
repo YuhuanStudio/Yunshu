@@ -16,10 +16,8 @@ Kernels:
 - kivi_quantize/dequantize: 2-bit KV cache compression
 """
 
-from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path

@@ -4,14 +4,11 @@ Discovers peer Yunshu nodes on the local network for cluster formation.
 Primary: zeroconf (mDNS/DNS-SD) for automatic discovery.
 Fallback: UDP broadcast for environments without mDNS support.
 """
-from __future__ import annotations
 
 import json
 import logging
 import socket
-import struct
 import threading
-import time
 from typing import Callable, Optional
 
 from .node import MeshNode, MeshNodeState, NodeCapabilities
@@ -54,7 +51,6 @@ class NodeDiscovery:
 
     def _try_start_zeroconf(self, local_node: MeshNode) -> None:
         try:
-            import zeroconf
             from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
         except ImportError:
             logger.info("zeroconf not available, using UDP broadcast discovery")

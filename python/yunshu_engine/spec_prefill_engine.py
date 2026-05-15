@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu SpecPrefillEngine — speculative prefill during decode idle time.
 
 While the model generates tokens for request A, uses idle GPU capacity to
@@ -17,7 +18,6 @@ Design:
   - Cancellation support for aborted requests
   - Stats tracking for utilisation analysis
 """
-from __future__ import annotations
 
 import logging
 import time

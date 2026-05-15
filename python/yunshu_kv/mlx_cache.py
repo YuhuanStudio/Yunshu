@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu MLX Cache Integration — Real KVCache manipulation.
 
 Handles MLX's actual cache types (KVCache, RotatingKVCache, ArraysCache,
@@ -13,10 +14,9 @@ Key MLX KVCache contract:
 - Concatenation: mx.concatenate(list, axis=2) for block assembly
 """
 
-from __future__ import annotations
 
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 

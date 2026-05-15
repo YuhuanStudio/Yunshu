@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Request lifecycle orchestrator — unified request state machine.
 
 Manages the full lifecycle of an inference request:
@@ -12,16 +13,13 @@ Provides:
   - Request-level metrics collection
   - Concurrency control with adaptive limits
 """
-from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

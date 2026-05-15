@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Inflight prefix sharing — new requests share KV with in-flight prefills.
 
 SGLang pattern: when a request is being prefilled, its partially-built KV

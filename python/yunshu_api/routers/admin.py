@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Control Plane — Admin router.
 
 Model lifecycle management: register, load, unload, list, delete.
@@ -6,12 +7,10 @@ RBAC key management: create, list, revoke, delete API keys with roles.
 System monitoring: hardware status, server metrics, prefill progress, model discovery.
 """
 
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel

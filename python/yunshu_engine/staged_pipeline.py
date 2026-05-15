@@ -1,3 +1,4 @@
+from __future__ import annotations
 """MultimodalPipelineCoordinator — multi-stage processing for multimodal requests.
 
 vllm-omni pattern: separates text/image/audio processing into distinct pipeline
@@ -20,7 +21,6 @@ Integration:
   - Replaces ad-hoc per-modality processing with a unified pipeline
   - Stage stats feed into telemetry / server_metrics
 """
-from __future__ import annotations
 
 import hashlib
 import json
@@ -29,7 +29,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)

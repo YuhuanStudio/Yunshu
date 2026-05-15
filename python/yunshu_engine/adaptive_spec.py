@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Adaptive Speculative Decode Controller — dynamic draft length (K).
 
 Inspired by SGLang's AdaptiveController pattern. Dynamically adjusts the
@@ -15,11 +16,10 @@ Integration:
   - After each speculation step, record_step() is called with results
   - get_draft_length() returns the recommended K for the next step
 """
-from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

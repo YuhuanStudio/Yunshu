@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Vision Encoding Strategies — pluggable image-to-feature extraction.
 
 §18.6 gap: oMLX has 3 vision encoding strategies (encode_image, qwen, llava).
@@ -36,7 +37,6 @@ References:
   - LLaVA: CLIP ViT + multi-layer MLP projector
   - Qwen2-VL: mRoPE position embedding + dynamic resolution
 """
-from __future__ import annotations
 
 import logging
 import os

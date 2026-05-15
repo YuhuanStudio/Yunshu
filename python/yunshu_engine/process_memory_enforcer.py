@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Process-level memory enforcer — oMLX pattern.
 
 Background asyncio task that polls mx.get_active_memory() and evicts
@@ -12,13 +14,10 @@ Adapted from oMLX's ProcessMemoryEnforcer but simplified for Yunshu's
 async-native architecture (no threading pool, single asyncio loop).
 """
 
-from __future__ import annotations
-
 import asyncio
 import gc
 import logging
-import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING
 
 import mlx.core as mx
 

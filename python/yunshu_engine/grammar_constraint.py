@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Structured output constraints beyond JSON Schema — regex and CFG support.
 
 Provides token-level constraint masking for:
@@ -14,7 +15,6 @@ All constraints implement the same interface as JsonSchemaConstraint:
 
 Integration: plug into ConstrainedSampler alongside JsonSchemaConstraint.
 """
-from __future__ import annotations
 
 import logging
 import re
@@ -350,7 +350,6 @@ class LarkGrammarConstraint:
                 # We accept it if it doesn't raise UnexpectedToken
                 try:
                     # Use parse_interactive if available
-                    from lark import UnexpectedToken
                     # If we get here without UnexpectedToken, the char is valid
                     valid.add(ch)
                 except (ImportError, Exception):

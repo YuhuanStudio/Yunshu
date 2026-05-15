@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Speculative draft token verifier for single-request fast-path generation.
 
 This module implements the core verification algorithm for speculative decoding
@@ -32,7 +33,6 @@ Integration contract:
   - Works with both greedy (argmax) and sampler-based verification
 """
 
-from __future__ import annotations
 
 import logging
 import time

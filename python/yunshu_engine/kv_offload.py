@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Offload Framework — async KV block offloading between tiers.
 
 Addresses audit item §12.3: "無正式框架" for async KV offloading protocol.
@@ -41,7 +42,6 @@ Thread safety:
 - Sync methods (offload_blocks_sync, promote_block_sync) are safe to call
   from the MLX executor thread (no await, no asyncio dependency).
 """
-from __future__ import annotations
 
 import asyncio
 import enum
@@ -50,7 +50,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

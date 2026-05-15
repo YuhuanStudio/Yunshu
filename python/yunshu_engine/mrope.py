@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu mRoPE (Multi-dimensional Rotary Position Embedding) support.
 
 Studied from oMLX's mRoPE integration, adapted for Yunshu's architecture:
@@ -16,7 +17,6 @@ References:
   - vLLM: vllm/v1/worker/gpu/mm/rope.py (RopeState)
   - Qwen2-VL paper: mRoPE for vision-language models
 """
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass

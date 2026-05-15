@@ -10,7 +10,6 @@ Security:
 - Set YUNSHU_AUTH_DISABLED=true to disable auth (dev only)
 - Health/docs endpoints remain public
 """
-from __future__ import annotations
 
 import hmac
 import os

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Unified speculative decoding interface — begin()/draft()/accept() lifecycle.
 
 Inspired by llama.cpp's common_speculative_state pattern. Each proposer type
@@ -16,7 +17,6 @@ Usage in BatchedEngine:
   ... verify against model ...
   proposer.accept(n_verified)
 """
-from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod

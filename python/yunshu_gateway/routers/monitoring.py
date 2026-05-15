@@ -6,13 +6,11 @@ yunshu_api/routers/monitoring.py — these are for real-time gateway
 observability by operators and Prometheus scraping.
 """
 
-from __future__ import annotations
 
 import logging
 import os
 import platform
 import subprocess
-import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query
@@ -744,7 +742,6 @@ async def kv_migration_stats() -> dict[str, Any]:
     per-tier capacity usage, and temperature distribution.
     """
     try:
-        from yunshu_engine.engine_core import EngineCore
         engine = None
         try:
             from ..engine import get_engine

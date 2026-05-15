@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Control Plane — Request queue management and priority scheduling hooks.
 
 Provides a control-plane-level view of the request queue with:
@@ -9,14 +10,13 @@ Provides a control-plane-level view of the request queue with:
 Phase 1: In-process queue observer + priority overrides.
 Phase 2: Distributed queue across mesh nodes.
 """
-from __future__ import annotations
 
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

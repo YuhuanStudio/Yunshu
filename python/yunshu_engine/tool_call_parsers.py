@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Tool Call Parsers — C15: multi-model tool call extraction.
 
 Different LLM families emit tool calls in different formats. This module
@@ -15,14 +16,13 @@ Supported formats:
 Each parser returns a list of ToolCallResult with (id, name, arguments).
 The factory auto-selects based on model name or explicit config.
 """
-from __future__ import annotations
 
 import json
 import logging
 import re
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

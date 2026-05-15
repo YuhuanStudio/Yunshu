@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Image generation pipeline registry — pluggable diffusion architecture support.
 
 Provides a registry that maps model paths/names to the correct pipeline
@@ -17,14 +18,11 @@ Integration:
   - Model manager detects pipeline type during model loading
   - Gateway endpoints remain the same regardless of pipeline type
 """
-from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

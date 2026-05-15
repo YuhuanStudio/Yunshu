@@ -3,7 +3,6 @@
 Node discovery, topology management, distributed ops monitoring.
 """
 
-from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 

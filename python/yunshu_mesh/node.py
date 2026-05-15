@@ -1,20 +1,17 @@
+from __future__ import annotations
 """Yunshu Mesh — Node representation and discovery.
 
 Each node is a Mac (Mac Studio, MacBook Pro, Mac Mini) in the cluster.
 Nodes discover each other via mDNS on the local network.
 """
 
-from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import platform
 import socket
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

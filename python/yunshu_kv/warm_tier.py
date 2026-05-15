@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Warm Tier — in-memory 4-bit quantized KV block cache.
 
 Sits between the hot tier (FP16 UMA) and cold tier (SSD). When the hot
@@ -10,7 +11,6 @@ for the actual quantization path. Metal kernel will replace the numpy path
 in Phase 2.
 """
 
-from __future__ import annotations
 
 import logging
 import time

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Grammar bitmask engine for structured output — xgrammar-style token masking.
 
 Instead of maintaining an allowlist of token IDs (expensive per-step computation),
@@ -36,13 +37,12 @@ Performance characteristics (vs JsonSchemaConstraint allowlist approach):
   - Overall: ~same asymptotic cost but avoids Python-level per-token iteration
     in the sampling hot path by using mx-level masking.
 """
-from __future__ import annotations
 
 import json
 import logging
 import os
 import re
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 

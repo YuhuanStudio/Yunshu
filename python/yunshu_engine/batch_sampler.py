@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Batch Sampling — vectorized batched sampling for continuous batching.
 
 Instead of sampling per-request sequentially with separate sampler objects,
@@ -22,13 +23,12 @@ Studied from:
 - mlx-lm's sample_utils.py: per-request sampler as reference (we vectorize)
 """
 
-from __future__ import annotations
 
 import logging
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import mlx.core as mx
 

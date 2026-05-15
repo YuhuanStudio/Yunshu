@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mesh — Data parallelism for distributed inference.
 
 Each node loads a full copy of the model. Incoming requests are
@@ -7,12 +8,11 @@ No weight sharding needed — scales throughput linearly with nodes.
 API:
   DataParallelRouter — distributes requests across engine replicas
 """
-from __future__ import annotations
 
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Realtime API router — WebSocket-based real-time inference.
 
 Implements OpenAI Realtime API compatible WebSocket protocol for:
@@ -8,7 +9,6 @@ Implements OpenAI Realtime API compatible WebSocket protocol for:
 
 Protocol: JSON events over WebSocket, following OpenAI's realtime API structure.
 """
-from __future__ import annotations
 
 import asyncio
 import json

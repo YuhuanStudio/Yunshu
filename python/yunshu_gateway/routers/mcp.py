@@ -1,3 +1,4 @@
+from __future__ import annotations
 """MCP (Model Context Protocol) gateway router.
 
 Implements MCP server protocol (2024-11-05 spec) for LLM tool use:
@@ -10,7 +11,6 @@ Implements MCP server protocol (2024-11-05 spec) for LLM tool use:
 MCP allows external agents to use Yunshu's inference capabilities
 through a standardized protocol, enabling tool-calling workflows.
 """
-from __future__ import annotations
 
 import asyncio
 import json

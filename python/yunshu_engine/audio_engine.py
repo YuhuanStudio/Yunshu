@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Audio Engine — MLX-native TTS and ASR.
 
 Deeply adapted from oMLX's TTSEngine, using mlx-audio for inference:
@@ -15,7 +16,6 @@ Public audio helpers:
 - make_wav_header(data_size, sample_rate, num_channels) -> bytes
 """
 
-from __future__ import annotations
 
 import asyncio
 import gc
@@ -23,7 +23,7 @@ import io
 import logging
 import struct
 import time
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """VoicePipeline — end-to-end STT → LLM → TTS pipeline.
 
 Chains ASR (speech-to-text), LLM (text generation), and TTS (text-to-speech)
@@ -8,12 +9,10 @@ Supports:
 - Streaming: yields intermediate results (transcription, LLM tokens, audio chunks)
 - Configurable: each stage can be independently configured
 """
-from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,7 @@ class VoicePipeline:
         return _find_tts_engine()
 
     def _find_llm_engine(self):
-        from yunshu_gateway.engine import get_engine, get_model_manager
+        from yunshu_gateway.engine import get_engine
         engine = get_engine()
         if engine and engine.is_loaded:
             return engine

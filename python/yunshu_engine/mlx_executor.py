@@ -8,7 +8,6 @@ Studied from oMLX's engine_core.py:
 This is the foundation for safe multi-model serving.
 """
 
-from __future__ import annotations
 
 import logging
 import sys

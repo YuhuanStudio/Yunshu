@@ -1,3 +1,4 @@
+from __future__ import annotations
 """MCP Client Manager — connects to external MCP tool servers.
 
 Complements the MCP Server (yunshu_gateway/routers/mcp.py) by adding
@@ -14,7 +15,6 @@ Follows oMLX's MCP client pattern:
 - Convert MCP tools ↔ OpenAI function format
 - Execute tool calls and return results to the LLM
 """
-from __future__ import annotations
 
 import asyncio
 import json
@@ -22,7 +22,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

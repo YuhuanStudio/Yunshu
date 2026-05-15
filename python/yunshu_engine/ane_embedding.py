@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu ANE Embedding Co-Processor — CoreML-based embedding inference on Apple Neural Engine.
 
 Offloads embedding model inference to the ANE via CoreML for lower latency and
@@ -24,14 +25,13 @@ References:
   - Apple Neural Engine: https://developer.apple.com/documentation/coreml
   - Phase 0 platform validation (W0-W2)
 """
-from __future__ import annotations
 
 import logging
 import os
 import platform
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 

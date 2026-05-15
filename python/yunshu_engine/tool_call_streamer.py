@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Tool Call Streamer — incremental tool call detection from streaming tokens.
 
 Processes tokens one at a time from a streaming LLM response, detecting
@@ -16,11 +17,10 @@ Key design:
    single response.
 """
 
-from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Output Collector — low-latency streaming with smart buffering.
 
 Studied from oMLX's output_collector.py (vLLM pattern):
@@ -9,7 +10,6 @@ Studied from oMLX's output_collector.py (vLLM pattern):
 
 Written from scratch for Yunshu, importing from our request module.
 """
-from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass

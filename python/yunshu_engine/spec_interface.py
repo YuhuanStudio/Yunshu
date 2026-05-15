@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Unified Speculative Decoding Interface (C7) — llama.cpp begin/draft/accept pattern.
 
 All speculative decoding strategies share a common lifecycle:
@@ -18,7 +19,6 @@ Strategy classes:
   - CompositeStrategy: combines multiple strategies (first non-empty draft wins)
   - SpecStrategyFactory: creates the right strategy from config dict
 """
-from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod

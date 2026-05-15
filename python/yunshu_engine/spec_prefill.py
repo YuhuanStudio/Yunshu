@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu SpecPrefill — attention-based sparse prefill for long prompts.
 
 Studied from oMLX's specprefill.py, adapted for Yunshu:
@@ -18,11 +19,10 @@ References:
   - oMLX specprefill.py (omlx/patches/specprefill.py)
   - arxiv.org/abs/2502.02789 (Speculative Prefill)
 """
-from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Callable, Optional
+from typing import Any
 
 import mlx.core as mx
 

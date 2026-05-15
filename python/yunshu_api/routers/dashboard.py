@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Yunshu Control Plane — Dashboard and configuration router.
 
 Provides the WebUI dashboard with server configuration,
 model status, usage stats, and system info.
 """
 
-from __future__ import annotations
 
 import logging
 

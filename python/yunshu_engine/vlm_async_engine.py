@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu VLM Async Engine Core — concurrent VLM inference (§18.5).
 
 Implements the oMLX VLMBatchedEngine pattern:
@@ -19,7 +20,6 @@ Architecture:
     → output collectors for streaming/non-streaming response assembly
     → queue-based request lifecycle management
 """
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -27,7 +27,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
 

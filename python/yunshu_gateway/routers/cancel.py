@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Generation cancellation endpoint — POST /v1/cancel."""
 
 from fastapi import APIRouter, HTTPException

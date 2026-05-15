@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Model-specific optimizations for RoPE, attention, MoE, and warmup.
 
 Provides per-architecture performance optimizations detected from model config:
@@ -6,7 +7,6 @@ Provides per-architecture performance optimizations detected from model config:
 3. MoEEfficiencyOptimizer — dynamic expert selection, caching, load balancing
 4. ModelWarmupManager — compile + KV cache warmup at model load time
 """
-from __future__ import annotations
 
 import logging
 import math

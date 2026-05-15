@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Anthropic Messages API compatible router.
 
 Supports:
@@ -15,7 +16,7 @@ import logging
 import re
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -23,7 +24,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
-from ..engine import get_engine, get_model_manager
+from ..engine import get_engine
 from .chat import _apply_lora_adapter, _release_lora_adapter
 from ..streaming import (
     ThinkingParser,
@@ -854,8 +855,15 @@ async def _stream_anthropic(
                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': final['visible']}})}\n\n"
 
-        # Close last content block
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
+        # If no content blocks were started at all (zero tokens), emit an empty text block
+        # so that the response always has at least one content block (Anthropic protocol requirement)
+        if not text_block_started and not thinking_block_started:
+            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+            text_block_started = True
+
+        # Close last content block (only if one was actually started)
+        if text_block_started or thinking_block_started:
+            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
 
         # message_delta (stop + usage)
         stop_reason = _map_stop_reason(None, matched_stop, has_tool_calls=tool_use_block_started)
@@ -872,6 +880,7 @@ async def _stream_anthropic(
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+    error_occurred = False
     try:
         async for event in with_sse_keepalive(
             _token_source(),
@@ -880,11 +889,14 @@ async def _stream_anthropic(
         ):
             yield event.encode("utf-8") if isinstance(event, str) else event
 
+        # Only emit message_stop on normal completion, NOT after errors
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except MemoryError:
+        error_occurred = True
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
     except Exception as e:
+        error_occurred = True
         logger.error("Anthropic streaming error", exc_info=True)
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")

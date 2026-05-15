@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Gateway — Rate limiting middleware.
 
 Token bucket rate limiter per client IP with RBAC per-key override.
@@ -9,7 +10,6 @@ unique-IP DoS. Configurable via environment:
   YUNSHU_RATE_LIMIT_TTL_SECONDS — bucket TTL in seconds (default: 600)
 """
 
-from __future__ import annotations
 
 import os
 import time

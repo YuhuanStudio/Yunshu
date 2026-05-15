@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu JSON Schema Constrained Generation — token-level constraint masking.
 
 Since xgrammar/outlines are not available on Apple Silicon, this implements
@@ -21,13 +22,12 @@ The constraint is designed to be called from the Scheduler's step loop,
 where the sampler is invoked per-token.
 """
 
-from __future__ import annotations
 
 import json
 import logging
 import re
 from enum import Enum, auto
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -810,8 +810,6 @@ class JsonSchemaConstraint:
             "is_done": self.is_done,
             "text_buffer_len": len(self._text_buffer),
         }
-        self._in_string = False
-        self._is_first_value = True
 
 
 # ── Logit Masking ───────────────────────────────────────────────────────────

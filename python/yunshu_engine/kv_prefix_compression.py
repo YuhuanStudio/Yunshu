@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Prefix Compression + Sliding Window Attention.
 
 Two complementary optimizations for long-context inference:
@@ -17,12 +18,11 @@ References:
   - Mistral sliding window attention (Jiang et al.)
   - H2O: Heavy-Hitter Oracle for KV cache eviction (Zhang et al.)
 """
-from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 

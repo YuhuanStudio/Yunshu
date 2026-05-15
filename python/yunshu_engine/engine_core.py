@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu EngineCore — continuous batching orchestrator (oMLX pattern).
 
 Studied from oMLX's engine_core.py, written from scratch:
@@ -17,7 +18,6 @@ Architecture:
   Gateway → EngineCore.stream_outputs(request_id)
     → collector.get_nowait() or await collector.get()
 """
-from __future__ import annotations
 
 import asyncio
 import gc
@@ -401,7 +401,7 @@ class EngineCore:
         # ── Wave 43: Additional production wiring ──
 
         # Forward batch hierarchy (ScheduleBatch → ForwardBatch → BatchResult)
-        from .forward_batch import ScheduleBatch, ForwardBatch, BatchResult, BatchComposer
+        from .forward_batch import BatchComposer
         self._batch_composer = BatchComposer()
 
         # Memory-aware scheduler (admission control with memory budget)

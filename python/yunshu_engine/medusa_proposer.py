@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Medusa speculative decoding proposer — multi-head prediction on base model hidden state.
 
 Medusa adds K independent prediction heads on top of the base model's last hidden
@@ -27,11 +28,9 @@ References:
     (Tianle Cai et al., 2024) — https://arxiv.org/abs/2401.10774
   - vLLM Medusa implementation (vllm/v1/spec_decode/medusa_proposer.py)
 """
-from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 

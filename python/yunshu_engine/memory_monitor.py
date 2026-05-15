@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Memory Monitor — Apple Silicon unified memory tracking.
 
 - GPU memory utilization tracking via MLX Metal API
@@ -14,7 +15,6 @@ Key MLX Metal APIs:
 - mx.metal.get_memory_info() — detailed memory breakdown
 """
 
-from __future__ import annotations
 
 import logging
 import threading

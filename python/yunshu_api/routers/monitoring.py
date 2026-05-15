@@ -4,11 +4,9 @@ System stats, GPU memory, request metrics, health checks.
 Supports both single-engine and multi-model mode.
 """
 
-from __future__ import annotations
 
 import logging
 import platform
-import time
 
 from fastapi import APIRouter, HTTPException
 

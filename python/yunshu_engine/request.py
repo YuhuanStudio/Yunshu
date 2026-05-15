@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Yunshu request management — adapted from oMLX/vLLM patterns.
 
 Self-written with deep MLX integration:
@@ -11,7 +13,6 @@ Studied from:
 - vLLM's request management: waiting/running/finished queues
 - mlx-lm's SequenceStateMachine: stop/reasoning state tracking
 """
-from __future__ import annotations
 
 import enum
 import time
@@ -22,7 +23,7 @@ from typing import Any, Optional
 class RequestStatus(enum.IntEnum):
     """Request lifecycle states (oMLX/vLLM pattern).
 
-    WAITING → PREFILLING → RUNNING → FINISHED_*
+    WAITING -> PREFILLING -> RUNNING -> FINISHED_*
     PREFILLING is used during external prefill (chunked progress tracking).
     """
     WAITING = enum.auto()
@@ -35,20 +36,28 @@ class RequestStatus(enum.IntEnum):
     FINISHED_ERROR = enum.auto()
     FINISHED_TIMEOUT = enum.auto()
 
-    @staticmethod
-    def is_finished(status: RequestStatus) -> bool:
-        return status >= RequestStatus.FINISHED_STOPPED
 
-    @staticmethod
-    def finish_reason(status: RequestStatus) -> Optional[str]:
-        mapping = {
-            RequestStatus.FINISHED_STOPPED: "stop",
-            RequestStatus.FINISHED_LENGTH: "length",
-            RequestStatus.FINISHED_ABORTED: "abort",
-            RequestStatus.FINISHED_ERROR: "error",
-            RequestStatus.FINISHED_TIMEOUT: "timeout",
-        }
-        return mapping.get(status)
+# Attach helper methods after class definition to avoid NameError in Python 3.13
+# (IntEnum class body cannot reference itself in method bodies during definition)
+def _rs_is_finished(status: int) -> bool:
+    """Check if a request status represents a finished state."""
+    return status >= RequestStatus.FINISHED_STOPPED
+
+
+def _rs_finish_reason(status: int) -> Optional[str]:
+    """Map a request status to its finish reason string."""
+    mapping = {
+        RequestStatus.FINISHED_STOPPED: "stop",
+        RequestStatus.FINISHED_LENGTH: "length",
+        RequestStatus.FINISHED_ABORTED: "abort",
+        RequestStatus.FINISHED_ERROR: "error",
+        RequestStatus.FINISHED_TIMEOUT: "timeout",
+    }
+    return mapping.get(status)
+
+
+RequestStatus.is_finished = staticmethod(_rs_is_finished)
+RequestStatus.finish_reason = staticmethod(_rs_finish_reason)
 
 
 @dataclass
@@ -218,7 +227,7 @@ class Request:
         self.finish_reason = reason or RequestStatus.finish_reason(status)
         self.generation_end = time.monotonic()
 
-    def __lt__(self, other: Request) -> bool:
+    def __lt__(self, other: "Request") -> bool:
         if self.priority != other.priority:
             return self.priority < other.priority
         return self.arrival_time < other.arrival_time

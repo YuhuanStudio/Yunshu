@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Audio API compatible router — TTS and ASR endpoints.
 
 Supports:
@@ -35,7 +36,6 @@ async def _extract_audio_from_video(video_path: str) -> str:
 
     Returns path to a temporary WAV file. Caller is responsible for cleanup.
     """
-    import subprocess
     fd, audio_path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
 

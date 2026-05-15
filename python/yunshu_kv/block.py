@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Yunshu KV Cache Block Pool — UMA-resident PagedAttention.
 
 Inspired by vLLM's BlockPool but adapted for Apple Silicon UMA:
@@ -7,10 +9,9 @@ Inspired by vLLM's BlockPool but adapted for Apple Silicon UMA:
 - Reference counting with O(1) LRU eviction via doubly-linked list
 """
 
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)

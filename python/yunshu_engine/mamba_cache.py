@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mamba / Hybrid KV Cache — mixed attention/SSM block cache management.
 
 Addresses audit item §12.2: vLLM supports mixed attention types in the same model
@@ -27,17 +28,15 @@ Studied from:
 - Mamba-SSM's inference cache (recurrent state management)
 - SGLang's model runner (mixed attention / SSM support)
 """
-from __future__ import annotations
 
 import enum
 import io
 import logging
-import math
 import struct
 import time
 import zlib
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu N-gram Speculative Decoding — model-free draft token proposal.
 
 Three proposer modes:
@@ -21,10 +22,9 @@ References:
   - llama.cpp ngram-mod (ggml/src/ggml-common/speculative.h)
   - "Fast Inference from Transformers via Autoregressive Diffusion"
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)

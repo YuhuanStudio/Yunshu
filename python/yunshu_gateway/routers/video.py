@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Video API compatible router — video generation endpoint.
 
 Supports:

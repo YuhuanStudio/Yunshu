@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Image Generation Engine — MLX-native Z-Image diffusion pipeline.
 
 Self-implemented Z-Image/Flux-family diffusion pipeline, studied from:
@@ -20,7 +21,6 @@ Weight format (andrevp/Z-Image-Turbo-MLX-4bit):
   - Transformer final layer adaLN: weight index is .1. in safetensors, maps to .0. in model
 """
 
-from __future__ import annotations
 
 import asyncio
 import base64
@@ -32,7 +32,6 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn

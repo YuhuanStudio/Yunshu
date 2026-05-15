@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Responses API compatible router.
 
 The Responses API is OpenAI's newest API format that combines
@@ -394,6 +395,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     try:
       async def _token_source():
         nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok
+        first_chunk = True
+        last_finish_reason = None
         if is_batched:
             async for output in engine.stream_chat(
                 messages=messages,
@@ -428,14 +431,18 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.new_text:
                     completion_tok += 1
+                if output.finish_reason is not None:
+                    last_finish_reason = output.finish_reason
                 _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
                     delta_content=output.new_text,
-                    finish_reason=output.finish_reason,
+                    finish_reason=None,  # intermediate: always None
+                    include_role=first_chunk,
                     logprobs=_chunk_lp,
                 )
+                first_chunk = False
         else:
             async for output in engine.stream_chat(
                 messages=messages,
@@ -470,14 +477,29 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 token_text = getattr(output, 'token_text', '')
                 if token_text:
                     completion_tok += 1
+                if getattr(output, 'finish_reason', None) is not None:
+                    last_finish_reason = output.finish_reason
                 _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
                     delta_content=token_text,
-                    finish_reason=getattr(output, 'finish_reason', None),
+                    finish_reason=None,  # intermediate: always None
+                    include_role=first_chunk,
                     logprobs=_chunk_lp,
                 )
+                first_chunk = False
+
+        # Final chunk with finish_reason
+        # If no tokens were emitted (first_chunk is still True), this is also
+        # the first chunk and must include role=assistant per OpenAI spec.
+        yield format_openai_chunk(
+            completion_id=response_id,
+            model=req.model,
+            delta_content="",
+            finish_reason=last_finish_reason or "stop",
+            include_role=first_chunk,
+        )
 
         if include_usage:
             yield format_openai_usage_chunk(

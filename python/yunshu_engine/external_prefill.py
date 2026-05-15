@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu External Prefill — prefill outside BatchGenerator for memory preflight,
 chunked progress tracking, mid-prefill abort, and remote KV transfer.
 
@@ -34,7 +35,6 @@ Architecture:
     ExternalPrefillClient.prefill_remote() sends token IDs to the
     remote prefill server and receives the resulting KV cache.
 """
-from __future__ import annotations
 
 import asyncio
 import json
@@ -44,8 +44,8 @@ import struct
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 

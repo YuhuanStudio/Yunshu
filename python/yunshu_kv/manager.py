@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Cache Manager — UMA-resident paged KV cache with prefix sharing.
 
 Orchestrates BlockPool (allocation/eviction) + BlockTable (per-request mapping)
@@ -7,11 +8,10 @@ Three-tier KV hierarchy (Phase 1 implements hot tier only):
   Hot (UMA FP16) → Warm (TurboQuant 4-bit) → Cold (SSD)
 """
 
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Token-Level Scheduler — fine-grained token budget allocation + priority inversion guard.
 
 Three components:
@@ -12,11 +13,10 @@ Architecture:
   PriorityInversionGuard.check_inversion() before scheduling decisions
   FairnessTracker.record_allocation() after each step for metrics
 """
-from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
 logger = logging.getLogger(__name__)

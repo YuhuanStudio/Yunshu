@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Prefix Cache — reuse prefilled KV states across requests.
 
 Stores completed request KV caches keyed by prompt token prefix.
@@ -21,7 +22,6 @@ Studied from:
 - oMLX's BlockAwarePrefixCache (block-level hashing, SSD persistence)
 - SGLang's RadixCache (tree-based prefix matching)
 """
-from __future__ import annotations
 
 import gc
 import hashlib

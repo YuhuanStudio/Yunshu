@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Cache Migration & Multi-Tier Cache Coordination.
 
 Handles asynchronous migration of KV cache blocks between tiers
@@ -29,7 +30,6 @@ Thread safety:
 - MultiTierCacheCoordinator uses threading.Lock for state mutations.
 - CacheWarmingScheduler uses a background daemon thread for prediction/warming.
 """
-from __future__ import annotations
 
 import collections
 import hashlib
@@ -38,7 +38,6 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Optional
 
 from .kv_offload import (
     KVTier,

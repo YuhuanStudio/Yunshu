@@ -1,9 +1,9 @@
+from __future__ import annotations
 """Batch inference endpoint — process multiple requests efficiently.
 
 Leverages Yunshu's continuous batching to handle multiple prompts
 in a single batch with optimal GPU utilization.
 """
-from __future__ import annotations
 
 import asyncio
 import logging

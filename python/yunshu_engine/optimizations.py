@@ -4,7 +4,6 @@ Re-exports hardware detection and provides get_optimization_status()
 for the admin dashboard. MLX already includes optimized SDPA and
 Metal kernels — no additional runtime patching needed.
 """
-from __future__ import annotations
 
 import logging
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Message format adapters for model-specific chat template input.
 
 oMLX §13.2 pattern: Some model families require special message formatting
@@ -6,7 +7,6 @@ OpenAI-style message list into the format expected by each model family.
 
 Adapters are auto-detected from model name and applied in _apply_chat_template().
 """
-from __future__ import annotations
 
 import re
 import logging

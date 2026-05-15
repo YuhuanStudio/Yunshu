@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Yunshu CLI — launch subcommand.
 
 Launch external coding tools (Codex, OpenCode, Pi) configured
 to use a running Yunshu server. Follows oMLX's integration architecture.
 """
 
-from __future__ import annotations
 
 import json
 import logging

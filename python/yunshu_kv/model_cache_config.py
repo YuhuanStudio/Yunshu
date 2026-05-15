@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Cache Type Registry — per-layer type-aware KV cache handling.
 
 Based on oMLX's type_handlers.py and type_registry.py pattern.
@@ -10,11 +11,10 @@ Architecture:
   ModelCacheConfig.build_from_model(model) → per-layer CacheLayerConfig list
   CacheLayerConfig determines: sliceable? boundary-eligible? handler?
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 from .mlx_cache import CacheType, detect_cache_type, is_sliceable
 

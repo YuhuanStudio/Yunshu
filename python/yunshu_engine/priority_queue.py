@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Heap-based priority queue for scheduler waiting requests.
 
 Replaces the previous deque + sort pattern with O(log n) push/pop via heapq.
@@ -9,7 +10,6 @@ Two modes:
 
 Thread-safe via a simple threading.Lock (CPython GIL makes this cheap).
 """
-from __future__ import annotations
 
 import heapq
 import threading

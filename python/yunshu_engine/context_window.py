@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu ContextWindowManager — context window truncation strategies.
 
 When conversations exceed the model's context window limit, applies
@@ -13,13 +14,12 @@ Integration:
     → ContextWindowManager.compute_truncation(messages, max_tokens, strategy)
     → returns truncated messages that fit within the budget
 """
-from __future__ import annotations
 
 import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 

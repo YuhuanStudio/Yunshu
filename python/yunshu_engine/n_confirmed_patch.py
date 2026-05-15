@@ -19,7 +19,6 @@ The speedup formula changes from:
 
 Based on oMLX PR 990 pattern. First standalone implementation outside oMLX.
 """
-from __future__ import annotations
 
 import logging
 from typing import Any, Optional

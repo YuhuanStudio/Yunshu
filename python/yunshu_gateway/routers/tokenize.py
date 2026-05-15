@@ -1,5 +1,5 @@
-"""OpenAI Tokenize API compatible router."""
 from __future__ import annotations
+"""OpenAI Tokenize API compatible router."""
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -69,7 +69,6 @@ async def token_count(req: TokenCountRequest):
 
 
 def _resolve_tokenizer(model_id: str):
-    from yunshu_engine.batched_engine import BatchedEngine
 
     manager = get_model_manager()
     if manager is not None:

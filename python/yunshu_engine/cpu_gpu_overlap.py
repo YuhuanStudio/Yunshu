@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu CPU/GPU Overlap Scheduler — C18: overlap CPU post-processing with GPU forward.
 
 Studied from SGLang's overlap scheduling pattern:
@@ -22,13 +23,12 @@ Integration:
   - OverlapScheduler.step_async() returns immediately after launching GPU work
   - OverlapScheduler.step_sync() waits for GPU + processes outputs
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

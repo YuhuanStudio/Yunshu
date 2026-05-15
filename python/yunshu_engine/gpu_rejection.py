@@ -1,3 +1,4 @@
+from __future__ import annotations
 """GPU-accelerated rejection sampling for speculative decoding (§12.4).
 
 Uses MLX batched operations to verify ALL draft tokens in parallel on GPU,
@@ -21,13 +22,12 @@ Enabled via YUNSHU_GPU_REJECTION=1 env var.
 Falls back to CPU sequential when disabled or on error.
 """
 
-from __future__ import annotations
 
 import logging
 import os
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import mlx.core as mx

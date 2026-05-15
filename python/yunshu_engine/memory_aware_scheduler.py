@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Memory-Aware Request Scheduler.
 
 Tracks GPU memory budget per request and provides admission control:
@@ -24,14 +25,11 @@ Reference:
   - vLLM Scheduler policy (block-manager-v2 + policy.py)
   - Orca iteration-level scheduling (Yu et al., OSDI 2022)
 """
-from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

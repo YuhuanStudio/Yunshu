@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Shared engine types — extracted from engine.py for cross-module use.
 
 EngineConfig and RequestPhase are used by multiple engine modules
 (vlm_engine, audio_engine, image_engine, model_manager) without
 needing the full legacy Engine class.
 """
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto

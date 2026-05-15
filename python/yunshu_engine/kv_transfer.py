@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Transfer Protocol — disaggregated prefill KV block transfer.
 
 Addresses audit item §12.2: external_prefill.py is "not mature" and lacks
@@ -41,7 +42,6 @@ Thread safety:
   - Server: runs in asyncio event loop, handles concurrent transfers
   - Stats: accumulated atomically (single-writer via lock)
 """
-from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -54,7 +54,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

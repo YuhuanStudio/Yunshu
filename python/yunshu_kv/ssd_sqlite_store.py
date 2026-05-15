@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu SSD KV Cache — SQLite-backed metadata store for crash consistency (C13).
 
 Replaces the JSON-based index with SQLite in WAL mode for:
@@ -11,7 +12,6 @@ Thread safety:
 - WAL mode allows concurrent reads while a write is in progress
 - All public methods are thread-safe
 """
-from __future__ import annotations
 
 import logging
 import os

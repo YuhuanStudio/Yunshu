@@ -1,12 +1,11 @@
+from __future__ import annotations
 """Yunshu KV Cache Block Table — per-request logical→physical block mapping.
 
 Each request maintains a BlockTable that maps logical token positions
 to physical KVBlock objects in the BlockPool.
 """
 
-from __future__ import annotations
 
-from typing import Optional
 
 from .block import KVBlock
 

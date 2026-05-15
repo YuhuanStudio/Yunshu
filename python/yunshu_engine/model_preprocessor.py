@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Model-specific preprocessors for multi-modal input handling (vllm-omni pattern).
 
 vllm-omni has 17+ model-specific input processors for different architectures.
@@ -10,13 +11,12 @@ Yunshu implements a registry of preprocessors that handle:
 
 Each preprocessor handles architecture-specific input format requirements.
 """
-from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

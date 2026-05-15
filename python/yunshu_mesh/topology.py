@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mesh — Topology management.
 
 Manages the physical and logical arrangement of nodes in the mesh.
@@ -11,7 +12,6 @@ Topologies are selected based on:
 Following SGLang's parallel_state pattern but adapted for mx.distributed.
 """
 
-from __future__ import annotations
 
 import logging
 from enum import Enum, auto

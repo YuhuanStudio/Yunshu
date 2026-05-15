@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Cache Serialization — persist and transfer KV cache state.
 
 Binary format:
@@ -15,12 +16,10 @@ Compression modes:
   "safetensors" — reserved for future use
 """
 
-from __future__ import annotations
 
 import io
 import struct
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 

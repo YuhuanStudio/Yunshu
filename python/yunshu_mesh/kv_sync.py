@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mesh — Distributed KV cache synchronization and health monitoring.
 
 Architecture:
@@ -18,7 +19,6 @@ Health Monitor Flow:
   3. Failover triggers: mark node offline, update topology, rebalance
   4. Node join triggers: rebalance via LayerAllocator
 """
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -26,7 +26,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import Any, Callable, Optional
 
 from .node import MeshNode, MeshNodeState

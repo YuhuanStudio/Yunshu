@@ -1,3 +1,4 @@
+from __future__ import annotations
 """DFlash Block Diffusion as Speculative Decoding Proposer.
 
 Uses DFlash's coarse stage as a fast draft token generator, then verifies
@@ -26,13 +27,12 @@ References:
   - Speculative Sampling (Leviathan et al., 2023): draft/verify pattern
   - SpecStrategy lifecycle (C7): begin/draft/accept/stats/end
 """
-from __future__ import annotations
 
 import logging
 import random
 import time
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import mlx.core as mx
 

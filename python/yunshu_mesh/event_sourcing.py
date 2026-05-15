@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Event Sourcing — C22: crash recovery + audit trail for cluster state.
 
 Studied from exo's distributed event sourcing pattern:
@@ -17,7 +18,6 @@ Event types:
   - CAPABILITY_UPDATE: Node hardware capabilities changed
   - SNAPSHOT: Periodic full state snapshot for faster recovery
 """
-from __future__ import annotations
 
 import json
 import logging
@@ -25,9 +25,9 @@ import os
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
-from enum import Enum, auto
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

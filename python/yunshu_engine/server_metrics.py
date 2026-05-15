@@ -4,7 +4,6 @@ Based on oMLX's ServerMetrics pattern: session + all-time scopes,
 per-model counters, periodic JSON persistence.
 """
 
-from __future__ import annotations
 
 import json
 import logging

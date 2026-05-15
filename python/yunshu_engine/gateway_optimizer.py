@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Gateway request pipeline optimizations — L1 layer acceleration.
 
 Components:
@@ -10,7 +11,6 @@ Enabled via environment:
   YUNSHU_RESPONSE_CACHE=1  — enable response cache (non-streaming only)
 """
 
-from __future__ import annotations
 
 import asyncio
 import hashlib
@@ -18,10 +18,10 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

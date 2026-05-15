@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Cache Optimizations — production-grade memory and compute optimizations.
 
 Four complementary subsystems that improve KV cache memory efficiency:
@@ -29,13 +30,11 @@ References:
   - SGLang RadixCache prefix matching
   - Sarathi chunked prefill interleaving
 """
-from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

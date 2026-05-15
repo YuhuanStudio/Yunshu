@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Chat Completions compatible router.
 
 Supports:
@@ -1197,11 +1198,14 @@ async def _stream_vlm_response(
             first_chunk = False
 
         # Final chunk with finish_reason
+        # If no tokens were emitted (first_chunk is still True), this is also
+        # the first chunk and must include role=assistant per OpenAI spec.
         yield format_openai_chunk(
             completion_id=completion_id,
             model=req.model,
             delta_content="",
             finish_reason=vlm_last_finish_reason or "stop",
+            include_role=first_chunk,
         )
 
         if include_usage:
@@ -1393,10 +1397,13 @@ async def _stream_response_multi(
             total_completion_tok += choice_completion_tok
             total_reasoning_tok += choice_reasoning_tok
 
-            # Emit final chunk with actual finish_reason for this choice
+            # Emit final chunk with actual finish_reason for this choice.
+            # If no tokens were emitted for this choice, this is also the first
+            # chunk for this choice and must include role=assistant per OpenAI spec.
             yield _format_choice_chunk(
                 completion_id, req.model, choice_idx,
                 "", choice_finish_reason or "stop",
+                include_role=first_chunk_for_choice,
             )
 
         if include_usage:
@@ -1736,6 +1743,8 @@ async def _stream_response(
                     has_emitted_tool_call = True
 
         # Final chunk with finish_reason from engine
+        # If no tokens were emitted (first_chunk is still True), this is also
+        # the first chunk and must include role=assistant per OpenAI spec.
         if has_emitted_tool_call:
             final_reason = "tool_calls"
         else:
@@ -1745,6 +1754,7 @@ async def _stream_response(
             model=req.model,
             delta_content="",
             finish_reason=final_reason,
+            include_role=first_chunk,
         )
 
         # Emit usage stats if stream_options.include_usage is true

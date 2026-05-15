@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu BatchedEngine — user-facing continuous batching engine (oMLX pattern).
 
 Studied from oMLX's engine/batched.py, written from scratch:
@@ -15,7 +16,6 @@ Architecture:
 
 This is the engine that ModelManager and the gateway routers use.
 """
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -88,7 +88,6 @@ def _create_prompt_cache_with_quant(model, kv_quant_bits: int | None = None, kv_
 
     if kv_quant_bits is not None and kv_quant_bits < 16:
         try:
-            from mlx_lm.models.cache import QuantizedKVCache
             for i, c in enumerate(cache):
                 if hasattr(c, 'to_quantized'):
                     cache[i] = c.to_quantized(group_size=kv_quant_group_size, bits=kv_quant_bits)
@@ -1195,10 +1194,25 @@ class BatchedEngine:
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                logprobs=logprobs,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop,
                 stop_token_ids=stop_token_ids,
                 seed=seed,
+                enable_thinking=enable_thinking,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=cancel_event,
+                logits_processors=logits_processors,
             )
 
         # MTP speculative decoding (built-in multi-token prediction heads)
@@ -1207,10 +1221,21 @@ class BatchedEngine:
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                logprobs=logprobs,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop,
                 stop_token_ids=stop_token_ids,
                 seed=seed,
+                enable_thinking=enable_thinking,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
+                cancel_event=cancel_event,
             )
 
         # N-gram speculative decoding (model-free, CPU-based proposal)
@@ -1223,11 +1248,20 @@ class BatchedEngine:
                 top_k=top_k,
                 min_p=min_p,
                 repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop,
+                stop_token_ids=stop_token_ids,
                 seed=seed,
                 logprobs=logprobs,
                 top_logprobs=top_logprobs,
                 json_schema=json_schema,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                enable_thinking=enable_thinking,
+                thinking_budget=thinking_budget,
+                cancel_event=cancel_event,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
@@ -2050,8 +2084,20 @@ class BatchedEngine:
             try:
                 async for output in self._stream_generate_speculative(
                     prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
                     logprobs=logprobs, stop=stop, stop_token_ids=stop_token_ids,
                     seed=seed,
+                    enable_thinking=enable_thinking,
+                    thinking_budget=thinking_budget,
+                    xtc_probability=xtc_probability,
+                    xtc_threshold=xtc_threshold,
+                    json_schema=json_schema,
+                    cancel_event=_cancel_event,
+                    logits_processors=logits_processors,
                 ):
                     yield output
             finally:
@@ -2067,8 +2113,15 @@ class BatchedEngine:
             try:
                 async for output in self._stream_generate_mtp(
                     prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                    top_p=top_p, top_k=top_k, min_p=min_p,
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
                     logprobs=logprobs, stop=stop, stop_token_ids=stop_token_ids,
                     seed=seed, cancel_event=_cancel_event,
+                    enable_thinking=enable_thinking,
+                    thinking_budget=thinking_budget,
                 ):
                     yield output
             finally:
@@ -2085,8 +2138,15 @@ class BatchedEngine:
                 async for output in self._stream_generate_ngram_spec(
                     prompt=prompt, max_tokens=max_tokens, temperature=temperature,
                     top_p=top_p, top_k=top_k, min_p=min_p,
-                    repetition_penalty=repetition_penalty, stop=stop,
-                    stop_token_ids=stop_token_ids, seed=seed,
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
+                    stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                    json_schema=json_schema, logprobs=logprobs,
+                    top_logprobs=top_logprobs,
+                    xtc_probability=xtc_probability,
+                    xtc_threshold=xtc_threshold,
                     cancel_event=_cancel_event,
                 ):
                     yield output
@@ -2960,10 +3020,25 @@ class BatchedEngine:
         prompt: str,
         max_tokens: int = 256,
         temperature: float = 0.7,
-        logprobs: bool = False,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
+        enable_thinking: bool | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        thinking_budget: int | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        json_schema: dict | str | None = None,
+        cancel_event: asyncio.Event | None = None,
+        logits_processors: list | None = None,
     ) -> GenerationOutput:
         """Generate using speculative decoding (single-request EAGLE-3 path).
 
@@ -2973,9 +3048,22 @@ class BatchedEngine:
         """
         if self._spec_decoder is None:
             # Fall back to standard generation if no decoder
-            return await self.generate(
+            return await self._generate_fast(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                top_p=top_p, top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                enable_thinking=enable_thinking,
+                logprobs=logprobs, top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=cancel_event,
+                logits_processors=logits_processors,
             )
 
         from .mlx_executor import get_mlx_executor
@@ -3062,10 +3150,24 @@ class BatchedEngine:
         prompt: str,
         max_tokens: int = 256,
         temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         logprobs: bool = False,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
+        enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        json_schema: dict | str | None = None,
+        cancel_event: asyncio.Event | None = None,
+        logits_processors: list | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using speculative decoding (single-request path).
 
@@ -3073,10 +3175,24 @@ class BatchedEngine:
         Each yield contains the accepted tokens from one verify step.
         """
         if self._spec_decoder is None:
-            # Fall back to standard streaming
-            async for output in self.stream_generate(
+            # Fall back to fast path streaming (avoid recursive dispatch)
+            async for output in self._stream_generate_fast(
                 prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                top_p=top_p, top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
                 stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                enable_thinking=enable_thinking,
+                thinking_budget=thinking_budget,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                json_schema=json_schema,
+                cancel_event=cancel_event,
+                logprobs=bool(logprobs),
+                top_logprobs=top_logprobs,
+                logits_processors=logits_processors,
             ):
                 yield output
             return
@@ -3137,6 +3253,9 @@ class BatchedEngine:
         try:
           _spec_ttft_recorded = False
           while len(generated_tokens) < max_tokens:
+            if cancel_event is not None and cancel_event.is_set():
+                logger.debug("Cancel event triggered during spec decode streaming")
+                break
             def _spec_step():
                 draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache)
                 verify_result = self._spec_decoder.verify_draft(
@@ -3231,12 +3350,21 @@ class BatchedEngine:
         top_p: float = 1.0,
         top_k: int = 0,
         min_p: float = 0.0,
-        repetition_penalty: float = 1.0,  # noqa: API compatibility
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
+        stop_token_ids: list[int] | None = None,
         seed: int | None = None,
-        logprobs: bool = False,  # noqa: API compatibility
-        top_logprobs: int | None = None,  # noqa: API compatibility
-        json_schema: dict | str | None = None,  # noqa: API compatibility
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        json_schema: dict | str | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -3260,6 +3388,16 @@ class BatchedEngine:
         # Build stop token sets
         stop_ids = set()
         stop_suffixes = []
+        if hasattr(tokenizer, 'eos_token_id'):
+            eid = tokenizer.eos_token_id
+            if isinstance(eid, (list, tuple)):
+                stop_ids.update(eid)
+            elif eid is not None:
+                stop_ids.add(eid)
+        if hasattr(tokenizer, 'eos_token_ids'):
+            stop_ids.update(tokenizer.eos_token_ids)
+        if stop_token_ids:
+            stop_ids.update(stop_token_ids)
         if stop:
             for s in stop:
                 try:
@@ -3271,7 +3409,11 @@ class BatchedEngine:
                 if len(s) > 1:
                     stop_suffixes.append(s)
 
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+        sampler = make_sampler(
+            temp=temperature, top_p=top_p,
+            top_k=top_k if top_k > 0 else 0, min_p=min_p,
+            xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+        )
 
         # Grammar constraint: pre-validate draft tokens against allowed set
         _grammar_constraint = None
@@ -3362,6 +3504,8 @@ class BatchedEngine:
                 # Step 2: Decode loop with N-gram lookahead
                 remaining = max_tokens - 1
                 while remaining > 0:
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
                     # Propose K draft tokens via N-gram
                     # Use adaptive K if controller is active, else use proposer default
                     _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
@@ -3494,12 +3638,18 @@ class BatchedEngine:
         top_p: float = 1.0,
         top_k: int = 0,
         min_p: float = 0.0,
-        repetition_penalty: float = 1.0,  # noqa: kept for API compatibility
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
-        json_schema: dict | str | None = None,  # noqa: kept for API compatibility
-        logprobs: bool = False,  # noqa: kept for API compatibility
+        json_schema: dict | str | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
@@ -3518,6 +3668,14 @@ class BatchedEngine:
 
         stop_ids = set()
         stop_suffixes = []
+        if hasattr(tokenizer, 'eos_token_id'):
+            eid = tokenizer.eos_token_id
+            if isinstance(eid, (list, tuple)):
+                stop_ids.update(eid)
+            elif eid is not None:
+                stop_ids.add(eid)
+        if hasattr(tokenizer, 'eos_token_ids'):
+            stop_ids.update(tokenizer.eos_token_ids)
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
         if stop:
@@ -3531,7 +3689,11 @@ class BatchedEngine:
                 if len(s) > 1:
                     stop_suffixes.append(s)
 
-        sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
+        sampler = make_sampler(
+            temp=temperature, top_p=top_p,
+            top_k=top_k if top_k > 0 else 0, min_p=min_p,
+            xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+        )
 
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue()
@@ -3787,11 +3949,22 @@ class BatchedEngine:
         self,
         prompt: str,
         max_tokens: int = 256,
-        temperature: float = 0.7,  # noqa: API compatibility
-        logprobs: bool = False,  # noqa: API compatibility
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
+        enable_thinking: bool | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        thinking_budget: int | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -3808,9 +3981,10 @@ class BatchedEngine:
         mtp_decoder = self._mtp_decoder
 
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            text = tokenizer.apply_chat_template(
-                prompt, tokenize=False, add_generation_prompt=True,
-            )
+            tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
+            text = tokenizer.apply_chat_template(prompt, **tpl_kwargs)
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
 
@@ -3903,12 +4077,21 @@ class BatchedEngine:
         self,
         prompt: str,
         max_tokens: int = 256,
-        temperature: float = 0.7,  # noqa: API compatibility
-        logprobs: bool = False,  # noqa: API compatibility
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        top_k: int = 0,
+        min_p: float = 0.0,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
+        logprobs: bool = False,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
         cancel_event: asyncio.Event | None = None,
+        enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 
@@ -3924,9 +4107,10 @@ class BatchedEngine:
         mtp_decoder = self._mtp_decoder
 
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
-            text = tokenizer.apply_chat_template(
-                prompt, tokenize=False, add_generation_prompt=True,
-            )
+            tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
+            text = tokenizer.apply_chat_template(prompt, **tpl_kwargs)
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
 

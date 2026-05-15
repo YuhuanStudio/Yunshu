@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Forward batch representation — multi-level batch hierarchy (vLLM/SGLang pattern).
 
 SGLang uses a 3-level batch representation:
@@ -13,12 +14,11 @@ This separation allows:
   - GPU forward to work with compact arrays (no gaps)
   - Output to be distributed back to per-request collectors efficiently
 """
-from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

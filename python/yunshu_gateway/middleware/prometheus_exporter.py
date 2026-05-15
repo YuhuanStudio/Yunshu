@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Gateway — Prometheus-compatible metrics exporter.
 
 Provides a richer Prometheus exposition format beyond what the basic
@@ -16,12 +17,11 @@ Predefined metrics
 - kv_cache_blocks_total   (gauge)     — KV cache blocks allocated
 """
 
-from __future__ import annotations
 
 import time
 from collections import defaultdict
 from threading import Lock
-from typing import Any, Optional
+from typing import Optional
 
 
 # ---------------------------------------------------------------------------

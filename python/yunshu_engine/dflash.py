@@ -1,3 +1,4 @@
+from __future__ import annotations
 """DFlash Block Diffusion Engine — 2-stage diffusion with block-level caching.
 
 oMLX §13.2 pattern: Block Diffusion (dflash) accelerates image generation by:
@@ -17,13 +18,12 @@ Integration:
 - Image Engine: delegates to DFlash when YUNSHU_DFLASH=1
 - KV L1/L2 caches for intermediate state reuse
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

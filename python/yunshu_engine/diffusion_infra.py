@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Diffusion pipeline infrastructure — distributed scheduling, LoRA offloading, coordination.
 
 Provides infrastructure for production-grade diffusion inference:
@@ -18,13 +19,12 @@ Reference:
   - diffusers: DDIMScheduler, DPMSolverMultistepScheduler
   - vLLM: LoRA request scheduling
 """
-from __future__ import annotations
 
 import logging
 import math
 import time
-from dataclasses import dataclass, field
-from enum import Enum, auto
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional, Union
 
 logger = logging.getLogger(__name__)

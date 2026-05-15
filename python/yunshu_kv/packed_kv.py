@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Packed KV Cache Format — C19: Metal SIMD-optimized layout.
 
 Transforms the standard KV cache layout for optimal Metal SIMD access:
@@ -16,7 +17,6 @@ Reference:
   - FlashAttention: padded head_dim to 128 for CUDA tensor cores
   - MLX: mx.array contiguous memory layout for Metal buffer reuse
 """
-from __future__ import annotations
 
 import logging
 import os

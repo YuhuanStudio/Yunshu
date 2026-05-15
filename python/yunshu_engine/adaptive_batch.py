@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Adaptive Batch Scheduler — load-aware batch sizing.
 
 .. deprecated:: This module is not used in the production pipeline. Kept for reference only.
@@ -16,10 +17,9 @@ Integration points:
   - PrefillChunker calls compute_prefill_chunk_size() for long prompts
   - Metrics sink calls update_metrics() after each batch step
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)

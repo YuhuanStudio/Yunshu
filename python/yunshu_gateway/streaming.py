@@ -16,7 +16,6 @@ Key design decisions:
 5. Tool call extraction from model output (XML-based parsing for function calls)
 """
 
-from __future__ import annotations
 
 import asyncio
 import json

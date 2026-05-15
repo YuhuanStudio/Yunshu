@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Tiered KV Cache Manager — Hot/Cold tier coordination.
 
 Based on oMLX's TieredCacheManager pattern:
@@ -13,14 +14,12 @@ oMLX only supports SSD-only mode in production. Yunshu adds the hot/warm
 distinction for performance optimization on Apple Silicon.
 """
 
-from __future__ import annotations
 
 import json
 import logging
-import os
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -29,8 +28,8 @@ import mlx.core as mx
 from .block import KVBlock
 from .block_table import BlockTable
 from .hash import compute_block_hash
-from .manager import KVCacheConfig, KVCacheManager, PrefixMatch
-from .warm_tier import KVWarmTier, KVTierConfig
+from .manager import KVCacheManager, PrefixMatch
+from .warm_tier import KVWarmTier
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """TeaCache — Timestep Embedding Aware Cache for diffusion acceleration.
 
 TeaCache accelerates diffusion inference by reusing transformer block
@@ -24,11 +25,9 @@ Integration with Z-Image:
   4. If accumulated distance < threshold: reuse cached residual (fast path)
   5. If accumulated distance >= threshold: run full transformer, cache residual
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 import numpy as np
 

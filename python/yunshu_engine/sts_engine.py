@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Speech-to-Speech (STS) Engine — audio enhancement, separation, and transformation.
 
 Provides:
@@ -14,7 +15,6 @@ Integration:
   - Gateway endpoint at /v1/audio/speech-to-speech
   - VLM pipeline for audio understanding → speech generation
 """
-from __future__ import annotations
 
 import asyncio
 import io
@@ -23,7 +23,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

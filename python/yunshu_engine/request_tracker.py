@@ -1,9 +1,9 @@
+from __future__ import annotations
 """Active generation request tracking and cancellation.
 
 Maintains a registry of in-progress generations that can be cancelled
 via the /v1/cancel endpoint. Tracks request_id → cancellation Event mapping.
 """
-from __future__ import annotations
 
 import asyncio
 import logging

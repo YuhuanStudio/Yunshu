@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Output Parser Factory — model-specific output extraction.
 
 oMLX §13.2 pattern: Each model family has its own output format for
@@ -10,7 +11,6 @@ the model family and applies the correct parser to extract:
 Complements reasoning_parser.py (which handles thinking tags) by also
 stripping model-specific prefixes, suffixes, and formatting artifacts.
 """
-from __future__ import annotations
 
 import re
 import logging

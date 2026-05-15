@@ -17,7 +17,6 @@ Trade-off:
 - Quality degrades proportionally (more experts skipped = more loss)
 - Recommended: only reduce top_k for models with top_k >= 4
 """
-from __future__ import annotations
 
 import logging
 

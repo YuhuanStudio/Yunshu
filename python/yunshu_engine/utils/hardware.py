@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Unified hardware detection for Apple Silicon.
 
 oMLX pattern: single source of truth for chip identification,
@@ -5,7 +6,6 @@ memory detection, MLX availability, and version info.
 
 Fallback chain for each detection: sysctl → MLX Metal → heuristic → default.
 """
-from __future__ import annotations
 
 import logging
 import platform

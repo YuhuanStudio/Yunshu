@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Inference Checkpoint/Restore — fault recovery for long-running tasks.
 
 Studied from oMLX's checkpointing and vLLM's preemption recovery:
@@ -10,7 +11,6 @@ Thread safety:
   - FaultRecoveryManager is lock-free (strategy selection is stateless per call)
   - ProgressEstimator uses no shared mutable state beyond stats counters
 """
-from __future__ import annotations
 
 import copy
 import enum
@@ -19,7 +19,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

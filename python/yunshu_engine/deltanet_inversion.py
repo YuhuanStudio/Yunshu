@@ -1,3 +1,4 @@
+from __future__ import annotations
 """DeltaNet state inversion — analytically invert the SSM recurrence on rejection.
 
 Used in the KV cache eviction path: when KV blocks are evicted from the prefix
@@ -48,7 +49,6 @@ state recovery. May become more useful if float32 states or mixed-precision
 inference becomes viable.
 Capture mechanism integrated via register_hooks() for DeltaNet layers.
 """
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass

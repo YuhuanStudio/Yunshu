@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Lightweight telemetry — sampled metric collection with batch flushing.
 
 .. deprecated:: This module is not used in the production pipeline. Kept for reference only.
@@ -18,13 +19,12 @@ Usage::
 
 When ``enabled=False``, all methods are no-ops.
 """
-from __future__ import annotations
 
 import logging
 import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

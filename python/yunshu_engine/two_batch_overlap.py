@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Two-Batch Overlap (TBO) Scheduler — §14.1 gap from SGLang comparison.
 
 Implements pipeline-parallel scheduling: while batch A is processed on GPU,
@@ -32,14 +33,13 @@ Integration:
   - EngineCore._engine_loop() uses wrap_step() when TBO is active
   - Falls back to sequential when batch_size <= 1 or low utilization
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 

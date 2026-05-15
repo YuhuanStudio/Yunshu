@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Quantization — group-wise 4-bit quantization for warm-tier KV cache.
 
 Implements group-wise uniform quantization for KV cache tensors destined for
@@ -25,10 +26,8 @@ Integration:
       from .kv_optimizations import AdaptiveKVQuantizer
 """
 
-from __future__ import annotations
 
 import math
-import struct
 from dataclasses import dataclass
 from typing import Any
 

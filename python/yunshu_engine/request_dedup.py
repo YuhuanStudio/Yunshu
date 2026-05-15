@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Request deduplication — merge identical concurrent requests (SGLang pattern).
 
 When multiple users submit identical requests simultaneously (same model,
@@ -9,15 +10,12 @@ This is especially useful for:
   - Cache warming bursts (multiple预热 requests)
   - Load testing / benchmark scenarios
 """
-from __future__ import annotations
 
 import hashlib
 import logging
 import os
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

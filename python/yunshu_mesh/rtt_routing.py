@@ -1,3 +1,4 @@
+from __future__ import annotations
 """RTT-aware mesh request routing (Parallax pattern).
 
 Parallax optimizes distributed inference by measuring round-trip
@@ -5,14 +6,11 @@ times between mesh nodes and routing requests to minimize latency.
 Uses exponential moving average (EMA) for RTT estimation and
 weighted least-loaded routing.
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

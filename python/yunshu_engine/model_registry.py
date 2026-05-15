@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Model Registry — tracks model ownership across engines (oMLX pattern).
 
 Prevents BatchKVCache conflicts when multiple EngineCore instances
@@ -7,7 +8,6 @@ causes incompatible cache objects and NoneType errors.
 
 Uses weak references for automatic cleanup on GC.
 """
-from __future__ import annotations
 
 import logging
 import threading

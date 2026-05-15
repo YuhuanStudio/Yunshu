@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Gateway — DataParallel middleware.
 
 Bridges the DataParallelRouter (yunshu_mesh.data_parallel) into the FastAPI
@@ -17,19 +18,17 @@ The actual node selection happens in engine/__init__.py:get_engine_for_model()
 which calls _dp_router.select_node(). This middleware wraps the full request
 lifecycle so that record_request_end() is always called.
 """
-from __future__ import annotations
 
 import logging
 import os
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 

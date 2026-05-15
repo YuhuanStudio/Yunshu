@@ -3,10 +3,8 @@
 Uses the tokenizer from the active engine to count tokens precisely.
 Falls back to heuristic estimation when no tokenizer is available.
 """
-from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

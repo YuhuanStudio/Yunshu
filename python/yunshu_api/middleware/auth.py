@@ -5,7 +5,6 @@ Token is set via YUNSHU_AUTH_TOKEN env var.
 Skips auth for health/live/ready/version endpoints.
 """
 
-from __future__ import annotations
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request

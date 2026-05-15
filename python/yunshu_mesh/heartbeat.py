@@ -5,7 +5,6 @@ UDP-based heartbeat protocol for detecting node failures:
 - Missing heartbeat for `timeout` seconds → node marked unhealthy
 - Recovery detected when timed-out node sends heartbeat again
 """
-from __future__ import annotations
 
 import json
 import logging

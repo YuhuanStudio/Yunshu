@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mesh — Pipeline parallelism for multi-node inference.
 
 Splits a transformer model across N nodes where each node handles
@@ -13,10 +14,8 @@ Pipeline parallelism is ideal for:
 - Latency-tolerant batch workloads
 """
 
-from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from typing import Optional
 

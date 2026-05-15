@@ -1,3 +1,4 @@
+from __future__ import annotations
 """GPU-accelerated N-gram Speculative Decoding — MLX vectorized lookup.
 
 Stores n-gram → m-gram mappings as MLX arrays, enabling GPU-side matching
@@ -14,10 +15,9 @@ References:
   - vLLM NgramProposer (vllm/v1/spec_decode/ngram_proposer.py)
   - vLLM GPU batch propose (vllm/v1/spec_decode/ngram_proposer_gpu.py)
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import mlx.core as mx

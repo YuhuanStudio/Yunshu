@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mesh — Intelligent layer allocation for pipeline parallelism.
 
 Upgrades from equal-split to memory-proportional, bandwidth-aware, and
@@ -8,7 +9,6 @@ latency-optimal layer allocation strategies.  Inspired by:
 
 Part of §16.2/§16.3 gap closure from the exo/Parallax comparison.
 """
-from __future__ import annotations
 
 import logging
 import math

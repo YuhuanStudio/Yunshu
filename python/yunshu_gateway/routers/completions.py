@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Completions API compatible router (text completions, not chat).
 
 Supports:
@@ -19,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..engine import get_engine, get_engine_for_model, get_model_manager
+from ..engine import get_engine, get_engine_for_model
 from .chat import _apply_lora_adapter, _release_lora_adapter
 
 logger = logging.getLogger(__name__)
@@ -299,6 +300,7 @@ async def _stream_completion(
 
     async def _stream_choice(choice_idx: int):
         nonlocal prompt_tok, completion_tok, cached_tok
+        choice_finish_reason = None
         if req.echo:
             yield format_openai_chunk(
                 completion_id=completion_id,
@@ -342,6 +344,9 @@ async def _stream_completion(
                 reasoning_tok_per_choice[choice_idx] = _choice_reasoning
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
+                # Track finish_reason from engine; only emit on final chunk
+                if output.finish_reason is not None:
+                    choice_finish_reason = output.finish_reason
                 # Format logprobs for this token if present
                 _chunk_logprobs = None
                 if output.logprobs:
@@ -350,7 +355,7 @@ async def _stream_completion(
                     completion_id=completion_id,
                     model=req.model,
                     delta_content=output.new_text,
-                    finish_reason=output.finish_reason,
+                    finish_reason=None,  # intermediate: always None
                     choice_index=choice_idx,
                     logprobs=_chunk_logprobs,
                 )
@@ -385,15 +390,26 @@ async def _stream_completion(
                     prompt_tok = output.prompt_token_count
                 if hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1
+                if output.finish_reason is not None:
+                    choice_finish_reason = output.finish_reason
                 _chunk_lp = _format_streaming_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 yield format_openai_chunk(
                     completion_id=completion_id,
                     model=req.model,
                     delta_content=output.token_text,
-                    finish_reason=output.finish_reason,
+                    finish_reason=None,  # intermediate: always None
                     choice_index=choice_idx,
                     logprobs=_chunk_lp,
                 )
+
+        # Emit final chunk with finish_reason for this choice (even if zero tokens)
+        yield format_openai_chunk(
+            completion_id=completion_id,
+            model=req.model,
+            delta_content="",
+            finish_reason=choice_finish_reason or "stop",
+            choice_index=choice_idx,
+        )
 
     async def _token_source():
         # Stream each choice sequentially (matches OpenAI spec behavior)

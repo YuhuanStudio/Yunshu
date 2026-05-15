@@ -6,7 +6,6 @@ estimates memory usage, and returns structured DiscoveredModel entries.
 Uses dynamic detection: delegates to model_manager._detect_model_type()
 which uses mlx-lm importlib probing for 0-day support.
 """
-from __future__ import annotations
 
 import json
 import logging

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """KV lifecycle integration — unified KV cache lifecycle management.
 
 Coordinates kv_migration (multi-tier migration), kv_optimizations
@@ -13,7 +14,6 @@ Lifecycle phases:
   5. Eviction — remove when memory pressure requires it
   6. Warming — pre-load predicted future blocks
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -21,7 +21,6 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Video Generation Engine — wraps mlx-video for Wan2.2 and LTX2.
 
 Provides a unified interface for:
@@ -27,7 +28,6 @@ Env vars:
   YUNSHU_VIDEO_STREAMING=1   Enable streaming frame decoder
   YUNSHU_VIDEO_LORA=path     Auto-load LoRA adapter at startup
 """
-from __future__ import annotations
 
 import asyncio
 import gc
@@ -1189,7 +1189,7 @@ class VideoEngine:
 
         try:
             import mlx.nn as nn
-            from mlx.utils import tree_flatten, tree_unflatten
+            from mlx.utils import tree_unflatten
             from mlx_lm.tuner.lora import LoRALinear
 
             merged_layers = []

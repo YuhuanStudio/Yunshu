@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Sleep/wake endpoints for power saving and resource management.
 
 3-level sleep (vLLM pattern):

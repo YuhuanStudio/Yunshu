@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Streaming Optimizer — pipelined token generation for lower ITL.
 
 Four components that reduce inter-token latency and improve throughput:
@@ -30,15 +31,13 @@ Integration:
   - BatchedDetokenizer flush() in _process_responses
   - StreamingBackpressureController check in streaming paths
 """
-from __future__ import annotations
 
 import asyncio
 import enum
 import logging
-import math
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 

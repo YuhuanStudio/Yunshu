@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu KV Compression — Three-tier KV cache hierarchy.
 
 Hot (UMA FP16) → Warm (4-bit quantized) → Cold (SSD)
@@ -7,11 +8,9 @@ for the warm tier. Metal kernel implementation will replace the numpy
 path in Phase 2.
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional
 
 import numpy as np
 

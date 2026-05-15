@@ -8,7 +8,6 @@ Supports three modes:
 The gateway routers use get_engine_for_model() which works in all modes.
 """
 
-from __future__ import annotations
 
 import logging
 import os

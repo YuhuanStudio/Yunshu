@@ -8,11 +8,10 @@ Extends the base Scheduler with:
 - Periodic KV block compaction (KVBlockCompactor from kv_optimizations)
 - Prediction-based eviction (KVEvictionPredictor from kv_optimizations)
 """
-from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 from .scheduler import Scheduler, SchedulerConfig, SchedulerOutput
 from .request import Request, RequestOutput, RequestStatus

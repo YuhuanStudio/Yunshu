@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Process Isolation — exo-style fault tolerance for inference.
 
 exo uses independent processes per inference task with a supervisor for fault
@@ -22,7 +23,6 @@ Integration:
   - Graceful degradation: worker crash → clear error, not server crash
   - Stats exposed via monitoring endpoints
 """
-from __future__ import annotations
 
 import logging
 import multiprocessing

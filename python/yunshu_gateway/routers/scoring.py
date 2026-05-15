@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Scoring endpoints: /v1/pooling, /v1/score, /v1/rerank.
 
 Implements vLLM-compatible scoring endpoints built on the existing

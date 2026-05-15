@@ -15,7 +15,6 @@ Usage:
     apply_mtp_patch()
     model = load_model_with_mtp("models/Qwen3.5-4B-MLX-bf16")
 """
-from __future__ import annotations
 
 import logging
 from typing import Any

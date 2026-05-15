@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Vision Feature Cache — two-tier LRU + SSD cache for vision encoder outputs.
 
 Studied from oMLX's cache/vision_feature_cache.py, adapted for Yunshu:
@@ -12,7 +13,6 @@ into language model space). Avoids re-running the vision encoder when
 the same image appears with different text contexts across multi-turn
 conversations.
 """
-from __future__ import annotations
 
 import hashlib
 import json

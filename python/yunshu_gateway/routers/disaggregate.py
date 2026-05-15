@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Disaggregated serving endpoints — separate prefill and decode phases.
 
 Implements the P/D disaggregation pattern from vLLM/SGLang:
@@ -21,7 +22,6 @@ Multi-node path (when YUNSHU_DISAGG_PD=1 and remote nodes registered):
   Client → /v1/decode → fetch KV from remote via KVTransferServer
     → Engine.decode_with_handle()
 """
-from __future__ import annotations
 
 import asyncio
 import collections
@@ -29,10 +29,10 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """TurboQuant KV Cache — per-layer mixed-precision KV quantization.
 
 oMLX §13.2 pattern: Instead of uniform quantization across all layers,
@@ -14,10 +15,9 @@ compared to 8x from uniform 4-bit quantization.
 The quantization is applied at the block boundary (every block_size tokens)
 during the paged scheduler's cache_completed_blocks() path.
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .kv_quantization import KVQuantConfig, KVQuantizer

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu VLM Engine — Vision-Language Model inference.
 
 Two-tier model loading:
@@ -18,7 +19,6 @@ Architecture:
 - GPU work serialized on shared executor (mlx_executor pattern)
 - Streaming via tokenizer.detokenizer (per-request, never pooled)
 """
-from __future__ import annotations
 
 import asyncio
 import base64

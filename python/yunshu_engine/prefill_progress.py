@@ -1,9 +1,9 @@
+from __future__ import annotations
 """Prefill progress tracker — lightweight per-request progress for dashboard.
 
 Studied from oMLX's prefill_progress.py. Updated by scheduler during prefill,
 read by admin API for live dashboard display. Thread-safe, O(1) per update.
 """
-from __future__ import annotations
 
 import threading
 import time

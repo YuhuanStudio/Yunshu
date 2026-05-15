@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Inference budget manager — token/time budget enforcement per request.
 
 Enforces per-request budgets for:
@@ -9,14 +10,12 @@ Enforces per-request budgets for:
 Integrates with the engine loop to check budgets during generation
 and stop requests that exceed their allocated resources.
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 

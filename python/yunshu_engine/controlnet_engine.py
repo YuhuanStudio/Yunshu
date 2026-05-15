@@ -1,3 +1,4 @@
+from __future__ import annotations
 """ControlNet + Depth-guided generation infrastructure.
 
 Provides spatial conditioning for the image diffusion pipeline:
@@ -18,11 +19,9 @@ Reference:
   - mflux: flux_controlnet.py, transformer_controlnet.py, depth_util.py
   - diffusers: ControlNetModel, depth estimation pipelines
 """
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 

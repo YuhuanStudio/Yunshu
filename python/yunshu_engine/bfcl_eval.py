@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu BFCL Evaluation Integration — Berkeley Function Calling Leaderboard.
 
 .. deprecated:: This module is not used in the production pipeline. Kept for reference only.
@@ -21,7 +22,6 @@ Architecture:
   BFCLEvaluator    — orchestrates test loading, execution, and scoring
 """
 
-from __future__ import annotations
 
 import json
 import logging
@@ -29,7 +29,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Boundary Snapshot SSD Store.
 
 Stores non-sliceable cache layer snapshots (ArraysCache, RotatingKVCache) to
@@ -9,16 +10,13 @@ Based on oMLX's boundary_snapshot_store.py pattern:
 - Background writer flushes to disk via thread
 - Ephemeral files cleaned up on request completion/abort
 """
-from __future__ import annotations
 
 import json
 import logging
-import os
 import struct
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
 
 import numpy as np
 

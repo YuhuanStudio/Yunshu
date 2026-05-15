@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Model Manager — Multi-model serving with LRU eviction.
 
 Manages multiple loaded models with memory-aware lifecycle:
@@ -13,7 +14,6 @@ Model type detection uses dynamic library probing instead of static lists:
 - This gives 0-day support for any new model mlx-lm adds
 """
 
-from __future__ import annotations
 
 import asyncio
 import gc
@@ -21,7 +21,7 @@ import importlib
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Optional

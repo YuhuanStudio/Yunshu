@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu RadixAttention — Tree-based prefix sharing for KV cache.
 
 Improves on oMLX's flat block-level prefix matching with a radix tree
@@ -8,7 +9,6 @@ that supports:
 - Efficient multi-turn conversation cache reuse
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional

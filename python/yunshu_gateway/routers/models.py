@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Models API compatible router."""
 
 import asyncio

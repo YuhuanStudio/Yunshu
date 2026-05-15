@@ -4,7 +4,6 @@ Separate FastAPI app for the admin/management API (L2).
 This mounts under /admin or runs as a separate service.
 """
 
-from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Modular scheduler mixins — composable scheduler components (SGLang pattern).
 
 SGLang uses 11+ mixin classes for its scheduler (metrics, profiling,
@@ -17,15 +18,14 @@ Usage:
   scheduler.add_mixin(MetricsMixin())
   scheduler.add_mixin(ProfilingMixin())
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

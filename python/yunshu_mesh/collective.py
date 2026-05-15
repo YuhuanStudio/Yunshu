@@ -16,7 +16,6 @@ mx.distributed API:
   recv(shape, dtype, src, group=None) -> array
 """
 
-from __future__ import annotations
 
 import logging
 import time
@@ -24,7 +23,7 @@ from typing import Optional, Sequence
 
 import mlx.core as mx
 
-from .topology import MeshTopology, TopologyType
+from .topology import MeshTopology
 
 logger = logging.getLogger(__name__)
 

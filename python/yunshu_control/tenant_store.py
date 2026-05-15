@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Multi-Tenant — API key auth, quotas, fairness, and persistence.
 
 Phase 1: Simple API key authentication with per-tenant rate limiting.
@@ -5,7 +6,6 @@ Phase 2: RBAC (org/project/api_key three-tier), SLO classes, priority queues.
 
 Persistence: Tenants saved to JSON file so API keys survive restarts.
 """
-from __future__ import annotations
 
 import hashlib
 import json

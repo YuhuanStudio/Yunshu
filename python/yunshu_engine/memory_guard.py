@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Yunshu MemoryGuard — proactive memory admission control.
 
 Prevents OOM by rejecting requests that would exceed available memory:
@@ -19,7 +21,6 @@ Integration:
     eviction decisions. Import via:
       from .kv_optimizations import KVEvictionPredictor
 """
-from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING

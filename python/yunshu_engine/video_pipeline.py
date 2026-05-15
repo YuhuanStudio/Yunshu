@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Native MLX Video Pipeline — frame-by-frame video generation without mlx-video dependency.
 
 Implements a native MLX pipeline for video generation that follows the Wan2.2-style
@@ -36,7 +37,6 @@ Env vars:
   YUNSHU_VIDEO_PIPELINE=native  Force native pipeline (skip mlx-video)
   YUNSHU_VIDEO_LORA=path        Auto-load LoRA adapter at startup
 """
-from __future__ import annotations
 
 import gc
 import logging

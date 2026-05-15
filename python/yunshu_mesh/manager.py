@@ -11,10 +11,8 @@ Lifecycle:
   5. MeshManager.shutdown() — clean exit
 """
 
-from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -22,7 +20,7 @@ from typing import Any, Optional
 
 import mlx.core as mx
 
-from .node import MeshNode, MeshNodeState, NodeCapabilities
+from .node import MeshNode, MeshNodeState
 from .topology import MeshTopology, TopologyType
 from .collective import CollectiveOps
 from .pipeline import PipelineParallel, auto_partition_model

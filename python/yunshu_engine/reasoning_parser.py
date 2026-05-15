@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Reasoning output parser factory.
 
 Auto-detects and parses reasoning/thinking output from different model
@@ -12,7 +13,6 @@ Supported families:
 - Gemma4: <start_think/>...</end_think/> tags
 - Generic: fallback <think/>...</think/> parser
 """
-from __future__ import annotations
 
 import re
 import logging

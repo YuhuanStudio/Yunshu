@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Yunshu Scheduler — continuous batching via mlx-lm BatchGenerator.
 
 Studied from oMLX's scheduler.py and engine_core.py, written from scratch:
@@ -16,7 +18,6 @@ Architecture:
     → distribute outputs to per-request collectors
     → deferred mx.clear_cache() when idle
 """
-from __future__ import annotations
 
 import copy
 import logging

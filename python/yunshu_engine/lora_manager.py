@@ -1,3 +1,4 @@
+from __future__ import annotations
 """LoRA Adapter Manager for dynamic adapter loading and serving.
 
 Provides runtime LoRA adapter management:
@@ -13,14 +14,12 @@ Architecture:
   LoRAAdapterManager — singleton managing adapters across engines
   LoRAAdapterEntry — per-adapter metadata + merge state
 """
-from __future__ import annotations
 
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

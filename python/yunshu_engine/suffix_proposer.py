@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Suffix-based Speculative Decoding — pattern reuse from own generation.
 
 Finds common suffixes in the request's own generated text and reuses them
@@ -22,12 +23,9 @@ References:
   - Suffix Decoding (https://arxiv.org/abs/2411.04975)
   - vLLM SuffixDecodingProposer (vllm/v1/spec_decode/suffix_decoding.py)
 """
-from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

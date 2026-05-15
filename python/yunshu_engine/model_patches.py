@@ -7,10 +7,8 @@ oMLX §13.2 pattern: Model families sometimes need runtime patches for:
 
 These patches are applied at model load time and are reversible.
 """
-from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 logger = logging.getLogger(__name__)

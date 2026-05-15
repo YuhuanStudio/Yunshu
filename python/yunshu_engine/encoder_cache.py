@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu EncoderCacheManager — encoder hidden-state cache for encoder-decoder models.
 
 Audit gap §12.2: Yunshu lacked encoder-decoder support while vLLM has
@@ -19,12 +20,11 @@ Design notes (vLLM EncoderCacheManager pattern):
 - Memory tracking uses ``sys.getsizeof`` as a lower bound and falls back
   to element-count estimation for numpy/MLX arrays.
 """
-from __future__ import annotations
 
 import logging
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)

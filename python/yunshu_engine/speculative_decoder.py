@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Speculative Decoding Engine — EAGLE-3 GPU-only path.
 
 Implements speculative decoding where a small draft model proposes K tokens,
@@ -36,12 +37,11 @@ References:
   - vLLM SpeculativeConfig (config/speculative.py)
   - oMLX speculative decoding patterns
 """
-from __future__ import annotations
 
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 

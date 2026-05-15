@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Deep observability: structured tracing, logging, enhanced metrics, health dashboard.
 
 Components:
@@ -9,7 +10,6 @@ Components:
 Thread-safe throughout. No external dependencies beyond stdlib.
 """
 
-from __future__ import annotations
 
 import io
 import json

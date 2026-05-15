@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Thinking-Segment KV Substore — reasoning token KV cache reuse.
 
 Stores KV cache segments keyed by (conversation_id, step_hash) so that
@@ -20,18 +21,15 @@ Integration:
 - On next turn in same conversation, checks for reusable segments
 - If found, injects cached KV and skips re-thinking identical steps
 """
-from __future__ import annotations
 
 import gc
 import hashlib
 import json
 import logging
-import os
-import struct
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

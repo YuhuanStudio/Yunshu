@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Gateway optimizer middleware — ResponseCache + RequestCoalescer.
 
 Wires the gateway optimizer modules into the request lifecycle:
@@ -6,14 +7,13 @@ Wires the gateway optimizer modules into the request lifecycle:
 
 Both are opt-in via YUNSHU_RESPONSE_CACHE=1 env var.
 """
-from __future__ import annotations
 
 import hashlib
 import json
 import logging
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 

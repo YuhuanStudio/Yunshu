@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Profiling endpoints for Metal performance analysis.
 
 Provides /v1/start_profile and /v1/stop_profile endpoints for

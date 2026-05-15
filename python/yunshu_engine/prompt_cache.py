@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu PromptCacheManager — exact-match KV state cache for prompt reuse.
 
 Caches complete prompt KV states keyed by content hash of messages + params.
@@ -17,7 +18,6 @@ Integration:
     → PromptCacheManager.store(messages_hash, kv_state)
       → after prefill, cache for future reuse
 """
-from __future__ import annotations
 
 import hashlib
 import json
@@ -352,7 +352,6 @@ class PromptCacheManager:
             total = kv_state.nbytes
         elif hasattr(kv_state, "shape") and hasattr(kv_state, "dtype"):
             # Estimate from shape + dtype
-            import struct
             try:
                 itemsize = {
                     "float32": 4, "float16": 2, "bfloat16": 2,

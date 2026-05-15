@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Reasoning model thinking budget processor.
 
 Controls thinking token consumption for models that use <think/> tags
@@ -12,7 +13,6 @@ Also provides:
 - Think-tag auto-detection: determines if a prompt enables reasoning mode
 - Close pattern resolution: handles model-specific whitespace around </think/>
 """
-from __future__ import annotations
 
 import logging
 import re

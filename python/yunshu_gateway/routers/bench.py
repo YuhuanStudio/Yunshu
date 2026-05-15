@@ -1,10 +1,10 @@
+from __future__ import annotations
 """Yunshu Benchmark API Router — Roofline, Latency, Throughput benchmarks.
 
 Based on oMLX's benchmark.py pattern but adapted for Yunshu's architecture.
 Uses mx.core for GPU operations with proper warmup and synchronization.
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -360,7 +360,7 @@ async def bench_model(request: ModelBenchRequest):
 
     try:
         from yunshu_engine.model_manager import ModelManager
-        from yunshu_engine.benchmark import BenchmarkRunner, BenchmarkSuite
+        from yunshu_engine.benchmark import BenchmarkRunner
 
         mgr = ModelManager()
         engine = mgr.get_engine()

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """MTP always-advance speculative decoder with n_confirmed skip state.
 
 Implements the always-advance MTP strategy with the key optimization from oMLX:
@@ -21,11 +22,9 @@ Also supports:
   - Cooldown on rejection (from llama.cpp PR #20700)
   - FastMTP vocabulary trimming (from llama.cpp PR #20700)
 """
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 import mlx.core as mx
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Role-Based Access Control — API key permissions and SLO classes.
 
 Implements a simple RBAC system:
@@ -6,7 +7,6 @@ Implements a simple RBAC system:
 - SLO classes: best_effort, standard, premium (affects scheduling priority)
 - JSON file persistence for API keys across restarts
 """
-from __future__ import annotations
 
 import hashlib
 import json

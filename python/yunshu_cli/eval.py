@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu CLI — eval subcommand.
 
 Accuracy benchmarks against a running Yunshu server.
@@ -5,7 +6,6 @@ Supports multiple-choice (MMLU-style), math (GSM8K), and
 code generation (HumanEval) benchmarks.
 """
 
-from __future__ import annotations
 
 import asyncio
 import json

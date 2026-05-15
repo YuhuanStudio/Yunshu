@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Gateway — Time-windowed metrics aggregator.
 
 Records individual request data points with timestamps and provides
@@ -10,14 +11,13 @@ This complements the cumulative _Metrics / PrometheusMetrics registries
 by answering questions like "what was the p99 latency in the last 60 seconds?"
 """
 
-from __future__ import annotations
 
 import math
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass

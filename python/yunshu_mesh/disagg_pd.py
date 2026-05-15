@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Disaggregated Prefill/Decode — C20: separate prefill/decode nodes.
 
 Studied from exo and vLLM's disaggregated serving pattern:
@@ -22,14 +23,13 @@ Limitations on Apple Silicon:
   - Unified memory means no real CPU/GPU memory split
   - Best suited for: M4 Ultra (decode) + M2/M3 (prefill) clusters
 """
-from __future__ import annotations
 
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

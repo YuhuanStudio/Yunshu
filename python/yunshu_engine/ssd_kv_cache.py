@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu SSD-Tier KV Cache — persistent KV block storage for prefix reuse.
 
 Studied from oMLX's PagedSSDCacheManager, adapted for Yunshu:
@@ -26,9 +27,7 @@ Thread safety:
   - Background writer does only file I/O (no Metal API calls)
   - Index mutations protected by threading.Lock
 """
-from __future__ import annotations
 
-import gc
 import json
 import logging
 import os
@@ -36,9 +35,9 @@ import struct
 import threading
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

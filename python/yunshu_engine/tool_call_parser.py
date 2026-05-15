@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Tool Call Parser Factory.
 
 Auto-detects model-specific tool call output formats and routes to
@@ -15,7 +16,6 @@ Supported formats:
 8. Anthropic: native tool_use blocks (pre-parsed)
 9. Gemini: FunctionCall JSON in response parts
 """
-from __future__ import annotations
 
 import json
 import re

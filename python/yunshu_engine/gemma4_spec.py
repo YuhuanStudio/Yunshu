@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Gemma4 built-in speculative decoding proposer.
 
 Gemma4 models have built-in speculative decoding capability where certain
@@ -32,11 +33,10 @@ References:
   - Gemma 4 Technical Report (Google DeepMind, 2025)
   - vLLM Gemma4 spec decode (vllm/v1/spec_decode/gemma4_proposer.py)
 """
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 

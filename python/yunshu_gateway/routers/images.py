@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Images API compatible router — image generation endpoint."""
 
 import base64
@@ -7,7 +8,7 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..engine import get_model_manager

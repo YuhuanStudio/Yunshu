@@ -1,11 +1,11 @@
+from __future__ import annotations
 """Yunshu exception hierarchy (oMLX pattern).
 
 Structured exceptions for better error handling, debugging, and recovery.
 Cache corruption patterns enable automatic scheduler recovery.
 """
-from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 
 class YunshuError(Exception):

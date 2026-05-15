@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu L4 Engine — MLX-native continuous batching.
 
 Deeply adapted to MLX's actual execution model by studying:
@@ -20,7 +21,6 @@ Key oMLX lessons incorporated:
 - Step counter and stats for monitoring
 """
 
-from __future__ import annotations
 
 import asyncio
 import gc
@@ -29,7 +29,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import auto
 from typing import Any, AsyncIterator, Optional
 
 import mlx.core as mx

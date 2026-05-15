@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Benchmark Engine — LLM inference performance measurement.
 
 .. deprecated:: This module is not used in the production pipeline. Kept for reference only.
@@ -12,12 +13,11 @@ Design goals:
 - Separates prefill vs decode timing via streaming token-by-token measurement
 - Produces structured dataclasses suitable for JSON serialization or markdown tables
 """
-from __future__ import annotations
 
 import asyncio
 import platform
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, Sequence, runtime_checkable
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """OpenAI Embeddings API compatible router.
 
 Supports text embedding generation for semantic search, clustering, etc.
@@ -6,12 +7,9 @@ When YUNSHU_ANE_EMBEDDINGS=1 is set and ANE is available, embeddings are
 computed on the Apple Neural Engine via CoreML for lower latency and
 reduced GPU contention.
 """
-from __future__ import annotations
 
 import logging
 import os
-import time
-import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -103,7 +101,6 @@ async def create_embedding(req: EmbeddingRequest):
 
 async def _resolve_embedding_engine(model_id: str):
     """Find an embedding engine for the given model."""
-    from yunshu_engine.batched_engine import BatchedEngine
 
     # Try model manager first
     manager = get_model_manager()

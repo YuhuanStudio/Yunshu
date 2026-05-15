@@ -4,7 +4,6 @@ Uses xxhash for speed (vs oMLX's SHA256). Chain hashing: each block's hash
 depends on the parent hash + token IDs, enabling O(1) prefix lookup.
 """
 
-from __future__ import annotations
 
 import struct
 from typing import Optional

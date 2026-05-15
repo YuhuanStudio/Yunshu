@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Mesh — Model sharding for distributed inference.
 
 Handles both tensor parallel and pipeline parallel sharding of MLX models.
@@ -15,7 +16,6 @@ API:
   load_sharded(model_name, group, strategy) -> (model, tokenizer)
 """
 
-from __future__ import annotations
 
 import logging
 from functools import partial
@@ -153,7 +153,7 @@ def _shard_llama_like(model, group: mx.distributed.Group) -> None:
     - MLP gate/up: all-to-sharded
     - MLP down: sharded-to-all
     """
-    from mlx.nn.layers.distributed import shard_linear, shard_inplace
+    from mlx.nn.layers.distributed import shard_linear
 
     all_to_sharded = partial(shard_linear, sharding="all-to-sharded", group=group)
     sharded_to_all = partial(shard_linear, sharding="sharded-to-all", group=group)

@@ -2,11 +2,10 @@
 
 Supports GLM-OCR and compatible models via mlx-vlm.
 """
-from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

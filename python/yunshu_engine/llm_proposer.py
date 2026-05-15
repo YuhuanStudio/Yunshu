@@ -1,3 +1,4 @@
+from __future__ import annotations
 """LLM-based speculative decoding proposer — uses a smaller LLM as draft model.
 
 Unlike cross-model spec decode (EAGLE-3 pattern) which tightly couples draft
@@ -31,11 +32,10 @@ References:
   - "Fast Inference from Transformers via Speculative Decoding"
     (Leviathan et al., 2023) — https://arxiv.org/abs/2211.17192
 """
-from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import mlx.core as mx
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Yunshu Gateway — Prometheus-compatible metrics middleware.
 
 Tracks request counts, latencies, token throughput, and error rates.
@@ -10,14 +11,12 @@ Metrics follow the OpenAI/vLLM pattern:
   - yunshu_inference_count
 """
 
-from __future__ import annotations
 
 import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request

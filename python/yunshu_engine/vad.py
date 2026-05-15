@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Voice Activity Detection (VAD) module.
 
 Provides multiple VAD implementations for speech detection in audio streams:
@@ -9,7 +10,6 @@ Used by:
 - ASR pipeline for pre-filtering silence
 - STS pipeline for turn-taking
 """
-from __future__ import annotations
 
 import logging
 import struct
