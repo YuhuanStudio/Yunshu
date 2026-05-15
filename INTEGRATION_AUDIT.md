@@ -46,6 +46,12 @@
 | Wave 95c: 零 truly silent except | 44 處 `except Exception:` (無 logger) 全部添加 `logger.debug("...", exc_info=True)` — 覆蓋 18 文件 (engine: 14, gateway: 5, mesh: 1) | 全項目可調試性 |
 | Wave 95: 死代碼清理 | batched_engine.py: 移除未用 json import, 移除重複 model= 賦值, 修復 _remaining/_matched/_context_ids 未用變量, 移除 _mx 死 import, 修復 logits/tokens/callback 未用參數 | Pylance 警告大幅減少 |
 | Wave 95: 監控端點 | /gw/monitoring/inflight-prefix-sharing — 追蹤並行 KV 前綴共享統計 (hits/misses/active) | 運維觀測 |
+| Wave 96: Critical get_hardware_info() bug | `get_hardware_info()` 未定義 — 6+ 調用站點全部靜默失敗，導致 memory guard、adaptive batch sizing、KV pressure eviction、KV offload 全部死代碼。新增 cached singleton (30s TTL) + `total_memory_bytes` 字段。 | 記憶體管理全面修復 |
+| Wave 96: Engine loop 延遲度量修復 | Adaptive batch sizing 原先在 scheduler step 前度量延遲（~0ms），現在改為 step 完成後度量實際 wall time | 自適應批次大小真正生效 |
+| Wave 96: 死代碼 + KV optimizer 生產接線 | 移除 engine_core.py 死 `_reorder_by_cache_locality`；接入 KVBlockCompactor + KVEvictionPredictor 到 PagedScheduler；接入 ChunkedPrefillOptimizer 到 hybrid prefill；模型預處理器 + inflight prefix sharing 接入 engine_core | 生產模組全面啟用 |
+| Wave 96b: Responses API 修復 | `_reasoning_tokens` NameError（batched path 未定義）、grammar 參數支援（regex/choice/cfg）、extract_tool_calls_model_aware 替代 | API 完整性 |
+| Wave 96c: Responses API 追蹤 + 轉發 | Structured tracing (get_inference_tracer) + priority/user 參數轉發 VLM handler | 與 chat/completions 一致 |
+| Wave 96d: Completions.py NameError | `_gen_one` 中 `result` 只在 is_batched path 定義但無條件引用 cached_tokens — 非批次路徑會 NameError | 路由修復 |
 
 ### 已完成修復 (2026-05-15 Wave 89-92 — Agent Wiring + Scoping Bugs + Parameter Forwarding)
 
