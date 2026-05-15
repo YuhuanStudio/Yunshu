@@ -418,11 +418,12 @@ async def _stream_completion(
     # Register with request tracker for cancellation support
     from yunshu_engine.request_tracker import get_request_tracker
     _tracker = get_request_tracker()
-    _tracker.register(completion_id, req.model)
+    _tracker_gen = _tracker.register(completion_id, req.model)
     try:
         async for event in with_sse_keepalive(
             _token_source(),
             http_request=request,
+            cancel_event=_tracker_gen.cancel_event,
         ):
             yield event.encode("utf-8")
     except MemoryError:

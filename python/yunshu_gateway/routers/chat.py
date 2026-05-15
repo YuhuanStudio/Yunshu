@@ -1216,14 +1216,20 @@ async def _stream_vlm_response(
 
         yield format_openai_done()
 
+    # Register with request tracker for cancellation support
+    from yunshu_engine.request_tracker import get_request_tracker
+    _vlm_tracker = get_request_tracker()
+    _vlm_gen = _vlm_tracker.register(completion_id, req.model)
     try:
       async for event in with_sse_keepalive(
           _token_source(),
           http_request=request,
+          cancel_event=_vlm_gen.cancel_event,
       ):
           yield event.encode("utf-8")
     finally:
       _release_lora_adapter(vlm_engine, loaded_adapter)
+      _vlm_tracker.unregister(completion_id)
 
 
 async def _stream_response_multi(
@@ -1291,6 +1297,7 @@ async def _stream_response_multi(
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
+                    cancel_event=gen.cancel_event,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():

@@ -1977,12 +1977,17 @@ class BatchedEngine:
         logprobs: bool | int = False,
         top_logprobs: int | None = None,
         logits_processors: list | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
         Default uses fast path (direct generate_step on executor) for single
         requests. Set use_engine_loop=True for continuous batching path.
         If use_engine_loop is None, uses YUNSHU_ENGINE_LOOP env var.
+
+        When cancel_event is provided (e.g. from gateway disconnect detection),
+        it is checked alongside the engine's internal cancel event to allow
+        cooperative cancellation from the HTTP layer.
         """
         if not self._loaded:
             await self.start()
@@ -2013,6 +2018,21 @@ class BatchedEngine:
             logger.debug("request tracker registration failed", exc_info=True)
             _cancel_event = None
             _tracker = None
+
+        # If the gateway passes an external cancel_event, wrap both events
+        # so that checking .is_set() on the wrapper detects either source.
+        if cancel_event is not None:
+            _internal = _cancel_event
+            _external = cancel_event
+
+            class _CompositeCancelEvent:
+                """Proxy that returns True if either the internal or external event is set."""
+                def is_set(self):
+                    if _internal is not None and _internal.is_set():
+                        return True
+                    return _external.is_set()
+
+            _cancel_event = _CompositeCancelEvent()
 
         # Speculative decoding path (Phase 4)
         if spec_decode and self._spec_enabled and self._spec_decoder is not None:
