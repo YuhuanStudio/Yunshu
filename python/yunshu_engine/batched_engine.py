@@ -2805,6 +2805,8 @@ class BatchedEngine:
             completion_tokens=len(token_ids),
             finished=True,
             finish_reason="stop" if len(token_ids) < max_tokens else "length",
+            reasoning_tokens=0,
+            cached_tokens=0,
         )
 
     async def _stream_generate_speculative(
@@ -2899,6 +2901,8 @@ class BatchedEngine:
                 completion_tokens=len(generated_tokens),
                 finished=finish_reason is not None,
                 finish_reason=finish_reason,
+                    reasoning_tokens=0,
+                    cached_tokens=0,
             )
 
             if finish_reason is not None:
@@ -3150,6 +3154,7 @@ class BatchedEngine:
             finish_reason=finish_reason,
             cached_tokens=cached_tokens,
             ttft_ms=round(ttft_s * 1000, 1),
+            reasoning_tokens=0,
         )
 
     async def _stream_generate_ngram_spec(
@@ -3394,6 +3399,8 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
+                    reasoning_tokens=0,
+                    cached_tokens=0,
                 )
                 if done:
                     break
@@ -3468,6 +3475,8 @@ class BatchedEngine:
             completion_tokens=len(token_ids),
             finished=True,
             finish_reason=finish_reason,
+            reasoning_tokens=0,
+            cached_tokens=0,
         )
 
     async def _stream_generate_mtp(
@@ -3621,6 +3630,8 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
+                    reasoning_tokens=0,
+                    cached_tokens=0,
                 )
                 if done:
                     break
