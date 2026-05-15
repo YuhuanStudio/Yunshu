@@ -2059,6 +2059,20 @@ class BatchedEngine:
         tokenizer = self._tokenizer
         model = self._model
 
+        # Model-specific preprocessing (§16.5 pattern)
+        if self._preprocessor_registry is not None:
+            try:
+                model_config = {"model_type": self.model_name or ""}
+                if hasattr(model, 'config') and hasattr(model.config, 'model_type'):
+                    model_config["model_type"] = model.config.model_type
+                preprocessor = self._preprocessor_registry.detect(model_config)
+                if preprocessor is not None:
+                    processed = preprocessor.preprocess(prompt, tokenizer)
+                    if processed.token_ids:
+                        prompt = processed.token_ids
+            except Exception:
+                logger.debug("model preprocessor failed in streaming", exc_info=True)
+
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             tpl_kwargs = {"tokenize": False, "add_generation_prompt": True}
             if enable_thinking is not None:
@@ -2191,6 +2205,22 @@ class BatchedEngine:
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
+
+            # Inflight prefix sharing (SGLang pattern)
+            _inflight_entry = None
+            if cached_kv is None:
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    _tracker = get_inflight_tracker()
+                    _inflight_entry = _tracker.find_prefix(
+                        [int(t) for t in ids], self.model_name or ""
+                    )
+                    if _inflight_entry is not None and _inflight_entry.kv_cache_ref is not None:
+                        cache = _inflight_entry.kv_cache_ref
+                        shared_len = min(len(_inflight_entry.token_ids), len(ids))
+                        ids_to_prefill = ids[shared_len:]
+                except Exception:
+                    logger.debug("inflight prefix lookup failed in streaming", exc_info=True)
 
             _lprocs = logits_processors if logits_processors else None
             with _wired_limit_ctx(model):
