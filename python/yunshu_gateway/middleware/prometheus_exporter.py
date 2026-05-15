@@ -295,6 +295,32 @@ class PrometheusMetrics:
             "Total KV prefix cache misses",
         )
 
+        # RadixTree eviction gauges
+        self._gauges["radix_evictions_lru"] = _Gauge(
+            "yunshu_radix_evictions_lru_total",
+            "Total RadixTree LRU evictions",
+        )
+        self._gauges["radix_evictions_lfu"] = _Gauge(
+            "yunshu_radix_evictions_lfu_total",
+            "Total RadixTree LFU evictions",
+        )
+        self._gauges["radix_evictions_fifo"] = _Gauge(
+            "yunshu_radix_evictions_fifo_total",
+            "Total RadixTree FIFO evictions",
+        )
+        self._gauges["radix_evictions_freed_blocks"] = _Gauge(
+            "yunshu_radix_evictions_freed_blocks_total",
+            "Total KV blocks freed by RadixTree evictions",
+        )
+        self._gauges["radix_total_nodes"] = _Gauge(
+            "yunshu_radix_total_nodes",
+            "Total nodes in the RadixTree",
+        )
+        self._gauges["radix_total_tokens"] = _Gauge(
+            "yunshu_radix_total_tokens",
+            "Total tokens stored in the RadixTree",
+        )
+
     # --- Counter API ---
 
     def inc_counter(self, name: str, labels: Optional[dict[str, str]] = None, amount: int = 1) -> None:

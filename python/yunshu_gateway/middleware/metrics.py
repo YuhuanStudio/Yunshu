@@ -187,8 +187,43 @@ class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Serve metrics endpoint
         if request.url.path == "/metrics":
+            parts = [_metrics.to_prometheus()]
+            # Append Prometheus exporter gauges (engine-level metrics)
+            try:
+                from .prometheus_exporter import get_prometheus_metrics
+                pm = get_prometheus_metrics()
+                # Collect RadixTree eviction metrics from loaded engines
+                try:
+                    from ..engine import get_engine, get_model_manager
+                    from yunshu_engine.batched_engine import BatchedEngine
+                    engines = []
+                    engine = get_engine()
+                    if engine and engine.is_loaded:
+                        engines.append(engine)
+                    manager = get_model_manager()
+                    if manager:
+                        for entry in manager.list_entries():
+                            if entry.is_loaded and entry.engine:
+                                engines.append(entry.engine)
+                    for eng in engines:
+                        if isinstance(eng, BatchedEngine):
+                            radix_stats = eng.get_radix_tree_stats()
+                            ev = radix_stats.get("eviction_stats", {})
+                            pm.set_gauge("radix_evictions_lru", ev.get("lru", 0))
+                            pm.set_gauge("radix_evictions_lfu", ev.get("lfu", 0))
+                            pm.set_gauge("radix_evictions_fifo", ev.get("fifo", 0))
+                            pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0))
+                            pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0))
+                            pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0))
+                except Exception:
+                    pass
+                pm_text = pm.generate()
+                if pm_text:
+                    parts.append(pm_text)
+            except Exception:
+                pass
             return Response(
-                content=_metrics.to_prometheus(),
+                content="\n".join(parts),
                 media_type="text/plain; version=0.0.4; charset=utf-8",
             )
 
