@@ -9,6 +9,7 @@ weighted least-loaded routing.
 
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 
@@ -85,6 +86,7 @@ class RTTAwareRouter:
         self._nodes: dict[str, NodeRTT] = {}
         self._route_count = 0
         self._fallback_count = 0
+        self._lock = threading.Lock()
 
     @classmethod
     def from_env(cls) -> RTTAwareRouter:
@@ -95,32 +97,42 @@ class RTTAwareRouter:
         )
 
     def add_node(self, node_id: str, max_requests: int = 32) -> None:
-        self._nodes[node_id] = NodeRTT(
-            node_id=node_id,
-            max_requests=max_requests,
-        )
+        with self._lock:
+            self._nodes[node_id] = NodeRTT(
+                node_id=node_id,
+                max_requests=max_requests,
+            )
 
     def remove_node(self, node_id: str) -> None:
-        self._nodes.pop(node_id, None)
+        with self._lock:
+            self._nodes.pop(node_id, None)
 
     def record_rtt(self, node_id: str, rtt_ms: float) -> None:
         """Record an RTT measurement for a node."""
-        node = self._nodes.get(node_id)
-        if node:
-            node.update_rtt(rtt_ms)
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node:
+                node.update_rtt(rtt_ms)
 
     def record_request_start(self, node_id: str) -> None:
-        node = self._nodes.get(node_id)
-        if node:
-            node.active_requests += 1
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node:
+                node.active_requests += 1
 
     def record_request_end(self, node_id: str) -> None:
-        node = self._nodes.get(node_id)
-        if node:
-            node.active_requests = max(0, node.active_requests - 1)
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node:
+                node.active_requests = max(0, node.active_requests - 1)
 
     def route(self, exclude: set[str] | None = None) -> RoutingScore | None:
         """Select the best node for a new request."""
+        with self._lock:
+            return self._route_unlocked(exclude)
+
+    def _route_unlocked(self, exclude: set[str] | None = None) -> RoutingScore | None:
+        """Internal route logic (caller must hold _lock)."""
         if not self._nodes:
             return None
 
@@ -170,53 +182,56 @@ class RTTAwareRouter:
 
     def route_all_scores(self, exclude: set[str] | None = None) -> list[RoutingScore]:
         """Return scored routing for all nodes (for debugging/monitoring)."""
-        if not self._nodes:
-            return []
+        with self._lock:
+            if not self._nodes:
+                return []
 
-        scores = []
-        for nid, node in self._nodes.items():
-            if exclude and nid in exclude:
-                continue
-            rtt = node.rtt_ema if node.probe_count > 0 else self._rtt_fallback
-            rtt_score = 1.0 / (1.0 + rtt / 100.0)
-            load_score = 1.0 - node.load_fraction
-            combined = self._rtt_weight * rtt_score + self._load_weight * load_score
+            scores = []
+            for nid, node in self._nodes.items():
+                if exclude and nid in exclude:
+                    continue
+                rtt = node.rtt_ema if node.probe_count > 0 else self._rtt_fallback
+                rtt_score = 1.0 / (1.0 + rtt / 100.0)
+                load_score = 1.0 - node.load_fraction
+                combined = self._rtt_weight * rtt_score + self._load_weight * load_score
 
-            scores.append(RoutingScore(
-                node_id=nid,
-                rtt_score=rtt_score,
-                load_score=load_score,
-                combined_score=combined,
-            ))
+                scores.append(RoutingScore(
+                    node_id=nid,
+                    rtt_score=rtt_score,
+                    load_score=load_score,
+                    combined_score=combined,
+                ))
 
-        scores.sort(key=lambda s: -s.combined_score)
-        if scores:
-            scores[0].selected = True
-        return scores
+            scores.sort(key=lambda s: -s.combined_score)
+            if scores:
+                scores[0].selected = True
+            return scores
 
     def needs_probe(self, node_id: str) -> bool:
         """Check if a node needs an RTT probe."""
-        node = self._nodes.get(node_id)
-        if node is None:
-            return False
-        if node.probe_count == 0:
-            return True
-        return time.monotonic() - node.last_probe > self._probe_interval
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return False
+            if node.probe_count == 0:
+                return True
+            return time.monotonic() - node.last_probe > self._probe_interval
 
     def get_stats(self) -> dict:
-        return {
-            "num_nodes": len(self._nodes),
-            "route_count": self._route_count,
-            "fallback_count": self._fallback_count,
-            "nodes": {
-                nid: {
-                    "rtt_ema_ms": round(node.rtt_ema, 2),
-                    "rtt_var_ms": round(node.rtt_var, 2),
-                    "timeout_ms": round(node.rtt_timeout_ms, 2),
-                    "active_requests": node.active_requests,
-                    "load": round(node.load_fraction, 4),
-                    "probes": node.probe_count,
-                }
-                for nid, node in self._nodes.items()
-            },
-        }
+        with self._lock:
+            return {
+                "num_nodes": len(self._nodes),
+                "route_count": self._route_count,
+                "fallback_count": self._fallback_count,
+                "nodes": {
+                    nid: {
+                        "rtt_ema_ms": round(node.rtt_ema, 2),
+                        "rtt_var_ms": round(node.rtt_var, 2),
+                        "timeout_ms": round(node.rtt_timeout_ms, 2),
+                        "active_requests": node.active_requests,
+                        "load": round(node.load_fraction, 4),
+                        "probes": node.probe_count,
+                    }
+                    for nid, node in self._nodes.items()
+                },
+            }

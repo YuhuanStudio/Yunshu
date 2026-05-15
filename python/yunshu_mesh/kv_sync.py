@@ -604,28 +604,29 @@ class KVSynchronizationService:
         Returns:
             Number of blocks loaded into local cache.
         """
-        if response.status != TransferStatus.COMPLETED:
-            self._stats.transfers_failed += 1
+        with self._lock:
+            if response.status != TransferStatus.COMPLETED:
+                self._stats.transfers_failed += 1
+                self._transfer_history[response.request_id] = response
+                return 0
+
+            loaded = 0
+            if self._block_consumer is not None and response.blocks:
+                try:
+                    model_name = ""
+                    # Try to get model from the original request
+                    req = self._pending_transfers.get(response.request_id)
+                    if req:
+                        model_name = req.model_name
+                    loaded = self._block_consumer(response.blocks, model_name)
+                except Exception as e:
+                    logger.debug("Block consumer failed: %s", e, exc_info=True)
+
+            total_bytes = sum(b.data_size for b in response.blocks)
+            self._stats.bytes_received += total_bytes
+
             self._transfer_history[response.request_id] = response
-            return 0
-
-        loaded = 0
-        if self._block_consumer is not None and response.blocks:
-            try:
-                model_name = ""
-                # Try to get model from the original request
-                req = self._pending_transfers.get(response.request_id)
-                if req:
-                    model_name = req.model_name
-                loaded = self._block_consumer(response.blocks, model_name)
-            except Exception as e:
-                logger.debug("Block consumer failed: %s", e, exc_info=True)
-
-        total_bytes = sum(b.data_size for b in response.blocks)
-        self._stats.bytes_received += total_bytes
-
-        self._transfer_history[response.request_id] = response
-        self._pending_transfers.pop(response.request_id, None)
+            self._pending_transfers.pop(response.request_id, None)
 
         return loaded
 
@@ -677,10 +678,10 @@ class KVSynchronizationService:
     # ── Internal ─────────────────────────────────────────────────────
 
     def _evict_oldest(self, registry: dict) -> None:
-        """Evict the oldest entries from a hash registry."""
-        # Sort by computed_at and remove the 10% oldest
+        """Evict the least-recently-verified entries from a hash registry."""
+        # Sort by last_verified (LRU) and remove the 10% least recently used
         sorted_entries = sorted(
-            registry.items(), key=lambda x: x[1].computed_at
+            registry.items(), key=lambda x: x[1].last_verified
         )
         to_remove = max(1, len(sorted_entries) // 10)
         for key, _ in sorted_entries[:to_remove]:
@@ -1087,15 +1088,20 @@ class MeshHealthMonitor:
     def _run_health_check(self) -> None:
         """Execute a single health check cycle."""
         timed_out = self._detect_failures()
+        # Check which timed-out nodes have reached the failure threshold.
+        # Note: consecutive_failures is incremented inside on_node_failure,
+        # so we only need to check the threshold here for nodes that are
+        # not yet marked as failed (healthy but timed out).
         nodes_to_failover: list[str] = []
         for node_id in timed_out:
             with self._lock:
                 status = self._node_status.get(node_id)
-                if status:
-                    status.consecutive_failures += 1
-                    if status.consecutive_failures >= self._failure_threshold:
-                        nodes_to_failover.append(node_id)
-        # Trigger failover outside the lock to avoid deadlock
+                # Only trigger failover once (the threshold check uses
+                # the count *after* the next increment in on_node_failure).
+                if status and status.consecutive_failures + 1 >= self._failure_threshold:
+                    nodes_to_failover.append(node_id)
+        # Trigger failover outside the lock to avoid deadlock.
+        # on_node_failure increments consecutive_failures.
         for node_id in nodes_to_failover:
             self.on_node_failure(node_id)
 

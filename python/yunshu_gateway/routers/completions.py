@@ -24,7 +24,7 @@ from ..engine import get_engine, get_engine_for_model
 from .chat import _apply_lora_adapter, _release_lora_adapter
 
 logger = logging.getLogger(__name__)
-from ..streaming import format_openai_chunk, format_openai_done, format_openai_usage_chunk
+from ..streaming import format_openai_completion_chunk, format_openai_done, format_openai_completion_usage_chunk
 
 router = APIRouter(tags=["completions"])
 
@@ -302,10 +302,10 @@ async def _stream_completion(
         nonlocal prompt_tok, completion_tok, cached_tok
         choice_finish_reason = None
         if req.echo:
-            yield format_openai_chunk(
+            yield format_openai_completion_chunk(
                 completion_id=completion_id,
                 model=req.model,
-                delta_content=prompt,
+                text=prompt,
                 choice_index=choice_idx,
             )
 
@@ -351,10 +351,10 @@ async def _stream_completion(
                 _chunk_logprobs = None
                 if output.logprobs:
                     _chunk_logprobs = _format_streaming_logprobs(output.logprobs)
-                yield format_openai_chunk(
+                yield format_openai_completion_chunk(
                     completion_id=completion_id,
                     model=req.model,
-                    delta_content=output.new_text,
+                    text=output.new_text,
                     finish_reason=None,  # intermediate: always None
                     choice_index=choice_idx,
                     logprobs=_chunk_logprobs,
@@ -393,20 +393,20 @@ async def _stream_completion(
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
                 _chunk_lp = _format_streaming_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
-                yield format_openai_chunk(
+                yield format_openai_completion_chunk(
                     completion_id=completion_id,
                     model=req.model,
-                    delta_content=output.token_text,
+                    text=output.token_text,
                     finish_reason=None,  # intermediate: always None
                     choice_index=choice_idx,
                     logprobs=_chunk_lp,
                 )
 
         # Emit final chunk with finish_reason for this choice (even if zero tokens)
-        yield format_openai_chunk(
+        yield format_openai_completion_chunk(
             completion_id=completion_id,
             model=req.model,
-            delta_content="",
+            text="",
             finish_reason=choice_finish_reason or "stop",
             choice_index=choice_idx,
         )
@@ -420,7 +420,7 @@ async def _stream_completion(
         if include_usage:
             # Sum reasoning tokens across all choices for total usage
             _total_reasoning = sum(reasoning_tok_per_choice.values())
-            yield format_openai_usage_chunk(
+            yield format_openai_completion_usage_chunk(
                 completion_id=completion_id,
                 model=req.model,
                 prompt_tokens=prompt_tok,
@@ -471,15 +471,27 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                         token_str = tokenizer.decode([lp_entry["token_id"]])
                     except Exception:
                         logger.debug("tokenizer decode failed", exc_info=True)
+                top_lps = lp_entry.get("top_logprobs", [])
+                # Decode top_logprobs bytes if present
+                decoded_top = []
+                for tlp in top_lps:
+                    tlp_token = tlp.get("token", "")
+                    decoded_top.append({
+                        "token": tlp_token,
+                        "logprob": tlp.get("logprob", 0.0),
+                        "bytes": list(tlp_token.encode("utf-8")) if tlp_token else [],
+                    })
                 token_logprobs.append({
                     "token": token_str,
                     "logprob": lp_entry.get("logprob", 0.0),
-                    "top_logprobs": lp_entry.get("top_logprobs", []),
+                    "bytes": list(token_str.encode("utf-8")) if token_str else [],
+                    "top_logprobs": decoded_top,
                 })
             elif isinstance(lp_entry, (int, float)):
                 token_logprobs.append({
                     "token": "",
                     "logprob": float(lp_entry),
+                    "bytes": [],
                     "top_logprobs": [],
                 })
 
@@ -507,16 +519,19 @@ def _format_streaming_logprobs(logprobs_list: list[dict]) -> dict | None:
             continue
         token_str = lp_entry.get("token", "")
         top_lps = lp_entry.get("top_logprobs", [])
-        # Decode top_logprobs token_ids to strings
+        # Decode top_logprobs with bytes field
         decoded_top = []
         for tlp in top_lps:
+            tlp_token = tlp.get("token", "")
             decoded_top.append({
-                "token": tlp.get("token", ""),
+                "token": tlp_token,
                 "logprob": tlp.get("logprob", 0.0),
+                "bytes": list(tlp_token.encode("utf-8")) if tlp_token else [],
             })
         entries.append({
             "token": token_str,
             "logprob": lp_entry.get("logprob", 0.0),
+            "bytes": list(token_str.encode("utf-8")) if token_str else [],
             "top_logprobs": decoded_top,
         })
     if not entries:

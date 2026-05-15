@@ -228,21 +228,32 @@ class CollectiveOps:
         n = world_size
 
         # Split tensor into chunks
-        chunks = mx.split(x, n, axis=0)
+        chunks = list(mx.split(x, n, axis=0))
 
         # Phase 1: Reduce-scatter
         for step in range(n - 1):
             send_rank = (rank + 1) % n
             recv_rank = (rank - 1 + n) % n
             chunk_idx = (rank - step + n) % n
+            recv_chunk_idx = (chunk_idx - 1 + n) % n
 
-            self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
-            received = self.recv(
-                chunks[(chunk_idx - 1 + n) % n].shape,
-                mx.float32,
-                recv_rank,
-            )
-            chunks[chunk_idx] = (chunks[chunk_idx].astype(mx.float32) + received)
+            # Avoid deadlock: even ranks send first, odd ranks recv first.
+            if rank % 2 == 0:
+                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+                received = self.recv(
+                    chunks[recv_chunk_idx].shape,
+                    mx.float32,
+                    recv_rank,
+                )
+            else:
+                received = self.recv(
+                    chunks[recv_chunk_idx].shape,
+                    mx.float32,
+                    recv_rank,
+                )
+                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+
+            chunks[chunk_idx] = chunks[chunk_idx].astype(mx.float32) + received
 
         # Phase 2: All-gather
         for step in range(n - 1):
@@ -250,12 +261,21 @@ class CollectiveOps:
             recv_rank = (rank - 1 + n) % n
             chunk_idx = (rank - step + 1 + n) % n
 
-            self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
-            received = self.recv(
-                chunks[chunk_idx].shape,
-                mx.float32,
-                recv_rank,
-            )
+            if rank % 2 == 0:
+                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+                received = self.recv(
+                    chunks[chunk_idx].shape,
+                    mx.float32,
+                    recv_rank,
+                )
+            else:
+                received = self.recv(
+                    chunks[chunk_idx].shape,
+                    mx.float32,
+                    recv_rank,
+                )
+                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+
             chunks[chunk_idx] = received
 
         return mx.concatenate(chunks, axis=0).astype(x.dtype)

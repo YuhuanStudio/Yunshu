@@ -307,7 +307,12 @@ class MeshManager:
 
     def handle_node_failure(self, node_id: str) -> None:
         """Handle a node failure — update topology, log event."""
-        failed_node = self._topology.get_node(self._topology.get_rank(node_id))
+        # Avoid looking up via re-ranked index; search by node_id directly
+        failed_node = None
+        for n in self._topology.nodes:
+            if n.node_id == node_id:
+                failed_node = n
+                break
         if failed_node:
             failed_node.state = MeshNodeState.OFFLINE
             self._publish_event("node_state_change", node_id, {
@@ -349,9 +354,12 @@ class MeshManager:
 
     def _on_peer_lost(self, node: MeshNode) -> None:
         """Callback: peer disappeared."""
-        self._topology.remove_node(node.node_id)
+        # Mark node offline instead of removing from topology.
+        # Removing would re-rank remaining nodes and invalidate
+        # pipeline stage assignments that reference the original ranks.
+        node.state = MeshNodeState.OFFLINE
         if self._dp_router:
-            self._dp_router.remove_node(node.node_id)
+            self._dp_router.mark_unavailable(node.node_id)
         if self._disagg_router:
             self._disagg_router.remove_node(node.node_id)
         self._publish_event("node_leave", node.node_id, {

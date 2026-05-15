@@ -267,19 +267,23 @@ def auto_partition_model(
     allocator = LayerAllocator()
     stage_allocs = allocator.allocate(num_layers, profiles, strategy)
 
-    # Build PipelineParallel from allocation results
-    pp = PipelineParallel(num_layers, num_nodes)
-    current = 0
+    # Build PipelineParallel directly from allocation results (skip
+    # PipelineParallel.__init__'s _build_stages to avoid wasted work).
+    pp = object.__new__(PipelineParallel)
+    pp._num_layers = num_layers
+    pp._num_stages = num_nodes
+    pp._collective = None
+    pp._stages = []
     for i, sa in enumerate(stage_allocs):
         if i >= num_nodes:
             break
-        pp._stages[i] = PipelineStage(
+        stage = PipelineStage(
             stage_id=i,
             start_layer=sa.start_layer,
             end_layer=sa.end_layer,
             rank=i,
         )
-        pp._stages[i].is_last = (sa.end_layer == num_layers)
-        current = sa.end_layer
+        stage.is_last = (sa.end_layer == num_layers)
+        pp._stages.append(stage)
 
     return pp

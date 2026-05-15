@@ -676,6 +676,69 @@ def format_openai_done() -> str:
     return "data: [DONE]\n\n"
 
 
+def format_openai_completion_chunk(
+    completion_id: str,
+    model: str,
+    text: str,
+    finish_reason: Optional[str] = None,
+    logprobs: Optional[dict] = None,
+    choice_index: int = 0,
+) -> str:
+    """Format a single SSE chunk in OpenAI Text Completions format.
+
+    OpenAI /v1/completions streaming uses choices[].text (not choices[].delta).
+    The object type is "text_completion" (not "chat.completion.chunk").
+    """
+    choice: dict[str, Any] = {
+        "index": choice_index,
+        "text": text,
+        "finish_reason": finish_reason,
+    }
+    if logprobs:
+        choice["logprobs"] = logprobs
+
+    chunk = {
+        "id": completion_id,
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [choice],
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+
+def format_openai_completion_usage_chunk(
+    completion_id: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    reasoning_tokens: int = 0,
+    cached_tokens: int = 0,
+) -> str:
+    """Format final SSE chunk with usage stats for Text Completions endpoint.
+
+    Same as format_openai_usage_chunk but uses "text_completion" object type.
+    """
+    usage = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+    if reasoning_tokens > 0:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    if cached_tokens > 0:
+        usage["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+    chunk = {
+        "id": completion_id,
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [],
+        "usage": usage,
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+
 def format_openai_usage_chunk(
     completion_id: str,
     model: str,

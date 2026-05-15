@@ -471,11 +471,24 @@ def _format_logprobs(
                     except Exception:
                         logger.debug("tokenizer decode failed for logprobs", exc_info=True)
                         token_str = ""
+                # Decode top_logprobs with bytes field
+                raw_top = lp.get("top_logprobs", [])
+                decoded_top = []
+                for tlp in raw_top:
+                    if isinstance(tlp, dict):
+                        tlp_token = tlp.get("token", "")
+                        decoded_top.append({
+                            "token": tlp_token,
+                            "logprob": tlp.get("logprob", 0.0),
+                            "bytes": list(tlp_token.encode("utf-8")) if tlp_token else [],
+                        })
+                    else:
+                        decoded_top.append(tlp)
                 entries.append({
                     "token": token_str,
                     "logprob": lp.get("logprob", 0.0),
                     "bytes": list(token_str.encode("utf-8")) if token_str else [],
-                    "top_logprobs": lp.get("top_logprobs", []),
+                    "top_logprobs": decoded_top,
                 })
             elif isinstance(lp, (int, float)):
                 entries.append({
@@ -1476,14 +1489,20 @@ def _format_chat_logprobs(logprobs_list: list[dict] | None) -> dict | None:
     for lp_entry in logprobs_list:
         if not isinstance(lp_entry, dict):
             continue
+        token_str = lp_entry.get("token", "")
         top_lps = lp_entry.get("top_logprobs", [])
         decoded_top = [
-            {"token": tlp.get("token", ""), "logprob": tlp.get("logprob", 0.0)}
+            {
+                "token": tlp.get("token", ""),
+                "logprob": tlp.get("logprob", 0.0),
+                "bytes": list(tlp.get("token", "").encode("utf-8")) if tlp.get("token") else [],
+            }
             for tlp in top_lps
         ]
         content.append({
-            "token": lp_entry.get("token", ""),
+            "token": token_str,
             "logprob": lp_entry.get("logprob", 0.0),
+            "bytes": list(token_str.encode("utf-8")) if token_str else [],
             "top_logprobs": decoded_top,
         })
     return {"content": content} if content else None

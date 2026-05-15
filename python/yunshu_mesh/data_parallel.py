@@ -90,6 +90,10 @@ class DataParallelRouter:
     def select_node(self) -> Optional[str]:
         """Select the best node for the next request.
 
+        Atomically selects a node and records the request start to prevent
+        TOCTOU races where two concurrent callers both select the same
+        least-loaded node before either increments active_requests.
+
         Returns:
             node_id of the selected node, or None if no nodes available.
         """
@@ -99,15 +103,21 @@ class DataParallelRouter:
                 return None
 
             if self._strategy == "round_robin":
-                return self._select_round_robin(available)
+                node_id = self._select_round_robin(available)
             elif self._strategy == "least_loaded":
-                return self._select_least_loaded(available)
+                node_id = self._select_least_loaded(available)
             elif self._strategy == "latency_aware":
-                return self._select_latency_aware(available)
+                node_id = self._select_latency_aware(available)
             elif self._strategy == "capacity_aware":
-                return self._select_capacity_aware(available)
+                node_id = self._select_capacity_aware(available)
             else:
-                return self._select_least_loaded(available)
+                node_id = self._select_least_loaded(available)
+
+            # Atomically record the request so the load counter is
+            # accurate for the next select_node() call.
+            if node_id and node_id in self._nodes:
+                self._nodes[node_id].record_request_start()
+            return node_id
 
     def set_node_capacity(self, node_id: str, memory_bytes: int, gpu_cores: int = 0) -> None:
         """C17: Set node capacity for memory-proportional routing.
@@ -137,9 +147,11 @@ class DataParallelRouter:
                 n.capacity_weight = 1.0
 
     def _select_round_robin(self, available: list[NodeLoad]) -> str:
-        idx = self._rr_index % len(available)
+        # Sort by node_id for stable ordering regardless of dict iteration
+        sorted_avail = sorted(available, key=lambda n: n.node_id)
+        idx = self._rr_index % len(sorted_avail)
         self._rr_index += 1
-        return available[idx].node_id
+        return sorted_avail[idx].node_id
 
     def _select_least_loaded(self, available: list[NodeLoad]) -> str:
         return min(available, key=lambda n: n.active_requests).node_id
@@ -170,6 +182,11 @@ class DataParallelRouter:
         return min(available, key=score).node_id
 
     def record_request_start(self, node_id: str) -> None:
+        """Manually record request start for externally-routed requests.
+
+        Note: select_node() already increments active_requests atomically.
+        Only call this if the node was chosen outside of select_node().
+        """
         with self._lock:
             if node_id in self._nodes:
                 self._nodes[node_id].record_request_start()

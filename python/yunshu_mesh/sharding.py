@@ -111,7 +111,11 @@ class PipelineLastLayer(nn.Module):
             )
             mx.eval(output)
 
-        if not self.is_prefill:
+        # Only the last rank gathers outputs from all stages during decode.
+        # Intermediate ranks have already sent their activations to the next
+        # stage and must NOT participate in all_gather (it would deadlock or
+        # produce incorrect results).
+        if not self.is_prefill and self.r == self.s - 1:
             output = mx.distributed.all_gather(output, group=self.group)[-output.shape[0]:]
             mx.eval(output)
 
@@ -339,11 +343,12 @@ def load_sharded_model(
     model, tokenizer = load_model(model_name, lazy=True)
 
     if strategy == "auto":
-        # Prefer tensor parallel (better throughput for small clusters)
-        if world_size <= 4 and hasattr(model, "shard"):
+        # Prefer tensor parallel for small clusters with built-in shard().
+        # Fall back to pipeline for larger clusters or models without shard().
+        if hasattr(model, "shard") and callable(model.shard):
             strategy = "tensor"
         else:
-            strategy = "tensor"  # Default to tensor for now
+            strategy = "pipeline"
 
     if strategy == "tensor":
         logger.info(f"Rank {rank}: Applying tensor parallel sharding")
