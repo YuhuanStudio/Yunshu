@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6015 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6052 passed, 16 skipped** (0 failures).
 
 ### 已完成修復 (2026-05-15 Wave 95 — Inflight Prefix Sharing + Zero Silent Excepts + Dead Code)
 
@@ -52,6 +52,17 @@
 | Wave 96b: Responses API 修復 | `_reasoning_tokens` NameError（batched path 未定義）、grammar 參數支援（regex/choice/cfg）、extract_tool_calls_model_aware 替代 | API 完整性 |
 | Wave 96c: Responses API 追蹤 + 轉發 | Structured tracing (get_inference_tracer) + priority/user 參數轉發 VLM handler | 與 chat/completions 一致 |
 | Wave 96d: Completions.py NameError | `_gen_one` 中 `result` 只在 is_batched path 定義但無條件引用 cached_tokens — 非批次路徑會 NameError | 路由修復 |
+
+### 已完成修復 (2026-05-15 Wave 97 — Streaming Path Deep Audit + Output Field Completeness)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 97: Inflight prefix sharing streaming fix | `_stream_generate_fast` 缺少 inflight prefix 註冊/取消註冊 — 串流路徑不參與並行 KV 前綴共享。新增 register + unregister (4 個出口點) | 串流路徑 inflight prefix 共享完整 |
+| Wave 97: cached_tokens 串流輸出 | `_stream_generate_fast` 不報告 cached_tokens。新增 _cached_tokens_box 跨執行緒通訊。chat.py/completions.py 串流路徑新增 cached_tokens 追蹤 + usage 輸出 | KV prefix cache 命中可觀測 |
+| Wave 97: EngineCore shutdown leak | `stop()` 清除 output collectors 不呼叫 `_cleanup_request` — inflight prefix entries 洩漏。改為逐個 cleanup | 關機資源洩漏修復 |
+| Wave 97: 33 個模糊 log 訊息 | 15 文件中 52 處 `logger.debug("failed")` — 全部替換為描述性訊息 (batched_engine: 8, engine: 5, engine_core: 3, ssd_kv_cache: 3, 其他: 13) | 全項目可調試性 |
+| Wave 97b: Responses API 串流修復 | 非批次串流路徑使用錯誤欄位 (output.new_text -> output.token_text)、缺少 reasoning_tokens/cached_tokens 追蹤 | API 輸出完整 |
+| Wave 97c: Engine_core 錯誤路徑洩漏 | budget rejection + memory guard rejection 不清理 inflight prefix — 新增 unregister。RequestOutput 新增 reasoning_tokens + cached_tokens。Scheduler 輸出新增兩個欄位。BatchedEngine engine loop 路徑輸出新增兩個欄位 | 完整的輸出欄位傳播 |
 
 ### 已完成修復 (2026-05-15 Wave 89-92 — Agent Wiring + Scoping Bugs + Parameter Forwarding)
 
