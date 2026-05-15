@@ -343,6 +343,22 @@ def create_app() -> FastAPI:
         except Exception:
             logger.debug("server metrics unavailable", exc_info=True)
 
+        # Add MCP client status
+        try:
+            from yunshu_engine.mcp_client import get_mcp_client_manager
+            mcp = get_mcp_client_manager()
+            if mcp is not None:
+                result["mcp_client"] = mcp.get_stats()
+        except Exception:
+            logger.debug("mcp client stats unavailable", exc_info=True)
+
+        # Add model registry status
+        try:
+            from yunshu_engine.model_registry import get_registry
+            result["model_registry"] = get_registry().get_stats()
+        except Exception:
+            logger.debug("model registry stats unavailable", exc_info=True)
+
         return result
 
     @app.get("/health/ready")

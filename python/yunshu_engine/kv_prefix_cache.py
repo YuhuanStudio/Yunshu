@@ -275,6 +275,8 @@ class KVPrefixCache:
         self._ssd_model_name: str = ""
         # Pre-eviction callback for DeltaNet inversion (set by BatchedEngine)
         self._pre_evict_callback: Any | None = None
+        # Block eviction checker: callable(block_hash) -> bool (e.g., MemoryGuard.should_evict_block)
+        self._block_evict_checker: Any | None = None
 
     def add(
         self,
@@ -507,6 +509,34 @@ class KVPrefixCache:
                 )
             except Exception:
                 logger.debug("pre-evict callback failed", exc_info=True)
+        # SSD spill: save evicted blocks to disk before discarding from RAM.
+        # This enables future lookups to restore from SSD instead of re-prefilling.
+        if self._ssd_cache is not None:
+            try:
+                evicted_hashes = self._block_hashes[index] if index < len(self._block_hashes) else []
+                evicted_cache = self._caches[index] if index < len(self._caches) else None
+                evicted_prompt = self._prompts[index] if index < len(self._prompts) else None
+                if evicted_hashes and evicted_cache is not None and evicted_prompt is not None:
+                    for bi, bh in enumerate(evicted_hashes):
+                        if not self._ssd_cache.has_block(bh):
+                            try:
+                                import numpy as np
+                                tokens = np.array(evicted_prompt)
+                                start = bi * _BLOCK_SIZE
+                                end = min(start + _BLOCK_SIZE, len(tokens))
+                                self._ssd_cache.save_block(
+                                    block_hash=bh,
+                                    cache_data=evicted_cache,
+                                    token_count=end - start,
+                                    model_name=self._ssd_model_name,
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "SSD spill save failed for block %s",
+                                    bh.hex()[:16], exc_info=True,
+                                )
+            except Exception:
+                logger.debug("SSD spill failed during eviction", exc_info=True)
         # Decrement block refcounts and clean up prefix index
         for bh in self._block_hashes[index]:
             if bh in self._block_refcount:
@@ -544,7 +574,8 @@ class KVPrefixCache:
 
     def _evict_if_full(self) -> None:
         """Evict entries using the configured strategy when at capacity."""
-        while len(self._prompts) >= self._max_entries:
+        _skip_count = 0  # guard against infinite loop when checker blocks all
+        while len(self._prompts) >= self._max_entries and _skip_count < len(self._prompts):
             # Update SLRU access counts if applicable
             if isinstance(self._eviction_strategy, SLRUStrategy):
                 self._eviction_strategy.update_access_counts(self._access_counts)
@@ -552,6 +583,16 @@ class KVPrefixCache:
                 self._prompts, self._last_used, self._access_counter,
                 self._priorities,
             )
+            # Check if block eviction is allowed (e.g., MemoryGuard.should_evict_block)
+            if self._block_evict_checker is not None and self._block_hashes[victim]:
+                skip = False
+                for bh in self._block_hashes[victim]:
+                    if not self._block_evict_checker(bh):
+                        skip = True
+                        break
+                if skip:
+                    _skip_count += 1
+                    continue
             h = _token_hash(self._prompts[victim])
             self._hash_index.pop(h, None)
             self._remove_entry(victim)
@@ -592,8 +633,9 @@ class KVPrefixCache:
             evicted = 0
             # Evict up to 25% of entries to amortize the check cost
             max_evict = max(1, len(self._prompts) // 4)
+            _skip_count = 0  # guard against infinite loop when checker blocks all
 
-            while self._prompts and evicted < max_evict:
+            while self._prompts and evicted < max_evict and _skip_count < len(self._prompts):
                 # Re-check pressure each iteration
                 active = mx.get_active_memory()
                 if (active / max_ws) * 100 < threshold_pct - 5.0:
@@ -605,6 +647,16 @@ class KVPrefixCache:
                     self._prompts, self._last_used, self._access_counter,
                     self._priorities,
                 )
+                # Check if block eviction is allowed (e.g., MemoryGuard.should_evict_block)
+                if self._block_evict_checker is not None and self._block_hashes[victim]:
+                    skip = False
+                    for bh in self._block_hashes[victim]:
+                        if not self._block_evict_checker(bh):
+                            skip = True
+                            break
+                    if skip:
+                        _skip_count += 1
+                        continue
                 self._remove_entry(victim)
                 evicted += 1
 
@@ -723,3 +775,11 @@ class KVPrefixCache:
         if self._ssd_cache is None:
             return None
         return self._ssd_cache.load_block(block_hash)
+
+    def close(self) -> None:
+        """Flush SSD cache and release resources."""
+        if self._ssd_cache is not None:
+            try:
+                self._ssd_cache.close()
+            except Exception:
+                logger.debug("SSD cache close failed", exc_info=True)

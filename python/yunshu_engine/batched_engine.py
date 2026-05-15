@@ -273,6 +273,16 @@ class BatchedEngine:
         from .kv_prefix_cache import KVPrefixCache
         self._kv_prefix_cache = KVPrefixCache(max_entries=64, min_prefix_length=32)
 
+        # Prompt cache for exact-match KV state reuse (supplements KVPrefixCache)
+        # When the same prompt text is submitted multiple times, the prompt cache
+        # returns the full KV state directly — zero prefill compute.
+        from .prompt_cache import PromptCacheManager
+        self._prompt_cache = PromptCacheManager(
+            max_entries=256,
+            max_memory_mb=512.0,
+            ttl_seconds=3600.0,
+        )
+
         # SSD KV cache persistence (opt-in via YUNSHU_SSD_CACHE=1)
         import os
         if os.environ.get("YUNSHU_SSD_CACHE", "").strip() in ("1", "true", "yes"):
@@ -294,6 +304,24 @@ class BatchedEngine:
         self._kv_quant_start: int = int(
             os.environ.get("YUNSHU_KV_QUANT_START", "0")
         )
+
+        # KV Transfer client — distributed KV cache transfer between nodes.
+        # In single-node mode, used for KV serialization/persistence.
+        # Enable via YUNSHU_KV_TRANSFER=1 for distributed prefill/decode.
+        self._kv_transfer_client = None
+        self._kv_transfer_stats = {
+            "blocks_transferred": 0,
+            "bytes_transferred": 0,
+            "transfer_failures": 0,
+        }
+        if os.environ.get("YUNSHU_KV_TRANSFER", "").strip() in ("1", "true", "yes"):
+            from .kv_transfer import KVTransferClient, KVTransferConfig
+            _kv_transfer_cfg = KVTransferConfig.from_env()
+            self._kv_transfer_client = KVTransferClient(_kv_transfer_cfg)
+            logger.info(
+                "KV transfer client initialized (remote=%s:%d)",
+                _kv_transfer_cfg.remote_host, _kv_transfer_cfg.remote_port,
+            )
 
         # Memory pressure eviction config (vllm-mlx pattern)
         self._mem_pressure_threshold = float(
@@ -924,9 +952,14 @@ class BatchedEngine:
         if self._engine_core is not None:
             await self._engine_core.stop()
             self._engine_core = None
-        # Release KV prefix cache (holds MLX array refs)
+        # Release KV prefix cache (holds MLX array refs) and flush SSD tier
         if self._kv_prefix_cache is not None:
+            self._kv_prefix_cache.close()
             self._kv_prefix_cache.clear()
+        # Prompt cache: clear on shutdown (in-memory only; for cross-restart
+        # persistence use SSD cache via YUNSHU_SSD_CACHE=1)
+        if self._prompt_cache is not None:
+            self._prompt_cache.invalidate_all()
         self._spec_decoder = None
         self._ngram_proposer = None
         self._adaptive_spec = None
@@ -939,6 +972,16 @@ class BatchedEngine:
         if self._deltanet_inverter is not None:
             self._deltanet_inverter.unregister_hooks()
             self._deltanet_inverter = None
+        # Stop KV transfer client (close network connections)
+        if self._kv_transfer_client is not None:
+            try:
+                import asyncio
+                asyncio.get_event_loop().run_until_complete(
+                    self._kv_transfer_client.stop()
+                )
+            except Exception:
+                logger.debug("KV transfer client stop failed", exc_info=True)
+            self._kv_transfer_client = None
         self._model = None
         self._tokenizer = None
         self._loaded = False
@@ -1402,6 +1445,27 @@ class BatchedEngine:
                 except Exception:
                     logger.debug("failed", exc_info=True)
 
+            # Prompt cache: try exact-match KV lookup by messages hash
+            _pc_hit = False
+            if hasattr(self, '_prompt_cache') and self._prompt_cache is not None:
+                try:
+                    from .prompt_cache import compute_messages_hash
+                    _pc_hash = compute_messages_hash(
+                        [{"role": "user", "content": text}],
+                        model=self.model_name,
+                    )
+                    _pc_entry = self._prompt_cache.lookup(_pc_hash)
+                    if _pc_entry is not None and _pc_entry.kv_state is not None:
+                        cache = _pc_entry.kv_state
+                        _pc_hit = True
+                        cached_tokens = _pc_entry.token_count
+                        logger.debug(
+                            f"Prompt cache hit: hash={_pc_hash[:12]}, "
+                            f"tokens={cached_tokens}"
+                        )
+                except Exception:
+                    logger.debug("prompt cache lookup failed", exc_info=True)
+
             # Try KV prefix cache hit
             prefix_cache = self._kv_prefix_cache
             # Proactive memory pressure eviction (vllm-mlx pattern)
@@ -1589,6 +1653,45 @@ class BatchedEngine:
                     self._kv_quant_group_size, self._kv_quant_bits,
                 )
             prefix_cache.add(ids, cache)
+
+            # KV Transfer: serialize and send KV blocks to remote decode node.
+            # In single-node mode, this is a no-op (client is None).
+            if self._kv_transfer_client is not None:
+                try:
+                    from .kv_transfer import extract_kv_blocks_from_cache
+                    blocks = extract_kv_blocks_from_cache(
+                        cache,
+                        [int(t) for t in ids],
+                    )
+                    if blocks:
+                        result = self._kv_transfer_client.send_blocks_sync(
+                            blocks=blocks,
+                            model_name=self.model_name,
+                            total_tokens=len(ids),
+                            layer_count=len(cache),
+                        )
+                        if result.status.value == "completed":
+                            self._kv_transfer_stats["blocks_transferred"] += result.blocks_transferred
+                            self._kv_transfer_stats["bytes_transferred"] += result.bytes_transferred
+                        else:
+                            self._kv_transfer_stats["transfer_failures"] += 1
+                except Exception:
+                    logger.debug("KV transfer send failed", exc_info=True)
+
+            # Prompt cache: store KV state for exact-match reuse
+            if not _pc_hit and hasattr(self, '_prompt_cache') and self._prompt_cache is not None:
+                try:
+                    from .prompt_cache import compute_messages_hash
+                    _pc_hash = compute_messages_hash(
+                        [{"role": "user", "content": text}],
+                        model=self.model_name,
+                    )
+                    self._prompt_cache.store(
+                        _pc_hash, cache,
+                        token_count=len(ids) + len(tokens),
+                    )
+                except Exception:
+                    logger.debug("prompt cache store failed", exc_info=True)
 
             # Store thinking segment KV for future reuse (if enabled)
             if _thinking_tokens and self._thinking_store is not None:
@@ -3517,6 +3620,18 @@ class BatchedEngine:
             "hits": getattr(self, '_response_cache_hits', 0),
             "misses": getattr(self, '_response_cache_misses', 0),
         }
+        # KV Transfer stats (distributed prefill/decode wire protocol)
+        stats["kv_transfer"] = {
+            "enabled": getattr(self, '_kv_transfer_client', None) is not None,
+            **getattr(self, '_kv_transfer_stats', {
+                "blocks_transferred": 0,
+                "bytes_transferred": 0,
+                "transfer_failures": 0,
+            }),
+        }
+        # Prompt cache stats (exact-match KV state reuse)
+        if hasattr(self, '_prompt_cache') and self._prompt_cache is not None:
+            stats["prompt_cache"] = self._prompt_cache.get_stats()
         return stats
 
     def get_kv_cache_stats(self) -> dict:

@@ -735,3 +735,30 @@ async def mcp_sse_endpoint(request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+# ── MCP Client endpoints (LLM → external MCP tool servers) ──
+
+
+@router.get("/mcp/client/status")
+async def mcp_client_status(request: Request) -> dict:
+    """Get MCP client connection status and discovered tools."""
+    mcp_mgr = getattr(request.app.state, "mcp_client", None)
+    if mcp_mgr is None:
+        return {"enabled": False, "connected_servers": 0, "total_tools": 0}
+    return {"enabled": True, **mcp_mgr.get_stats()}
+
+
+@router.get("/mcp/client/tools")
+async def mcp_client_tools(request: Request) -> dict:
+    """List tools discovered from connected MCP servers.
+
+    Returns tools in both MCP format and OpenAI function format.
+    """
+    mcp_mgr = getattr(request.app.state, "mcp_client", None)
+    if mcp_mgr is None:
+        return {"tools": [], "openai_format": []}
+    return {
+        "tools": mcp_mgr.list_tools(),
+        "openai_format": mcp_mgr.get_tools_as_openai(),
+    }

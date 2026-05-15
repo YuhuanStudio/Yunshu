@@ -416,6 +416,11 @@ class EngineCore:
         # Batch sampler (vectorized batch sampling + logits processing + stop checking)
         from .batch_sampler import BatchSampler, BatchStopChecker
         self._batch_sampler = BatchSampler()
+        # TODO: BatchStopChecker operates on mx.array token_ids + StopConfig,
+        # which are scheduler-level internals (SequenceStateMachine already handles
+        # stop detection in _process_responses). Wiring it here would duplicate logic.
+        # Enable when vectorized batch-level stop checking is needed above the
+        # per-request state machine (e.g., for GPU-side stop token matching).
         self._batch_stop_checker = BatchStopChecker()
 
         # Model optimizations (RoPE scaling, attention type detection, MoE efficiency)
@@ -476,6 +481,10 @@ class EngineCore:
     def set_prefix_cache(self, cache: Any) -> None:
         """Set KV prefix cache for batch-path insert_segments (C16)."""
         self.scheduler.set_prefix_cache(cache)
+        # Wire MemoryGuard.should_evict_block into the prefix cache's eviction
+        # path so prediction-based eviction decisions are respected.
+        if self._memory_guard is not None and hasattr(cache, '_block_evict_checker'):
+            cache._block_evict_checker = self._memory_guard.should_evict_block
 
     def set_metal_kernel_manager(self, manager: Any) -> None:
         """Set Metal kernel manager for custom GPU kernel operations.
@@ -649,6 +658,19 @@ class EngineCore:
             except Exception:
                 logger.debug("KV offload manager stop failed", exc_info=True)
 
+        # Flush KV prefix cache to SSD for persistence across restarts
+        _prefix_cache = getattr(self.scheduler, '_prefix_cache', None)
+        if _prefix_cache is not None and hasattr(_prefix_cache, 'flush_to_ssd'):
+            try:
+                _loop = asyncio.get_running_loop()
+                blocks_flushed = await _loop.run_in_executor(
+                    self._executor, _prefix_cache.flush_to_ssd,
+                )
+                if blocks_flushed > 0:
+                    logger.info(f"KV prefix cache flushed {blocks_flushed} blocks to SSD")
+            except Exception:
+                logger.debug("KV prefix cache SSD flush failed", exc_info=True)
+
         # ── Wave 42: Shutdown wired modules ──
         if self._composition_scheduler is not None:
             try:
@@ -751,6 +773,32 @@ class EngineCore:
             token_ids = list(prompt)
 
         num_prompt_tokens = len(token_ids)
+
+        # Multimodal pipeline: process images/audio/video via staged pipeline
+        # (staged_pipeline.py MultimodalPipelineCoordinator)
+        _mm_images = kwargs.get('images') or kwargs.get('image')
+        _mm_audio = kwargs.get('audio')
+        _mm_video = kwargs.get('video')
+        if _mm_images or _mm_audio or _mm_video:
+            try:
+                from .staged_pipeline import PipelineRequest
+                _mm_req = PipelineRequest(
+                    request_id=req_id,
+                    model_id=getattr(self.scheduler, 'model_id', ''),
+                    text=prompt if isinstance(prompt, str) else None,
+                    images=_mm_images if isinstance(_mm_images, list) else [_mm_images] if _mm_images else None,
+                    audio=_mm_audio if isinstance(_mm_audio, list) else [_mm_audio] if _mm_audio else None,
+                    video=_mm_video if isinstance(_mm_video, list) else [_mm_video] if _mm_video else None,
+                )
+                _mm_results = self._multimodal_pipeline.process(_mm_req)
+                _mm_errors = [r for r in _mm_results if r.error is not None]
+                if _mm_errors:
+                    logger.warning(
+                        f"Multimodal pipeline errors for {req_id}: "
+                        f"{[r.error for r in _mm_errors]}"
+                    )
+            except Exception:
+                logger.debug("multimodal pipeline processing failed", exc_info=True)
 
         # ── Context window truncation (prevent garbage output from overlength prompts) ──
         max_seq_len = self._get_max_seq_len()
@@ -1088,6 +1136,55 @@ class EngineCore:
                     except Exception:
                         logger.debug("composition pre_step failed", exc_info=True)
 
+                # AdaptiveBatchSizer: dynamically adjust batch size based on
+                # queue depth, memory, and SLO latency (auto_tuner.py)
+                try:
+                    queue_depth = len(self.scheduler.waiting)
+                    from .utils.hardware import get_hardware_info as _ghw
+                    _hw = _ghw()
+                    import mlx.core as _mx
+                    _mem_avail = 1.0 - (_mx.get_active_memory() / max(_hw.total_memory_bytes, 1))
+                    suggested = self._adaptive_batch_sizer.compute_optimal_batch(
+                        queue_depth=queue_depth,
+                        memory_available=_mem_avail,
+                        slo_latency_ms=200.0,  # default SLO target
+                        current_latency_ms=(_time.monotonic() - _step_start) * 1000 if '_step_start' in dir() else 0.0,
+                    )
+                    if suggested < self.config.completion_batch_size:
+                        self.config.completion_batch_size = suggested
+                except Exception:
+                    pass  # best-effort
+
+                # Priority inversion guard: detect and resolve priority inversion
+                # before scheduling (token_scheduler.py PriorityInversionGuard)
+                try:
+                    from .token_scheduler import SchedulableRequest as _SReq
+                    _running = [
+                        _SReq(request_id=rid, priority=r.sampling_params.priority if r.sampling_params else 0,
+                              wait_time=0.0, context_length=r.num_prompt_tokens,
+                              output_length=len(r.output_token_ids) if r.output_token_ids else 0)
+                        for rid, r in self.scheduler.running.items()
+                    ]
+                    _waiting = [
+                        _SReq(request_id=r.request_id, priority=r.sampling_params.priority if r.sampling_params else 0,
+                              wait_time=_time.monotonic() - getattr(r, '_submit_time', _time.monotonic()) if hasattr(r, '_submit_time') else 0.0,
+                              context_length=r.num_prompt_tokens)
+                        for r in self.scheduler.waiting
+                    ] if hasattr(self.scheduler.waiting, '__iter__') else []
+                    inversions = self._priority_guard.check_inversion(_running, _waiting)
+                    for inv in inversions:
+                        low_req = next((r for r in _running if r.request_id == inv.low_request_id), None)
+                        high_req = next((r for r in _waiting if r.request_id == inv.high_request_id), None)
+                        if low_req and high_req:
+                            self._priority_guard.apply_inheritance(low_req, high_req)
+                            # Boost effective priority on the actual running request
+                            actual = self.scheduler.running.get(inv.low_request_id)
+                            if actual and actual.sampling_params:
+                                actual.sampling_params.priority = low_req.effective_priority
+                            logger.debug(f"Priority inheritance: {inv.low_request_id} boosted to {low_req.effective_priority}")
+                except Exception:
+                    pass  # best-effort
+
                 # Run scheduler step on MLX executor thread
                 # §14.1: TBO takes priority when enabled; else C18 overlap; else plain
                 if self._tbo_scheduler.config.enabled:
@@ -1126,6 +1223,19 @@ class EngineCore:
                 collector = self._output_collectors.get(rid)
                 if collector is None:
                     continue
+
+                # Output parser: extract reasoning/tool_calls from raw text
+                # (output_parser.py parse_output — model-specific extraction)
+                if req_output.finished and req_output.output_text:
+                    try:
+                        model_name = getattr(self.scheduler, 'model_id', None)
+                        parsed = self._parse_output(req_output.output_text, model_name)
+                        if parsed.reasoning and parsed.content != req_output.output_text:
+                            req_output.output_text = parsed.content
+                        if parsed.finish_reason:
+                            req_output.finish_reason = parsed.finish_reason
+                    except Exception:
+                        pass  # best-effort
 
                 if use_simple_streaming:
                     collector.put(req_output)

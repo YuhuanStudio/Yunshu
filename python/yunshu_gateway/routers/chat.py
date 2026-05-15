@@ -27,6 +27,7 @@ from ..engine import get_engine, get_model_manager
 from ..streaming import (
     extract_thinking,
     extract_tool_calls_v2 as extract_tool_calls,
+    extract_tool_calls_model_aware,
     clean_tool_call_markup,
     format_openai_chunk,
     format_openai_done,
@@ -562,7 +563,7 @@ async def _build_multi_choice(
 
         tool_calls = []
         if req.tools:
-            tool_calls = extract_tool_calls(regular_content)
+            tool_calls = extract_tool_calls_model_aware(regular_content, req.model)
             if tool_calls:
                 cleaned = clean_tool_call_markup(regular_content)
                 fr = "tool_calls"
@@ -848,11 +849,11 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             # Extract thinking (oMLX pattern)
             thinking_content, regular_content = extract_thinking(raw_text, req.model)
 
-            # Extract tool calls (oMLX pattern)
+            # Extract tool calls using model-aware format detection (C15)
             tool_calls = []
             cleaned_content = regular_content
             if req.tools:
-                tool_calls = extract_tool_calls(regular_content)
+                tool_calls = extract_tool_calls_model_aware(regular_content, req.model)
                 if tool_calls:
                     cleaned_content = clean_tool_call_markup(regular_content)
 
@@ -878,7 +879,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             slog.info("inference_complete", model=req.model, trace_id=trace_id,
                       prompt_tokens=prompt_tok, completion_tokens=completion_tok)
 
-            return JSONResponse(format_openai_non_stream(
+            response_body = format_openai_non_stream(
                 completion_id=completion_id,
                 model=req.model,
                 content=cleaned_content.strip(),
@@ -888,7 +889,13 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 thinking_content=thinking_content if thinking_content else None,
                 tool_calls=tool_calls if tool_calls else None,
                 logprobs=logprobs_data,
-            ))
+            )
+
+            # Attach MCP tool execution results (if any were executed)
+            if mcp_results:
+                response_body["mcp_tool_results"] = mcp_results
+
+            return JSONResponse(response_body)
         finally:
             _release_lora_adapter(engine, loaded_adapter)
 
@@ -1010,7 +1017,7 @@ async def _handle_vlm_chat(
         finish_reason = r.get("finish_reason", "stop")
         tool_calls = None
         if req.tools:
-            tool_calls = extract_tool_calls(content)
+            tool_calls = extract_tool_calls_model_aware(content, req.model)
             if tool_calls:
                 content = clean_tool_call_markup(content)
                 finish_reason = "tool_calls"

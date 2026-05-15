@@ -651,6 +651,7 @@ class Scheduler:
         # mRoPE batch delta manager (oMLX pattern)
         from .mrope import BatchRopeDeltaManager
         self._rope_delta_mgr = BatchRopeDeltaManager()
+        self._last_batch_rope_deltas: list[tuple[int, float]] = []
 
         # Encoder-decoder cache (§12.2: vLLM EncoderCacheManager pattern)
         from .encoder_cache import EncoderCacheManager
@@ -890,6 +891,19 @@ class Scheduler:
         outputs = []
         try:
             prompt_responses, gen_responses = self._batch_gen.next()
+
+            # 3a. Retrieve batch RoPE deltas for decode (mRoPE multimodal support)
+            # Provides per-request mRoPE deltas aligned to UID order. Currently
+            # stored for future use in multimodal batch decode; text-only requests
+            # return 0.0 deltas.
+            if self.running:
+                try:
+                    _uids = [uid for uid, rid in self._uid_to_req.items() if rid in self.running]
+                    if _uids:
+                        _rope_deltas = self.get_batch_rope_deltas(_uids)
+                        self._last_batch_rope_deltas = list(zip(_uids, _rope_deltas))
+                except Exception:
+                    pass
 
             # 4. Process prompt responses (prefill completion)
             if prompt_responses:
@@ -1207,6 +1221,19 @@ class Scheduler:
                                 )
                     except Exception:
                         logger.debug("prefix cache lookup failed in batch path", exc_info=True)
+
+                # §12.2: Check encoder cache for encoder-decoder models.
+                # If the request has a cached encoder hidden state (from a prior
+                # request with the same encoder input), attach it so the decoder
+                # can skip re-encoding.
+                if hasattr(req, 'encoder_request_id'):
+                    cached_encoder = self._encoder_cache.get(req.encoder_request_id)
+                    if cached_encoder is not None:
+                        req.cached_encoder_output = cached_encoder
+                        logger.debug(
+                            "Encoder cache hit for %s — reusing encoder output",
+                            req.request_id,
+                        )
 
                 if cached_kv is not None and len(remaining_tokens) > 0:
                     # Use insert_segments with cached KV state
@@ -1857,6 +1884,14 @@ class Scheduler:
                             self.model_id,
                         )
 
+                    # Cache encoder outputs for encoder-decoder models (§12.2).
+                    # If the response carries encoder hidden states (e.g. from a
+                    # Whisper/T5-style encoder-decoder model), store them in the
+                    # encoder cache for potential reuse in subsequent requests.
+                    encoder_output = getattr(resp, 'encoder_outputs', None)
+                    if encoder_output is not None:
+                        self._encoder_cache.put(req_id, encoder_output)
+
     def _process_aborts(self) -> None:
         """Process deferred abort requests (oMLX pattern)."""
         if not self._pending_abort_ids:
@@ -2005,6 +2040,10 @@ class Scheduler:
                 self.running.pop(req_id, None)
                 self.finished_ids.add(req_id)
                 self._kv_prefix_hashes.pop(req_id, None)
+                # §12.2: Evict encoder cache entry for finished request.
+                # The encoder output is no longer needed once the decoder
+                # has completed generation.
+                self._encoder_cache.evict(req_id)
 
     def _create_detokenizer(self):
         if self.tokenizer is None:
@@ -2716,6 +2755,8 @@ class Scheduler:
                 logger.debug("MTP stats unavailable", exc_info=True)
         # §12.2: encoder-decoder cache stats
         stats["encoder_cache"] = self._encoder_cache.get_stats()
+        # Batch RoPE deltas (mRoPE multimodal decode support)
+        stats["batch_rope_deltas"] = len(self._last_batch_rope_deltas)
         # Metal kernel manager stats (when enabled via YUNSHU_METAL_KERNELS=1)
         stats["metal_kernels"] = {
             "available": self._metal_kernel_manager is not None,

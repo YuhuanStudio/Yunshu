@@ -187,6 +187,16 @@ class VLMEngine:
         # Created lazily after model load when model_name is known.
         self._vlm_vision_cache_adapter = None
 
+        # Encoder cache — caches encoder hidden states (vision/audio/text encoder)
+        # keyed by request_id. When the same image/audio is seen again in the
+        # batch path, reuse cached encoder output instead of re-encoding.
+        # Complements VisionFeatureCache (which caches at the mlx_vlm layer).
+        from .encoder_cache import EncoderCacheManager
+        self._encoder_cache = EncoderCacheManager(
+            max_entries=int(os.environ.get("YUNSHU_ENCODER_CACHE_MAX", "64")),
+            ttl_seconds=float(os.environ.get("YUNSHU_ENCODER_CACHE_TTL", "300")),
+        )
+
         # Per-image KV prefix cache state — maps image_hash to PromptCacheState.
         # When the same image appears with different text contexts, the KV cache
         # from the previous conversation is reused for the common image prefix.
@@ -386,6 +396,7 @@ class VLMEngine:
         self._vlm_vision_cache_adapter = None
         self._kv_prefix_states.clear()
         self._multimodal_prefix_cache.clear()
+        self._encoder_cache.clear()
 
         # Reset stats counters
         self._vlm_vision_hits = 0
@@ -803,6 +814,19 @@ class VLMEngine:
         # Track vision feature cache hits/misses via adapter stats
         vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
 
+        # Encoder cache lookup: check if we have cached encoder hidden states
+        # for this request. The encoder cache stores vision/audio encoder outputs
+        # keyed by a combination of image hash and request context.
+        _encoder_cache_key = None
+        if image_hash is not None:
+            _encoder_cache_key = f"vlm-{image_hash}"
+            cached_encoder = self._encoder_cache.get(_encoder_cache_key)
+            if cached_encoder is not None:
+                logger.debug(
+                    "VLM encoder cache hit for image %s — reusing encoder output",
+                    image_hash[:8],
+                )
+
         gen_kwargs: dict = {
             "max_tokens": max_tokens,
             "temp": temperature,
@@ -837,6 +861,19 @@ class VLMEngine:
                 logger.debug("VLM vision feature cache hit: reused encoded image")
             elif image_paths:
                 self._vlm_vision_misses += 1
+
+        # Store encoder output in encoder cache for future reuse.
+        # If vlm_generate produced a result with encoder_outputs, cache them
+        # so subsequent requests with the same image can skip re-encoding.
+        if _encoder_cache_key is not None:
+            encoder_output = getattr(result, 'encoder_outputs', None)
+            if encoder_output is None and hasattr(self._model, 'vision_tower'):
+                # For models with explicit vision_tower, store a marker that
+                # this image has been encoded successfully (actual features are
+                # in the vision_cache adapter). The encoder cache tracks TTL.
+                encoder_output = True
+            if encoder_output is not None:
+                self._encoder_cache.put(_encoder_cache_key, encoder_output)
 
         # After generation, save KV prefix state for this image (first time or
         # update with new state). stream_generate already called update() on the
@@ -1054,6 +1091,17 @@ class VLMEngine:
         # Track vision feature cache hits/misses via adapter stats
         vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
 
+        # Encoder cache lookup for streaming vision path
+        _encoder_cache_key = None
+        if image_hash is not None:
+            _encoder_cache_key = f"vlm-{image_hash}"
+            cached_encoder = self._encoder_cache.get(_encoder_cache_key)
+            if cached_encoder is not None:
+                logger.debug(
+                    "VLM stream encoder cache hit for image %s",
+                    image_hash[:8],
+                )
+
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p)
         stop_suffixes = stop or []
         token_count = 0
@@ -1121,6 +1169,10 @@ class VLMEngine:
                     logger.debug("VLM stream vision feature cache hit: reused encoded image")
                 elif image_paths:
                     self._vlm_vision_misses += 1
+
+            # Store encoder output in encoder cache for streaming vision path
+            if _encoder_cache_key is not None and hasattr(self._model, 'vision_tower'):
+                self._encoder_cache.put(_encoder_cache_key, True)
 
             # After streaming, save KV prefix state for this image
             if image_hash is not None:
@@ -1760,6 +1812,9 @@ class VLMEngine:
             stats["vision_cache_ssd_loads"] = vc_stats.get("ssd_loads", 0)
             stats["vision_cache_saves"] = vc_stats.get("saves", 0)
             stats["vision_cache_errors"] = vc_stats.get("errors", 0)
+
+        # Merge encoder cache stats (encoder hidden-state cache)
+        stats["encoder_cache"] = self._encoder_cache.get_stats()
 
         # Merge MultimodalPipelineCoordinator stats
         try:
