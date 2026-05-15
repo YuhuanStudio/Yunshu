@@ -35,7 +35,16 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6031 passed, 16 skipped** (1 pre-existing flaky).
+> 以下為基於本報告發現所完成的修復，最新測試: **6032 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-15 Wave 89-92 — Agent Wiring + Scoping Bugs + Parameter Forwarding)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 89: Agent wiring integration | MCP client endpoints, model-aware tool call extraction, process memory enforcer, encoder cache wiring into VLM + scheduler, KV transfer wired into BatchedEngine, SSD eviction in kv_prefix_cache | All agent work integrated |
+| Wave 90: Scoping bug fixes | Return _stopped_by_suffix/_itl_samples/_thinking_tokens from _run() (were NameError). StreamingBackpressureController added to ngram_spec and mtp streaming. Fix prometheus import path. Add import os. | Runtime crash prevention |
+| Wave 91: Dead variable audit | Forward priority to engine_core.generate(). Add seed to streaming fast path. Log memory guard rejection reason. Remove unused _batched_detok. | Parameter completeness |
+| Wave 92: Responses API forwarding | Forward stop_token_ids, spec_decode, xtc, priority, logprobs in all 4 Responses API calls. Add logprobs, xtc to streaming engine loop path. | API parameter completeness |
 
 ### 已完成修復 (2026-05-15 Wave 86-87 — ResponseCache + SlidingWindowKV + RequestDedup + VideoEngine + Thinking Budget)
 
