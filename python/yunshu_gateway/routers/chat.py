@@ -61,7 +61,7 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         get_metrics_v2().counter("yunshu_tokens_total", {"type": "prompt"}, prompt_tokens)
         get_metrics_v2().counter("yunshu_tokens_total", {"type": "completion"}, completion_tokens)
     except Exception:
-        pass
+        logger.debug("metrics recording failed", exc_info=True)
 
 
 def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:

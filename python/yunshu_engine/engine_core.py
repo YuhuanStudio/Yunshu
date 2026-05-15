@@ -547,7 +547,7 @@ class EngineCore:
         try:
             self._profiler.stop_profiling()
         except Exception:
-            pass
+            logger.debug("profiler stop failed", exc_info=True)
 
         # Stop external prefill server
         if self._prefill_server is not None:
@@ -647,6 +647,10 @@ class EngineCore:
             if excess > 0 and num_prompt_tokens > excess:
                 token_ids = token_ids[excess:]
                 num_prompt_tokens = len(token_ids)
+                # Track truncation in ContextWindowManager stats
+                if self._context_window_mgr is not None:
+                    self._context_window_mgr._stats.truncations += 1
+                    self._context_window_mgr._stats.tokens_removed += excess
                 logger.info(
                     f"Context window truncation: {excess} tokens removed from prompt "
                     f"(max_seq_len={max_seq_len})"
@@ -1138,7 +1142,7 @@ class EngineCore:
                 if val and isinstance(val, int) and val > 0:
                     return val
         except Exception:
-            pass
+            logger.debug("max_seq_len detection failed", exc_info=True)
         return 0
 
     def _messages_to_text(

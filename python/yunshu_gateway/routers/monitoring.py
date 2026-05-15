@@ -488,7 +488,7 @@ async def metal_kernel_stats() -> dict[str, Any]:
                 from yunshu_engine.metal_kernels import get_compilation_status
                 entry.update(get_compilation_status())
             except Exception:
-                pass
+                logger.debug("metal kernel status failed", exc_info=True)
         # Also pull from engine stats (which includes scheduler-level info)
         stats = getattr(engine, 'get_stats', lambda: {})()
         if "metal_kernels" in stats:

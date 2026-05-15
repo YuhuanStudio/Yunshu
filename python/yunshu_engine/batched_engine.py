@@ -3271,6 +3271,7 @@ class BatchedEngine:
             from .ane_embedding import get_ane_embedding_stats
             stats["ane_embeddings"] = get_ane_embedding_stats()
         except Exception:
+            logger.debug("ane embedding stats failed", exc_info=True)
             stats["ane_embeddings"] = {"enabled": False, "active": False}
         # DeltaNet inversion status (when enabled via YUNSHU_DELTANET_INVERSION=1)
         stats["deltanet_inversion"] = {

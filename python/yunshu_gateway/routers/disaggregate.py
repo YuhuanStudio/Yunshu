@@ -85,7 +85,7 @@ def _resolve_engine(request: Request):
         from ..engine import get_engine
         engine = get_engine()
     except Exception:
-        pass
+        logger.debug("engine resolution failed", exc_info=True)
     return engine
 
 
