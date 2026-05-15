@@ -448,6 +448,12 @@ class RealtimeSession:
 
             full_text = ""
 
+            # Extract session-level generation parameters
+            _stop = config.get("stop") or self.session_config.get("stop")
+            _stop_token_ids = config.get("stop_token_ids") or self.session_config.get("stop_token_ids")
+            _thinking_budget = config.get("thinking_budget") or self.session_config.get("thinking_budget")
+            _priority = config.get("priority", 0)
+
             if is_batched:
                 async for output in engine.stream_chat(
                     messages=messages,
@@ -455,6 +461,10 @@ class RealtimeSession:
                     temperature=temperature,
                     top_p=self.session_config.get("top_p", 1.0),
                     enable_thinking=self.session_config.get("enable_thinking", False),
+                    thinking_budget=_thinking_budget,
+                    stop=_stop,
+                    stop_token_ids=_stop_token_ids,
+                    priority=_priority,
                 ):
                     if output.new_text:
                         full_text += output.new_text
@@ -476,6 +486,9 @@ class RealtimeSession:
                     temperature=temperature,
                     top_p=self.session_config.get("top_p", 1.0),
                     enable_thinking=self.session_config.get("enable_thinking", False),
+                    thinking_budget=_thinking_budget,
+                    stop=_stop,
+                    stop_token_ids=_stop_token_ids,
                 ):
                     if output.token_text:
                         full_text += output.token_text
