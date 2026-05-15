@@ -6,6 +6,7 @@ Supports:
 - Logprobs
 - Echo mode
 """
+import json
 import logging
 import time
 import uuid
@@ -427,11 +428,11 @@ async def _stream_completion(
         ):
             yield event.encode("utf-8")
     except MemoryError:
-        yield f"data: {{\"error\": {{\"message\": \"Insufficient GPU memory\", \"type\": \"server_error\"}}}}\n\n".encode()
+        yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
         logger.error(f"Completions streaming error: {e}", exc_info=True)
-        yield f"data: {{\"error\": {{\"message\": \"Internal server error\", \"type\": \"server_error\"}}}}\n\n".encode()
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     finally:
         _release_lora_adapter(engine, loaded_adapter)

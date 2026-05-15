@@ -808,7 +808,7 @@ async def _stream_anthropic(
         ):
             yield event.encode("utf-8") if isinstance(event, str) else event
 
-        yield "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".encode("utf-8")
+        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         _anth_tracker.unregister(message_id)

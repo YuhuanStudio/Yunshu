@@ -1593,6 +1593,8 @@ class EngineCore:
                                         completion_tokens=req_output.completion_tokens,
                                         logprobs=req_output.logprobs,
                                         current_state=req_output.current_state,
+                                        reasoning_tokens=req_output.reasoning_tokens,
+                                        cached_tokens=req_output.cached_tokens,
                                     )
                                     shadow_collector.put(shadow_output)
                                     shadow_collector.put(None)  # sentinel

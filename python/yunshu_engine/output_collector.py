@@ -83,6 +83,10 @@ class RequestOutputCollector:
                 _lp = _lp + new.logprobs
             else:
                 _lp = new.logprobs
+        # Accumulate reasoning_tokens across steps (per-step may be partial)
+        _reasoning = (existing.reasoning_tokens or 0) + (new.reasoning_tokens or 0)
+        # Take max cached_tokens (monotonic, not cumulative)
+        _cached = max(existing.cached_tokens or 0, new.cached_tokens or 0)
         return RequestOutput(
             request_id=new.request_id,
             new_token_ids=existing.new_token_ids + new.new_token_ids,
@@ -95,6 +99,8 @@ class RequestOutputCollector:
             completion_tokens=new.completion_tokens,
             logprobs=_lp,
             current_state=new.current_state,
+            reasoning_tokens=_reasoning,
+            cached_tokens=_cached,
             error=new.error or existing.error,
         )
 

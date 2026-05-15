@@ -496,10 +496,12 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     except MemoryError:
         yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n"
         yield format_openai_done()
+        return
     except Exception as e:
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n"
         yield format_openai_done()
+        return
     finally:
         if _tracker is not None:
             try:
