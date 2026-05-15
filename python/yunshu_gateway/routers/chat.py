@@ -989,22 +989,6 @@ async def _handle_vlm_chat(
             "finish_reason": data["finish_reason"],
         })
 
-    # Extract tool calls if tools were provided
-    tool_calls = None
-    finish_reason = result.get("finish_reason", "stop")
-    if req.tools:
-        tool_calls = extract_tool_calls(content)
-        if tool_calls:
-            content = clean_tool_call_markup(content)
-            finish_reason = "tool_calls"
-
-    message = {"role": "assistant", "content": content.strip()}
-    if tool_calls:
-        message["tool_calls"] = [
-            {"id": f"call_vlm:{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
-            for i, tc in enumerate(tool_calls)
-        ]
-
     vlm_usage = {
         "prompt_tokens": prompt_tok,
         "completion_tokens": total_completion_tok,
@@ -1035,7 +1019,14 @@ async def _stream_vlm_response(
     loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
 
     async def _token_source():
+        nonlocal loaded_adapter
         first_chunk = True
+        vlm_prompt_tok = 0
+        vlm_completion_tok = 0
+        vlm_reasoning_tok = 0
+        include_usage = (
+            req.stream_options is not None and req.stream_options.include_usage
+        )
         stream_kwargs: dict[str, Any] = dict(
             messages=messages,
             max_tokens=req.max_tokens,
@@ -1058,6 +1049,10 @@ async def _stream_vlm_response(
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
         async for output in vlm_engine.generate_stream(**stream_kwargs):
+            if hasattr(output, 'token_text') and output.token_text:
+                vlm_completion_tok += 1
+            if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                vlm_reasoning_tok = output.reasoning_tokens
             yield format_openai_chunk(
                 completion_id=completion_id,
                 model=req.model,
@@ -1066,6 +1061,21 @@ async def _stream_vlm_response(
                 include_role=first_chunk,
             )
             first_chunk = False
+
+        if include_usage:
+            tok = getattr(vlm_engine, '_tokenizer', None)
+            if tok and not vlm_prompt_tok:
+                try:
+                    vlm_prompt_tok = len(tok.encode(vlm_engine._format_prompt(messages)))
+                except Exception:
+                    pass
+            yield format_openai_usage_chunk(
+                completion_id=completion_id,
+                model=req.model,
+                prompt_tokens=vlm_prompt_tok,
+                completion_tokens=vlm_completion_tok,
+                reasoning_tokens=vlm_reasoning_tok,
+            )
 
         yield format_openai_done()
 
@@ -1275,6 +1285,7 @@ async def _stream_response(
     )
     prompt_tok = 0
     completion_tok = 0
+    reasoning_tok = 0
 
     def _format_tool_call_chunk(tc, idx: int) -> str:
         """Format a tool_call as an OpenAI streaming chunk with delta."""
@@ -1341,6 +1352,8 @@ async def _stream_response(
                 finish_reason = output.finish_reason
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
+                if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                    reasoning_tok = output.reasoning_tokens
                 if token_text:
                     completion_tok += 1
 
@@ -1395,6 +1408,8 @@ async def _stream_response(
                     prompt_tok = output.prompt_token_count
                 if hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1
+                if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
+                    reasoning_tok = output.reasoning_tokens
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
                 if output.current_state == "reasoning":
                     yield format_openai_chunk(
@@ -1447,21 +1462,17 @@ async def _stream_response(
                     tool_call_index += 1
                     has_emitted_tool_call = True
 
-        # Final chunk with finish_reason
+        # Final chunk with finish_reason from engine
         if has_emitted_tool_call:
-            yield format_openai_chunk(
-                completion_id=completion_id,
-                model=req.model,
-                delta_content="",
-                finish_reason="tool_calls",
-            )
+            final_reason = "tool_calls"
         else:
-            yield format_openai_chunk(
-                completion_id=completion_id,
-                model=req.model,
-                delta_content="",
-                finish_reason="stop",
-            )
+            final_reason = finish_reason or "stop"
+        yield format_openai_chunk(
+            completion_id=completion_id,
+            model=req.model,
+            delta_content="",
+            finish_reason=final_reason,
+        )
 
         # Emit usage stats if stream_options.include_usage is true
         if include_usage:
@@ -1470,6 +1481,7 @@ async def _stream_response(
                 model=req.model,
                 prompt_tokens=prompt_tok,
                 completion_tokens=completion_tok,
+                reasoning_tokens=reasoning_tok,
             )
 
         yield format_openai_done()

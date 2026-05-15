@@ -636,6 +636,7 @@ class VLMEngine:
                     detokenizer = self._tokenizer.detokenizer
                     detokenizer.reset()
 
+                accumulated = ""
                 token_count = 0
                 for token_id, _ in generate_step(
                     input_ids, self._model,
@@ -644,7 +645,6 @@ class VLMEngine:
                 ):
                     token_count += 1
                     is_eos = token_id in stop_ids
-                    finish_reason = "stop" if is_eos else None
 
                     if not is_eos:
                         if has_detokenizer:
@@ -654,6 +654,22 @@ class VLMEngine:
                             token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
                     else:
                         token_text = ""
+
+                    accumulated += token_text
+
+                    # Check multi-token stop suffixes
+                    finish_reason = None
+                    if is_eos:
+                        finish_reason = "stop"
+                    elif stop:
+                        for s in stop:
+                            if accumulated.endswith(s):
+                                # Trim the stop suffix from output
+                                trim_pos = len(accumulated) - len(s)
+                                token_text = accumulated[trim_pos:]
+                                accumulated = accumulated[:trim_pos]
+                                finish_reason = "stop"
+                                break
 
                     output = RequestOutput(
                         request_id=req_id,
@@ -666,8 +682,28 @@ class VLMEngine:
                     queue.put_nowait(output)
 
                     if finish_reason:
+                        # Flush remaining bytes from detokenizer
+                        if has_detokenizer:
+                            remaining = detokenizer.finalize()
+                            if remaining:
+                                queue.put_nowait(RequestOutput(
+                                    request_id=req_id,
+                                    new_text=remaining,
+                                    finish_reason=None,
+                                    finished=False,
+                                ))
                         return
 
+                # Max tokens reached — finalize detokenizer
+                if has_detokenizer:
+                    remaining = detokenizer.finalize()
+                    if remaining:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text=remaining,
+                            finish_reason=None,
+                            finished=False,
+                        ))
                 output = RequestOutput(
                     request_id=req_id,
                     new_text="",
@@ -1245,8 +1281,27 @@ class VLMEngine:
             ))
 
             if finish_reason:
+                if has_detokenizer:
+                    remaining = detokenizer.finalize()
+                    if remaining:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text=remaining,
+                            finish_reason=None,
+                            finished=False,
+                        ))
                 return
 
+        # Max tokens reached — finalize detokenizer
+        if has_detokenizer:
+            remaining = detokenizer.finalize()
+            if remaining:
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text=remaining,
+                    finish_reason=None,
+                    finished=False,
+                ))
         queue.put_nowait(RequestOutput(
             request_id=req_id,
             new_text="",
