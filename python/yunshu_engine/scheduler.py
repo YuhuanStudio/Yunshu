@@ -2098,7 +2098,7 @@ class Scheduler:
             is_thinking = current_state == 'reasoning'
             ts = self._thinking_state.get(req_id)
             if ts is None:
-                ts = {'in_thinking': False, 'thinking_start_idx': None, 'was_in_thinking': False}
+                ts = {'in_thinking': False, 'thinking_start_idx': None, 'was_in_thinking': False, 'total_reasoning_tokens': 0}
                 self._thinking_state[req_id] = ts
 
             # Detect thinking-start transition (normal → reasoning)
@@ -2111,6 +2111,8 @@ class Scheduler:
             if ts['in_thinking'] and not is_thinking and ts['thinking_start_idx'] is not None:
                 thinking_end_idx = len(req.output_token_ids)
                 thinking_tokens = list(req.output_token_ids[ts['thinking_start_idx']:thinking_end_idx])
+                # Accumulate reasoning tokens from this completed segment
+                ts['total_reasoning_tokens'] += len(thinking_tokens)
                 context_tokens = list(req.prompt_token_ids) if req.prompt_token_ids else []
                 # Extract KV data from response if available, else None
                 kv_data = getattr(resp, 'prompt_cache', None)
@@ -2157,9 +2159,10 @@ class Scheduler:
                 logprobs=logprobs,
                 current_state=current_state,
                 reasoning_tokens=(
-                    len(req.output_token_ids) - ts['thinking_start_idx']
-                    if ts and ts.get('thinking_start_idx') is not None and ts.get('in_thinking')
-                    else 0
+                    (ts.get('total_reasoning_tokens', 0) or 0)
+                    + (len(req.output_token_ids) - ts['thinking_start_idx']
+                       if ts and ts.get('thinking_start_idx') is not None and ts.get('in_thinking')
+                       else 0)
                 ),
                 cached_tokens=getattr(req, 'cached_tokens', 0),
             )
