@@ -592,6 +592,7 @@ class VLMEngine:
         repetition_penalty: float = 1.0,
         logprobs: bool = False,
         top_logprobs: int | None = None,
+        cancel_event: Any = None,
         **kwargs,
     ) -> AsyncIterator[RequestOutput]:
         """Streaming generation: yields RequestOutput per token."""
@@ -641,7 +642,7 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if has_images or has_audio:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event)
                     return
 
                 prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
@@ -684,6 +685,8 @@ class VLMEngine:
                     max_tokens=max_tokens,
                     sampler=sampler,
                 ):
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
                     token_count += 1
                     is_eos = token_id in stop_ids
 
@@ -1064,6 +1067,7 @@ class VLMEngine:
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
         enable_thinking: bool | None = None,
+        cancel_event: Any = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate().
 
@@ -1140,6 +1144,8 @@ class VLMEngine:
                 prompt=prompt,
                 **stream_kwargs,
             ):
+                if cancel_event is not None and cancel_event.is_set():
+                    return
                 token_count += 1
                 text = result.text if hasattr(result, 'text') else ""
                 accumulated += text

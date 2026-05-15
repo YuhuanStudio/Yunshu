@@ -24,6 +24,7 @@ from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_chunk
+from .chat import _format_chat_logprobs
 
 router = APIRouter(tags=["responses"])
 
@@ -388,11 +389,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.new_text:
                     completion_tok += 1
+                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
                     delta_content=output.new_text,
                     finish_reason=output.finish_reason,
+                    logprobs=_chunk_lp,
                 )
         else:
             async for output in engine.generate_stream(
@@ -428,11 +431,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 token_text = getattr(output, 'token_text', '')
                 if token_text:
                     completion_tok += 1
+                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
                     delta_content=token_text,
                     finish_reason=getattr(output, 'finish_reason', None),
+                    logprobs=_chunk_lp,
                 )
 
         if include_usage:

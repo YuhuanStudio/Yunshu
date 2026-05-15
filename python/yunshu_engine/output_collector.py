@@ -74,6 +74,15 @@ class RequestOutputCollector:
                 RequestOutputCollector._waiting_consumers -= 1
 
     def _merge(self, existing: RequestOutput, new: RequestOutput) -> RequestOutput:
+        # Accumulate logprobs across steps (fast path gives per-step lists)
+        _lp = existing.logprobs
+        if new.logprobs is not None:
+            if _lp is None:
+                _lp = new.logprobs
+            elif isinstance(_lp, list) and isinstance(new.logprobs, list):
+                _lp = _lp + new.logprobs
+            else:
+                _lp = new.logprobs
         return RequestOutput(
             request_id=new.request_id,
             new_token_ids=existing.new_token_ids + new.new_token_ids,
@@ -84,7 +93,7 @@ class RequestOutputCollector:
             finish_reason=new.finish_reason,
             prompt_tokens=new.prompt_tokens,
             completion_tokens=new.completion_tokens,
-            logprobs=new.logprobs,
+            logprobs=_lp,
             current_state=new.current_state,
             error=new.error or existing.error,
         )
