@@ -913,34 +913,81 @@ async def _handle_vlm_chat(
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
-    try:
-        result = await vlm_engine.generate(**gen_kwargs)
-    except MemoryError:
-        return JSONResponse(
-            status_code=507,
-            content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
-        )
-    except Exception as e:
-        logger.error("VLM engine inference failed", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"error": {"message": str(e), "type": type(e).__name__}},
-        )
 
-    content = result.get("text", "")
-    vlm_reasoning_tokens = result.get("reasoning_tokens", 0)
     tok = getattr(vlm_engine, '_tokenizer', None)
     prompt_tok = 0
-    completion_tok = 0
     if tok:
         try:
             prompt_text = vlm_engine._format_prompt(messages)
             prompt_tok = len(tok.encode(prompt_text))
         except Exception:
             logger.debug("prompt token count failed", exc_info=True)
-        completion_tok = len(tok.encode(content))
+
+    async def _vlm_gen_one(idx: int):
+        try:
+            r = await vlm_engine.generate(**gen_kwargs)
+        except MemoryError:
+            return idx, None, "memory_error"
+        except Exception as e:
+            logger.error("VLM engine inference failed", exc_info=True)
+            return idx, None, str(e)
+
+        content = r.get("text", "")
+        rt = r.get("reasoning_tokens", 0)
+        ct = len(tok.encode(content)) if tok else max(1, len(content) // 4)
+        finish_reason = r.get("finish_reason", "stop")
+        tool_calls = None
+        if req.tools:
+            tool_calls = extract_tool_calls(content)
+            if tool_calls:
+                content = clean_tool_call_markup(content)
+                finish_reason = "tool_calls"
+        return idx, {
+            "content": content.strip(),
+            "reasoning_tokens": rt,
+            "completion_tokens": ct,
+            "finish_reason": finish_reason,
+            "tool_calls": tool_calls,
+        }, None
+
+    n = max(req.n, 1)
+    if n == 1:
+        results = [await _vlm_gen_one(0)]
     else:
-        completion_tok = max(1, len(content) // 4)
+        import asyncio
+        results = await asyncio.gather(*[_vlm_gen_one(i) for i in range(n)])
+        results.sort(key=lambda x: x[0])
+
+    # Check for errors
+    for idx, data, err in results:
+        if err == "memory_error":
+            return JSONResponse(
+                status_code=507,
+                content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
+            )
+        if err is not None:
+            return JSONResponse(
+                status_code=500,
+                content={"error": {"message": err, "type": "inference_error"}},
+            )
+
+    total_completion_tok = 0
+    total_reasoning_tok = 0
+    choices = []
+    for idx, data, _ in results:
+        total_completion_tok += data["completion_tokens"]
+        total_reasoning_tok += data["reasoning_tokens"]
+        message = {"role": "assistant", "content": data["content"]}
+        if data["tool_calls"]:
+            message["tool_calls"] = [
+                {"id": f"call_vlm:{idx}:{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                for i, tc in enumerate(data["tool_calls"])
+            ]
+        choices.append({
+            "index": idx,
+            "message": message,
+            "finish_reason": data["finish_reason"],
+        })
 
     # Extract tool calls if tools were provided
     tool_calls = None
@@ -960,22 +1007,18 @@ async def _handle_vlm_chat(
 
     vlm_usage = {
         "prompt_tokens": prompt_tok,
-        "completion_tokens": completion_tok,
-        "total_tokens": prompt_tok + completion_tok,
+        "completion_tokens": total_completion_tok,
+        "total_tokens": prompt_tok + total_completion_tok,
     }
-    if vlm_reasoning_tokens > 0:
-        vlm_usage["completion_tokens_details"] = {"reasoning_tokens": vlm_reasoning_tokens}
+    if total_reasoning_tok > 0:
+        vlm_usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tok}
 
     return JSONResponse({
         "id": completion_id,
         "object": "chat.completion",
         "created": int(time.time()),
         "model": req.model,
-        "choices": [{
-            "index": 0,
-            "message": message,
-            "finish_reason": finish_reason,
-        }],
+        "choices": choices,
         "usage": vlm_usage,
     })
 
