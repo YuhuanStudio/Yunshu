@@ -71,6 +71,9 @@ class ResponsesRequest(BaseModel):
     xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     grammar: Optional[dict] = None
     lora_adapter: Optional[str] = None
+    stream_options: Optional[dict] = None  # {"include_usage": true}
+    user: Optional[str] = None
+    priority: int = Field(default=0, ge=0, le=100)
 
 
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
@@ -221,13 +224,13 @@ async def create_response(req: ResponsesRequest, request: Request):
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
-                stop_token_ids=getattr(req, 'stop_token_ids', None),
-                spec_decode=getattr(req, 'spec_decode', False),
-                xtc_probability=getattr(req, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-                priority=getattr(req, 'priority', 0),
-                logprobs=getattr(req, 'logprobs', False),
-                top_logprobs=getattr(req, 'top_logprobs', None),
+                stop_token_ids=req.stop_token_ids,
+                spec_decode=req.spec_decode,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -250,13 +253,13 @@ async def create_response(req: ResponsesRequest, request: Request):
                 logit_bias=req.logit_bias,
                 min_p=req.min_p,
                 stop=req.stop,
-                stop_token_ids=getattr(req, 'stop_token_ids', None),
-                spec_decode=getattr(req, 'spec_decode', False),
-                xtc_probability=getattr(req, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-                priority=getattr(req, 'priority', 0),
-                logprobs=getattr(req, 'logprobs', False),
-                top_logprobs=getattr(req, 'top_logprobs', None),
+                stop_token_ids=req.stop_token_ids,
+                spec_decode=req.spec_decode,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -313,11 +316,17 @@ async def create_response(req: ResponsesRequest, request: Request):
 
 async def _stream_response(engine, req, messages, response_id, json_schema):
     """SSE streaming for Responses API."""
-    from ..streaming import with_sse_keepalive
+    from ..streaming import with_sse_keepalive, format_openai_done, format_openai_usage_chunk
     from yunshu_engine.batched_engine import BatchedEngine
     is_batched = isinstance(engine, BatchedEngine)
+    include_usage = (
+        req.stream_options is not None and req.stream_options.get("include_usage", False)
+    )
+    prompt_tok = 0
+    completion_tok = 0
 
     async def _token_source():
+        nonlocal prompt_tok, completion_tok
         if is_batched:
             async for output in engine.stream_generate(
                 prompt=messages,
@@ -336,14 +345,18 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
-                stop_token_ids=getattr(req, 'stop_token_ids', None),
-                spec_decode=getattr(req, 'spec_decode', False),
-                xtc_probability=getattr(req, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-                priority=getattr(req, 'priority', 0),
-                logprobs=getattr(req, 'logprobs', False),
-                top_logprobs=getattr(req, 'top_logprobs', None),
+                stop_token_ids=req.stop_token_ids,
+                spec_decode=req.spec_decode,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             ):
+                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                    prompt_tok = output.prompt_tokens
+                if output.new_text:
+                    completion_tok += 1
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
@@ -367,20 +380,33 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 logit_bias=req.logit_bias,
                 min_p=req.min_p,
                 stop=req.stop,
-                stop_token_ids=getattr(req, 'stop_token_ids', None),
-                spec_decode=getattr(req, 'spec_decode', False),
-                xtc_probability=getattr(req, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-                priority=getattr(req, 'priority', 0),
-                logprobs=getattr(req, 'logprobs', False),
-                top_logprobs=getattr(req, 'top_logprobs', None),
+                stop_token_ids=req.stop_token_ids,
+                spec_decode=req.spec_decode,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
             ):
+                if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
+                    prompt_tok = output.prompt_token_count
+                if hasattr(output, 'token_text') and output.token_text:
+                    completion_tok += 1
                 yield format_openai_chunk(
                     completion_id=response_id,
                     model=req.model,
                     delta_content=output.new_text,
                     finish_reason=output.finish_reason,
                 )
+
+        if include_usage:
+            yield format_openai_usage_chunk(
+                completion_id=response_id,
+                model=req.model,
+                prompt_tokens=prompt_tok,
+                completion_tokens=completion_tok,
+            )
+        yield format_openai_done()
 
     async for chunk in with_sse_keepalive(_token_source()):
         yield chunk
