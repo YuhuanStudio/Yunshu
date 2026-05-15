@@ -35,7 +35,23 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6024 passed, 16 skipped** (1 pre-existing flaky).
+> 以下為基於本報告發現所完成的修復，最新測試: **6031 passed, 16 skipped** (1 pre-existing flaky).
+
+### 已完成修復 (2026-05-15 Wave 86-87 — ResponseCache + SlidingWindowKV + RequestDedup + VideoEngine + Thinking Budget)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 86: ResponseCache wiring | Wire ResponseCache into BatchedEngine.generate() lookup+store for both fast path and engine loop path. Add response_cache_hits/misses counters. | Cache layer activated |
+| Wave 86: SlidingWindowKV trim | Fix on_new_token() — was passing request_id string as token_position int. Add trim_kv_cache() for real MLX KV cache array slicing. | Windowed attention memory savings |
+| Wave 86: RequestDedup fan-out | Shadow requests wait for primary output via shared collectors, instead of running independent inference. | Dedup actually saves compute |
+| Wave 86: VideoEngine native pipeline | Wire WanVideoPipeline into _run_generation() with TeaCache support. Add _encode_frames_to_mp4(). TeaCache in _denoise(). | Native MLX video pipeline activated |
+| Wave 86: Legacy param forwarding | Fix legacy Engine.generate()/generate_stream() parameter gaps (xtc, stop_token_ids, thinking_budget, spec_decode, etc.). Forward in gateway chat.py + completions.py. | Legacy path API completeness |
+| Wave 86: Cache-locality reordering | Sort requests by shared KV prefix hash before each scheduler step. | Better KV cache utilization |
+| Wave 87: Thinking budget bug | Fix thinking_budget counting ALL tokens instead of just thinking tokens (both fast path + streaming path). | Budget enforcement correctness |
+| Wave 87: Stop suffix finish_reason | Stop suffix matches now return finish_reason="stop" instead of "length". | API compliance |
+| Wave 87: VLM streaming stop suffix | _stream_vlm_vision accumulated text for multi-token stop suffix matching. | VLM streaming correctness |
+| Wave 87: Responses API params | Forward n, stop_token_ids, logprobs, spec_decode, xtc, grammar in VLM redirect. | API completeness |
+| Wave 87: Response cache monitoring | /gw/monitoring/response-cache endpoint for hit/miss stats. | Observability |
 
 ### 已完成修復 (2026-05-15 Wave 78-84 — Critical Bugs + Streaming + n>1 + Priority + SpecDecode)
 
