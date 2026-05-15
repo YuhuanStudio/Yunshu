@@ -221,6 +221,13 @@ async def create_response(req: ResponsesRequest, request: Request):
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
+                stop_token_ids=getattr(req, 'stop_token_ids', None),
+                spec_decode=getattr(req, 'spec_decode', False),
+                xtc_probability=getattr(req, 'xtc_probability', 0.0),
+                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+                priority=getattr(req, 'priority', 0),
+                logprobs=getattr(req, 'logprobs', False),
+                top_logprobs=getattr(req, 'top_logprobs', None),
             )
             text = result.text
             pt = result.prompt_tokens
@@ -243,6 +250,13 @@ async def create_response(req: ResponsesRequest, request: Request):
                 logit_bias=req.logit_bias,
                 min_p=req.min_p,
                 stop=req.stop,
+                stop_token_ids=getattr(req, 'stop_token_ids', None),
+                spec_decode=getattr(req, 'spec_decode', False),
+                xtc_probability=getattr(req, 'xtc_probability', 0.0),
+                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+                priority=getattr(req, 'priority', 0),
+                logprobs=getattr(req, 'logprobs', False),
+                top_logprobs=getattr(req, 'top_logprobs', None),
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -322,6 +336,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
+                stop_token_ids=getattr(req, 'stop_token_ids', None),
+                spec_decode=getattr(req, 'spec_decode', False),
+                xtc_probability=getattr(req, 'xtc_probability', 0.0),
+                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+                priority=getattr(req, 'priority', 0),
+                logprobs=getattr(req, 'logprobs', False),
+                top_logprobs=getattr(req, 'top_logprobs', None),
             ):
                 yield format_openai_chunk(
                     completion_id=response_id,
@@ -346,6 +367,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema):
                 logit_bias=req.logit_bias,
                 min_p=req.min_p,
                 stop=req.stop,
+                stop_token_ids=getattr(req, 'stop_token_ids', None),
+                spec_decode=getattr(req, 'spec_decode', False),
+                xtc_probability=getattr(req, 'xtc_probability', 0.0),
+                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
+                priority=getattr(req, 'priority', 0),
+                logprobs=getattr(req, 'logprobs', False),
+                top_logprobs=getattr(req, 'top_logprobs', None),
             ):
                 yield format_openai_chunk(
                     completion_id=response_id,
