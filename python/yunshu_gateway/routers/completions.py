@@ -64,6 +64,7 @@ class CompletionRequest(BaseModel):
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
     n: int = 1
+    logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
 
 
 @router.post("/completions", response_model=None)
@@ -166,6 +167,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
                     priority=req.priority,
+                    logits_processors=req.logits_processors,
                 )
                 text = result.text
                 pt = result.prompt_tokens
@@ -198,6 +200,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logprobs=req.logprobs > 0,
                     top_logprobs=req.top_logprobs,
                     priority=req.priority,
+                    logits_processors=req.logits_processors,
                 )
                 text = state.generated_text
                 pt = state.prompt_token_count

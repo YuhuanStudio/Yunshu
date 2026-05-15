@@ -512,6 +512,14 @@ class EngineCore:
         # consecutively to maximize KV cache block locality and reduce thrashing.
         self._kv_prefix_hashes: dict[str, int] = {}
 
+        # MON-2/4/5: Scheduler monitoring gauges (read by Prometheus exporter)
+        self._last_batch_size: int = 0
+        self._last_queue_depth: int = 0
+        self._last_step_wall_ms: float = 0.0
+        self._total_step_time_ms: float = 0.0
+        self._total_idle_time_ms: float = 0.0
+        self._monitoring_start_time: float = time.monotonic()
+
     def set_prefix_cache(self, cache: Any) -> None:
         """Set KV prefix cache for batch-path insert_segments (C16)."""
         self.scheduler.set_prefix_cache(cache)
@@ -536,6 +544,16 @@ class EngineCore:
     @property
     def has_active_requests(self) -> bool:
         return self.scheduler.has_requests()
+
+    def get_compute_utilization(self) -> float:
+        """Return percentage of time spent in active scheduler steps vs total time.
+
+        Returns 0.0 when no steps have been taken yet. Value is 0–100.
+        """
+        total_ms = self._total_step_time_ms + self._total_idle_time_ms
+        if total_ms <= 0:
+            return 0.0
+        return min(self._total_step_time_ms / total_ms * 100.0, 100.0)
 
     def setup_memory_guard(
         self,
@@ -1325,6 +1343,7 @@ class EngineCore:
 
             if not self.scheduler.has_requests():
                 # Event-driven idle: wait for wake signal instead of polling
+                _idle_start = time.monotonic()
                 if self._wake_event is not None:
                     try:
                         await asyncio.wait_for(
@@ -1336,6 +1355,7 @@ class EngineCore:
                         pass
                 else:
                     await asyncio.sleep(self.config.step_interval)
+                self._total_idle_time_ms += (time.monotonic() - _idle_start) * 1000
                 continue
 
             try:
@@ -1456,6 +1476,21 @@ class EngineCore:
                         self.config.completion_batch_size = suggested
                 except Exception:
                     logger.debug("adaptive batch sizing failed", exc_info=True)
+
+                # MON-2/4/5: Track monitoring gauges for Prometheus export
+                try:
+                    self._last_step_wall_ms = (time.monotonic() - _step_start) * 1000
+                    self._total_step_time_ms += self._last_step_wall_ms
+                    self._last_batch_size = len(scheduler_output.outputs) if hasattr(scheduler_output, 'outputs') else 0
+                    self._last_queue_depth = len(self.scheduler.waiting)
+                    # Record batch size in ServerMetrics for histogram distribution
+                    try:
+                        from .server_metrics import get_server_metrics
+                        get_server_metrics().record_batch_size(self._last_batch_size)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             except asyncio.CancelledError:
                 logger.info("Engine loop cancelled, failing all in-flight requests")
                 failed = self.scheduler.fail_all_requests()

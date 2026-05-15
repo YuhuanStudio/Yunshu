@@ -11,6 +11,7 @@ Supports:
 - Structured output (response_format)
 - Image and audio input (routed to VLM/Omni)
 """
+import json
 import logging
 import time
 import uuid
@@ -229,6 +230,8 @@ async def create_response(req: ResponsesRequest, request: Request):
     try:
         from yunshu_engine.batched_engine import BatchedEngine
         is_batched = isinstance(engine, BatchedEngine)
+        result = None
+        state = None
 
         if is_batched:
             result = await engine.chat(
@@ -346,6 +349,17 @@ async def create_response(req: ResponsesRequest, request: Request):
                 **({"input_tokens_details": {"cached_tokens": _cached_tokens}} if _cached_tokens else {}),
             },
         })
+    except MemoryError:
+        return JSONResponse(
+            status_code=507,
+            content={"error": {"message": "Insufficient GPU memory", "type": "server_error"}},
+        )
+    except Exception as e:
+        logger.error(f"Responses API generation error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": "Internal server error", "type": "server_error"}},
+        )
     finally:
         _release_lora_adapter(engine, loaded_adapter)
 
@@ -476,6 +490,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
       async for chunk in with_sse_keepalive(_token_source(), http_request=request):
         yield chunk
+    except MemoryError:
+        yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n"
+        yield format_openai_done()
+    except Exception as e:
+        logger.error(f"Responses API streaming error: {e}", exc_info=True)
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n"
+        yield format_openai_done()
     finally:
         if _tracker is not None:
             try:

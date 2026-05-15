@@ -301,6 +301,17 @@ async def prometheus_export() -> str:
                 except Exception:
                     logger.debug("RadixTree gauge population failed", exc_info=True)
 
+                # MON-2/4/5: Scheduler monitoring gauges from engine_core
+                try:
+                    core = entry.engine._engine_core
+                    if core is not None:
+                        pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
+                        pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
+                        pm.set_gauge("compute_utilization_pct", core.get_compute_utilization())
+                        pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0))
+                except Exception:
+                    logger.debug("scheduler monitoring gauge population failed", exc_info=True)
+
     return pm.generate()
 
 

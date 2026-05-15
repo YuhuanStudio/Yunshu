@@ -53,6 +53,11 @@ class ServerMetrics:
         self._itl_p50: float = 0.0
         self._itl_p99: float = 0.0
 
+        # Batch size distribution tracking (MON-2)
+        self._batch_size_samples: list[int] = []
+        self._batch_size_p50: int = 0
+        self._batch_size_p99: int = 0
+
         self._start_time = time.time()
         self._last_save_time = time.time()
 
@@ -192,6 +197,36 @@ class ServerMetrics:
             "itl_p50_ms": round(self._itl_p50 * 1000, 2),
             "itl_p99_ms": round(self._itl_p99 * 1000, 2),
             "itl_samples_buffered": len(self._itl_samples),
+        }
+
+    def record_batch_size(self, batch_size: int) -> None:
+        """Record a scheduler batch size sample (MON-2).
+
+        Called from engine_core._engine_loop after each scheduler step.
+        Maintains a bounded buffer and computes percentiles on flush.
+        """
+        self._batch_size_samples.append(batch_size)
+        if len(self._batch_size_samples) >= 1000:
+            self._compute_batch_size_percentiles()
+
+    def _compute_batch_size_percentiles(self) -> None:
+        """Compute batch size percentiles from collected samples."""
+        if not self._batch_size_samples:
+            return
+        samples = sorted(self._batch_size_samples)
+        n = len(samples)
+        self._batch_size_p50 = samples[n // 2]
+        self._batch_size_p99 = samples[min(int(n * 0.99), n - 1)]
+        self._batch_size_samples = samples[-100:]  # Keep last 100 for rolling stats
+
+    def get_batch_size_stats(self) -> dict[str, Any]:
+        """Return batch size distribution statistics."""
+        if self._batch_size_samples:
+            self._compute_batch_size_percentiles()
+        return {
+            "batch_size_p50": self._batch_size_p50,
+            "batch_size_p99": self._batch_size_p99,
+            "batch_size_samples_buffered": len(self._batch_size_samples),
         }
 
     def _build_snapshot(

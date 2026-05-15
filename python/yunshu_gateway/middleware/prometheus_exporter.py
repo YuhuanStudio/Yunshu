@@ -321,6 +321,34 @@ class PrometheusMetrics:
             "Total tokens stored in the RadixTree",
         )
 
+        # Chunked prefill gauges (Wave 108)
+        self._gauges["chunked_prefill_active_chunks"] = _Gauge(
+            "yunshu_chunked_prefill_active_chunks",
+            "Number of requests currently in chunked prefill",
+        )
+        self._gauges["chunked_prefill_total_chunks_processed"] = _Gauge(
+            "yunshu_chunked_prefill_total_chunks_processed",
+            "Total chunked prefill chunks processed",
+        )
+
+        # Scheduler monitoring gauges (MON-2/4/5)
+        self._gauges["scheduler_waiting_queue_depth"] = _Gauge(
+            "yunshu_scheduler_waiting_queue_depth",
+            "Number of requests waiting in the scheduler queue",
+        )
+        self._gauges["scheduler_batch_size"] = _Gauge(
+            "yunshu_scheduler_batch_size",
+            "Current scheduler step batch size",
+        )
+        self._gauges["compute_utilization_pct"] = _Gauge(
+            "yunshu_compute_utilization_pct",
+            "Percentage of time spent in active scheduler steps",
+        )
+        self._gauges["step_duration_ms"] = _Gauge(
+            "yunshu_step_duration_ms",
+            "Last scheduler step wall time in milliseconds",
+        )
+
     # --- Counter API ---
 
     def inc_counter(self, name: str, labels: Optional[dict[str, str]] = None, amount: int = 1) -> None:

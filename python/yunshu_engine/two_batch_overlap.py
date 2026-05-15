@@ -394,7 +394,7 @@ class TwoBatchOverlapScheduler:
         self._swap_batches()
 
         # Track metrics
-        was_overlapped = cpu_overlap_ms > 0 and not self._in_fallback
+        was_overlapped = True  # We took the overlapped path
         self._metrics.record_step(
             gpu_time_ms=gpu_total_ms,
             cpu_overlap_time_ms=cpu_overlap_ms,

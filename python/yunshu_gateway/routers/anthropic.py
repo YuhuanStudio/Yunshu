@@ -94,6 +94,9 @@ class AnthropicMessagesRequest(BaseModel):
     xtc_threshold: float = 0.0
     priority: int = 0
     json_schema: Optional[dict] = None
+    logprobs: bool = False
+    top_logprobs: Optional[int] = None
+    logits_processors: Optional[list] = None
 
 
 # ── Content block helpers ──
@@ -384,6 +387,9 @@ async def _non_stream_batched(engine, messages, req, stop):
         xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
         priority=getattr(req, 'priority', 0),
         json_schema=getattr(req, 'json_schema', None),
+        logprobs=getattr(req, 'logprobs', False),
+        top_logprobs=getattr(req, 'top_logprobs', None),
+        logits_processors=getattr(req, 'logits_processors', None),
     )
     except MemoryError:
         return JSONResponse(
@@ -474,6 +480,9 @@ async def _non_stream_legacy(engine, messages, req, stop):
             xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
             priority=getattr(req, 'priority', 0),
             json_schema=getattr(req, 'json_schema', None),
+            logprobs=getattr(req, 'logprobs', False),
+            top_logprobs=getattr(req, 'top_logprobs', None),
+            logits_processors=getattr(req, 'logits_processors', None),
         )
     except MemoryError:
         return JSONResponse(
@@ -587,6 +596,9 @@ async def _stream_anthropic(
                 xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
                 priority=getattr(req, 'priority', 0),
                 json_schema=getattr(req, 'json_schema', None),
+                logprobs=getattr(req, 'logprobs', False),
+                top_logprobs=getattr(req, 'top_logprobs', None),
+                logits_processors=getattr(req, 'logits_processors', None),
             ):
                 parsed = parser.process_chunk(output.new_text)
 
@@ -671,6 +683,9 @@ async def _stream_anthropic(
                 xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
                 priority=getattr(req, 'priority', 0),
                 json_schema=getattr(req, 'json_schema', None),
+                logprobs=getattr(req, 'logprobs', False),
+                top_logprobs=getattr(req, 'top_logprobs', None),
+                logits_processors=getattr(req, 'logits_processors', None),
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:
                     input_tokens = output.prompt_token_count
