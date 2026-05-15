@@ -128,6 +128,17 @@ async def create_response(req: ResponsesRequest, request: Request):
     messages = _convert_to_messages(req)
     json_schema = _parse_response_format(req.response_format, req.grammar)
 
+    # Structured tracing
+    from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
+    tracer = get_inference_tracer()
+    slog = get_structured_logger()
+    trace_id = f"resp-{uuid.uuid4().hex[:16]}"
+    trace = tracer.start_trace(trace_id, metadata={
+        "model": req.model, "stream": req.stream,
+        "endpoint": "/responses",
+    })
+    slog.info("inference_request", model=req.model, trace_id=trace_id, stream=req.stream)
+
     engine = get_engine()
     if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):
         try:
@@ -180,6 +191,8 @@ async def create_response(req: ResponsesRequest, request: Request):
             xtc_probability=req.xtc_probability,
             xtc_threshold=req.xtc_threshold,
             lora_adapter=req.lora_adapter,
+            priority=req.priority,
+            user=req.user,
         )
         vlm_json_schema = _parse_response_format(chat_response_format)
         return await _handle_vlm_chat(chat_req, messages, request, json_schema=vlm_json_schema)
