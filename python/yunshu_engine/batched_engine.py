@@ -1765,7 +1765,7 @@ class BatchedEngine:
         # Record TTFT + ITL in Prometheus
         if ttft_s > 0:
             try:
-                from ..middleware.prometheus_exporter import get_prometheus_metrics
+                from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
                 pm = get_prometheus_metrics()
                 pm.observe_histogram("ttft_seconds", ttft_s)
                 if cached_tokens > 0:
@@ -3325,7 +3325,7 @@ class BatchedEngine:
 
         # Record MTP stats in Prometheus
         try:
-            from ..middleware.prometheus_exporter import get_prometheus_metrics
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
             pm = get_prometheus_metrics()
             s = mtp_decoder.stats
             if s.total_cycles > 0:
