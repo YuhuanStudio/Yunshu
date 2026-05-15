@@ -493,6 +493,7 @@ async def _build_multi_choice(
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 stop_token_ids=req.stop_token_ids,
+                priority=req.priority,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -749,6 +750,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         seed=req.seed,
                         enable_thinking=req.enable_thinking,
                         stop_token_ids=req.stop_token_ids,
+                        priority=req.priority,
                     )
                     raw_text = state.generated_text
                     prompt_tok = state.prompt_token_count

@@ -16,7 +16,7 @@ from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..engine import get_engine, get_engine_for_model, get_model_manager
 from .chat import _apply_lora_adapter, _release_lora_adapter
@@ -62,6 +62,7 @@ class CompletionRequest(BaseModel):
     lora_adapter: Optional[str] = None
     grammar: Optional[dict] = None  # {"type": "regex", "pattern": "..."} etc.
     user: Optional[str] = None
+    priority: int = Field(default=0, ge=0, le=100)
     n: int = 1
 
 
@@ -163,6 +164,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                 xtc_threshold=req.xtc_threshold,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                priority=req.priority,
             )
             text = result.text
             prompt_tokens = result.prompt_tokens
@@ -186,6 +188,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
+                priority=req.priority,
             )
             text = state.generated_text
             prompt_tokens = state.prompt_token_count

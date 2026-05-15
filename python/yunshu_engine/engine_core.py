@@ -606,6 +606,7 @@ class EngineCore:
         logprobs: bool = False,
         top_logprobs: int | None = None,
         lora_adapter: str | None = None,
+        priority: int = 0,
         **kwargs,
     ) -> str:
         """Add a generation request. Returns request_id for streaming/abort.
@@ -774,6 +775,7 @@ class EngineCore:
             thinking_budget=thinking_budget,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
+            priority=priority,
         )
 
         request = Request(

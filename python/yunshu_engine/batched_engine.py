@@ -920,6 +920,7 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
+        priority: int = 0,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -1668,6 +1669,7 @@ class BatchedEngine:
             seed=seed, json_schema=json_schema,
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
+            priority=priority,
         )
 
         finished_normally = False
