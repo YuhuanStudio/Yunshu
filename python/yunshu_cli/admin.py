@@ -243,7 +243,14 @@ def admin_config(
             console.print("[red]Format: --set key=value[/]")
             raise typer.Exit(1)
         try:
-            resp = httpx.patch(f"{url}/api/v1/admin/config/engine", json={"key": k, "value": v}, timeout=5)
+            try:
+                num_v = int(v)
+            except ValueError:
+                try:
+                    num_v = float(v)
+                except ValueError:
+                    num_v = v
+            resp = httpx.patch(f"{url}/api/v1/admin/config/engine", json={k: num_v}, timeout=5)
             console.print(f"[green]{resp.json().get('message', 'Updated')}[/]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/]")

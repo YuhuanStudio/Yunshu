@@ -447,10 +447,11 @@ async def _build_multi_choice(
 
     prompt_tok = 0
     completion_tok = 0
+    reasoning_tok = 0
     choices = []
 
     async def _gen_one(idx: int):
-        nonlocal prompt_tok, completion_tok
+        nonlocal prompt_tok, completion_tok, reasoning_tok
         if is_batched:
             result = await engine.chat(
                 messages=messages,
@@ -521,7 +522,8 @@ async def _build_multi_choice(
             ]
 
         _record_metrics(pt, ct)
-        return idx, pt, ct, {"index": idx, "message": message, "finish_reason": fr}
+        _rt = getattr(result, 'reasoning_tokens', 0) if is_batched else 0
+        return idx, pt, ct, _rt, {"index": idx, "message": message, "finish_reason": fr}
 
     results = await asyncio.gather(
         *[_gen_one(i) for i in range(req.n)], return_exceptions=True,
@@ -534,10 +536,11 @@ async def _build_multi_choice(
             errors.append((idx, r))
             logger.error(f"choice {idx} failed: {r}", exc_info=r)
             continue
-        idx, pt, ct, choice = r
+        idx, pt, ct, _rt, choice = r
         choices.append(choice)
         prompt_tok = pt
         completion_tok += ct
+        reasoning_tok += _rt
 
     if not choices and errors:
         exc = errors[0][1]
@@ -551,17 +554,21 @@ async def _build_multi_choice(
             content={"error": {"message": str(exc), "type": type(exc).__name__}},
         )
 
+    usage = {
+        "prompt_tokens": prompt_tok,
+        "completion_tokens": completion_tok,
+        "total_tokens": prompt_tok + completion_tok,
+    }
+    if reasoning_tok > 0:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tok}
+
     return JSONResponse({
         "id": completion_id,
         "object": "chat.completion",
         "created": int(time.time()),
         "model": req.model,
         "choices": sorted(choices, key=lambda c: c["index"]),
-        "usage": {
-            "prompt_tokens": prompt_tok,
-            "completion_tokens": completion_tok,
-            "total_tokens": prompt_tok + completion_tok,
-        },
+        "usage": usage,
     })
 
 

@@ -151,6 +151,22 @@ class VideoEngine:
             self._lora_adapter_path = env_lora
             logger.info(f"Video LoRA adapter path set from env: {env_lora}")
 
+        # TeaCache for diffusion acceleration (opt-in via YUNSHU_VIDEO_TEACACHE)
+        self._teacache = None
+        teacache_env = os.environ.get("YUNSHU_VIDEO_TEACACHE", "").strip()
+        if teacache_env in ("1", "true", "yes"):
+            from .teacache import TeaCacheConfig, TeaCacheHook
+            self._teacache = TeaCacheHook(TeaCacheConfig(rel_l1_thresh=0.2))
+            logger.info("Video TeaCache enabled (threshold=0.2)")
+        elif teacache_env and teacache_env not in ("0", "false", "no"):
+            try:
+                thresh = float(teacache_env)
+                from .teacache import TeaCacheConfig, TeaCacheHook
+                self._teacache = TeaCacheHook(TeaCacheConfig(rel_l1_thresh=thresh))
+                logger.info(f"Video TeaCache enabled (threshold={thresh})")
+            except ValueError:
+                pass
+
     @property
     def model_name(self) -> str:
         return self._model_path.rsplit("/", 1)[-1] if "/" in self._model_path else "video-default"
@@ -496,6 +512,7 @@ class VideoEngine:
             "lora_loaded": self._lora_loaded,
             "lora_merged": self._lora_merged,
             "lora_adapter_id": self._stats.lora_adapter_id,
+            "teacache_enabled": self._teacache is not None,
         }
 
     # ═══════════════════════════════════════════════════════════════════════

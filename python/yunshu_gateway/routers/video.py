@@ -140,9 +140,10 @@ async def create_video(req: VideoGenerateRequest):
 
 
 async def _stream_video_frames(video_engine, req: VideoGenerateRequest, image_bytes: bytes | None):
-    """SSE generator that streams video frames as they're generated."""
+    """SSE generator that generates video then streams frames as they are decoded."""
     try:
-        async for frame_data in video_engine.stream_frames(
+        # Generate full video first, then stream frames progressively
+        result = await video_engine.generate(
             prompt=req.prompt,
             negative_prompt=req.negative_prompt,
             image=image_bytes,
@@ -154,16 +155,27 @@ async def _stream_video_frames(video_engine, req: VideoGenerateRequest, image_by
             fps=req.fps,
             seed=req.seed,
             scheduler=req.scheduler,
+            output_format="mp4",
+        )
+
+        # Stream decoded frames from the generated video
+        async for frame_data in video_engine.stream_frames(
+            video_data=result.video_data,
+            frame_interval=1,
         ):
-            if isinstance(frame_data, bytes):
+            if isinstance(frame_data, dict):
+                frame_bytes = frame_data.get("frame")
+                if frame_bytes and isinstance(frame_bytes, bytes):
+                    frame_b64 = base64.b64encode(frame_bytes).decode("ascii")
+                else:
+                    continue
+            elif isinstance(frame_data, bytes):
                 frame_b64 = base64.b64encode(frame_data).decode("ascii")
-            elif isinstance(frame_data, dict):
-                frame_b64 = frame_data
             else:
                 continue
             chunk = {
                 "created": int(time.time()),
-                "data": [{"frame": frame_b64 if isinstance(frame_b64, str) else None, "type": "frame"}],
+                "data": [{"frame": frame_b64, "type": "frame"}],
             }
             yield f"data: {json.dumps(chunk)}\n\n"
 

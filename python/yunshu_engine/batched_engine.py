@@ -67,6 +67,7 @@ class GenerationOutput:
     cached_tokens: int = 0
     logprobs: list[dict] | None = None
     ttft_ms: float = 0.0
+    reasoning_tokens: int = 0
 
 
 _PROGRESSIVE_QUANT_INTERVAL = 256
@@ -1608,6 +1609,7 @@ class BatchedEngine:
             cached_tokens=cached_tokens,
             logprobs=lp_result,
             ttft_ms=round(ttft_s * 1000, 1),
+            reasoning_tokens=len(_thinking_tokens),
         )
 
     async def stream_generate(
@@ -1983,7 +1985,7 @@ class BatchedEngine:
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
-                            _put((new_text, n_tok, True))
+                            _put((new_text, n_tok, True, len(_thinking_tokens)))
                             if _pipeline is not None:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
@@ -2000,7 +2002,7 @@ class BatchedEngine:
                             if token == think_end_token:
                                 _in_thinking = False
                                 self._lookahead_reasoning.check_thinking_state_text("</think")
-                    _put((new_text, n_tok, stop_hit or suffix_hit))
+                    _put((new_text, n_tok, stop_hit or suffix_hit, len(_thinking_tokens)))
                     if stop_hit or suffix_hit:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
@@ -2017,8 +2019,8 @@ class BatchedEngine:
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment
                 if remaining:
-                    _put((remaining, n_tok, False))
-                _put(("", n_tok, True))
+                    _put((remaining, n_tok, False, len(_thinking_tokens)))
+                _put(("", n_tok, True, len(_thinking_tokens)))
                 mx.synchronize()
                 # Finish pipeline tracking at end of generation
                 if _pipeline is not None:
@@ -2033,6 +2035,7 @@ class BatchedEngine:
 
         accumulated = ""
         n_tok = 0
+        _reasoning_tokens = 0
         try:
             while True:
                 try:
@@ -2055,7 +2058,10 @@ class BatchedEngine:
                             finish_reason="memory_limit",
                         )
                     break
-                new_text, tok_count, done = item
+                if len(item) == 4:
+                    new_text, tok_count, done, _reasoning_tokens = item
+                else:
+                    new_text, tok_count, done = item
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -2083,6 +2089,7 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
+                    reasoning_tokens=_reasoning_tokens,
                 )
                 if done:
                     break
