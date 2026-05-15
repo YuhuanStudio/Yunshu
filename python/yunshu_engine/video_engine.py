@@ -32,12 +32,13 @@ from __future__ import annotations
 import asyncio
 import gc
 import io
+import json
 import logging
 import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -468,8 +469,6 @@ class VideoEngine:
                 except (ImportError, AttributeError) as e:
                     logger.error(f"Unsupported model type {self._model_type}: {e}")
                     return None
-                logger.error(f"Unsupported model type: {self._model_type}")
-                return None
 
             return output_path
 
@@ -932,8 +931,6 @@ class VideoEngine:
         # If model not yet loaded, just record the adapter path for lazy loading
         if self._model is None:
             self._lora_adapter_path = str(adapter_dir)
-            self._lora_rank = self._lora_rank
-            self._lora_scale = self._lora_scale
             logger.info(f"LoRA adapter queued for lazy loading: {adapter_path}")
             return True
 

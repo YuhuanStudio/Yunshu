@@ -707,8 +707,6 @@ class BatchedEngine:
             self._kv_prefix_cache = None
         if s.spec_decode_enabled:
             self._spec_enabled = True
-        if s.ngram_spec_enabled:
-            self._ngram_spec_enabled = True
         if s.spec_prefill_enabled:
             self._spec_prefill_enabled = True
             self._spec_prefill_threshold = s.spec_prefill_threshold
@@ -1601,6 +1599,8 @@ class BatchedEngine:
             except Exception:
                 logger.debug("TTFT/ITL prometheus recording failed", exc_info=True)
 
+        self._total_reasoning_tokens += len(_thinking_tokens)
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -1613,7 +1613,6 @@ class BatchedEngine:
             ttft_ms=round(ttft_s * 1000, 1),
             reasoning_tokens=len(_thinking_tokens),
         )
-        self._total_reasoning_tokens += len(_thinking_tokens)
 
     async def stream_generate(
         self,
@@ -3402,7 +3401,7 @@ class BatchedEngine:
         # Wave 42: Model preprocessor registry stats
         if hasattr(self, '_preprocessor_registry') and self._preprocessor_registry is not None:
             stats["model_preprocessor"] = self._preprocessor_registry.get_stats()
-        stats["reasoning_tokens"] = self._total_reasoning_tokens
+        stats["reasoning_tokens"] = getattr(self, '_total_reasoning_tokens', 0)
         return stats
 
     def get_kv_cache_stats(self) -> dict:

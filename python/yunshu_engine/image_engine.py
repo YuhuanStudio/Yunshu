@@ -32,7 +32,7 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 import mlx.nn as nn

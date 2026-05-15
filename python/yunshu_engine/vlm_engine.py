@@ -30,7 +30,7 @@ import tempfile
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 
@@ -433,7 +433,7 @@ class VLMEngine:
         audio_paths = await self._extract_audio(messages)
         video_frames = await self._extract_video_frames(messages)
         image_paths.extend(video_frames)
-        self._enable_thinking = enable_thinking
+        _enable_thinking = enable_thinking
 
         # Run through MultimodalPipelineCoordinator for preprocessing tracking
         try:
@@ -461,17 +461,14 @@ class VLMEngine:
             effort_map = {"low": 2048, "medium": 8192, "high": 32768}
             thinking_budget = effort_map.get(reasoning_effort, 8192)
 
-        # Compute image hash for vision feature cache lookup
-        image_hash = self._compute_image_hash(image_paths) if image_paths else None
-
         def _generate_sync():
             if seed is not None:
                 mx.random.seed(seed)
 
             if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
-                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths)
+                return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking)
 
-            prompt_text = self._format_prompt(messages)
+            prompt_text = self._format_prompt(messages, enable_thinking=_enable_thinking)
             input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
             if self._is_vlm:
@@ -479,7 +476,7 @@ class VLMEngine:
                 pres_p = kwargs.get('presence_penalty', 0.0)
                 lb = kwargs.get('logit_bias', None)
                 js = kwargs.get('json_schema', None)
-                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p, lb, js)
+                return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, stop, repetition_penalty, freq_p, pres_p, lb, js, enable_thinking=_enable_thinking)
 
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
@@ -540,6 +537,15 @@ class VLMEngine:
         self._total_reasoning_tokens += reasoning_tokens
         self._cleanup_temp_files()
 
+        prompt_text = self._format_prompt(messages)
+        prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
+        return {
+            "text": result,
+            "reasoning_tokens": reasoning_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": len(self._tokenizer.encode(result)) if result and self._tokenizer else 0,
+        }
+
     async def generate_stream(
         self,
         prompt: list[dict] | None = None,
@@ -559,18 +565,20 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
-        self._enable_thinking = enable_thinking
+        # Extract images/audio once, reuse for both pipeline and generation
+        image_paths = await self._extract_images(messages)
+        audio_paths = await self._extract_audio(messages)
+        video_frames = await self._extract_video_frames(messages)
+        image_paths.extend(video_frames)
 
         # Pipeline tracking for streaming path
         try:
-            image_paths_stream = await self._extract_images(messages)
-            audio_paths_stream = await self._extract_audio(messages)
             from .staged_pipeline import PipelineRequest
             pipe_req = PipelineRequest(
                 request_id=kwargs.get("request_id", ""),
                 model_id=self.model_name,
-                images=image_paths_stream if image_paths_stream else None,
-                audio=audio_paths_stream if audio_paths_stream else None,
+                images=image_paths if image_paths else None,
+                audio=audio_paths if audio_paths else None,
                 params={"messages": messages},
             )
             self._pipeline.process(pipe_req)
@@ -582,16 +590,9 @@ class VLMEngine:
 
         queue: asyncio.Queue[RequestOutput | None] = asyncio.Queue(maxsize=256)
 
-        # Extract images for VLM vision path (same as non-streaming)
-        image_paths = await self._extract_images(messages)
-        audio_paths = await self._extract_audio(messages)
-        video_frames = await self._extract_video_frames(messages)
-        image_paths.extend(video_frames)
+        # Use already-extracted images/audio for VLM vision path
         has_images = bool(image_paths) and self._has_vision and self._is_vlm
         has_audio = bool(audio_paths) and self._is_vlm
-
-        # Compute image hash for vision feature cache lookup
-        _image_hash = self._compute_image_hash(image_paths) if image_paths else None
 
         def _stream_sync():
             try:
@@ -599,10 +600,10 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if has_images or has_audio:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, stop, audio_paths=audio_paths)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, stop, audio_paths=audio_paths, enable_thinking=enable_thinking)
                     return
 
-                prompt_text = self._format_prompt(messages)
+                prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
                 input_ids = mx.array(self._tokenizer.encode(prompt_text))
 
                 if self._is_vlm:
@@ -610,7 +611,7 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -706,6 +707,7 @@ class VLMEngine:
         top_k: int = 0,
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
+        enable_thinking: bool | None = None,
     ) -> str:
         """Vision + text generation using mlx_vlm.generate().
 
@@ -717,8 +719,8 @@ class VLMEngine:
 
         vlm_messages = self._build_vlm_messages(messages)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
-        if getattr(self, '_enable_thinking', None) is not None:
-            tpl_kwargs["enable_thinking"] = self._enable_thinking
+        if enable_thinking is not None:
+            tpl_kwargs["enable_thinking"] = enable_thinking
 
         # Include audio count in template kwargs for Omni models
         if audio_paths:
@@ -809,17 +811,6 @@ class VLMEngine:
             if delta is not None:
                 logger.debug(f"mRoPE delta captured: {delta:.4f}")
 
-        # C21: Store multimodal prefix tokens for future reuse
-        try:
-            system_text = ""
-            for m in messages:
-                if m.get("role") == "system":
-                    system_text += m.get("content", "")
-            prompt_ids = self._tokenizer.encode(prompt)
-            self._store_mm_prefix_tokens(image_paths, system_text, prompt_ids)
-        except Exception:
-            logger.debug("multimodal prefix cache store failed", exc_info=True)
-
         return result.text if hasattr(result, 'text') else str(result), 0
 
     # ── VLM text generation (for mlx-vlm models) ──
@@ -837,6 +828,7 @@ class VLMEngine:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         json_schema: dict | None = None,
+        enable_thinking: bool | None = None,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -964,6 +956,7 @@ class VLMEngine:
         top_k: int = 0,
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
+        enable_thinking: bool | None = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate().
 
@@ -976,8 +969,8 @@ class VLMEngine:
 
         vlm_messages = self._build_vlm_messages(messages)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
-        if getattr(self, '_enable_thinking', None) is not None:
-            tpl_kwargs["enable_thinking"] = self._enable_thinking
+        if enable_thinking is not None:
+            tpl_kwargs["enable_thinking"] = enable_thinking
 
         if audio_paths:
             tpl_kwargs["num_audios"] = len(audio_paths)
@@ -1099,6 +1092,7 @@ class VLMEngine:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         json_schema: dict | None = None,
+        enable_thinking: bool | None = None,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1287,7 +1281,7 @@ class VLMEngine:
                 vlm_messages.append({"role": msg.get("role", "user"), "content": str(content)})
         return vlm_messages
 
-    def _format_prompt(self, messages: list[dict]) -> str:
+    def _format_prompt(self, messages: list[dict], enable_thinking: bool | None = None) -> str:
         if self._tokenizer is not None and hasattr(self._tokenizer, "apply_chat_template"):
             try:
                 clean = []
@@ -1297,8 +1291,8 @@ class VLMEngine:
                         "content": self._extract_text(msg.get("content", "")),
                     })
                 tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
-                if getattr(self, '_enable_thinking', None) is not None:
-                    tpl_kwargs["enable_thinking"] = self._enable_thinking
+                if enable_thinking is not None:
+                    tpl_kwargs["enable_thinking"] = enable_thinking
                 text = self._tokenizer.apply_chat_template(clean, **tpl_kwargs)
                 if text:
                     return text
@@ -1637,26 +1631,6 @@ class VLMEngine:
                 logger.debug("image hash computation failed, using path", exc_info=True)
                 parts.append(path)
         return "|".join(parts)
-
-    def _get_mm_prefix_tokens(self, image_paths: list[str], system_text: str) -> list[int] | None:
-        """Get cached token IDs for a multimodal prefix (C21)."""
-        key = self._mm_prefix_key(image_paths, system_text)
-        result = self._multimodal_prefix_cache.get(key)
-        if result is not None:
-            self._mm_prefix_hits += 1
-        else:
-            self._mm_prefix_misses += 1
-        return result
-
-    def _store_mm_prefix_tokens(self, image_paths: list[str], system_text: str, token_ids: list[int]) -> None:
-        """Store processed token IDs for a multimodal prefix (C21)."""
-        if len(self._multimodal_prefix_cache) > 64:
-            # Evict oldest entries
-            keys = list(self._multimodal_prefix_cache.keys())
-            for k in keys[:16]:
-                del self._multimodal_prefix_cache[k]
-        key = self._mm_prefix_key(image_paths, system_text)
-        self._multimodal_prefix_cache[key] = token_ids
 
     # ── Stats ──
 

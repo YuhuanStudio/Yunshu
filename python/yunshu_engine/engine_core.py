@@ -26,7 +26,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
 

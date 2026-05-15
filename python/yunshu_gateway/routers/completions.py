@@ -140,97 +140,120 @@ async def create_completion(req: CompletionRequest, request: Request):
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     try:
-        if is_batched:
-            result = await engine.generate(
-                prompt=prompt,
-                max_tokens=req.max_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                min_p=req.min_p,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
-                stop=req.stop,
-                stop_token_ids=req.stop_token_ids,
-                seed=req.seed,
-                spec_decode=req.spec_decode,
-                enable_thinking=req.enable_thinking,
-                thinking_budget=req.thinking_budget,
-                json_schema=json_schema,
-                reasoning_effort=req.reasoning_effort,
-                xtc_probability=req.xtc_probability,
-                xtc_threshold=req.xtc_threshold,
-                logprobs=req.logprobs,
-                top_logprobs=req.top_logprobs,
-                priority=req.priority,
-            )
-            text = result.text
-            prompt_tokens = result.prompt_tokens
-            completion_tokens = result.completion_tokens
-            finish_reason = result.finish_reason
-            logprobs_data = None
-        else:
-            state = await engine.generate(
-                prompt=prompt,
-                max_tokens=req.max_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                min_p=req.min_p,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
-                stop=req.stop,
-                stop_token_ids=req.stop_token_ids,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                thinking_budget=req.thinking_budget,
-                priority=req.priority,
-            )
-            text = state.generated_text
-            prompt_tokens = state.prompt_token_count
-            completion_tokens = state.completion_token_count
-            finish_reason = state.finish_reason or "stop"
-            reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
-            logprobs_data = None
-            if req.logprobs > 0:
-                logprobs_data = _format_logprobs(
-                    state, getattr(engine, '_tokenizer', None), req.logprobs
+        async def _gen_one(idx: int):
+            if is_batched:
+                result = await engine.generate(
+                    prompt=prompt,
+                    max_tokens=req.max_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    min_p=req.min_p,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=req.logit_bias,
+                    stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
+                    seed=req.seed,
+                    spec_decode=req.spec_decode,
+                    enable_thinking=req.enable_thinking,
+                    thinking_budget=req.thinking_budget,
+                    json_schema=json_schema,
+                    reasoning_effort=req.reasoning_effort,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
+                    priority=req.priority,
                 )
+                text = result.text
+                pt = result.prompt_tokens
+                ct = result.completion_tokens
+                fr = result.finish_reason
+                rt = getattr(result, 'reasoning_tokens', 0)
+                lp = None
+            else:
+                state = await engine.generate(
+                    prompt=prompt,
+                    max_tokens=req.max_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    min_p=req.min_p,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=req.logit_bias,
+                    stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    thinking_budget=req.thinking_budget,
+                    priority=req.priority,
+                )
+                text = state.generated_text
+                pt = state.prompt_token_count
+                ct = state.completion_token_count
+                fr = state.finish_reason or "stop"
+                rt = getattr(state, 'reasoning_tokens', 0)
+                lp = None
+                if req.logprobs > 0:
+                    lp = _format_logprobs(
+                        state, getattr(engine, '_tokenizer', None), req.logprobs
+                    )
 
-        if req.echo:
-            text = prompt + text
+            if req.echo:
+                text = prompt + text
+            return idx, pt, ct, fr, rt, lp, text
+
+        n = max(req.n, 1)
+        if n == 1:
+            results = [await _gen_one(0)]
+        else:
+            import asyncio
+            results = await asyncio.gather(*[_gen_one(i) for i in range(n)])
+            results.sort(key=lambda x: x[0])
+
+        prompt_tokens = results[0][1]
+        total_completion_tokens = sum(r[2] for r in results)
+        total_reasoning_tokens = sum(r[4] for r in results)
+        max_finish_reason = results[0][3]
+
+        choices = []
+        for idx, pt, ct, fr, rt, lp, text in results:
+            choices.append({
+                "index": idx,
+                "text": text,
+                "finish_reason": fr,
+                **({"logprobs": lp} if lp else {}),
+            })
 
         # End tracing
         tracer.end_span(trace_id, "prefill")
         tracer.end_trace(trace_id, result={
             "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "finish_reason": finish_reason,
+            "completion_tokens": total_completion_tokens,
+            "finish_reason": max_finish_reason,
         })
         slog.info("inference_complete", model=req.model, trace_id=trace_id,
-                  prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+                  prompt_tokens=prompt_tokens, completion_tokens=total_completion_tokens)
+
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": total_completion_tokens,
+            "total_tokens": prompt_tokens + total_completion_tokens,
+        }
+        if total_reasoning_tokens:
+            usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tokens}
 
         return JSONResponse({
             "id": completion_id,
             "object": "text_completion",
             "created": int(time.time()),
             "model": req.model,
-            "choices": [{
-                "index": 0,
-                "text": text,
-                "finish_reason": finish_reason,
-                **({"logprobs": logprobs_data} if logprobs_data else {}),
-            }],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                **({"completion_tokens_details": {"reasoning_tokens": reasoning_tokens}} if reasoning_tokens else {}),
-            },
+            "choices": choices,
+            "usage": usage,
         })
     finally:
         _release_lora_adapter(engine, loaded_adapter)
@@ -249,14 +272,16 @@ async def _stream_completion(
     prompt_tok = 0
     completion_tok = 0
     reasoning_tok = 0
+    n = max(req.n, 1)
 
-    async def _token_source():
-        nonlocal reasoning_tok
+    async def _stream_choice(choice_idx: int):
+        nonlocal prompt_tok, completion_tok, reasoning_tok
         if req.echo:
             yield format_openai_chunk(
                 completion_id=completion_id,
                 model=req.model,
                 delta_content=prompt,
+                choice_index=choice_idx,
             )
 
         if is_batched:
@@ -294,6 +319,7 @@ async def _stream_completion(
                     model=req.model,
                     delta_content=output.new_text,
                     finish_reason=output.finish_reason,
+                    choice_index=choice_idx,
                 )
         else:
             async for output in engine.generate_stream(
@@ -323,7 +349,14 @@ async def _stream_completion(
                     model=req.model,
                     delta_content=output.token_text,
                     finish_reason=output.finish_reason,
+                    choice_index=choice_idx,
                 )
+
+    async def _token_source():
+        # Stream each choice sequentially (matches OpenAI spec behavior)
+        for choice_idx in range(n):
+            async for chunk in _stream_choice(choice_idx):
+                yield chunk
 
         if include_usage:
             yield format_openai_usage_chunk(

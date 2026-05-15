@@ -636,6 +636,7 @@ def format_openai_chunk(
     tool_calls: Optional[list[dict]] = None,
     logprobs: Optional[dict] = None,
     include_role: bool = False,
+    choice_index: int = 0,
 ) -> str:
     """Format a single SSE chunk in OpenAI Chat Completions format."""
     delta = {"content": delta_content}
@@ -645,7 +646,7 @@ def format_openai_chunk(
         delta["reasoning_content"] = thinking_content
 
     choice: dict[str, Any] = {
-        "index": 0,
+        "index": choice_index,
         "delta": delta,
         "finish_reason": finish_reason,
     }
