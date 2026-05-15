@@ -1766,7 +1766,7 @@ class BatchedEngine:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
-                pass
+                logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -1780,7 +1780,7 @@ class BatchedEngine:
                     from .inflight_prefix_sharing import get_inflight_tracker
                     get_inflight_tracker().unregister(_inflight_req_id)
                 except Exception:
-                    pass
+                    logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -1791,8 +1791,21 @@ class BatchedEngine:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
-                pass
+                logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
             raise
+        except Exception as e:
+            logger.error(f"Unexpected error during generation: {e}", exc_info=True)
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_inflight_req_id)
+            except Exception:
+                logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
+            return GenerationOutput(
+                finished=True,
+                finish_reason="error",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+            )
 
         # Decode token strings for logprobs
         lp_result = None
@@ -3253,6 +3266,14 @@ class BatchedEngine:
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         def _run():
+            try:
+                _run_inner()
+            except Exception as e:
+                logger.error(f"N-gram streaming generation failed: {e}", exc_info=True)
+                _put(e)
+                _put(_sentinel)
+
+        def _run_inner():
             if seed is not None:
                 mx.random.seed(seed)
             ids = mx.array(input_ids)
@@ -3424,6 +3445,9 @@ class BatchedEngine:
                     logger.warning("N-gram streaming timeout: no token for 120s")
                     break
                 if item is _sentinel:
+                    break
+                if isinstance(item, BaseException):
+                    logger.warning(f"N-gram streaming error: {item}")
                     break
                 new_text, tok_count, done, token_id = item
                 accumulated += new_text

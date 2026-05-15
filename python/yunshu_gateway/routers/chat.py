@@ -1544,7 +1544,20 @@ async def _stream_response(
 
                 _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
 
-                if use_tool_streamer and tool_streamer and token_text:
+                # Route thinking content based on SequenceStateMachine state
+                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                if _is_reasoning:
+                    yield format_openai_chunk(
+                        completion_id=completion_id,
+                        model=req.model,
+                        delta_content="",
+                        thinking_content=token_text,
+                        finish_reason=None,
+                        include_role=first_chunk,
+                        logprobs=_chunk_lp,
+                    )
+                    first_chunk = False
+                elif use_tool_streamer and tool_streamer and token_text:
                     # Run through tool call streamer
                     outputs = tool_streamer.process_token(token_text)
                     for out in outputs:
