@@ -1993,6 +1993,7 @@ class BatchedEngine:
                     top_p=top_p, top_k=top_k, min_p=min_p,
                     repetition_penalty=repetition_penalty, stop=stop,
                     stop_token_ids=stop_token_ids, seed=seed,
+                    cancel_event=_cancel_event,
                 ):
                     yield output
             finally:
@@ -2079,6 +2080,11 @@ class BatchedEngine:
                     await self._engine_core.abort_request(request_id)
                 except Exception:
                     logger.debug("stream abort failed", exc_info=True)
+            if _tracker is not None:
+                try:
+                    _tracker.unregister(_stream_req_id)
+                except Exception:
+                    logger.debug("request tracker cleanup failed", exc_info=True)
 
     async def _stream_generate_fast(
         self,
@@ -2219,6 +2225,17 @@ class BatchedEngine:
         def _put(item):
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
+        # Inflight prefix sharing: defined at _run level so it's accessible
+        # from exception handlers even if _run_inner crashes early
+        _inflight_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
+
+        def _unregister_inflight():
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_inflight_req_id)
+            except Exception:
+                logger.debug("inflight prefix unregister failed in streaming", exc_info=True)
+
         def _run():
             try:
                 _run_inner()
@@ -2299,7 +2316,6 @@ class BatchedEngine:
                     logger.debug("inflight prefix lookup failed in streaming", exc_info=True)
 
             # Register our prefill as in-flight for concurrent requests to share
-            _inflight_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().register(
@@ -2310,13 +2326,6 @@ class BatchedEngine:
                 )
             except Exception:
                 logger.debug("inflight prefix register failed in streaming", exc_info=True)
-
-            def _unregister_inflight():
-                try:
-                    from .inflight_prefix_sharing import get_inflight_tracker
-                    get_inflight_tracker().unregister(_inflight_req_id)
-                except Exception:
-                    logger.debug("inflight prefix unregister failed in streaming", exc_info=True)
 
             _lprocs = logits_processors if logits_processors else None
             with _wired_limit_ctx(model):
@@ -3328,6 +3337,7 @@ class BatchedEngine:
         seed: int | None = None,
         json_schema: dict | str | None = None,  # noqa: kept for API compatibility
         logprobs: bool = False,  # noqa: kept for API compatibility
+        cancel_event: asyncio.Event | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -3411,6 +3421,10 @@ class BatchedEngine:
                 # Decode with N-gram lookahead
                 remaining = max_tokens - 1
                 while remaining > 0:
+                    if cancel_event is not None and cancel_event.is_set():
+                        detokenizer.finalize()
+                        _put(_sentinel)
+                        return
                     _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
                     draft_ids = proposer.propose(all_token_ids)
                     if _adaptive_k is not None:
