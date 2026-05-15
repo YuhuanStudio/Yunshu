@@ -53,6 +53,14 @@
 | Wave 96c: Responses API 追蹤 + 轉發 | Structured tracing (get_inference_tracer) + priority/user 參數轉發 VLM handler | 與 chat/completions 一致 |
 | Wave 96d: Completions.py NameError | `_gen_one` 中 `result` 只在 is_batched path 定義但無條件引用 cached_tokens — 非批次路徑會 NameError | 路由修復 |
 
+### 已完成修復 (2026-05-16 Wave 98d — Chat Streaming Logprobs + Anthropic Thinking + Dead Code)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 98d: Chat streaming logprobs | 新增 _format_chat_logprobs() helper，所有 Chat streaming 路徑 (batched + legacy) 現在正確傳遞 logprobs 到 SSE chunks | logprobs=true 串流終於有數據 |
+| Wave 98d: Anthropic legacy thinking | Legacy engine 串流路徑不處理 thinking tokens — 靜默丟棄。修復: 正確發送 thinking_block_start/delta + text 轉換 | Anthropic thinking 串流完整 |
+| Wave 98d: BatchStopChecker 死代碼 | engine_core.py 的 BatchStopChecker 從未被調用 (SequenceStateMachine 已處理 stop detection)。移除 + 刪除對應測試 | 減少死代碼 |
+
 ### 已完成修復 (2026-05-16 Wave 98 — Resource Leaks + Parameter Forwarding + Preprocessor Safety + 3-State Shutdown)
 
 | 修復 | 描述 | 影響 |
