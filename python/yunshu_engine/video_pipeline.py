@@ -754,13 +754,33 @@ class WanVideoPipeline(VideoPipeline):
         request: VideoGenRequest,
         scheduler: FlowMatchingScheduler | EulerScheduler,
     ) -> mx.array:
-        """Run the full denoising loop (simplified without real transformer)."""
+        """Run the full denoising loop.
+
+        When a real transformer model is loaded and TeaCache hook is attached,
+        uses TeaCache-accelerated forward passes. Otherwise falls back to
+        simplified velocity prediction for testing.
+        """
+        teacache_hook = getattr(self, '_teacache_hook', None)
+
         for step_idx in range(request.num_steps):
             t = scheduler.get_timestep(step_idx)
             dt = scheduler.get_dt(step_idx)
 
-            # Simplified velocity prediction (real pipeline uses transformer)
-            noise_pred = latents * 0.1 * t
+            if self._model is not None and hasattr(self._model, '__call__'):
+                # Real transformer forward pass
+                if teacache_hook is not None and hasattr(self._model, 't_embedder'):
+                    # TeaCache-accelerated forward
+                    sigmas = scheduler.sigmas if hasattr(scheduler, 'sigmas') else None
+                    noise_pred = teacache_hook.forward(
+                        self._model, latents, step_idx, sigmas,
+                        cap_feats=getattr(self, '_text_embeddings', None),
+                    )
+                else:
+                    noise_pred = self._model(latents, t)
+            else:
+                # Simplified velocity prediction (placeholder for testing)
+                noise_pred = latents * 0.1 * t
+
             latents = scheduler.step(noise_pred, latents, t, dt)
 
             if step_idx % 4 == 0:

@@ -556,6 +556,11 @@ class Scheduler:
         # KV prefix cache for batch-path insert_segments (C16)
         self._prefix_cache: Any = None
 
+        # Cache-locality request reordering (SGLang/vLLM pattern)
+        # Maps request_id → first KV block hash. Requests with the same hash
+        # share a prefix and are scheduled consecutively for better cache locality.
+        self._kv_prefix_hashes: dict[str, int] = {}
+
         # Deferred cache clearing (oMLX #435)
         self._step_counter: int = 0
         self._deferred_clear_at: int | None = None
@@ -770,6 +775,55 @@ class Scheduler:
         """
         self._hybrid_kv = hybrid_kv
 
+    def set_kv_prefix_hash(self, request_id: str, prefix_hash: int) -> None:
+        """Store a request's KV prefix hash for cache-locality reordering.
+
+        Called by EngineCore after computing the prefix hash for a new request.
+        The hash is derived from the first complete KV block of the prompt,
+        which approximates the system prompt / conversation prefix.
+        """
+        self._kv_prefix_hashes[request_id] = prefix_hash
+
+    def _reorder_by_cache_locality(self, requests: list) -> list:
+        """Sort requests by KV prefix hash for better cache utilization.
+
+        Groups requests sharing the same KV prefix hash (i.e., same system
+        prompt / conversation prefix) so they are inserted consecutively into
+        the BatchGenerator. This maximizes KV cache block locality during
+        prefill and decode, reducing cache thrashing.
+
+        SGLang and vLLM sort running requests by shared KV block prefixes
+        before each forward pass for the same reason.
+
+        Args:
+            requests: List of Request objects to sort.
+
+        Returns:
+            Reordered list. No-op when len <= 1. Stable sort preserves
+            insertion order within each prefix group.
+        """
+        if len(requests) <= 1:
+            return requests
+
+        # Group by KV prefix hash
+        prefix_groups: dict[int, list] = {}
+        no_prefix: list = []
+
+        for req in requests:
+            rid = req.request_id
+            prefix_hash = self._kv_prefix_hashes.get(rid)
+            if prefix_hash is not None:
+                prefix_groups.setdefault(prefix_hash, []).append(req)
+            else:
+                no_prefix.append(req)
+
+        # Emit grouped first (shared prefix), then ungrouped
+        result: list = []
+        for group in prefix_groups.values():
+            result.extend(group)
+        result.extend(no_prefix)
+        return result
+
     def _get_external_prefiller(self) -> Any:
         """Lazy-initialize the ExternalPrefiller."""
         if self._external_prefiller is None:
@@ -970,6 +1024,12 @@ class Scheduler:
             to_insert.append(req)
 
         # No need to sort — the heap maintains order (FCFS or PRIORITY)
+
+        # Cache-locality reordering: sort to_insert by KV prefix hash so
+        # requests sharing the same system prompt / conversation prefix are
+        # inserted into the BatchGenerator consecutively. This improves KV
+        # cache block locality during prefill and decode (SGLang/vLLM pattern).
+        to_insert = self._reorder_by_cache_locality(to_insert)
 
         # Respect max_num_seqs limit — with preemption under PRIORITY policy
         active_count = len(self.running)
@@ -1944,6 +2004,7 @@ class Scheduler:
             if RequestStatus.is_finished(req.status):
                 self.running.pop(req_id, None)
                 self.finished_ids.add(req_id)
+                self._kv_prefix_hashes.pop(req_id, None)
 
     def _create_detokenizer(self):
         if self.tokenizer is None:
@@ -2039,6 +2100,7 @@ class Scheduler:
     def remove_finished_request(self, request_id: str) -> None:
         self.requests.pop(request_id, None)
         self.finished_ids.discard(request_id)
+        self._kv_prefix_hashes.pop(request_id, None)
 
     def _try_init_spec_decoder(self) -> None:
         """Try to initialize speculative decoding by detecting spec heads in the model.
@@ -2676,6 +2738,11 @@ class Scheduler:
         # Batched draft collection stats
         if self._draft_collector is not None:
             stats["draft_collector"] = self._draft_collector.get_stats()
+        # Cache-locality reordering stats
+        stats["cache_locality"] = {
+            "tracked_prefixes": len(self._kv_prefix_hashes),
+            "unique_groups": len(set(self._kv_prefix_hashes.values())) if self._kv_prefix_hashes else 0,
+        }
         return stats
 
 

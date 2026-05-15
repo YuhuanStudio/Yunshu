@@ -190,6 +190,13 @@ async def create_completion(req: CompletionRequest, request: Request):
                     seed=req.seed,
                     enable_thinking=req.enable_thinking,
                     thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    spec_decode=req.spec_decode,
+                    json_schema=json_schema,
+                    logprobs=req.logprobs > 0,
+                    top_logprobs=req.top_logprobs,
                     priority=req.priority,
                 )
                 text = state.generated_text
@@ -340,6 +347,11 @@ async def _stream_completion(
                 thinking_budget=req.thinking_budget,
                 reasoning_effort=req.reasoning_effort,
                 stop_token_ids=req.stop_token_ids,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                spec_decode=req.spec_decode,
+                json_schema=json_schema,
+                priority=req.priority,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count

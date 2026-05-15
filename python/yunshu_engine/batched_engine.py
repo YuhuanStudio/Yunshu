@@ -238,6 +238,10 @@ class BatchedEngine:
         self._ngram_proposer = None  # NgramProposer, created on demand
         self._ngram_stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
 
+        # Response cache hit/miss counters (YUNSHU_RESPONSE_CACHE=1)
+        self._response_cache_hits = 0
+        self._response_cache_misses = 0
+
         # GPU-accelerated rejection sampling (opt-in via YUNSHU_GPU_REJECTION=1)
         from .gpu_rejection import GPURejectionSampler, should_enable_gpu_rejection
         self._gpu_rejection_sampler = GPURejectionSampler()
@@ -447,7 +451,15 @@ class BatchedEngine:
             attn_opt = AttentionOptimizer()
             attn_opt.detect_attention_type(self._model)
             moe_opt = MoEEfficiencyOptimizer()
-            moe_opt.configure(self._model)
+            # Auto-detect MoE config from model
+            moe_num_experts = 0
+            moe_top_k = 0
+            if hasattr(self._model, 'config'):
+                cfg = self._model.config
+                moe_num_experts = getattr(cfg, 'num_experts', getattr(cfg, 'num_local_experts', 0))
+                moe_top_k = getattr(cfg, 'num_experts_per_tok', getattr(cfg, 'num_selected_experts', 0))
+            if moe_num_experts > 0 and moe_top_k > 0:
+                moe_opt.configure(self._model, moe_num_experts, moe_top_k)
             logger.info(
                 f"Model optimizations detected: RoPE={rope_opt.get_scaling_config().scaling_type}, "
                 f"Attention={attn_opt.get_stats().get('attention_type', 'unknown')}, "
@@ -1019,6 +1031,38 @@ class BatchedEngine:
             if enable_thinking is None:
                 enable_thinking = True
 
+        # Response cache lookup (YUNSHU_RESPONSE_CACHE=1)
+        _rc_hash = None
+        if not spec_decode:
+            try:
+                from .gateway_optimizer import get_response_cache
+                _rc = get_response_cache()
+                if _rc.enabled:
+                    _rc_hash = _rc.hash_request(
+                        self.model_name,
+                        prompt if isinstance(prompt, str) else str(prompt),
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k,
+                        min_p=min_p,
+                        repetition_penalty=repetition_penalty,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
+                        stop=str(stop),
+                        seed=seed,
+                        enable_thinking=enable_thinking,
+                        thinking_budget=thinking_budget,
+                        json_schema=str(json_schema),
+                    )
+                    _rc_hit = _rc.get(_rc_hash)
+                    if _rc_hit is not None:
+                        self._response_cache_hits += 1
+                        return _rc_hit
+                    self._response_cache_misses += 1
+            except Exception:
+                logger.debug("response cache lookup failed", exc_info=True)
+
         # ── Wave 43: Context window truncation for long prompts ──
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             try:
@@ -1083,7 +1127,7 @@ class BatchedEngine:
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
         if not _use_engine_loop:
-            return await self._generate_fast(
+            result = await self._generate_fast(
                 prompt=prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -1106,6 +1150,13 @@ class BatchedEngine:
                 json_schema=json_schema,
                 cancel_event=cancel_event,
             )
+            if _rc_hash is not None and result.finish_reason != "error":
+                try:
+                    from .gateway_optimizer import get_response_cache
+                    get_response_cache().put(_rc_hash, result)
+                except Exception:
+                    logger.debug("response cache store failed", exc_info=True)
+            return result
 
         # Engine loop path: continuous batching with scheduler overhead
         result = await self._engine_core.generate(
@@ -1150,7 +1201,7 @@ class BatchedEngine:
         except Exception:
             logger.debug("output_parser failed", exc_info=True)
 
-        return GenerationOutput(
+        engine_loop_result = GenerationOutput(
             text=output_text,
             new_text=output_text,
             prompt_tokens=result.prompt_tokens,
@@ -1158,6 +1209,13 @@ class BatchedEngine:
             finished=True,
             finish_reason=finish_reason,
         )
+        if _rc_hash is not None and engine_loop_result.finish_reason != "error":
+            try:
+                from .gateway_optimizer import get_response_cache
+                get_response_cache().put(_rc_hash, engine_loop_result)
+            except Exception:
+                logger.debug("response cache store failed", exc_info=True)
+        return engine_loop_result
 
     async def _generate_fast(
         self,
@@ -3372,6 +3430,10 @@ class BatchedEngine:
         if hasattr(self, '_preprocessor_registry') and self._preprocessor_registry is not None:
             stats["model_preprocessor"] = self._preprocessor_registry.get_stats()
         stats["reasoning_tokens"] = getattr(self, '_total_reasoning_tokens', 0)
+        stats["response_cache"] = {
+            "hits": getattr(self, '_response_cache_hits', 0),
+            "misses": getattr(self, '_response_cache_misses', 0),
+        }
         return stats
 
     def get_kv_cache_stats(self) -> dict:

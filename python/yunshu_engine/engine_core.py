@@ -286,6 +286,7 @@ class EngineCore:
         from .request_dedup import RequestDeduplicator
         self._request_dedup: RequestDeduplicator | None = None
         self._dedup_hashes: dict[str, str] = {}  # req_id → content_hash
+        self._dedup_shadows: dict[str, str] = {}  # shadow_req_id → primary_req_id
         if os.environ.get("YUNSHU_REQUEST_DEDUP", "").strip() in ("1", "true", "yes"):
             self._request_dedup = RequestDeduplicator.from_env()
             logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
@@ -465,6 +466,12 @@ class EngineCore:
         self._num_requests_processed: int = 0
         self._request_timestamps: dict[str, float] = {}  # req_id → monotonic start time
         self._request_lora_adapters: dict[str, str] = {}  # req_id → lora_adapter_id
+
+        # Cache-locality request reordering (SGLang/vLLM pattern)
+        # Maps request_id → KV prefix hash for grouping requests with shared
+        # prefixes. Requests sharing the same prefix hash are scheduled
+        # consecutively to maximize KV cache block locality and reduce thrashing.
+        self._kv_prefix_hashes: dict[str, int] = {}
 
     def set_prefix_cache(self, cache: Any) -> None:
         """Set KV prefix cache for batch-path insert_segments (C16)."""
@@ -799,7 +806,22 @@ class EngineCore:
             )
             dedup_result = self._request_dedup.check(req_id, content_hash)
             if dedup_result is not None:
-                logger.debug(f"Request {req_id} dedup hit for {dedup_result.primary_request_id}")
+                # Shadow request: don't add to scheduler, wait for primary's output
+                primary_id = dedup_result.primary_request_id
+                logger.debug(
+                    f"Request {req_id} dedup hit, shadowing {primary_id}"
+                )
+                self._dedup_shadows[req_id] = primary_id
+                self._dedup_hashes[req_id] = content_hash
+                # Create output collector + finished event so the caller can await
+                from .output_collector import RequestOutputCollector, RequestStreamState
+                self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+                self._stream_states[req_id] = RequestStreamState(
+                    stream_interval=self.config.stream_interval
+                )
+                self._finished_events[req_id] = asyncio.Event()
+                self._request_timestamps[req_id] = time.monotonic()
+                return req_id
             else:
                 self._request_dedup.register(req_id, content_hash)
             self._dedup_hashes[req_id] = content_hash
@@ -906,6 +928,14 @@ class EngineCore:
         )
         self._finished_events[req_id] = asyncio.Event()
         self._request_timestamps[req_id] = time.monotonic()
+
+        # Compute and store KV prefix hash for cache-locality reordering
+        prefix_hash = self._compute_prefix_hash_for_request(req_id, token_ids)
+        if prefix_hash is not None:
+            self._kv_prefix_hashes[req_id] = prefix_hash
+            # Also set on scheduler so _schedule_waiting can reorder by prefix
+            self.scheduler.set_kv_prefix_hash(req_id, prefix_hash)
+
         if loaded_lora and lora_adapter:
             self._request_lora_adapters[req_id] = lora_adapter
 
@@ -1132,7 +1162,35 @@ class EngineCore:
                     if self._request_dedup is not None:
                         content_hash = self._dedup_hashes.pop(rid, None)
                         if content_hash:
-                            self._request_dedup.complete(content_hash)
+                            all_ids = self._request_dedup.complete(content_hash)
+                            # Fan out output to shadow requests
+                            from .request import RequestOutput as _RO
+                            for shadow_id in all_ids:
+                                if shadow_id == rid:
+                                    continue
+                                shadow_collector = self._output_collectors.get(shadow_id)
+                                if shadow_collector is not None:
+                                    # Rewrite request_id for the shadow
+                                    shadow_output = _RO(
+                                        request_id=shadow_id,
+                                        new_token_ids=req_output.new_token_ids,
+                                        new_text=req_output.new_text,
+                                        output_token_ids=req_output.output_token_ids,
+                                        output_text=req_output.output_text,
+                                        finished=True,
+                                        finish_reason=req_output.finish_reason,
+                                        prompt_tokens=req_output.prompt_tokens,
+                                        completion_tokens=req_output.completion_tokens,
+                                        logprobs=req_output.logprobs,
+                                        current_state=req_output.current_state,
+                                    )
+                                    shadow_collector.put(shadow_output)
+                                    shadow_collector.put(None)  # sentinel
+                                    self._dedup_hashes.pop(shadow_id, None)
+                                    self._dedup_shadows.pop(shadow_id, None)
+                                    shadow_event = self._finished_events.get(shadow_id)
+                                    if shadow_event is not None:
+                                        shadow_event.set()
 
             # Update adaptive batch scheduler metrics
             if scheduler_output.outputs:
@@ -1148,7 +1206,18 @@ class EngineCore:
                         # Sliding window tracking
                         if self._sliding_window_mgr is not None:
                             try:
-                                self._sliding_window_mgr.on_new_token(rid)
+                                total_pos = req_output.prompt_tokens + req_output.completion_tokens
+                                evicted = self._sliding_window_mgr.on_new_token(
+                                    token_position=total_pos,
+                                    request_id=rid,
+                                )
+                                # Trim real KV cache for sliding window models
+                                if evicted:
+                                    req = self.scheduler.running.get(rid)
+                                    if req is not None and req.prompt_cache is not None:
+                                        self._sliding_window_mgr.trim_kv_cache(
+                                            req.prompt_cache, request_id=rid,
+                                        )
                             except Exception:
                                 logger.debug("sliding window tracking failed", exc_info=True)
 
@@ -1284,11 +1353,63 @@ class EngineCore:
 
             await asyncio.sleep(0)
 
+    def _reorder_by_cache_locality(self, request_ids: list[str]) -> list[str]:
+        """Sort requests by KV prefix hash for better cache utilization.
+
+        Groups requests sharing the same KV prefix hash (i.e., same system
+        prompt / conversation prefix) so they are processed consecutively.
+        This maximizes KV cache block locality and reduces cache thrashing,
+        following the SGLang/vLLM pattern of sorting running requests by
+        shared KV block prefixes before each forward pass.
+
+        Returns:
+            Reordered list of request IDs. No-op when len <= 1.
+        """
+        if len(request_ids) <= 1:
+            return request_ids
+
+        # Group by KV prefix hash from _kv_prefix_hashes
+        prefix_groups: dict[int, list[str]] = {}
+        no_prefix: list[str] = []
+
+        for rid in request_ids:
+            prefix_hash = self._kv_prefix_hashes.get(rid)
+            if prefix_hash is not None:
+                prefix_groups.setdefault(prefix_hash, []).append(rid)
+            else:
+                no_prefix.append(rid)
+
+        # Emit grouped first (shared prefix), then ungrouped
+        result: list[str] = []
+        for group in prefix_groups.values():
+            result.extend(group)
+        result.extend(no_prefix)
+        return result
+
+    def _compute_prefix_hash_for_request(self, req_id: str, prompt_token_ids: list[int]) -> int | None:
+        """Compute and store a KV prefix hash for a request.
+
+        Uses the first complete KV block's worth of tokens as the prefix hash.
+        This approximates the system prompt / conversation prefix that determines
+        KV block sharing. Returns the hash, or None if the prompt is too short.
+        """
+        block_size = self.config.kv_block_size
+        if len(prompt_token_ids) < block_size:
+            return None
+        try:
+            from yunshu_kv.hash import compute_block_hash
+            first_block_tokens = prompt_token_ids[:block_size]
+            return compute_block_hash(None, first_block_tokens)
+        except Exception:
+            return None
+
     def _signal_finished(self, request_id: str) -> None:
         """Signal request completion."""
         event = self._finished_events.get(request_id)
         if event:
             event.set()
+        # Clean up prefix hash tracking
+        self._kv_prefix_hashes.pop(request_id, None)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request output management state."""
@@ -1296,6 +1417,7 @@ class EngineCore:
         self._stream_states.pop(request_id, None)
         self._finished_events.pop(request_id, None)
         self._request_timestamps.pop(request_id, None)
+        self._kv_prefix_hashes.pop(request_id, None)
         # Release LoRA adapter if any
         lora_id = self._request_lora_adapters.pop(request_id, None)
         if lora_id:
@@ -1316,6 +1438,7 @@ class EngineCore:
             logger.debug("kv_lifecycle release failed", exc_info=True)
         if self._request_dedup is not None:
             content_hash = self._dedup_hashes.pop(request_id, None)
+            self._dedup_shadows.pop(request_id, None)
             if content_hash:
                 self._request_dedup.complete(content_hash)
         if self._checkpoint_mgr is not None:

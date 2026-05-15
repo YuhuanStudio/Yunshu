@@ -337,7 +337,7 @@ class VideoEngine:
         scheduler: str,
         output_format: str,
     ) -> VideoGenOutput:
-        """Synchronous generation using mlx-video."""
+        """Synchronous generation — tries native pipeline, then mlx-video."""
         model_dir = self._get_model_dir()
 
         if not model_dir or not os.path.isdir(model_dir):
@@ -345,6 +345,37 @@ class VideoEngine:
             return self._fallback_generation(
                 prompt, width, height, num_frames, fps, output_format,
             )
+
+        # Try native MLX pipeline first (YUNSHU_VIDEO_PIPELINE=native)
+        use_native = os.environ.get("YUNSHU_VIDEO_PIPELINE", "").strip() == "native"
+        if use_native or self._native_pipeline is not None:
+            result = self._generate_with_native_pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                image=image,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                num_steps=num_steps,
+                guide_scale=guide_scale,
+                seed=seed,
+                scheduler=scheduler,
+                model_dir=model_dir,
+            )
+            if result is not None:
+                frames = result.frames
+                video_data = b""
+                if output_format == "mp4" and frames:
+                    video_data = self._encode_frames_to_mp4(frames, fps)
+                return VideoGenOutput(
+                    video_data=video_data if output_format == "mp4" else b"",
+                    frames=frames,
+                    width=width,
+                    height=height,
+                    num_frames=len(frames) or num_frames,
+                    fps=fps,
+                    method="native_mlx",
+                )
 
         # Save image to temp file for I2V if provided
         image_path = None
@@ -475,6 +506,123 @@ class VideoEngine:
         except ImportError:
             logger.error("mlx-video not installed. Install with: pip install mlx-video")
             return None
+
+    def _generate_with_native_pipeline(
+        self,
+        prompt: str,
+        negative_prompt: str,
+        image: bytes | None,
+        width: int,
+        height: int,
+        num_frames: int,
+        num_steps: int,
+        guide_scale: float,
+        seed: int,
+        scheduler: str,
+        model_dir: str,
+    ):
+        """Generate video using native MLX pipeline (WanVideoPipeline + TeaCache)."""
+        try:
+            from .video_pipeline import WanVideoPipeline, VideoGenRequest
+
+            if self._native_pipeline is None:
+                self._native_pipeline = WanVideoPipeline(model_path=model_dir)
+                loaded = self._native_pipeline.load_weights(model_dir)
+                if not loaded:
+                    logger.warning("Native pipeline weight loading failed")
+                    self._native_pipeline = None
+                    return None
+
+            request = VideoGenRequest(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                num_steps=num_steps,
+                guide_scale=guide_scale,
+                seed=seed if seed >= 0 else int(time.time_ns()) % (2**31),
+                scheduler=scheduler,
+            )
+
+            # Wire TeaCache into the pipeline's denoising loop
+            if self._teacache is not None:
+                self._teacache.reset()
+                self._native_pipeline._teacache_hook = self._teacache
+
+            if image is not None:
+                import tempfile
+                fd, img_path = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                try:
+                    with open(img_path, "wb") as f:
+                        f.write(image)
+                    result = self._native_pipeline.generate_from_image(
+                        request=request,
+                        image_path=img_path,
+                    )
+                finally:
+                    if os.path.exists(img_path):
+                        os.unlink(img_path)
+            else:
+                result = self._native_pipeline.generate_frames(request)
+
+            # Detach teacache hook after generation
+            if hasattr(self._native_pipeline, '_teacache_hook'):
+                self._native_pipeline._teacache_hook = None
+
+            if result and result.frames:
+                return result
+            return None
+        except Exception as e:
+            logger.error(f"Native pipeline generation failed: {e}", exc_info=True)
+            return None
+
+    def _encode_frames_to_mp4(self, frames: list, fps: int) -> bytes:
+        """Encode a list of frames (np arrays or PIL images) to MP4 bytes."""
+        try:
+            import subprocess
+            import tempfile
+
+            fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+            os.close(fd)
+
+            import numpy as np
+            from PIL import Image
+
+            fd2, frame_pattern = tempfile.mkstemp(suffix="_%04d.png")
+            os.close(fd2)
+            os.unlink(fd2)
+            frame_dir = frame_pattern.rsplit("_", 1)[0]
+            os.makedirs(frame_dir, exist_ok=True)
+
+            for i, frame in enumerate(frames):
+                if isinstance(frame, np.ndarray):
+                    img = Image.fromarray(frame)
+                elif hasattr(frame, 'save'):
+                    img = frame
+                else:
+                    continue
+                img.save(os.path.join(frame_dir, f"{i:04d}.png"))
+
+            subprocess.run([
+                "ffmpeg", "-y", "-framerate", str(fps),
+                "-i", os.path.join(frame_dir, "%04d.png"),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                tmp_path,
+            ], capture_output=True, check=True)
+
+            data = Path(tmp_path).read_bytes()
+            os.unlink(tmp_path)
+
+            # Cleanup frame images
+            import shutil
+            shutil.rmtree(frame_dir, ignore_errors=True)
+
+            return data
+        except Exception as e:
+            logger.error(f"MP4 encoding failed: {e}", exc_info=True)
+            return b""
 
     def _fallback_generation(
         self,

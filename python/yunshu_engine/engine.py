@@ -84,6 +84,11 @@ class RequestState:
     # Timing
     arrival_time: float = field(default_factory=time.monotonic)
 
+    # Additional sampler params for legacy path
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.0
+    stop_token_ids: list[int] = field(default_factory=list)
+
 
 # ── Engine Core ──
 
@@ -395,7 +400,8 @@ class Engine:
         return detok
 
     def _make_sampler(self, temperature: float = 0.7, top_p: float = 1.0,
-                      top_k: int = 0, min_p: float = 0.0):
+                      top_k: int = 0, min_p: float = 0.0,
+                      xtc_probability: float = 0.0, xtc_threshold: float = 0.0):
         """Create a per-request sampler with the given parameters.
 
         Supports all mlx-lm sampler params (oMLX SamplingParams pattern).
@@ -406,14 +412,18 @@ class Engine:
             top_p=top_p,
             top_k=top_k,
             min_p=min_p,
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
         )
 
-    def _make_state_machine(self, stop: list[str] | None = None):
+    def _make_state_machine(self, stop: list[str] | None = None,
+                            stop_token_ids: list[int] | None = None):
         """Create a SequenceStateMachine for stop sequence detection.
 
         Follows mlx-lm server.py's _make_state_machine pattern:
         - EOS tokens always stop generation
         - User stop words encoded to token sequences
+        - Additional stop token IDs passed directly
         - Reasoning transitions (think_start/think_end) if tokenizer supports it
         - All managed via Aho-Corasick trie for O(k) matching
         """
@@ -427,6 +437,10 @@ class Engine:
         for w in (stop or []):
             t = tuple(tokenizer.encode(w, add_special_tokens=False))
             common_stops.append((t, None))
+
+        # Add explicit stop_token_ids (Wave 57 pattern)
+        for tid in (stop_token_ids or []):
+            common_stops.append(((tid,), None))
 
         transitions = {}
         transitions["normal"] = list(common_stops)
@@ -458,11 +472,36 @@ class Engine:
         stop: list[str] | None = None,
         request_id: str | None = None,
         enable_thinking: bool | None = None,
+        stop_token_ids: list[int] | None = None,
+        seed: int | None = None,
+        thinking_budget: int | None = None,
+        reasoning_effort: str | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        spec_decode: bool = False,
+        json_schema: dict | str | None = None,
+        logprobs: bool = False,
+        top_logprobs: int | None = None,
+        priority: int = 0,
         **kwargs,
     ) -> RequestState:
         """Add a new generation request to the engine."""
         if not self.is_loaded:
             raise RuntimeError("No model loaded")
+
+        # Parameters not supported by legacy engine — log and ignore
+        if spec_decode:
+            logger.debug("spec_decode ignored in legacy Engine (requires BatchedEngine)")
+        if json_schema:
+            logger.debug("json_schema ignored in legacy Engine (requires BatchedEngine)")
+        if thinking_budget is not None:
+            logger.debug("thinking_budget ignored in legacy Engine (requires BatchedEngine)")
+        if reasoning_effort is not None:
+            logger.debug("reasoning_effort ignored in legacy Engine (requires BatchedEngine)")
+        if logprobs:
+            logger.debug("logprobs/top_logprobs ignored in legacy Engine (requires BatchedEngine)")
+        if priority > 0:
+            logger.debug("priority ignored in legacy Engine (single-request path)")
 
         # EngineCore path: returns request_id, wraps as RequestState for compatibility
         if self._engine_core is not None:
@@ -478,6 +517,7 @@ class Engine:
                 presence_penalty=presence_penalty,
                 logit_bias=logit_bias,
                 stop=stop,
+                stop_token_ids=stop_token_ids,
                 request_id=request_id,
                 enable_thinking=enable_thinking,
             )
@@ -527,6 +567,10 @@ class Engine:
             stop=stop or [],
             prompt_token_count=len(token_ids),
             detokenizer=detokenizer,
+            # Store additional params for sampler/state_machine creation
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
+            stop_token_ids=stop_token_ids or [],
         )
 
         self._waiting.append(state)
@@ -677,8 +721,9 @@ class Engine:
                 sampler = self._make_sampler(
                     state.temperature, state.top_p,
                     state.top_k, state.min_p,
+                    state.xtc_probability, state.xtc_threshold,
                 )
-                sm = self._make_state_machine(state.stop)
+                sm = self._make_state_machine(state.stop, state.stop_token_ids)
 
                 uids = self._batch_gen.insert(
                     prompts=[tokens],

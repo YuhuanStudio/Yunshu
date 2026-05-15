@@ -81,6 +81,7 @@ class WindowStats:
     system_prompt_blocks: int = 0
     total_blocks_seen: int = 0
     memory_saved_bytes: int = 0
+    kv_trimmed: int = 0  # Total positions trimmed from real KV cache arrays
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

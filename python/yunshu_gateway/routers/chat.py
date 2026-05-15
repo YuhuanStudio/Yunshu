@@ -496,6 +496,12 @@ async def _build_multi_choice(
                 seed=req.seed,
                 enable_thinking=req.enable_thinking,
                 stop_token_ids=req.stop_token_ids,
+                thinking_budget=req.thinking_budget,
+                reasoning_effort=req.reasoning_effort,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                spec_decode=req.spec_decode,
+                json_schema=json_schema,
                 priority=req.priority,
             )
             text = state.generated_text
@@ -760,6 +766,14 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         seed=req.seed,
                         enable_thinking=req.enable_thinking,
                         stop_token_ids=req.stop_token_ids,
+                        thinking_budget=req.thinking_budget,
+                        reasoning_effort=req.reasoning_effort,
+                        xtc_probability=req.xtc_probability,
+                        xtc_threshold=req.xtc_threshold,
+                        spec_decode=req.spec_decode,
+                        json_schema=json_schema,
+                        logprobs=req.logprobs,
+                        top_logprobs=req.top_logprobs,
                         priority=req.priority,
                     )
                     raw_text = state.generated_text
@@ -1183,6 +1197,13 @@ async def _stream_response_multi(
                     seed=(req.seed + choice_idx) if req.seed is not None else None,
                     enable_thinking=req.enable_thinking,
                     stop_token_ids=req.stop_token_ids,
+                    thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    spec_decode=req.spec_decode,
+                    json_schema=json_schema,
+                    priority=req.priority,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1406,6 +1427,9 @@ async def _stream_response(
                 stop_token_ids=req.stop_token_ids,
                 xtc_probability=req.xtc_probability,
                 xtc_threshold=req.xtc_threshold,
+                spec_decode=req.spec_decode,
+                json_schema=json_schema,
+                priority=req.priority,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
