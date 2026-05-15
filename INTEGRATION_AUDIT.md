@@ -37,14 +37,17 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6024 passed, 16 skipped** (1 pre-existing flaky).
 
-### 已完成修復 (2026-05-15 Wave 78-81 — Critical Engine Bugs + SpecDraftVerifier + n>1 + Error Handling)
+### 已完成修復 (2026-05-15 Wave 78-84 — Critical Bugs + Streaming + n>1 + Priority + SpecDecode)
 
 | 修復 | 描述 | 影響 |
 |------|------|------|
-| Wave 78: Critical engine bug fixes | VLMEngine.generate() missing return statement (returned None). BatchedEngine._generate_fast() unreachable reasoning token accounting. VideoEngine dynamic import always returning None. Missing import json in video_engine.py. VLMEngine double image/audio extraction (temp file leak). VideoEngine LoRA rank/scale overwritten by defaults. VLMEngine._enable_thinking race condition → pass as parameter. Completions n>1 support (non-streaming asyncio.gather + streaming sequential). | 7 個關鍵 bug 修復, 完整性 API 合規 |
-| Wave 79: SpecDraftVerifier | SpecDraftVerifier 類：verify() 和 verify_with_last_token() 兩種驗證模式，支持 KV cache trimming 和統計追蹤。替代 batched_engine.py 中 ~70 行重複驗證邏輯。Legacy engine.py 清理：移除 Engine/RequestState 懶加載，修復 conftest.py 損壞的 set_engine 導入。 | 猜測解碼基礎設施, 代碼清理 |
-| Wave 80: VLM n>1 + SDK cleanup | VLM 非串流路徑 n>1 支持通過 asyncio.gather。每個選擇獨立 VLM 生成+工具調用提取。移除 pyproject.toml 中已刪除的 yunshu_sdk 引用。 | API 合規, 構建清理 |
-| Wave 81: Error handling + dead code | 升級關鍵設置失敗從 debug→warning：模型補丁、優化偵測、MTP、MemoryGuard、上下文窗口截斷、JSON schema 約束、KV prefix 狀態。移除 BatchedEngine 死字段 _streaming_backpressure 和 _batched_detokenizer。移除未使用的 Optional 導入。 | 可調試性, 代碼清潔 |
+| Wave 78: Critical engine bug fixes | VLMEngine.generate() missing return (returned None). BatchedEngine unreachable reasoning accounting. VideoEngine dynamic import always returning None. Missing import json. VLM double image extraction (temp file leak). VideoEngine LoRA rank/scale overwrite. VLM _enable_thinking race condition. Completions n>1 support (asyncio.gather + streaming). | 7 critical bugs, API compliance |
+| Wave 79: SpecDraftVerifier + cleanup | SpecDraftVerifier: verify() + verify_with_last_token() with KV cache trimming. Replaced ~70 lines duplicated logic. Legacy engine.py cleanup: removed Engine/RequestState from lazy loader. Fixed conftest.py broken set_engine import. | Spec decode infra, code cleanup |
+| Wave 80: VLM n>1 + SDK cleanup | VLM non-streaming n>1 via asyncio.gather. Removed yunshu_sdk from pyproject.toml. | API compliance |
+| Wave 81: Error handling + dead code | Upgraded critical failures debug→warning (patches, MTP, MemoryGuard, context window, JSON schema, KV prefix). Removed dead fields. Removed unused Optional imports. | Debuggability |
+| Wave 82: Streaming correctness | VLM streaming multi-token stop sequences. detokenizer.finalize() in all VLM paths. finish_reason from engine (not hardcoded "stop"). Reasoning tokens in usage chunk. VLM streaming usage stats with include_usage. Removed dead code (NameError risk). | Streaming completeness |
+| Wave 83: Priority forwarding (chat) | priority=req.priority added to engine.chat() and engine.stream_chat() (single + multi-choice, streaming + non-streaming) | Scheduling correctness |
+| Wave 84: Priority forwarding (completions) | priority=req.priority added to completions streaming batched path | Scheduling correctness |
 
 ### 已完成修復 (2026-05-15 Wave 67-76 — Reasoning Tokens + Video Streaming + Thread Safety)
 
