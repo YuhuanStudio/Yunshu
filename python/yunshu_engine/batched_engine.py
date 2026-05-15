@@ -1222,6 +1222,8 @@ class BatchedEngine:
             logprobs=logprobs,
             top_logprobs=top_logprobs,
             priority=priority,
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
         )
 
         if result is None:

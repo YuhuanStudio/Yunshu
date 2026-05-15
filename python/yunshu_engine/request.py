@@ -72,6 +72,8 @@ class SamplingParams:
     thinking_budget: int | None = None
     reasoning_effort: str | None = None
     enable_thinking: bool | None = None
+    xtc_probability: float = 0.0
+    xtc_threshold: float = 0.0
     # Structured output (JSON schema constrained generation)
     json_schema: dict | str | None = None
 

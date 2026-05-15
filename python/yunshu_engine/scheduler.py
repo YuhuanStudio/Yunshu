@@ -2090,6 +2090,8 @@ class Scheduler:
             top_p=sp.top_p,
             top_k=sp.top_k,
             min_p=sp.min_p,
+            xtc_probability=getattr(sp, 'xtc_probability', 0.0),
+            xtc_threshold=getattr(sp, 'xtc_threshold', 0.0),
         )
 
         # Build logits processors for repetition/presence/frequency penalties + logit_bias

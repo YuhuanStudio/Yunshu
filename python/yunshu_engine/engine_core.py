@@ -1010,6 +1010,8 @@ class EngineCore:
             logprobs=logprobs,
             top_logprobs=top_logprobs,
             priority=priority,
+            xtc_probability=kwargs.get('xtc_probability', 0.0),
+            xtc_threshold=kwargs.get('xtc_threshold', 0.0),
         )
 
         request = Request(
