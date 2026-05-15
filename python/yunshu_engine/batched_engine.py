@@ -1939,6 +1939,10 @@ class BatchedEngine:
             enable_thinking=enable_thinking,
             thinking_budget=thinking_budget,
             priority=priority,
+            logprobs=bool(logprobs),
+            top_logprobs=top_logprobs,
+            xtc_probability=xtc_probability,
+            xtc_threshold=xtc_threshold,
         )
 
         finished_normally = False
