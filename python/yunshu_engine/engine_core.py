@@ -151,9 +151,9 @@ class EngineCore:
                     if num_blocks <= 0:
                         # Auto-compute from UMA budget
                         try:
-                            from .memory_monitor import MemoryMonitor
-                            monitor = MemoryMonitor()
-                            uma_bytes = monitor.get_stats().get("total_memory_bytes", 0)
+                            from .utils.hardware import get_hardware_info
+                            _hw = get_hardware_info()
+                            uma_bytes = _hw.total_memory_bytes
                             if uma_bytes > 0:
                                 num_blocks = compute_num_blocks(kv_config, uma_bytes, 0)
                             else:
@@ -192,6 +192,19 @@ class EngineCore:
         if not self.config.enable_paged_kv:
             self.scheduler = Scheduler(model, tokenizer, scheduler_config)
             self._kv_manager = None
+        else:
+            # Wire KV optimization modules into PagedScheduler
+            try:
+                from .kv_optimizations import KVBlockCompactor, KVEvictionPredictor
+                compactor = KVBlockCompactor()
+                predictor = KVEvictionPredictor()
+                if hasattr(self.scheduler, 'set_compactor'):
+                    self.scheduler.set_compactor(compactor)
+                if hasattr(self.scheduler, 'set_eviction_predictor'):
+                    self.scheduler.set_eviction_predictor(predictor)
+                logger.info("KVBlockCompactor + KVEvictionPredictor wired into PagedScheduler")
+            except Exception:
+                logger.debug("KV optimization wiring skipped", exc_info=True)
 
         # Wire ServerMetrics + PrefillProgressTracker into scheduler
         try:
@@ -454,6 +467,10 @@ class EngineCore:
         # Output parser (model-specific output extraction)
         from .output_parser import parse_output
         self._parse_output = parse_output
+
+        # Model preprocessor registry (auto-detects model family for multimodal input)
+        from .model_preprocessor import PreprocessorRegistry
+        self._preprocessor_registry = PreprocessorRegistry()
 
         # SpecPrefill engine (priority prefill queue for GPU idle time)
         from .spec_prefill_engine import SpecPrefillEngine
@@ -764,6 +781,28 @@ class EngineCore:
             except Exception:
                 logger.debug(f"LoRA adapter load failed: {lora_adapter}", exc_info=True)
 
+        # Model preprocessor: detect and preprocess for model-specific input
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            has_multimodal = any(
+                isinstance(c.get("content"), list)
+                for c in prompt
+                if isinstance(c.get("content"), list)
+            )
+            if has_multimodal and self._preprocessor_registry is not None:
+                try:
+                    model_config = {"model_type": getattr(self.scheduler, 'model_id', '') or ""}
+                    if self._model is not None:
+                        cfg = getattr(self._model, 'config', self._model)
+                        if hasattr(cfg, 'model_type'):
+                            model_config["model_type"] = cfg.model_type
+                    preprocessor = self._preprocessor_registry.detect(model_config)
+                    if preprocessor is not None:
+                        processed = preprocessor.preprocess(prompt, self._tokenizer)
+                        if processed.token_ids:
+                            prompt = processed.token_ids
+                except Exception:
+                    logger.debug("model preprocessor failed, using raw prompt", exc_info=True)
+
         # Encode prompt
         if isinstance(prompt, str):
             token_ids = self._tokenizer.encode(prompt)
@@ -774,6 +813,19 @@ class EngineCore:
             token_ids = list(prompt)
 
         num_prompt_tokens = len(token_ids)
+
+        # Inflight prefix sharing: register for concurrent KV prefix reuse (SGLang pattern)
+        try:
+            from .inflight_prefix_sharing import get_inflight_tracker
+            _inflight_tracker = get_inflight_tracker()
+            _inflight_tracker.register(
+                req_id,
+                token_ids,
+                None,  # KV cache ref not yet available
+                getattr(self.scheduler, 'model_id', '') or '',
+            )
+        except Exception:
+            logger.debug("inflight prefix register failed", exc_info=True)
 
         # Multimodal pipeline: process images/audio/video via staged pipeline
         # (staged_pipeline.py MultimodalPipelineCoordinator)
@@ -1117,8 +1169,7 @@ class EngineCore:
                 continue
 
             try:
-                import time as _time
-                _step_start = _time.monotonic()
+                _step_start = time.monotonic()
 
                 # Wave 43: CompositionScheduler pre_step hooks (metrics, memory pressure)
                 if self._composition_scheduler is not None:
@@ -1137,25 +1188,6 @@ class EngineCore:
                     except Exception:
                         logger.debug("composition pre_step failed", exc_info=True)
 
-                # AdaptiveBatchSizer: dynamically adjust batch size based on
-                # queue depth, memory, and SLO latency (auto_tuner.py)
-                try:
-                    queue_depth = len(self.scheduler.waiting)
-                    from .utils.hardware import get_hardware_info as _ghw
-                    _hw = _ghw()
-                    import mlx.core as _mx
-                    _mem_avail = 1.0 - (_mx.get_active_memory() / max(_hw.total_memory_bytes, 1))
-                    suggested = self._adaptive_batch_sizer.compute_optimal_batch(
-                        queue_depth=queue_depth,
-                        memory_available=_mem_avail,
-                        slo_latency_ms=200.0,  # default SLO target
-                        current_latency_ms=(_time.monotonic() - _step_start) * 1000,
-                    )
-                    if suggested < self.config.completion_batch_size:
-                        self.config.completion_batch_size = suggested
-                except Exception:
-                    logger.debug("adaptive batch sizing failed", exc_info=True)
-
                 # Priority inversion guard: detect and resolve priority inversion
                 # before scheduling (token_scheduler.py PriorityInversionGuard)
                 try:
@@ -1168,7 +1200,7 @@ class EngineCore:
                     ]
                     _waiting = [
                         _SReq(request_id=r.request_id, priority=r.sampling_params.priority if r.sampling_params else 0,
-                              wait_time=_time.monotonic() - getattr(r, '_submit_time', _time.monotonic()) if hasattr(r, '_submit_time') else 0.0,
+                              wait_time=time.monotonic() - getattr(r, '_submit_time', time.monotonic()) if hasattr(r, '_submit_time') else 0.0,
                               context_length=r.num_prompt_tokens)
                         for r in self.scheduler.waiting
                     ] if hasattr(self.scheduler.waiting, '__iter__') else []
@@ -1207,6 +1239,25 @@ class EngineCore:
                         self._composition_scheduler.post_step(self.scheduler, scheduler_output)
                     except Exception:
                         logger.debug("composition post_step failed", exc_info=True)
+
+                # AdaptiveBatchSizer: adjust batch size using ACTUAL step wall time
+                try:
+                    _step_wall_ms = (time.monotonic() - _step_start) * 1000
+                    queue_depth = len(self.scheduler.waiting)
+                    from .utils.hardware import get_hardware_info as _ghw
+                    _hw = _ghw()
+                    import mlx.core as _mx
+                    _mem_avail = 1.0 - (_mx.get_active_memory() / max(_hw.total_memory_bytes, 1))
+                    suggested = self._adaptive_batch_sizer.compute_optimal_batch(
+                        queue_depth=queue_depth,
+                        memory_available=_mem_avail,
+                        slo_latency_ms=200.0,
+                        current_latency_ms=_step_wall_ms,
+                    )
+                    if suggested < self.config.completion_batch_size:
+                        self.config.completion_batch_size = suggested
+                except Exception:
+                    logger.debug("adaptive batch sizing failed", exc_info=True)
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
                 failed = self.scheduler.fail_all_requests()
@@ -1358,7 +1409,7 @@ class EngineCore:
                 # ── Wave 42: Profiler + auto-tuner + fairness ──
                 try:
                     batch_size = len(scheduler_output.outputs)
-                    _step_wall_ms = (_time.monotonic() - _step_start) * 1000
+                    _step_wall_ms = (time.monotonic() - _step_start) * 1000
                     _tokens_gen = sum(
                         o.completion_tokens for o in scheduler_output.outputs if o.completion_tokens
                     )
@@ -1464,39 +1515,6 @@ class EngineCore:
 
             await asyncio.sleep(0)
 
-    def _reorder_by_cache_locality(self, request_ids: list[str]) -> list[str]:
-        """Sort requests by KV prefix hash for better cache utilization.
-
-        Groups requests sharing the same KV prefix hash (i.e., same system
-        prompt / conversation prefix) so they are processed consecutively.
-        This maximizes KV cache block locality and reduces cache thrashing,
-        following the SGLang/vLLM pattern of sorting running requests by
-        shared KV block prefixes before each forward pass.
-
-        Returns:
-            Reordered list of request IDs. No-op when len <= 1.
-        """
-        if len(request_ids) <= 1:
-            return request_ids
-
-        # Group by KV prefix hash from _kv_prefix_hashes
-        prefix_groups: dict[int, list[str]] = {}
-        no_prefix: list[str] = []
-
-        for rid in request_ids:
-            prefix_hash = self._kv_prefix_hashes.get(rid)
-            if prefix_hash is not None:
-                prefix_groups.setdefault(prefix_hash, []).append(rid)
-            else:
-                no_prefix.append(rid)
-
-        # Emit grouped first (shared prefix), then ungrouped
-        result: list[str] = []
-        for group in prefix_groups.values():
-            result.extend(group)
-        result.extend(no_prefix)
-        return result
-
     def _compute_prefix_hash_for_request(self, req_id: str, prompt_token_ids: list[int]) -> int | None:
         """Compute and store a KV prefix hash for a request.
 
@@ -1530,6 +1548,12 @@ class EngineCore:
         self._finished_events.pop(request_id, None)
         self._request_timestamps.pop(request_id, None)
         self._kv_prefix_hashes.pop(request_id, None)
+        # Inflight prefix sharing: unregister
+        try:
+            from .inflight_prefix_sharing import get_inflight_tracker
+            get_inflight_tracker().unregister(request_id)
+        except Exception:
+            logger.debug("inflight prefix unregister failed", exc_info=True)
         # Release LoRA adapter if any
         lora_id = self._request_lora_adapters.pop(request_id, None)
         if lora_id:
@@ -1674,6 +1698,16 @@ class EngineCore:
         stats["process_isolation"] = {"enabled": self._isolation_enabled}
         stats["spec_prefill_engine"] = self._spec_prefill_engine.get_stats()
         stats["turbo_quant"] = self._turbo_quant.get_stats()
+        # Model preprocessor stats
+        if self._preprocessor_registry is not None:
+            stats["model_preprocessor"] = self._preprocessor_registry.get_stats()
+        # Inflight prefix sharing stats
+        try:
+            from .inflight_prefix_sharing import get_inflight_tracker
+            stats["inflight_prefix_sharing"] = get_inflight_tracker().get_stats()
+        except Exception:
+            logger.debug("inflight prefix stats unavailable", exc_info=True)
+            stats["inflight_prefix_sharing"] = {"enabled": False}
         return stats
 
     def _overlap_step(self) -> Any:

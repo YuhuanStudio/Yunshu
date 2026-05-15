@@ -12,6 +12,7 @@ import platform
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -32,6 +33,7 @@ class HardwareInfo:
     chip_name: str
     total_memory_gb: float
     max_working_set_bytes: int
+    total_memory_bytes: int = 0
     gpu_cores: Optional[int] = None
     mlx_device_name: Optional[str] = None
     os_version: str = ""
@@ -180,14 +182,35 @@ def format_bytes(b: int) -> str:
 
 
 def detect_hardware() -> HardwareInfo:
+    total_mem_bytes = get_total_memory_bytes()
     return HardwareInfo(
         chip_name=get_chip_name(),
-        total_memory_gb=get_system_memory_gb(),
+        total_memory_gb=total_mem_bytes / (1024 ** 3),
+        total_memory_bytes=total_mem_bytes,
         max_working_set_bytes=get_max_working_set_bytes(),
         gpu_cores=get_gpu_core_count(),
         mlx_device_name=get_mlx_device_name(),
         os_version=get_os_version(),
     )
+
+
+_cached_hw: HardwareInfo | None = None
+_cached_hw_time: float = 0.0
+_HW_CACHE_TTL = 30.0
+
+
+def get_hardware_info() -> HardwareInfo:
+    """Cached hardware info singleton (refreshes every 30s).
+
+    Used by engine_core, scheduler, and kv_offload for memory checks.
+    Caching avoids sysctl overhead on every engine loop step.
+    """
+    global _cached_hw, _cached_hw_time
+    now = time.monotonic()
+    if _cached_hw is None or (now - _cached_hw_time) > _HW_CACHE_TTL:
+        _cached_hw = detect_hardware()
+        _cached_hw_time = now
+    return _cached_hw
 
 
 def compute_adaptive_defaults(hw: HardwareInfo | None = None) -> dict:

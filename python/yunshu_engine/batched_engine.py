@@ -3715,6 +3715,7 @@ class BatchedEngine:
             from .inflight_prefix_sharing import get_inflight_tracker
             stats["inflight_prefix_sharing"] = get_inflight_tracker().get_stats()
         except Exception:
+            logger.debug("inflight prefix stats unavailable", exc_info=True)
             stats["inflight_prefix_sharing"] = {"enabled": False}
         return stats
 

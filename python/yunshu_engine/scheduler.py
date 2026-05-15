@@ -706,6 +706,18 @@ class Scheduler:
             max_decode_slots=self.config.max_num_seqs,
         )
 
+        # Chunked prefill optimizer (semantic chunk boundary selection)
+        if self.config.enable_hybrid_prefill:
+            try:
+                from .kv_optimizations import ChunkedPrefillOptimizer
+                self._chunked_prefill_optimizer = ChunkedPrefillOptimizer()
+                logger.info("ChunkedPrefillOptimizer wired (hybrid prefill)")
+            except Exception:
+                logger.debug("ChunkedPrefillOptimizer init skipped", exc_info=True)
+                self._chunked_prefill_optimizer = None
+        else:
+            self._chunked_prefill_optimizer = None
+
     def _init_batch_generator(self) -> None:
         """Create BatchGenerator on first use (lazy init)."""
         if self._batch_gen is not None:
@@ -1558,6 +1570,18 @@ class Scheduler:
 
             # Feed one chunk
             chunk_size = self.config.hybrid_chunk_size
+            # Use semantic chunk boundaries when optimizer is available
+            if self._chunked_prefill_optimizer is not None and len(remaining) > chunk_size:
+                try:
+                    chunks = self._chunked_prefill_optimizer.compute_optimal_chunks(
+                        remaining, chunk_size, max_chunks=1,
+                    )
+                    if chunks:
+                        semantic_end = chunks[0].end_token
+                        if semantic_end > 0 and semantic_end < len(remaining):
+                            chunk_size = max(semantic_end, chunk_size // 2)
+                except Exception:
+                    logger.debug("semantic chunking fallback", exc_info=True)
             chunk = remaining[:chunk_size]
             state['remaining_tokens'] = remaining[chunk_size:]
 

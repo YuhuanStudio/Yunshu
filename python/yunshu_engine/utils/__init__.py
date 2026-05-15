@@ -4,6 +4,7 @@ from .hardware import (
     format_bytes,
     get_chip_name,
     get_gpu_core_count,
+    get_hardware_info,
     get_max_working_set_bytes,
     get_mlx_device_name,
     get_mlx_lm_version,
