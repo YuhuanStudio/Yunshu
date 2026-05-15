@@ -1190,6 +1190,7 @@ class BatchedEngine:
 
         # Apply output parser to extract reasoning/tool_calls from raw text
         output_text = _clean_special_tokens(result.output_text)
+        _reasoning_tok = 0
         try:
             from .output_parser import parse_output
             parsed = parse_output(output_text, self.model_name)
@@ -1201,6 +1202,17 @@ class BatchedEngine:
         except Exception:
             logger.debug("output_parser failed", exc_info=True)
 
+        # Reasoning parser: model-specific reasoning extraction with token count
+        # Supplements output_parser with per-model reasoning token counting
+        try:
+            from .reasoning_parser import get_reasoning_parser
+            rp = get_reasoning_parser(self.model_name)
+            rp_out = rp.parse(output_text)
+            if rp_out.reasoning and rp_out.reasoning_tokens > 0:
+                _reasoning_tok = rp_out.reasoning_tokens
+        except Exception:
+            logger.debug("reasoning_parser failed", exc_info=True)
+
         engine_loop_result = GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -1208,6 +1220,7 @@ class BatchedEngine:
             completion_tokens=result.completion_tokens,
             finished=True,
             finish_reason=finish_reason,
+            reasoning_tokens=_reasoning_tok,
         )
         if _rc_hash is not None and engine_loop_result.finish_reason != "error":
             try:
@@ -1269,7 +1282,6 @@ class BatchedEngine:
                         model_config["model_type"] = model.config.model_type
                     preprocessor = self._preprocessor_registry.detect(model_config)
                     if preprocessor is not None:
-                        from .model_preprocessor import PreprocessedInput
                         processed = preprocessor.preprocess(prompt, tokenizer)
                         if processed.token_ids:
                             prompt = processed.token_ids
@@ -1665,6 +1677,21 @@ class BatchedEngine:
 
         self._total_reasoning_tokens += len(_thinking_tokens)
 
+        # Reasoning parser: supplement token-level tracking with model-specific
+        # reasoning extraction when thinking tokens were not explicitly tracked
+        _reasoning_tok = len(_thinking_tokens)
+        if _reasoning_tok == 0 and output_text:
+            try:
+                from .reasoning_parser import get_reasoning_parser
+                rp = get_reasoning_parser(self.model_name)
+                rp_out = rp.parse(output_text)
+                if rp_out.reasoning:
+                    _reasoning_tok = rp_out.reasoning_tokens
+                    if rp_out.content != output_text:
+                        output_text = rp_out.content
+            except Exception:
+                logger.debug("reasoning_parser failed in fast path", exc_info=True)
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -1675,7 +1702,7 @@ class BatchedEngine:
             cached_tokens=cached_tokens,
             logprobs=lp_result,
             ttft_ms=round(ttft_s * 1000, 1),
-            reasoning_tokens=len(_thinking_tokens),
+            reasoning_tokens=_reasoning_tok,
         )
 
     async def stream_generate(

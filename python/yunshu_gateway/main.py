@@ -121,6 +121,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             _memory_enforcer.start()
 
+    # Initialize MCP client manager (LLM → external MCP tool servers)
+    mcp_config_path = os.environ.get("YUNSHU_MCP_CONFIG")
+    mcp_servers_env = os.environ.get("YUNSHU_MCP_SERVERS", "")
+    if mcp_config_path or mcp_servers_env:
+        try:
+            from yunshu_engine.mcp_client import init_mcp_client
+            mcp_mgr = await init_mcp_client(config_path=mcp_config_path)
+            if mcp_mgr and hasattr(app, 'state'):
+                app.state.mcp_client = mcp_mgr
+            stats = mcp_mgr.get_stats()
+            logger.info(
+                "MCP client manager initialized: %d servers, %d tools",
+                stats["connected_servers"], stats["total_tools"],
+            )
+        except Exception:
+            logger.warning("MCP client initialization failed", exc_info=True)
+
     yield
 
     # Graceful shutdown with request draining (state machine)
@@ -133,6 +150,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await asyncio.wait_for(_drain_event.wait(), timeout=drain_timeout)
         except asyncio.TimeoutError:
             pass
+
+    # Disconnect MCP client manager
+    try:
+        from yunshu_engine.mcp_client import get_mcp_client_manager
+        mcp = get_mcp_client_manager()
+        if mcp is not None:
+            await mcp.disconnect_all()
+    except Exception:
+        logger.debug("MCP client shutdown failed", exc_info=True)
 
     if _memory_enforcer is not None:
         await _memory_enforcer.stop()
@@ -241,6 +267,8 @@ def create_app() -> FastAPI:
     from .routers import anthropic, audio, batch_inference, bench, chat, completions, embeddings, images, mcp, models, monitoring as gw_monitoring, profiling, realtime, scoring, tokenize
 
     # Wave 43: MCP client manager (LLM → external MCP tool servers)
+    # Actual initialization happens in lifespan() since init_mcp_client is async.
+    # Here we just check if the singleton was already initialized (e.g. in tests).
     mcp_servers_env = os.environ.get("YUNSHU_MCP_SERVERS", "")
     if mcp_servers_env:
         try:
@@ -248,9 +276,9 @@ def create_app() -> FastAPI:
             mcp_mgr = get_mcp_client_manager()
             if mcp_mgr:
                 app.state.mcp_client = mcp_mgr
-                logger.info(f"MCP client manager enabled ({len(mcp_servers_env.split(','))} servers)")
+                logger.info(f"MCP client manager already initialized")
         except Exception:
-            logger.debug("MCP client setup failed", exc_info=True)
+            logger.debug("MCP client setup deferred to lifespan", exc_info=True)
 
     # Routes — L1 Gateway
     from .routers import sleep as sleep_mod

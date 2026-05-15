@@ -3,6 +3,11 @@
 Background asyncio task that polls mx.get_active_memory() and evicts
 LRU models from ModelManager when the process memory limit is exceeded.
 
+Two usage modes:
+1. **Gateway/multi-model**: Pass a ModelManager — enforcer evicts LRU models.
+2. **Standalone/single-model**: Use create_standalone_enforcer() — enforcer
+   clears KV cache and triggers GC when memory pressure is detected.
+
 Adapted from oMLX's ProcessMemoryEnforcer but simplified for Yunshu's
 async-native architecture (no threading pool, single asyncio loop).
 """
@@ -12,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any, Optional
 
 import mlx.core as mx
 

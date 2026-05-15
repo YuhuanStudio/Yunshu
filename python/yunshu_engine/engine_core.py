@@ -25,7 +25,7 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 logger = logging.getLogger(__name__)
@@ -292,7 +292,7 @@ class EngineCore:
             logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
 
         # KV lifecycle manager (4-tier hot/warm/cool/cold admission/migration/eviction)
-        from .kv_lifecycle import KVLifecycleManager, KVTierConfig
+        from .kv_lifecycle import KVLifecycleManager
         self._kv_lifecycle = KVLifecycleManager()
         logger.info("KVLifecycleManager wired (4-tier KV lifecycle)")
 
@@ -414,7 +414,7 @@ class EngineCore:
         self._hybrid_kv = HybridKVCache()
 
         # Batch sampler (vectorized batch sampling + logits processing + stop checking)
-        from .batch_sampler import BatchSampler, LogitsProcessorBatch, BatchStopChecker
+        from .batch_sampler import BatchSampler, BatchStopChecker
         self._batch_sampler = BatchSampler()
         self._batch_stop_checker = BatchStopChecker()
 

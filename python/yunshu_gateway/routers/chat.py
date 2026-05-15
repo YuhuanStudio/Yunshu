@@ -41,6 +41,54 @@ from yunshu_engine.gateway_optimizer import get_streaming_buffer
 
 logger = logging.getLogger(__name__)
 
+
+async def _try_execute_mcp_tools(
+    tool_calls: list[dict],
+    request: Request,
+) -> list[dict]:
+    """Execute MCP tool calls and return results list.
+
+    For each extracted tool call, checks if it matches an MCP tool
+    (via the MCPClientManager). If so, executes the tool call and
+    appends the result. Non-MCP tools are skipped.
+
+    Returns a list of {"tool_call_id": str, "output": str} dicts
+    for each executed MCP tool call.
+    """
+    results = []
+    mcp_mgr = getattr(request.app.state, "mcp_client", None)
+    if mcp_mgr is None or not tool_calls:
+        return results
+
+    for tc in tool_calls:
+        name = tc.get("name", "")
+        arguments = tc.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                import json as _json
+                arguments = _json.loads(arguments)
+            except Exception:
+                arguments = {}
+
+        try:
+            result = await mcp_mgr.call_tool(name, arguments)
+            results.append({
+                "tool_call_id": tc.get("id", ""),
+                "output": json.dumps(result) if not isinstance(result, str) else result,
+            })
+            logger.info("MCP tool executed: %s", name)
+        except KeyError:
+            # Not an MCP tool — skip (client-side tool)
+            pass
+        except Exception as e:
+            logger.warning("MCP tool execution failed for %s: %s", name, e)
+            results.append({
+                "tool_call_id": tc.get("id", ""),
+                "output": json.dumps({"error": str(e)}),
+            })
+
+    return results
+
 router = APIRouter(tags=["chat"])
 
 
@@ -809,6 +857,14 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     cleaned_content = clean_tool_call_markup(regular_content)
 
             finish_reason = "tool_calls" if tool_calls else finish
+
+            # Execute MCP tool calls if any (server-side tool execution)
+            mcp_results = []
+            if tool_calls:
+                try:
+                    mcp_results = await _try_execute_mcp_tools(tool_calls, request)
+                except Exception:
+                    logger.debug("MCP tool execution failed", exc_info=True)
 
             _record_metrics(prompt_tok, completion_tok)
 

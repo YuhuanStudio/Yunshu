@@ -318,6 +318,18 @@ class ModelManager:
 
                 self._current_memory_bytes += entry.estimated_bytes
 
+                # Register model ownership in ModelRegistry to prevent
+                # BatchKVCache conflicts when multiple engines share a model
+                try:
+                    from .model_registry import get_registry
+                    model_obj = getattr(engine, '_model', None)
+                    if model_obj is not None:
+                        get_registry().acquire(
+                            model_obj, engine, f"model_manager:{model_id}",
+                        )
+                except Exception:
+                    logger.debug("model_registry acquire failed", exc_info=True)
+
                 # Post-load cache clear (oMLX #429: weight loading creates large
                 # Metal buffer temporaries that stay in the buffer pool)
                 loop = asyncio.get_running_loop()
@@ -410,6 +422,17 @@ class ModelManager:
         pre_unload_active = mx.get_active_memory()
 
         if entry.engine is not None:
+            # Release model ownership in ModelRegistry
+            try:
+                from .model_registry import get_registry
+                model_obj = getattr(entry.engine, '_model', None)
+                if model_obj is not None:
+                    get_registry().release(
+                        model_obj, f"model_manager:{model_id}",
+                    )
+            except Exception:
+                logger.debug("model_registry release failed", exc_info=True)
+
             try:
                 await entry.engine.stop()
             except Exception as e:

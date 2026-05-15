@@ -43,7 +43,14 @@ async def list_models() -> dict:
                 except Exception:
                     logger.debug(f"failed to get stats for {entry.model_id}", exc_info=True)
             models.append(model_info)
-        return {"object": "list", "data": models}
+        result = {"object": "list", "data": models}
+        # Include model registry stats for debugging/monitoring
+        try:
+            from yunshu_engine.model_registry import get_registry
+            result["registry"] = get_registry().get_stats()
+        except Exception:
+            logger.debug("model_registry stats unavailable", exc_info=True)
+        return result
 
     # Single-engine mode
     engine = get_engine()

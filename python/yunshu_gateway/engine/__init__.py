@@ -64,7 +64,12 @@ def init_model_manager(
 
 
 def _discover_models(models_dir: str) -> None:
-    """Scan a directory for model subdirectories and register them."""
+    """Scan a directory for model subdirectories and register them.
+
+    Uses yunshu_engine.model_discovery for modality-aware detection
+    (LLM, VLM, TTS, ASR, ImageGen) with estimated size calculation.
+    Falls back to simple directory scan if model_discovery fails.
+    """
     if _model_manager is None:
         return
 
@@ -72,6 +77,26 @@ def _discover_models(models_dir: str) -> None:
     if not models_path.exists():
         return
 
+    # Primary: use model_discovery module (oMLX pattern — modality-aware)
+    try:
+        from yunshu_engine.model_discovery import discover_models
+        discovered = discover_models(models_path)
+        for mid, info in discovered.items():
+            _model_manager.register_model(
+                model_id=mid,
+                model_path=info.model_path,
+                estimated_bytes=info.estimated_size,
+            )
+        if discovered:
+            logger.info(
+                "Auto-discovered %d models from %s (via model_discovery)",
+                len(discovered), models_path,
+            )
+        return
+    except Exception:
+        logger.debug("model_discovery failed, falling back to simple scan", exc_info=True)
+
+    # Fallback: simple directory scan
     for subdir in sorted(models_path.iterdir()):
         if not subdir.is_dir():
             continue
