@@ -13,6 +13,16 @@ import {
   AlertTriangle,
   Zap,
   Thermometer,
+  Network,
+  Brain,
+  Wrench,
+  Layers,
+  GitBranch,
+  ArrowRightLeft,
+  BarChart3,
+  Eye,
+  Radio,
+  Shield,
 } from "lucide-react";
 
 interface SystemStats {
@@ -65,6 +75,23 @@ export default function MonitoringPage() {
   const [meshStatus, setMeshStatus] = useState<Record<string, unknown> | null>(null);
   const [engineTuning, setEngineTuning] = useState<Record<string, unknown> | null>(null);
   const [modelStats, setModelStats] = useState<Record<string, unknown> | null>(null);
+  const [dataParallel, setDataParallel] = useState<Record<string, unknown> | null>(null);
+  const [perModel, setPerModel] = useState<Record<string, unknown> | null>(null);
+  const [thinkingSegments, setThinkingSegments] = useState<Record<string, unknown> | null>(null);
+  const [metalKernels, setMetalKernels] = useState<Record<string, unknown> | null>(null);
+  const [aneEmbeddings, setAneEmbeddings] = useState<Record<string, unknown> | null>(null);
+  const [externalPrefill, setExternalPrefill] = useState<Record<string, unknown> | null>(null);
+  const [healthDashboard, setHealthDashboard] = useState<Record<string, unknown> | null>(null);
+  const [reasoningTokens, setReasoningTokens] = useState<Record<string, unknown> | null>(null);
+  const [responseCache, setResponseCache] = useState<Record<string, unknown> | null>(null);
+  const [inflightPrefix, setInflightPrefix] = useState<Record<string, unknown> | null>(null);
+  const [requestCoalescer, setRequestCoalescer] = useState<Record<string, unknown> | null>(null);
+  const [tokenScheduler, setTokenScheduler] = useState<Record<string, unknown> | null>(null);
+  const [kvMigration, setKvMigration] = useState<Record<string, unknown> | null>(null);
+  const [attentionEviction, setAttentionEviction] = useState<Record<string, unknown> | null>(null);
+  const [batchSize, setBatchSize] = useState<Record<string, unknown> | null>(null);
+  const [autoTuner, setAutoTuner] = useState<Record<string, unknown> | null>(null);
+  const [memoryPressure, setMemoryPressure] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -82,7 +109,7 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes, gwSysRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes, tuningRes, modelsRes] = await Promise.all([
+        const [sysRes, engRes, gwSysRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes, tuningRes, modelsRes, dpRes, perModelRes, thinkRes, metalRes, aneRes, extPfRes, healthRes, reasonRes, rcRes, inflightRes, coalRes, tsRes, kvMigRes, attnEvRes, bsRes, atRes, mpRes] = await Promise.all([
           fetch("/api/v1/monitoring/system").catch(() => null),
           fetch("/api/v1/monitoring/engine").catch(() => null),
           fetch("/api/v1/gw/monitoring/system").catch(() => null),
@@ -97,6 +124,23 @@ export default function MonitoringPage() {
           fetch("/api/v1/mesh/status").catch(() => null),
           fetch("/v1/profile/engine").catch(() => null),
           fetch("/v1/models").catch(() => null),
+          fetch("/api/v1/gw/monitoring/data-parallel").catch(() => null),
+          fetch("/api/v1/gw/monitoring/per-model").catch(() => null),
+          fetch("/api/v1/gw/monitoring/thinking-segments").catch(() => null),
+          fetch("/api/v1/gw/monitoring/metal-kernels").catch(() => null),
+          fetch("/api/v1/gw/monitoring/ane-embeddings").catch(() => null),
+          fetch("/api/v1/gw/monitoring/external-prefill").catch(() => null),
+          fetch("/api/v1/gw/monitoring/health-dashboard").catch(() => null),
+          fetch("/api/v1/gw/monitoring/reasoning-tokens").catch(() => null),
+          fetch("/api/v1/gw/monitoring/response-cache").catch(() => null),
+          fetch("/api/v1/gw/monitoring/inflight-prefix-sharing").catch(() => null),
+          fetch("/api/v1/gw/monitoring/request-coalescer").catch(() => null),
+          fetch("/api/v1/gw/monitoring/token-scheduler").catch(() => null),
+          fetch("/api/v1/gw/monitoring/kv-migration").catch(() => null),
+          fetch("/api/v1/gw/monitoring/attention-eviction").catch(() => null),
+          fetch("/api/v1/gw/monitoring/batch-size").catch(() => null),
+          fetch("/api/v1/gw/monitoring/auto-tuner").catch(() => null),
+          fetch("/api/v1/gw/monitoring/memory-pressure").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
@@ -175,6 +219,74 @@ export default function MonitoringPage() {
         if (modelsRes && modelsRes.ok) {
           const modelsData = await modelsRes.json();
           if (mounted.current) setModelStats(modelsData);
+        }
+        if (dpRes && dpRes.ok) {
+          const dpData = await dpRes.json();
+          if (mounted.current) setDataParallel(dpData);
+        }
+        if (perModelRes && perModelRes.ok) {
+          const pmData = await perModelRes.json();
+          if (mounted.current) setPerModel(pmData);
+        }
+        if (thinkRes && thinkRes.ok) {
+          const thinkData = await thinkRes.json();
+          if (mounted.current) setThinkingSegments(thinkData);
+        }
+        if (metalRes && metalRes.ok) {
+          const metalData = await metalRes.json();
+          if (mounted.current) setMetalKernels(metalData);
+        }
+        if (aneRes && aneRes.ok) {
+          const aneData = await aneRes.json();
+          if (mounted.current) setAneEmbeddings(aneData);
+        }
+        if (extPfRes && extPfRes.ok) {
+          const extPfData = await extPfRes.json();
+          if (mounted.current) setExternalPrefill(extPfData);
+        }
+        if (healthRes && healthRes.ok) {
+          const healthData = await healthRes.json();
+          if (mounted.current) setHealthDashboard(healthData);
+        }
+        if (reasonRes && reasonRes.ok) {
+          const reasonData = await reasonRes.json();
+          if (mounted.current) setReasoningTokens(reasonData);
+        }
+        if (rcRes && rcRes.ok) {
+          const rcData = await rcRes.json();
+          if (mounted.current) setResponseCache(rcData);
+        }
+        if (inflightRes && inflightRes.ok) {
+          const inflightData = await inflightRes.json();
+          if (mounted.current) setInflightPrefix(inflightData);
+        }
+        if (coalRes && coalRes.ok) {
+          const coalData = await coalRes.json();
+          if (mounted.current) setRequestCoalescer(coalData);
+        }
+        if (tsRes && tsRes.ok) {
+          const tsData = await tsRes.json();
+          if (mounted.current) setTokenScheduler(tsData);
+        }
+        if (kvMigRes && kvMigRes.ok) {
+          const kvMigData = await kvMigRes.json();
+          if (mounted.current) setKvMigration(kvMigData);
+        }
+        if (attnEvRes && attnEvRes.ok) {
+          const attnEvData = await attnEvRes.json();
+          if (mounted.current) setAttentionEviction(attnEvData);
+        }
+        if (bsRes && bsRes.ok) {
+          const bsData = await bsRes.json();
+          if (mounted.current) setBatchSize(bsData);
+        }
+        if (atRes && atRes.ok) {
+          const atData = await atRes.json();
+          if (mounted.current) setAutoTuner(atData);
+        }
+        if (mpRes && mpRes.ok) {
+          const mpData = await mpRes.json();
+          if (mounted.current) setMemoryPressure(mpData);
         }
         if (mounted.current) {
           setLastUpdate(new Date());
@@ -831,6 +943,465 @@ export default function MonitoringPage() {
               </div>
             );
           })()}
+
+          {/* Health Dashboard */}
+          {healthDashboard && healthDashboard.enabled !== false && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-3">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <Shield className="w-4 h-4 text-[var(--color-accent)]" />
+                Health Dashboard
+              </h3>
+              {healthDashboard.score !== undefined && (
+                <div className="flex items-center gap-4">
+                  <div className={`text-3xl font-bold ${
+                    Number(healthDashboard.score) >= 80 ? "text-[var(--color-success)]" :
+                    Number(healthDashboard.score) >= 50 ? "text-amber-500" : "text-[var(--color-danger)]"
+                  }`}>
+                    {Number(healthDashboard.score).toFixed(0)}
+                  </div>
+                  <div className="text-sm text-[var(--color-text-secondary)]">/ 100 health score</div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(healthDashboard).filter(([k]) => !["enabled", "error", "reason", "score"].includes(k)).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">
+                      {k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                    </div>
+                    <div className="font-medium tabular-nums">
+                      {typeof v === "number" ? v.toLocaleString() : typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Data Parallel */}
+          {dataParallel && dataParallel.active && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Network className="w-4 h-4 text-[var(--color-accent)]" />
+                Data Parallel
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(dataParallel).filter(([k]) => k !== "active").map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">
+                      {k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
+                    </div>
+                    <div className="font-medium tabular-nums">
+                      {typeof v === "number" ? v.toLocaleString() : typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Per-Model Metrics */}
+          {perModel && !perModel.error && perModel._summary && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-[var(--color-accent)]" />
+                Per-Model Metrics
+              </h3>
+              {Object.entries(perModel).filter(([k]) => k !== "_summary" && k !== "error").map(([modelId, data]) => (
+                <div key={modelId}>
+                  <div className="text-xs text-[var(--color-text-secondary)] font-medium mb-2">{modelId}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                    {Object.entries(data as Record<string, unknown>).slice(0, 8).map(([k, v]) => (
+                      <div key={k}>
+                        <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                        <div className="font-medium tabular-nums">
+                          {typeof v === "number" ? (v > 100000 ? fmtBytes(v) : v.toLocaleString()) : String(v)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Auto-Tuner State */}
+          {autoTuner && autoTuner.models && (autoTuner.models as Record<string, unknown>[]).length > 0 && (() => {
+            const models = (autoTuner.models as Record<string, unknown>[]).filter((m) => m.auto_tuner || m.profiler || m.slo);
+            if (models.length === 0) return null;
+            return (
+              <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-4">
+                <h3 className="font-semibold text-sm flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-[var(--color-accent)]" />
+                  Auto-Tuner State
+                </h3>
+                {models.map((model: Record<string, unknown>, idx: number) => {
+                  const tuner = model.auto_tuner as Record<string, unknown> | undefined;
+                  const profiler = model.profiler as Record<string, unknown> | undefined;
+                  const slo = model.slo as Record<string, unknown> | undefined;
+                  return (
+                    <div key={idx} className="space-y-2">
+                      <div className="text-xs text-[var(--color-text-secondary)] font-medium">{String(model.model_id || "default")}</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                        {tuner && Object.entries(tuner).slice(0, 6).map(([k, v]) => (
+                          <div key={`at-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">Tuner: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                        {profiler && Object.entries(profiler).slice(0, 4).map(([k, v]) => (
+                          <div key={`pf-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">Profiler: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                        {slo && Object.entries(slo).slice(0, 4).map(([k, v]) => (
+                          <div key={`slo-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">SLO: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* Memory Pressure */}
+          {memoryPressure && memoryPressure.active && (memoryPressure.models as Record<string, unknown>[])?.length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-3">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-[var(--color-accent)]" />
+                Memory Pressure
+              </h3>
+              {(memoryPressure.models as Record<string, unknown>[]).map((model: Record<string, unknown>, idx: number) => (
+                <div key={idx}>
+                  <div className="text-xs text-[var(--color-text-secondary)] font-medium mb-2">{String(model.model_id)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                    {Object.entries(model).filter(([k]) => k !== "model_id").map(([sectionKey, sectionVal]) => {
+                      if (typeof sectionVal === "object" && sectionVal !== null) {
+                        return Object.entries(sectionVal as Record<string, unknown>).map(([k, v]) => (
+                          <div key={`${sectionKey}-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">
+                              {sectionKey.replace(/_/g, " ")}: {k.replace(/_/g, " ")}
+                            </div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ));
+                      }
+                      return (
+                        <div key={sectionKey}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">{sectionKey.replace(/_/g, " ")}</div>
+                          <div className="font-medium tabular-nums">{typeof sectionVal === "number" ? sectionVal.toLocaleString() : String(sectionVal)}</div>
+                        </div>
+                      );
+                    }).flat()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Thinking Segments */}
+          {thinkingSegments && thinkingSegments.active && (thinkingSegments.models as Record<string, unknown>[])?.length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Brain className="w-4 h-4 text-[var(--color-accent)]" />
+                Thinking Segments
+              </h3>
+              {(thinkingSegments.models as Record<string, unknown>[]).map((model: Record<string, unknown>, idx: number) => (
+                <div key={idx} className="mb-2 last:mb-0">
+                  <div className="text-xs text-[var(--color-text-secondary)] mb-1">{String(model.model_id)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                    {Object.entries(model).filter(([k]) => k !== "model_id").map(([k, v]) => (
+                      <div key={k}>
+                        <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                        <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Reasoning Tokens */}
+          {reasoningTokens && reasoningTokens.total_reasoning_tokens !== undefined && Number(reasoningTokens.total_reasoning_tokens) > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Brain className="w-4 h-4 text-[var(--color-accent)]" />
+                Reasoning Tokens
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">Total Reasoning Tokens</div>
+                  <div className="font-medium tabular-nums">{Number(reasoningTokens.total_reasoning_tokens).toLocaleString()}</div>
+                </div>
+                {(reasoningTokens.engines as Record<string, unknown>[])?.map((eng: Record<string, unknown>, idx: number) => (
+                  <div key={idx}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{String(eng.model_id)}</div>
+                    <div className="font-medium tabular-nums">{Number(eng.reasoning_tokens).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Metal Kernels */}
+          {metalKernels && metalKernels.active && (metalKernels.models as Record<string, unknown>[])?.length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
+                Metal Kernels
+              </h3>
+              {(metalKernels.models as Record<string, unknown>[]).map((model: Record<string, unknown>, idx: number) => (
+                <div key={idx} className="mb-2 last:mb-0">
+                  <div className="text-xs text-[var(--color-text-secondary)] mb-1">{String(model.model_id)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <div className="text-xs text-[var(--color-text-secondary)]">Enabled</div>
+                      <div className="font-medium">{model.enabled ? "Yes" : "No"}</div>
+                    </div>
+                    {Object.entries(model).filter(([k]) => !["model_id", "enabled"].includes(k)).map(([k, v]) => (
+                      <div key={k}>
+                        <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                        <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ANE Embeddings */}
+          {aneEmbeddings && aneEmbeddings.enabled && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
+                ANE Embeddings
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(aneEmbeddings).filter(([k]) => !["enabled", "error"].includes(k)).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                    <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* External Prefill */}
+          {externalPrefill && externalPrefill.enabled && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <ArrowRightLeft className="w-4 h-4 text-[var(--color-accent)]" />
+                External Prefill
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(externalPrefill).filter(([k]) => !["enabled", "error"].includes(k)).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                    <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Response Cache */}
+          {responseCache && responseCache.cache_module && (responseCache.cache_module as Record<string, unknown>).enabled !== false && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Layers className="w-4 h-4 text-[var(--color-accent)]" />
+                Response Cache
+              </h3>
+              {((responseCache.engines as Record<string, unknown>[]) || []).length > 0 && (
+                <div className="mb-3">
+                  {(responseCache.engines as Record<string, unknown>[]).map((eng: Record<string, unknown>, idx: number) => {
+                    const rc = eng.response_cache as Record<string, unknown>;
+                    return (
+                      <div key={idx} className="mb-2 last:mb-0">
+                        <div className="text-xs text-[var(--color-text-secondary)] mb-1">{String(eng.model_id)}</div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                          {rc && Object.entries(rc).map(([k, v]) => (
+                            <div key={k}>
+                              <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                              <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {responseCache.cache_module && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                  {Object.entries(responseCache.cache_module as Record<string, unknown>).map(([k, v]) => (
+                    <div key={k}>
+                      <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                      <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Inflight Prefix Sharing */}
+          {inflightPrefix && inflightPrefix.enabled && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <GitBranch className="w-4 h-4 text-[var(--color-accent)]" />
+                Inflight Prefix Sharing
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(inflightPrefix).filter(([k]) => k !== "enabled").map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                    <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Request Coalescer */}
+          {requestCoalescer && requestCoalescer.enabled && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Radio className="w-4 h-4 text-[var(--color-accent)]" />
+                Request Coalescer
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(requestCoalescer).filter(([k]) => k !== "enabled").map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                    <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Token Scheduler */}
+          {tokenScheduler && tokenScheduler.enabled !== false && (tokenScheduler.token_scheduler || tokenScheduler.priority_inversion || tokenScheduler.fairness) && (() => {
+            const ts = tokenScheduler.token_scheduler as Record<string, unknown> | undefined;
+            const pi = tokenScheduler.priority_inversion as Record<string, unknown> | undefined;
+            const fair = tokenScheduler.fairness as Record<string, unknown> | undefined;
+            if (!ts && !pi && !fair) return null;
+            return (
+              <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-3">
+                <h3 className="font-semibold text-sm flex items-center gap-2">
+                  <Gauge className="w-4 h-4 text-[var(--color-accent)]" />
+                  Token Scheduler &amp; Fairness
+                </h3>
+                {ts && (
+                  <div>
+                    <div className="text-xs text-[var(--color-text-secondary)] font-medium mb-1">Token Scheduler</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                      {Object.entries(ts).slice(0, 8).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                          <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {pi && (
+                  <div>
+                    <div className="text-xs text-[var(--color-text-secondary)] font-medium mb-1">Priority Inversion</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                      {Object.entries(pi).slice(0, 6).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                          <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {fair && (
+                  <div>
+                    <div className="text-xs text-[var(--color-text-secondary)] font-medium mb-1">Fairness</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                      {Object.entries(fair).slice(0, 6).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                          <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* KV Migration */}
+          {kvMigration && kvMigration.enabled !== false && Object.keys(kvMigration).length > 1 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <ArrowRightLeft className="w-4 h-4 text-[var(--color-accent)]" />
+                KV Migration (Multi-Tier)
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                {Object.entries(kvMigration).filter(([k]) => !["enabled", "reason"].includes(k)).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                    <div className="font-medium tabular-nums">
+                      {typeof v === "number" ? (v > 1024 * 1024 ? fmtBytes(v) : v.toLocaleString()) : typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Attention Eviction (H2O) */}
+          {attentionEviction && attentionEviction.enabled !== false && (attentionEviction.models as Record<string, unknown>[])?.length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <Eye className="w-4 h-4 text-[var(--color-accent)]" />
+                Attention Eviction (H2O)
+              </h3>
+              {(attentionEviction.models as Record<string, unknown>[]).map((model: Record<string, unknown>, idx: number) => (
+                <div key={idx} className="mb-2 last:mb-0">
+                  <div className="text-xs text-[var(--color-text-secondary)] mb-1">{String(model.model_id)}</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                    {Object.entries(model).filter(([k]) => k !== "model_id").map(([k, v]) => (
+                      <div key={k}>
+                        <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                        <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Batch Size Distribution */}
+          {batchSize && batchSize.enabled !== false && Object.keys(batchSize).length > 1 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+                <BarChart3 className="w-4 h-4 text-[var(--color-accent)]" />
+                Batch Size Distribution
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                {Object.entries(batchSize).filter(([k]) => !["enabled", "reason"].includes(k)).map(([k, v]) => (
+                  <div key={k}>
+                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                    <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>

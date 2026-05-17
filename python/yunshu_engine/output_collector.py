@@ -87,8 +87,8 @@ class RequestOutputCollector:
         _reasoning = (existing.reasoning_tokens or 0) + (new.reasoning_tokens or 0)
         # Take max cached_tokens (monotonic, not cumulative)
         _cached = max(existing.cached_tokens or 0, new.cached_tokens or 0)
-        # Preserve TTFT: use existing if set (first-token timing), else new
-        _ttft = existing.ttft_ms or new.ttft_ms or 0.0
+        # Preserve TTFT: use existing if set (> 0, first-token timing), else new
+        _ttft = existing.ttft_ms if existing.ttft_ms > 0 else (new.ttft_ms if new.ttft_ms > 0 else 0.0)
         return RequestOutput(
             request_id=new.request_id,
             new_token_ids=existing.new_token_ids + new.new_token_ids,
@@ -103,7 +103,7 @@ class RequestOutputCollector:
             current_state=new.current_state,
             reasoning_tokens=_reasoning,
             cached_tokens=_cached,
-            error=new.error or existing.error,
+            error=new.error if new.error is not None else existing.error,
             ttft_ms=_ttft,
         )
 
@@ -113,7 +113,9 @@ class RequestOutputCollector:
         self._sentinel = False
         if self._is_waiting:
             self._is_waiting = False
-            RequestOutputCollector._waiting_consumers -= 1
+            RequestOutputCollector._waiting_consumers = max(
+                0, RequestOutputCollector._waiting_consumers - 1
+            )
 
     @classmethod
     def has_waiting_consumers(cls) -> bool:

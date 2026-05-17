@@ -470,10 +470,10 @@ class SamplingPlan:
         # Apply temperature
         scaled = logits / self.temperature
 
-        # Apply min_p filtering
+        # Apply min_p filtering (standard: threshold in logit space)
         if self.min_p > 0:
             max_logit = np.max(scaled)
-            threshold = max_logit - self.min_p * max_logit
+            threshold = max_logit + np.log(self.min_p)
             mask = scaled >= threshold
             scaled = np.where(mask, scaled, -np.inf)
 
@@ -713,10 +713,11 @@ class BatchedDetokenizer:
       text2 = bd.get_segment("req-2")
     """
 
-    def __init__(self, tokenizer: Any = None) -> None:
+    def __init__(self, tokenizer: Any = None, max_segments: int = 1024) -> None:
         self._tokenizer = tokenizer
         self._queue: list[_DetokEntry] = []
         self._segments: dict[str, str] = {}
+        self._max_segments = max_segments
         self._flush_count = 0
         self._total_tokens_processed = 0
         self._total_flush_ms = 0.0
@@ -785,6 +786,11 @@ class BatchedDetokenizer:
                 self._total_tokens_processed += len(entry.token_ids)
 
         self._segments.update(results)
+        # Evict oldest segments if over capacity to prevent unbounded growth
+        if len(self._segments) > self._max_segments:
+            keys_to_evict = list(self._segments.keys())[: len(self._segments) - self._max_segments]
+            for k in keys_to_evict:
+                del self._segments[k]
         self._queue.clear()
         self._flush_count += 1
         self._total_flush_ms += (time.perf_counter() - t0) * 1000

@@ -163,6 +163,9 @@ class AnthropicMessagesRequest(BaseModel):
             rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
             if rf_type not in ("json_object", "json_schema", "text", None):
                 raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
+        # Per Anthropic spec: top_logprobs requires logprobs=True
+        if self.top_logprobs is not None and not self.logprobs:
+            raise ValueError("top_logprobs requires logprobs to be true")
         return self
 
 

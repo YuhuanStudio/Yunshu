@@ -133,6 +133,8 @@ class TTSRequest(BaseModel):
             raise ValueError("model: field is required and cannot be empty")
         if not self.input or not self.input.strip():
             raise ValueError("input: field is required and cannot be empty")
+        if not self.voice or not self.voice.strip():
+            raise ValueError("voice: field is required and cannot be empty")
         if self.response_format not in ("wav",):
             raise ValueError(f"response_format: unsupported format '{self.response_format}'. Only 'wav' is currently supported.")
         return self
@@ -359,6 +361,9 @@ async def create_transcription(
     timestamp_granularities: Optional[list[str]] = Form(None),
 ) -> dict:
     """Transcribe audio file (OpenAI /v1/audio/transcriptions compatible)."""
+    if not model or not model.strip():
+        raise HTTPException(status_code=400, detail="model: field is required and cannot be empty")
+
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not initialized")
@@ -489,6 +494,9 @@ async def voice_pipeline(
     Accepts audio input, transcribes it, generates an LLM response,
     and synthesizes the response as audio.
     """
+    if not llm_model or not llm_model.strip():
+        raise HTTPException(status_code=400, detail="llm_model: field is required and cannot be empty")
+
     from yunshu_engine.voice_pipeline import VoicePipeline, VoicePipelineConfig
 
     audio_data = await file.read()

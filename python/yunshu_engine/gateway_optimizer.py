@@ -180,7 +180,8 @@ class RequestCoalescer:
 
     async def get_flushed_batch(self) -> tuple[str, _PendingBatch] | None:
         """Retrieve the most recently flushed batch (for engine consumption)."""
-        return getattr(self, "_last_flushed", None)
+        async with self._lock:
+            return getattr(self, "_last_flushed", None)
 
     async def resolve_batch(
         self, batch: _PendingBatch, results: list[Any]
@@ -678,10 +679,12 @@ class ResponseCache:
             size = 1024  # default estimate
 
         async with self._lock:
-            # Evict if necessary
-            await self._evict_if_needed(size)
-
             if request_hash in self._entries:
+                # Update existing entry — only evict for the net size increase
+                old = self._entries[request_hash]
+                net_increase = size - old.size_bytes
+                if net_increase > 0:
+                    await self._evict_if_needed(net_increase)
                 # Update existing entry
                 old = self._entries[request_hash]
                 self._total_memory -= old.size_bytes
@@ -693,7 +696,8 @@ class ResponseCache:
                 # Promote in LRU
                 self._lru.move_to_end(request_hash)
             else:
-                # New entry
+                # New entry — evict if necessary for full size
+                await self._evict_if_needed(size)
                 entry = _CacheEntry(
                     key=request_hash,
                     response=response,

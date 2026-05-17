@@ -44,6 +44,15 @@ class PoolingRequest(BaseModel):
             raise ValueError(f"pooling_type: must be one of {', '.join(sorted(_VALID_POOLING_TYPES))}, got '{self.pooling_type}'")
         if self.encoding_format not in ("float", "base64"):
             raise ValueError(f"encoding_format: must be 'float' or 'base64', got '{self.encoding_format}'")
+        # Validate input: string must be non-empty, list must have elements
+        if isinstance(self.input, str) and not self.input.strip():
+            raise ValueError("input: cannot be empty or whitespace-only")
+        if isinstance(self.input, list) and not self.input:
+            raise ValueError("input: cannot be an empty list")
+        if isinstance(self.input, list):
+            for i, t in enumerate(self.input):
+                if not isinstance(t, str) or not t.strip():
+                    raise ValueError(f"input: item at index {i} is empty or whitespace-only")
         return self
 
 
@@ -65,6 +74,13 @@ class ScoreRequest(BaseModel):
             raise ValueError("text_1: field is required and cannot be empty")
         if not texts_b or all(not t.strip() for t in texts_b):
             raise ValueError("text_2: field is required and cannot be empty")
+        # Reject individual empty items
+        for i, t in enumerate(texts_a):
+            if not isinstance(t, str) or not t.strip():
+                raise ValueError(f"text_1: item at index {i} is empty or whitespace-only")
+        for i, t in enumerate(texts_b):
+            if not isinstance(t, str) or not t.strip():
+                raise ValueError(f"text_2: item at index {i} is empty or whitespace-only")
         return self
 
 
@@ -85,6 +101,12 @@ class RerankRequest(BaseModel):
             raise ValueError("documents: field is required and cannot be empty")
         if self.top_n is not None and self.top_n <= 0:
             raise ValueError("top_n: must be a positive integer")
+        # Validate individual documents are not empty
+        for i, doc in enumerate(self.documents):
+            if not isinstance(doc, str) or not doc.strip():
+                raise ValueError(f"documents: item at index {i} is empty or whitespace-only")
+        if len(self.documents) > 2048:
+            raise ValueError("documents: maximum 2048 documents per request")
         return self
 
 
@@ -101,6 +123,10 @@ class ClassifyRequest(BaseModel):
             raise ValueError("input: field is required and cannot be empty")
         if len(self.labels) < 2:
             raise ValueError("labels: at least 2 labels required for classification")
+        # Validate individual labels are not empty
+        for i, label in enumerate(self.labels):
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(f"labels: item at index {i} is empty or whitespace-only")
         return self
 
 
@@ -109,16 +135,6 @@ class ClassifyRequest(BaseModel):
 @router.post("/pooling", response_model=None)
 async def create_pooling(req: PoolingRequest):
     texts = req.input if isinstance(req.input, list) else [req.input]
-    if not texts:
-        raise HTTPException(status_code=400, detail="Input cannot be empty")
-
-    # Validate pooling type
-    if req.pooling_type.upper() not in _VALID_POOLING_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid pooling_type '{req.pooling_type}'. "
-                   f"Must be one of: {', '.join(sorted(_VALID_POOLING_TYPES))}",
-        )
 
     engine = await _resolve_engine(req.model)
     if engine is None:
@@ -167,17 +183,6 @@ async def create_pooling(req: PoolingRequest):
 async def create_score(req: ScoreRequest):
     texts_a = req.text_1 if isinstance(req.text_1, list) else [req.text_1]
     texts_b = req.text_2 if isinstance(req.text_2, list) else [req.text_2]
-
-    # Validate scoring type
-    if req.scoring_type not in _VALID_SCORING_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid scoring_type '{req.scoring_type}'. "
-                   f"Must be one of: {', '.join(sorted(_VALID_SCORING_TYPES))}",
-        )
-
-    if not texts_a or not texts_b:
-        raise HTTPException(status_code=400, detail="text_1 and text_2 cannot be empty")
 
     # Broadcast single-element lists
     if len(texts_a) != len(texts_b):
@@ -230,16 +235,6 @@ async def create_score(req: ScoreRequest):
 
 @router.post("/rerank", response_model=None)
 async def create_rerank(req: RerankRequest):
-    if not req.query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty")
-    if not req.documents:
-        raise HTTPException(status_code=400, detail="Documents cannot be empty")
-    if len(req.documents) > 2048:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many documents: {len(req.documents)} > 2048",
-        )
-
     # Truncate long documents
     truncated_docs = []
     for doc in req.documents:
@@ -325,13 +320,6 @@ async def classify_input(req: ClassifyRequest):
     Uses temperature scaling (temperature=0.07) on cosine similarities
     to produce well-separated probability distributions.
     """
-    if not req.input or not req.input.strip():
-        raise HTTPException(status_code=400, detail="Input cannot be empty")
-    if not req.labels:
-        raise HTTPException(status_code=400, detail="Labels cannot be empty")
-    if len(req.labels) < 2:
-        raise HTTPException(status_code=400, detail="At least 2 labels required for classification")
-
     engine = await _resolve_engine(req.model)
     if engine is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")

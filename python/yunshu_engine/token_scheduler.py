@@ -337,8 +337,9 @@ class TokenLevelScheduler:
 
         if self.decode_strategy == DecodeStrategy.ROUND_ROBIN:
             per_request = max(1, decode_budget // max(len(requests), 1))
+            remaining_budget = decode_budget
             for req in requests:
-                tokens = min(per_request, decode_budget)
+                tokens = min(per_request, remaining_budget) if remaining_budget > 0 else 0
                 allocations.append(
                     TokenBudgetAllocation(
                         request_id=req.request_id,
@@ -348,6 +349,7 @@ class TokenLevelScheduler:
                         effective_priority=req.effective_priority,
                     )
                 )
+                remaining_budget -= tokens
 
         elif self.decode_strategy == DecodeStrategy.PRIORITY_ONLY:
             # Strict priority: higher priority gets all tokens first
@@ -356,7 +358,9 @@ class TokenLevelScheduler:
             )
             remaining = decode_budget
             for req in sorted_reqs:
-                tokens = min(max(1, remaining), remaining) if remaining > 0 else 0
+                # Each request gets 1 decode token per step (one forward pass = one
+                # token per request).  Only allocate if budget remains.
+                tokens = 1 if remaining > 0 else 0
                 allocations.append(
                     TokenBudgetAllocation(
                         request_id=req.request_id,
@@ -371,9 +375,12 @@ class TokenLevelScheduler:
         else:  # WFQ (default)
             weights = [self._compute_weight(req) for req in requests]
             total_w = sum(weights) or 1.0
+            remaining_budget = decode_budget
             for i, req in enumerate(requests):
-                raw = max(1, int(decode_budget * weights[i] / total_w))
-                tokens = min(raw, decode_budget)
+                # Allocate proportional to weight, but respect remaining budget.
+                # Use floor division so total does not systematically exceed budget.
+                raw = int(decode_budget * weights[i] / total_w)
+                tokens = max(1, min(raw, remaining_budget)) if remaining_budget > 0 else 0
                 allocations.append(
                     TokenBudgetAllocation(
                         request_id=req.request_id,
@@ -383,6 +390,7 @@ class TokenLevelScheduler:
                         effective_priority=req.effective_priority,
                     )
                 )
+                remaining_budget -= tokens
 
         return allocations
 

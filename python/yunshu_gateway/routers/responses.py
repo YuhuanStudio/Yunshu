@@ -94,6 +94,7 @@ class ResponsesRequest(BaseModel):
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: Optional[list] = None  # User-provided custom logits processors
+    timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -240,6 +241,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             lora_adapter=req.lora_adapter,
             priority=req.priority,
             user=req.user,
+            timeout=req.timeout,
         )
         vlm_json_schema = _parse_response_format(chat_response_format)
         return await _handle_vlm_chat(chat_req, messages, request, json_schema=vlm_json_schema)
@@ -335,6 +337,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
+                    timeout_seconds=req.timeout,
                 )
                 text = result.text
                 pt = result.prompt_tokens
@@ -369,6 +372,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
+                    timeout_seconds=req.timeout,
                 )
                 text = state.generated_text
                 pt = state.prompt_token_count
@@ -571,6 +575,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
                 cancel_event=_cancel_evt,
+                timeout_seconds=req.timeout,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -620,6 +625,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
                 cancel_event=_cancel_evt,
+                timeout_seconds=req.timeout,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count

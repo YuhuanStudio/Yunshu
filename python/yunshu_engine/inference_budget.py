@@ -184,12 +184,18 @@ class InferenceBudgetManager:
         return None
 
     def check_budgets(self) -> list[tuple[str, str]]:
-        """Check all budgets and return (request_id, reason) for exhausted ones."""
+        """Check all budgets and return (request_id, reason) for exhausted ones.
+
+        Includes both full budget exhaustion (token/time/cost) and
+        thinking budget exhaustion.
+        """
         exhausted = []
         for rid, budget in list(self._budgets.items()):
             if budget.is_exhausted:
                 reason = budget.exhaustion_reason or "unknown"
                 exhausted.append((rid, reason))
+            elif budget.is_thinking_exhausted:
+                exhausted.append((rid, "thinking_budget_reached"))
         return exhausted
 
     def remove(self, request_id: str) -> InferenceBudget | None:

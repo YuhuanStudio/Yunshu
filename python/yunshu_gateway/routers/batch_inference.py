@@ -72,6 +72,8 @@ class BatchRequest(BaseModel):
     max_concurrent: int = Field(default=4, ge=1, le=64)
     timeout: float = Field(
         default=_BATCH_DEFAULT_TIMEOUT,
+        ge=1.0,
+        le=3600.0,
         description="Seconds before the entire batch is aborted",
     )
 
@@ -312,6 +314,15 @@ async def upload_batch_csv(
     Expected CSV columns: custom_id, prompt (or messages_json)
     Optional columns: max_tokens, temperature, system_prompt
     """
+    if not model or not model.strip():
+        raise HTTPException(status_code=400, detail="model parameter is required and cannot be empty")
+
+    if not isinstance(max_tokens, int) or max_tokens < 1:
+        raise HTTPException(status_code=400, detail="max_tokens must be a positive integer")
+
+    if not isinstance(max_concurrent, int) or max_concurrent < 1:
+        raise HTTPException(status_code=400, detail="max_concurrent must be a positive integer")
+
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
@@ -331,7 +342,11 @@ async def upload_batch_csv(
         messages_json = row.get("messages_json", "")
         system_prompt = row.get("system_prompt", "")
         row_max_tokens = int(row.get("max_tokens", max_tokens))
+        if row_max_tokens < 1:
+            row_max_tokens = max_tokens
         row_temp = float(row.get("temperature", 0.7))
+        if row_temp < 0:
+            row_temp = 0.7
 
         if messages_json:
             import json
@@ -386,8 +401,17 @@ async def _execute_chat_completion(body: dict) -> dict:
     from ..engine import get_engine, get_engine_for_model
 
     model = body.get("model", "")
+    if not model or not model.strip():
+        raise ValueError("model: field is required and cannot be empty")
+
     messages = body.get("messages", [])
+    if not messages:
+        raise ValueError("messages: field is required and cannot be empty")
+
     max_tokens = body.get("max_tokens", 512)
+    if not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ValueError("max_tokens: must be a positive integer")
+
     temperature = body.get("temperature", 0.7)
     top_p = body.get("top_p", 1.0)
     stop = body.get("stop")
@@ -502,8 +526,19 @@ async def _execute_completion(body: dict) -> dict:
     from yunshu_engine.batched_engine import BatchedEngine
 
     model = body.get("model", "")
+    if not model or not model.strip():
+        raise ValueError("model: field is required and cannot be empty")
+
     prompt = body.get("prompt", "")
+    if isinstance(prompt, str) and not prompt.strip():
+        raise ValueError("prompt: field is required and cannot be empty")
+    if isinstance(prompt, list) and not prompt:
+        raise ValueError("prompt: field is required and cannot be empty")
+
     max_tokens = body.get("max_tokens", 128)
+    if not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ValueError("max_tokens: must be a positive integer")
+
     temperature = body.get("temperature", 0.7)
 
     engine = get_engine()
