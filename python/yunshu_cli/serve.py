@@ -116,6 +116,23 @@ def serve(
         help="Max seconds to wait for request draining on shutdown.",
         envvar="YUNSHU_DRAIN_TIMEOUT",
     ),
+    keep_alive_timeout: int = typer.Option(
+        5,
+        "--keep-alive-timeout",
+        help="Seconds to keep idle connections alive (0 to disable).",
+        envvar="YUNSHU_KEEP_ALIVE_TIMEOUT",
+    ),
+    max_request_size: int = typer.Option(
+        10 * 1024 * 1024,
+        "--max-request-size",
+        help="Maximum request body size in bytes (default: 10MB).",
+        envvar="YUNSHU_MAX_REQUEST_SIZE",
+    ),
+    server_header: bool = typer.Option(
+        False,
+        "--server-header",
+        help="Include 'Server: Yunshu' header in responses (for reverse proxy compat).",
+    ),
     reload: bool = typer.Option(
         False,
         "--reload",
@@ -159,6 +176,8 @@ def serve(
     env["YUNSHU_STARTUP_TIMEOUT"] = str(startup_timeout)
     env["YUNSHU_SLOW_REQUEST_THRESHOLD"] = str(slow_request_threshold)
     env["YUNSHU_DRAIN_TIMEOUT"] = str(drain_timeout)
+    env["YUNSHU_KEEP_ALIVE_TIMEOUT"] = str(keep_alive_timeout)
+    env["YUNSHU_MAX_REQUEST_SIZE"] = str(max_request_size)
 
     # Determine effective model source
     effective_model = model or os.environ.get("YUNSHU_MODEL")
@@ -196,6 +215,9 @@ def serve(
         log_level=log_level,
         reload=reload,
         factory=False,
+        timeout_keep_alive=keep_alive_timeout,
+        limit_max_request_size=max_request_size,
+        server_header="Yunshu" if server_header else None,
     )
 
 

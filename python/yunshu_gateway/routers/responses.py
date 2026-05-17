@@ -254,6 +254,13 @@ async def create_response(req: ResponsesRequest, request: Request):
     # Streaming: must return before the try/finally releases LoRA.
     # LoRA lifecycle is managed inside _stream_response's finally block.
     if req.stream:
+        if req.n > 1:
+            _release_lora_adapter(engine, loaded_adapter)
+            raise HTTPException(
+                status_code=400,
+                detail="n>1 is not supported with stream=True for the Responses API. "
+                       "Use stream=False for multiple completions, or stream=True with n=1.",
+            )
         return StreamingResponse(
             _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter, request=request),
             media_type="text/event-stream",
@@ -276,125 +283,147 @@ async def create_response(req: ResponsesRequest, request: Request):
     try:
         from yunshu_engine.batched_engine import BatchedEngine
         is_batched = isinstance(engine, BatchedEngine)
-        result = None
-        state = None
 
-        if is_batched:
-            result = await engine.chat(
-                messages=messages,
-                max_tokens=req.max_output_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                thinking_budget=req.thinking_budget,
-                reasoning_effort=req.reasoning_effort,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                logit_bias=_logit_bias,
-                min_p=req.min_p,
-                json_schema=json_schema,
-                stop=req.stop,
-                stop_token_ids=req.stop_token_ids,
-                spec_decode=req.spec_decode,
-                xtc_probability=req.xtc_probability,
-                xtc_threshold=req.xtc_threshold,
-                priority=req.priority,
-                logprobs=req.logprobs,
-                top_logprobs=req.top_logprobs,
-                logits_processors=req.logits_processors,
-                cancel_event=_ns_cancel_event,
-            )
-            text = result.text
-            pt = result.prompt_tokens
-            ct = result.completion_tokens
-            finish_reason = _normalize_finish_reason(result.finish_reason)
-            _reasoning_tokens = getattr(result, 'reasoning_tokens', 0)
-            _cached_tokens = getattr(result, 'cached_tokens', 0)
-        else:
-            state = await engine.generate(
-                prompt=messages,
-                max_tokens=req.max_output_tokens,
-                temperature=req.temperature,
-                top_p=req.top_p,
-                top_k=req.top_k,
-                seed=req.seed,
-                enable_thinking=req.enable_thinking,
-                thinking_budget=req.thinking_budget,
-                reasoning_effort=req.reasoning_effort,
-                repetition_penalty=req.repetition_penalty,
-                frequency_penalty=req.frequency_penalty,
-                presence_penalty=req.presence_penalty,
-                logit_bias=_logit_bias,
-                min_p=req.min_p,
-                json_schema=json_schema,
-                stop=req.stop,
-                stop_token_ids=req.stop_token_ids,
-                spec_decode=req.spec_decode,
-                xtc_probability=req.xtc_probability,
-                xtc_threshold=req.xtc_threshold,
-                priority=req.priority,
-                logprobs=req.logprobs,
-                top_logprobs=req.top_logprobs,
-                logits_processors=req.logits_processors,
-                cancel_event=_ns_cancel_event,
-            )
-            text = state.generated_text
-            pt = state.prompt_token_count
-            ct = state.completion_token_count
-            finish_reason = _normalize_finish_reason(state.finish_reason)
-            _reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
-            _cached_tokens = getattr(state, 'cached_tokens', 0)
+        # ── n>1 support: generate n responses sequentially ──
+        # Single GPU cannot parallelize multiple generations; they run
+        # sequentially.  Each choice gets its own message output item.
+        all_output_items: list[dict] = []
+        total_pt = 0
+        total_ct = 0
+        total_reasoning_tokens = 0
+        max_cached_tokens = 0
 
-        # Extract tool calls
-        tool_calls = None
-        if req.tools:
-            from .chat import extract_tool_calls_model_aware, clean_tool_call_markup
-            tool_calls = extract_tool_calls_model_aware(text, req.model)
+        for choice_idx in range(req.n):
+            result = None
+            state = None
+
+            if is_batched:
+                result = await engine.chat(
+                    messages=messages,
+                    max_tokens=req.max_output_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=_logit_bias,
+                    min_p=req.min_p,
+                    json_schema=json_schema,
+                    stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
+                    spec_decode=req.spec_decode,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    priority=req.priority,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
+                    logits_processors=req.logits_processors,
+                    cancel_event=_ns_cancel_event,
+                )
+                text = result.text
+                pt = result.prompt_tokens
+                ct = result.completion_tokens
+                finish_reason = _normalize_finish_reason(result.finish_reason)
+                _reasoning_tokens = getattr(result, 'reasoning_tokens', 0)
+                _cached_tokens = getattr(result, 'cached_tokens', 0)
+            else:
+                state = await engine.generate(
+                    prompt=messages,
+                    max_tokens=req.max_output_tokens,
+                    temperature=req.temperature,
+                    top_p=req.top_p,
+                    top_k=req.top_k,
+                    seed=req.seed,
+                    enable_thinking=req.enable_thinking,
+                    thinking_budget=req.thinking_budget,
+                    reasoning_effort=req.reasoning_effort,
+                    repetition_penalty=req.repetition_penalty,
+                    frequency_penalty=req.frequency_penalty,
+                    presence_penalty=req.presence_penalty,
+                    logit_bias=_logit_bias,
+                    min_p=req.min_p,
+                    json_schema=json_schema,
+                    stop=req.stop,
+                    stop_token_ids=req.stop_token_ids,
+                    spec_decode=req.spec_decode,
+                    xtc_probability=req.xtc_probability,
+                    xtc_threshold=req.xtc_threshold,
+                    priority=req.priority,
+                    logprobs=req.logprobs,
+                    top_logprobs=req.top_logprobs,
+                    logits_processors=req.logits_processors,
+                    cancel_event=_ns_cancel_event,
+                )
+                text = state.generated_text
+                pt = state.prompt_token_count
+                ct = state.completion_token_count
+                finish_reason = _normalize_finish_reason(state.finish_reason)
+                _reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
+                _cached_tokens = getattr(state, 'cached_tokens', 0)
+
+            # Accumulate usage across all choices
+            total_pt = pt  # prompt tokens are the same for every choice
+            total_ct += ct
+            total_reasoning_tokens += _reasoning_tokens
+            max_cached_tokens = max(max_cached_tokens, _cached_tokens)
+
+            # Extract tool calls for this choice
+            tool_calls = None
+            if req.tools:
+                from .chat import extract_tool_calls_model_aware, clean_tool_call_markup
+                tool_calls = extract_tool_calls_model_aware(text, req.model)
+                if tool_calls:
+                    text = clean_tool_call_markup(text)
+                    finish_reason = "tool_calls"
+
+            # Build output item for this choice
+            text_part = {"type": "output_text", "text": text.strip()}
+            # Include logprobs if requested
+            if req.logprobs:
+                _result_lp = getattr(result, 'logprobs', None) if is_batched else getattr(state, 'logprobs', None)
+                if _result_lp:
+                    _chunk_lp = _format_chat_logprobs(_result_lp)
+                    if _chunk_lp:
+                        text_part["logprobs"] = _chunk_lp
+            content_parts = [text_part]
+            choice_item = {
+                "type": "message",
+                "id": f"msg-{uuid.uuid4().hex[:24]}",
+                "role": "assistant",
+                "content": content_parts,
+                "status": "completed",
+            }
+            # For n>1, include a choice_index so clients can distinguish
+            if req.n > 1:
+                choice_item["index"] = choice_idx
+
+            all_output_items.append(choice_item)
+
             if tool_calls:
-                text = clean_tool_call_markup(text)
-                finish_reason = "tool_calls"
+                for tc in tool_calls:
+                    all_output_items.append({
+                        "type": "function_call",
+                        "id": f"fc-{uuid.uuid4().hex[:24]}",
+                        "call_id": f"call_{uuid.uuid4().hex[:8]}",
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                    })
 
-        # Build output items
-        output_items = []
-        text_part = {"type": "output_text", "text": text.strip()}
-        # Include logprobs if requested
-        if req.logprobs:
-            _result_lp = getattr(result, 'logprobs', None) if is_batched else getattr(state, 'logprobs', None)
-            if _result_lp:
-                _chunk_lp = _format_chat_logprobs(_result_lp)
-                if _chunk_lp:
-                    text_part["logprobs"] = _chunk_lp
-        content_parts = [text_part]
-        output_items.append({
-            "type": "message",
-            "id": f"msg-{uuid.uuid4().hex[:24]}",
-            "role": "assistant",
-            "content": content_parts,
-        })
-
-        if tool_calls:
-            for tc in tool_calls:
-                output_items.append({
-                    "type": "function_call",
-                    "id": f"fc-{uuid.uuid4().hex[:24]}",
-                    "call_id": f"call_{uuid.uuid4().hex[:8]}",
-                    "name": tc["name"],
-                    "arguments": tc["arguments"],
-                })
-
-        _record_metrics(pt, ct)
+        _record_metrics(total_pt, total_ct)
 
         # End tracing
         tracer.end_trace(trace_id, result={
-            "prompt_tokens": pt,
-            "completion_tokens": ct,
-            "finish_reason": finish_reason,
+            "prompt_tokens": total_pt,
+            "completion_tokens": total_ct,
+            "choices": req.n,
         })
         slog.info("inference_complete", model=req.model, trace_id=trace_id,
-                  prompt_tokens=pt, completion_tokens=ct)
+                  prompt_tokens=total_pt, completion_tokens=total_ct, choices=req.n)
 
         return JSONResponse({
             "id": response_id,
@@ -402,13 +431,13 @@ async def create_response(req: ResponsesRequest, request: Request):
             "created_at": int(time.time()),
             "model": req.model,
             "status": "completed",
-            "output": output_items,
+            "output": all_output_items,
             "usage": {
-                "input_tokens": pt,
-                "output_tokens": ct,
-                "total_tokens": pt + ct,
-                **({"output_tokens_details": {"reasoning_tokens": _reasoning_tokens}} if _reasoning_tokens else {}),
-                **({"input_tokens_details": {"cached_tokens": _cached_tokens}} if _cached_tokens else {}),
+                "input_tokens": total_pt,
+                "output_tokens": total_ct,
+                "total_tokens": total_pt + total_ct,
+                **({"output_tokens_details": {"reasoning_tokens": total_reasoning_tokens}} if total_reasoning_tokens else {}),
+                **({"input_tokens_details": {"cached_tokens": max_cached_tokens}} if max_cached_tokens else {}),
             },
         })
     except MemoryError:
@@ -432,7 +461,27 @@ async def create_response(req: ResponsesRequest, request: Request):
 
 
 async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None, request=None):
-    """SSE streaming for Responses API."""
+    """SSE streaming for Responses API.
+
+    ARCHITECTURAL GAP — Streaming uses chat.completion.chunk format:
+      The OpenAI Responses API defines its own SSE event types:
+        - response.created, response.in_progress
+        - response.output_item.added, response.content_part.added
+        - response.output_text.delta, response.output_text.done
+        - response.completed
+      However, the current implementation emits chat.completion.chunk
+      objects (reusing the chat completions streaming path). This is a
+      known gap that requires significant refactoring:
+        1. New formatters in streaming.py for each Responses API event type
+        2. Different delta structure (output_text.delta vs choices[].delta)
+        3. Lifecycle events (response.created/in_progress/completed)
+        4. Usage reporting via response.completed event, not a separate chunk
+      Until the proper formatters are built, chat.completion.chunk format
+      is used as a compatible fallback that most clients can parse.
+
+    n>1 is rejected at the router level (see create_response) before
+    reaching this function.
+    """
     from ..streaming import with_sse_keepalive, format_openai_done, format_openai_usage_chunk
     from yunshu_engine.batched_engine import BatchedEngine
     from .chat import _release_lora_adapter
@@ -441,7 +490,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     if _logit_bias:
         _logit_bias = {int(k): v for k, v in _logit_bias.items()}
     include_usage = (
-        req.stream_options is not None and req.stream_options.get("include_usage", False)
+        req.stream_options is not None and req.stream_options.include_usage
     )
     prompt_tok = 0
     completion_tok = 0

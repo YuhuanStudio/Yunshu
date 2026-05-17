@@ -66,6 +66,8 @@ def _validate_env_vars() -> list[str]:
         "YUNSHU_KV_QUANT_BITS": (int, False),
         "YUNSHU_KV_QUANT_GROUP_SIZE": (int, False),
         "YUNSHU_MEM_PRESSURE_THRESHOLD": (float, False),
+        "YUNSHU_MAX_REQUEST_SIZE": (int, False),
+        "YUNSHU_KEEP_ALIVE_TIMEOUT": (int, False),
     }
     for var, (type_fn, required) in numeric_vars.items():
         val = os.environ.get(var)
@@ -591,6 +593,42 @@ def create_app() -> FastAPI:
                 },
             )
         return await call_next(request)
+
+    # Request body size limit middleware (reject oversized payloads early)
+    max_request_size = int(os.environ.get("YUNSHU_MAX_REQUEST_SIZE", str(10 * 1024 * 1024)))
+
+    @app.middleware("http")
+    async def request_size_limit(request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > max_request_size:
+                    path = request.url.path
+                    if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+                        return JSONResponse(
+                            status_code=413,
+                            content={
+                                "type": "error",
+                                "error": {
+                                    "type": "invalid_request_error",
+                                    "message": f"Request body too large: {content_length} bytes (max {max_request_size})",
+                                },
+                            },
+                        )
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": {
+                                "message": f"Request body too large: {content_length} bytes (max {max_request_size})",
+                                "type": "invalid_request_error",
+                                "code": "request_too_large",
+                            }
+                        },
+                    )
+            except (ValueError, TypeError):
+                pass  # Malformed content-length — let downstream handle it
+        return await call_next(request)
+
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(TenantAuthMiddleware)

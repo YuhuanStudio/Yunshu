@@ -57,6 +57,10 @@ class ServerMetrics:
         self._batch_size_p50: int = 0
         self._batch_size_p99: int = 0
 
+        # Compute utilization tracking (GPU active / wall time)
+        self._total_compute_time_ms: float = 0.0
+        self._total_wall_time_ms: float = 0.0
+
         self._start_time = time.time()
         self._last_save_time = time.time()
 
@@ -250,6 +254,37 @@ class ServerMetrics:
                 "batch_size_samples_buffered": 0,
             }
 
+    def record_compute_step(self, step_duration_ms: float, idle: bool = False) -> None:
+        """Record a scheduler step duration for compute utilization tracking.
+
+        Called from engine_core._engine_loop after each step.
+        Step time = GPU active time; idle time = time spent waiting for requests.
+
+        Args:
+            step_duration_ms: Duration of this step in milliseconds.
+            idle: If True, this was an idle poll (no active requests processed).
+        """
+        with self._lock:
+            if idle:
+                self._total_wall_time_ms += step_duration_ms
+            else:
+                self._total_compute_time_ms += step_duration_ms
+                self._total_wall_time_ms += step_duration_ms
+
+    def get_compute_utilization(self) -> float:
+        """Return compute utilization percentage (GPU active / total wall time).
+
+        Returns 0.0 when no steps have been recorded. Value is 0–100.
+        Thread-safe.
+        """
+        with self._lock:
+            if self._total_wall_time_ms <= 0:
+                return 0.0
+            return min(
+                self._total_compute_time_ms / self._total_wall_time_ms * 100.0,
+                100.0,
+            )
+
     def _build_snapshot(
         self,
         prompt: int,
@@ -265,6 +300,11 @@ class ServerMetrics:
         avg_gen_tps = completion / gen_dur if gen_dur > 0 else 0.0
         cache_eff = (cached / prompt * 100) if prompt > 0 else 0.0
 
+        compute_util = (
+            min(self._total_compute_time_ms / self._total_wall_time_ms * 100.0, 100.0)
+            if self._total_wall_time_ms > 0
+            else 0.0
+        )
         return {
             "total_tokens_served": prompt + completion,
             "total_cached_tokens": cached,
@@ -274,6 +314,7 @@ class ServerMetrics:
             "total_requests": requests,
             "avg_prefill_tps": round(avg_prefill_tps, 1),
             "avg_generation_tps": round(avg_gen_tps, 1),
+            "compute_utilization_pct": round(compute_util, 2),
             "uptime_seconds": round(uptime, 1),
         }
 

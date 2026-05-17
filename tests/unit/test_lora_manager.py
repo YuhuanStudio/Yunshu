@@ -377,6 +377,267 @@ class TestLoRAListAdaptersRefCount:
         assert adapters[0]["ref_count"] == 3
 
 
+class TestLoRACrossModelConcurrent:
+    """Verify concurrent multi-model LoRA: multiple managers with different
+    adapters under simultaneous load, ensuring ref-counting and LRU eviction
+    work correctly across model instances without interference."""
+
+    @staticmethod
+    def _make_managers(n_models: int, adapters_per_model: int, max_loras: int = 3):
+        """Create N independent LoRAAdapterManager instances, each with adapters."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        managers = {}
+        for m in range(n_models):
+            mgr = LoRAAdapterManager(max_loras=max_loras)
+            for a in range(adapters_per_model):
+                aid = f"model{m}-adapter{a}"
+                mgr._adapters[aid] = LoRAAdapterEntry(
+                    adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True,
+                )
+                mgr._lru_order.append(aid)
+            mgr._active_adapter_id = f"model{m}-adapter0"
+            managers[f"model{m}"] = mgr
+        return managers
+
+    def test_concurrent_acquire_release_multi_model(self):
+        """Multiple threads operating on different model managers simultaneously."""
+        import threading
+        managers = self._make_managers(4, 3)
+        errors = []
+        barrier = threading.Barrier(8)
+
+        def worker(model_key, adapter_idx):
+            try:
+                mgr = managers[model_key]
+                aid = f"{model_key}-adapter{adapter_idx}"
+                barrier.wait(timeout=5)
+                for _ in range(50):
+                    mgr.acquire_adapter(aid)
+                    mgr.release_adapter(aid)
+            except Exception as e:
+                errors.append((model_key, adapter_idx, e))
+
+        threads = []
+        for m in range(4):
+            for a in range(2):  # 2 threads per model
+                t = threading.Thread(target=worker, args=(f"model{m}", a))
+                threads.append(t)
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert len(errors) == 0, f"Errors: {errors}"
+        # All ref counts should be back to 0
+        for key, mgr in managers.items():
+            for aid, entry in mgr._adapters.items():
+                assert entry.ref_count == 0, f"{key}/{aid} ref_count={entry.ref_count}"
+
+    def test_concurrent_cross_model_eviction(self):
+        """Eviction on one model's manager must never touch another model's adapters."""
+        import threading
+        managers = self._make_managers(3, 3, max_loras=2)
+        errors = []
+        barrier = threading.Barrier(6)
+
+        def acquirer(model_key, adapter_idx):
+            try:
+                mgr = managers[model_key]
+                aid = f"{model_key}-adapter{adapter_idx}"
+                barrier.wait(timeout=5)
+                mgr.acquire_adapter(aid)
+                import time
+                time.sleep(0.05)
+                mgr.release_adapter(aid)
+            except Exception as e:
+                errors.append(("acquire", model_key, e))
+
+        def evictor(model_key):
+            try:
+                mgr = managers[model_key]
+                barrier.wait(timeout=5)
+                for _ in range(30):
+                    mgr._unload_lru()
+            except Exception as e:
+                errors.append(("evict", model_key, e))
+
+        threads = []
+        for m in range(3):
+            threads.append(threading.Thread(target=acquirer, args=(f"model{m}", 0)))
+            threads.append(threading.Thread(target=evictor, args=(f"model{m}",)))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+        # Verify isolation: loaded adapters in one model should not affect others
+        for m in range(3):
+            mgr = managers[f"model{m}"]
+            # If adapter0 still has refs, it must still be loaded
+            entry0 = mgr._adapters[f"model{m}-adapter0"]
+            if entry0.ref_count > 0:
+                assert entry0.is_loaded, f"model{m}-adapter0 has refs but is not loaded"
+
+    def test_concurrent_acquire_eviction_different_models(self):
+        """Stress test: acquire on model A while evicting on model B."""
+        import threading
+        managers = self._make_managers(2, 4, max_loras=2)
+        errors = []
+        barrier = threading.Barrier(4)
+
+        def model_a_worker():
+            mgr = managers["model0"]
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(100):
+                    mgr.acquire_adapter("model0-adapter0")
+                    mgr.release_adapter("model0-adapter0")
+            except Exception as e:
+                errors.append(("model_a", e))
+
+        def model_b_evictor():
+            mgr = managers["model1"]
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(50):
+                    mgr._unload_lru()
+            except Exception as e:
+                errors.append(("model_b_evict", e))
+
+        def model_b_acquire():
+            mgr = managers["model1"]
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(100):
+                    mgr.acquire_adapter("model1-adapter1")
+                    mgr.release_adapter("model1-adapter1")
+            except Exception as e:
+                errors.append(("model_b_acquire", e))
+
+        def model_a_evictor():
+            mgr = managers["model0"]
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(50):
+                    mgr._unload_lru()
+            except Exception as e:
+                errors.append(("model_a_evict", e))
+
+        threads = [
+            threading.Thread(target=model_a_worker),
+            threading.Thread(target=model_b_evictor),
+            threading.Thread(target=model_b_acquire),
+            threading.Thread(target=model_a_evictor),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+    def test_ref_count_isolation_under_contention(self):
+        """Verify ref counts don't leak across model managers under contention."""
+        import threading
+        managers = self._make_managers(3, 2)
+        errors = []
+        barrier = threading.Barrier(6)
+
+        def worker(model_key, adapter_idx, iterations):
+            try:
+                mgr = managers[model_key]
+                aid = f"{model_key}-adapter{adapter_idx}"
+                barrier.wait(timeout=5)
+                for _ in range(iterations):
+                    mgr.acquire_adapter(aid)
+                    # Brief hold
+                    mgr.release_adapter(aid)
+            except Exception as e:
+                errors.append((model_key, adapter_idx, e))
+
+        threads = []
+        for m in range(3):
+            for a in range(2):
+                iters = 200 if a == 0 else 100
+                t = threading.Thread(target=worker, args=(f"model{m}", a, iters))
+                threads.append(t)
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+        # All ref counts must be exactly 0 after all releases
+        for key, mgr in managers.items():
+            for aid, entry in mgr._adapters.items():
+                assert entry.ref_count == 0, (
+                    f"{key}/{aid} ref_count={entry.ref_count} — leaked across managers"
+                )
+
+    def test_lru_order_independent_per_model(self):
+        """LRU order in one manager is unaffected by operations on another."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr_a = LoRAAdapterManager(max_loras=4)
+        mgr_b = LoRAAdapterManager(max_loras=4)
+
+        for i in range(3):
+            for mgr, prefix in [(mgr_a, "a"), (mgr_b, "b")]:
+                aid = f"{prefix}-{i}"
+                mgr._adapters[aid] = LoRAAdapterEntry(
+                    adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True,
+                )
+                mgr._lru_order.append(aid)
+            mgr_a._active_adapter_id = "a-0"
+            mgr_b._active_adapter_id = "b-0"
+
+        # Touch a-1 in mgr_a
+        mgr_a.acquire_adapter("a-1")
+        mgr_a.release_adapter("a-1")
+        assert mgr_a._lru_order[-1] == "a-1"
+
+        # Touch b-2 in mgr_b — should not affect mgr_a's LRU order
+        mgr_b.acquire_adapter("b-2")
+        mgr_b.release_adapter("b-2")
+        assert mgr_b._lru_order[-1] == "b-2"
+        assert mgr_a._lru_order[-1] == "a-1"  # unchanged
+
+    def test_shutdown_one_manager_does_not_affect_others(self):
+        """Shutting down one model's LoRA manager doesn't touch others."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr_a = LoRAAdapterManager(max_loras=2)
+        mgr_b = LoRAAdapterManager(max_loras=2)
+
+        for i in range(2):
+            for mgr, prefix in [(mgr_a, "a"), (mgr_b, "b")]:
+                aid = f"{prefix}-{i}"
+                mgr._adapters[aid] = LoRAAdapterEntry(
+                    adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True,
+                )
+                mgr._lru_order.append(aid)
+            mgr_a._active_adapter_id = "a-0"
+            mgr_b._active_adapter_id = "b-0"
+
+        # Acquire refs on mgr_b
+        mgr_b.acquire_adapter("b-0")
+
+        # Shutdown mgr_a
+        mgr_a.shutdown()
+        assert len(mgr_a._adapters) == 0
+        assert mgr_a._active_adapter_id is None
+
+        # mgr_b must be untouched
+        assert len(mgr_b._adapters) == 2
+        assert mgr_b._adapters["b-0"].is_loaded is True
+        assert mgr_b._adapters["b-0"].ref_count == 1
+        assert mgr_b._active_adapter_id == "b-0"
+
+
 class TestGrammarParameter:
     def test_parse_grammar_json_schema(self):
         from yunshu_gateway.routers.chat import _parse_response_format

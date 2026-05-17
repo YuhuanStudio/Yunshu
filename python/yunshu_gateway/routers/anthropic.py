@@ -770,38 +770,49 @@ async def _stream_anthropic(
     _anth_tracker = get_request_tracker()
     _anth_gen = _anth_tracker.register(message_id, req.model)
 
-    # message_start event
-    _start_ts = int(time.time())
-    msg_start = {
-        "type": "message_start",
-        "message": {
-            "id": message_id,
-            "type": "message",
-            "role": "assistant",
-            "content": [],
-            "model": req.model,
-            "stop_reason": None,
-            "stop_sequence": None,
-            "created_at": _start_ts,
-            "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                },
-        },
-    }
-    yield f"event: message_start\ndata: {json.dumps(msg_start)}\n\n".encode("utf-8")
+    # Track whether message_start has been emitted (deferred until first
+    # engine output so we can report accurate cache token counts).
+    _message_start_emitted = False
 
-    # content_block_start for thinking (if enabled)
-    if enable_thinking:
-        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n".encode("utf-8")
-        thinking_block_started = True
+    async def _emit_message_start(inp_tokens: int, cached_toks: int) -> bytes:
+        """Build and return the message_start event bytes.
+
+        Called once, when the first engine output arrives with prompt_tokens.
+        cache_creation_input_tokens = prompt_tokens - cached_tokens
+        cache_read_input_tokens = cached_tokens
+        """
+        cache_creation = max(0, inp_tokens - cached_toks)
+        cache_read = max(0, cached_toks)
+        msg_start = {
+            "type": "message_start",
+            "message": {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": req.model,
+                "stop_reason": None,
+                "stop_sequence": None,
+                "created_at": _start_ts,
+                "usage": {
+                    "input_tokens": inp_tokens,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": cache_creation,
+                    "cache_read_input_tokens": cache_read,
+                },
+            },
+        }
+        return f"event: message_start\ndata: {json.dumps(msg_start)}\n\n".encode("utf-8")
+
+    _start_ts = int(time.time())
+
+    # content_block_start for thinking (if enabled) is deferred along with
+    # message_start — emitted inside _token_source after message_start.
 
     async def _token_source():
         nonlocal input_tokens, output_tokens, block_index, cached_tokens
         nonlocal thinking_block_started, text_block_started, tool_use_block_started
-        nonlocal accumulated_text, matched_stop
+        nonlocal accumulated_text, matched_stop, _message_start_emitted
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -842,6 +853,16 @@ async def _stream_anthropic(
                     input_tokens = output.prompt_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
+
+                # Emit message_start on first output with prompt_tokens.
+                # Deferred from the initial yield so that cache token counts
+                # are populated from the engine rather than reporting 0.
+                if not _message_start_emitted:
+                    _message_start_emitted = True
+                    yield _emit_message_start(input_tokens, cached_tokens)
+                    if enable_thinking:
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
+                        thinking_block_started = True
 
                 # Thinking content
                 if enable_thinking and _is_reasoning and _token_text:
@@ -944,6 +965,15 @@ async def _stream_anthropic(
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 
+                # Emit message_start on first output with prompt_tokens
+                # (deferred from the initial yield for accurate cache tokens).
+                if not _message_start_emitted:
+                    _message_start_emitted = True
+                    yield _emit_message_start(input_tokens, cached_tokens)
+                    if enable_thinking:
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
+                        thinking_block_started = True
+
                 # Use engine's current_state (token-level tracking) when available,
                 # fall back to ThinkingParser for engines that don't set current_state
                 _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
@@ -1010,11 +1040,21 @@ async def _stream_anthropic(
                             # Normal text delta
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
 
+        # If message_start was never emitted (engine produced zero outputs or
+        # only outputs without prompt_tokens), emit it now with whatever we have.
+        if not _message_start_emitted:
+            _message_start_emitted = True
+            yield _emit_message_start(input_tokens, cached_tokens)
+
         # If no content blocks were started at all (zero tokens), emit an empty text block
         # so that the response always has at least one content block (Anthropic protocol requirement)
         if not text_block_started and not thinking_block_started:
-            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-            text_block_started = True
+            if enable_thinking:
+                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
+                thinking_block_started = True
+            else:
+                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                text_block_started = True
 
         # Close last content block (only if one was actually started)
         if text_block_started or thinking_block_started:
@@ -1022,8 +1062,8 @@ async def _stream_anthropic(
 
         # message_delta (stop + usage)
         # Per Anthropic streaming spec, message_delta usage ONLY contains output_tokens.
-        # cache_creation_input_tokens / cache_read_input_tokens belong in message_start usage
-        # but are sent there as 0 since we don't know them until after streaming begins.
+        # cache_creation_input_tokens / cache_read_input_tokens are in message_start
+        # (emitted deferred above when the first engine output arrives).
         stop_reason = _map_stop_reason(None, matched_stop, has_tool_calls=tool_use_block_started)
         delta_data = {
             "type": "message_delta",

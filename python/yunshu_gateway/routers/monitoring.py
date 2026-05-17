@@ -194,7 +194,7 @@ def _get_active_requests() -> dict[str, Any]:
 @router.get("/system")
 async def system_stats() -> dict[str, Any]:
     """System-level statistics: CPU, memory, GPU, runtime info."""
-    return {
+    result = {
         "cpu": _get_cpu_info(),
         "memory": _get_memory_info(),
         "gpu": _get_gpu_info(),
@@ -203,6 +203,23 @@ async def system_stats() -> dict[str, Any]:
         "pid": os.getpid(),
         "hostname": platform.node(),
     }
+
+    # Compute utilization from engine_core (GPU active time / wall time)
+    try:
+        engines = _collect_engines_from_globals()
+        util_values = []
+        for model_id, engine in engines:
+            core = getattr(engine, '_engine_core', None)
+            if core is not None and hasattr(core, 'get_compute_utilization'):
+                util_values.append(core.get_compute_utilization())
+        if util_values:
+            result["compute_utilization_pct"] = round(
+                sum(util_values) / len(util_values), 2
+            )
+    except Exception:
+        logger.debug("compute_utilization collection failed", exc_info=True)
+
+    return result
 
 
 @router.get("/models")

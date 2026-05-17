@@ -130,3 +130,41 @@ class TestServerMetrics:
         time.sleep(0.05)
         snap = m.get_snapshot()
         assert snap["uptime_seconds"] >= 0.05
+
+    def test_compute_utilization_empty(self):
+        """No steps recorded → 0% utilization."""
+        m = ServerMetrics()
+        assert m.get_compute_utilization() == 0.0
+        snap = m.get_snapshot()
+        assert snap["compute_utilization_pct"] == 0.0
+
+    def test_compute_utilization_100pct(self):
+        """All compute steps, no idle → 100% utilization."""
+        m = ServerMetrics()
+        m.record_compute_step(10.0)
+        m.record_compute_step(20.0)
+        assert m.get_compute_utilization() == 100.0
+
+    def test_compute_utilization_50pct(self):
+        """Half compute, half idle → 50% utilization."""
+        m = ServerMetrics()
+        m.record_compute_step(10.0)
+        m.record_compute_step(10.0, idle=True)
+        assert m.get_compute_utilization() == 50.0
+
+    def test_compute_utilization_clamped_at_100(self):
+        """Utilization cannot exceed 100%."""
+        m = ServerMetrics()
+        m.record_compute_step(100.0)
+        # Manually set wall time lower to test clamp
+        m._total_wall_time_ms = 50.0
+        util = m.get_compute_utilization()
+        assert util == 100.0
+
+    def test_compute_utilization_in_snapshot(self):
+        m = ServerMetrics()
+        m.record_request_complete(100, 50)
+        m.record_compute_step(8.0)
+        m.record_compute_step(2.0, idle=True)
+        snap = m.get_snapshot()
+        assert snap["compute_utilization_pct"] == 80.0
