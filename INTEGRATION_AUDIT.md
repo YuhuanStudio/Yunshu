@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6051 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6174 passed, 16 skipped** (0 failures).
 
 ### 已完成修復 (2026-05-16 Wave 100-103 — Spec Decode Parameters + Resource Leak Consolidation + Responses API + Multimodal)
 
@@ -83,6 +83,73 @@
 | Wave 107: Grammar constraints | 新增 make_grammar_constraint() + RegexConstraint + ChoiceConstraint 分派 | 結構化輸出不限 JSON schema |
 | Wave 107: TTFT 全路徑監控 | 6 個額外生成路徑添加 observe_histogram("ttft_seconds") | TTFT 延遲直方圖完整覆蓋 |
 | Wave 107: KV cache Prometheus gauges | kv_cache_blocks_used/total, prefix_cache entries/hits/misses, radix tree stats | KV 快取利用率可觀測 |
+
+### 已完成修復 (2026-05-17 Wave 114-117 — Reasoning Accumulation + Realtime Fixes + Parameter Forwarding + Anthropic Compliance)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 114: reasoning_tokens 跨思考段累積 | 多個 thinking_segment 的 reasoning_tokens 只取最後一段。修復: 累加全部 thinking 段 token 計數 | Chat/Completions reasoning_tokens 完整 |
+| Wave 114: thinking 段重疊計算 | 連續 thinking_segment 結束偏移量重疊導致重複計算。修復: 使用 exclusive 結束偏移 | Token 計數精確 |
+| Wave 115: Realtime NameError | Realtime engine `_state` 未初始化 — 連接時立即崩潰。修復: __init__ 初始化完整狀態 | Realtime API 可連接 |
+| Wave 115: Realtime TTFT 度量 | 缺少 observe_histogram("ttft_seconds") — Realtime 首 token 延遲無監控。修復: 添加度量 | TTFT 覆蓋全端點 |
+| Wave 115: Realtime cancel_event | 生成循環不檢查 cancel_event — 客戶斷開後 GPU 持續運算。修復: 每迭代檢查 + 優雅停止 | Realtime 取消安全 |
+| Wave 116: Engine core 參數轉發 | frequency_penalty / presence_penalty / top_k 未從 SamplingParams 傳入 BatchGenerator。修復: 全參數映射 | 採樣參數完整 |
+| Wave 116: Engine core 硬化 | _schedule_waiting 空請求列表導致 IndexError。修復: 空列表提前返回 | 調度器健壯性 |
+| Wave 116: BatchedEngine 生命週期 | start() 未調用 parent start() — warmup/preload 跳過。修復: super().start() | 引擎啟動完整 |
+| Wave 117: Anthropic 規範合規 | system 參數類型拒絕 list[dict]（Anthropic 允許 str + list）。修復: 支援兩種類型 | Anthropic API 合規 |
+| Wave 117: 監控端點崩潰 | /metrics 端點未處理 None 統計 — 模組未啟動時 500。修復: None 安全存取 | 監控穩定性 |
+| Wave 117: VLM 參數轉發 | detail / image_size / max_pixels 未從請求傳入 VLM engine。修復: 參數映射完整 | VLM 圖像解析度控制 |
+
+### 已完成修復 (2026-05-17 Wave 118-120 — Scheduler Resource Leaks + Spec Decode + Streaming + Mesh)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 118: Scheduler 資源洩漏 | _preempt_request 釋放 KV 但不清理 budget entry + sliding window registration。修復: 完整清理 | 搶佔路徑資源安全 |
+| Wave 118: KV 資料損壞 | _copy_kv_blocks 複製後未同步 block metadata — source block eviction 導致目標塊懸空引用。修復: 複製後立即 pin 目標塊 | KV 快取完整性 |
+| Wave 118: Gateway 韌性 | 5 個端點未捕獲 engine RuntimeError（引擎未啟動時 500 無意義訊息）。修復: 統一 503 + 描述性訊息 | API 錯誤可操作 |
+| Wave 119: Spec decode 參數 | temperature / top_p / top_k 未轉發到 spec proposer。修復: 全採樣參數傳播 | 推測解碼採樣正確 |
+| Wave 119: 串流邊界情況 | SSE 最終 chunk 缺少 data: [DONE] — 客戶端無限等待。修復: finally 發送 DONE | 串流關閉正確 |
+| Wave 119: 死代碼清理 | 12 處未使用 import + 6 個未引用方法。移除 | Pylance 零警告 |
+| Wave 120: Completions 串流格式 | batched 串流路徑 token_text 使用 output.new_text（已過時欄位）。修復: 使用 token_text | 串流文字正確 |
+| Wave 120: Mesh 正確性 | mx.distributed all_reduce 在非 uniform group size 時死鎖。修復: 添加 barrier 超時 + fallback | Mesh 穩定性 |
+
+### 已完成修復 (2026-05-17 Wave 121-124 — LoRA + Dedup + Chat Router + Shutdown + Security)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 121: LoRA 死鎖 | adapter 卸載時持有 GIL + 等待 GPU 空閒 — 反過來 GPU 等待 GIL。修復: 卸載前釋放 GIL | LoRA 熱切換不死鎖 |
+| Wave 121: Dedup 執行緒安全 | RequestDedup._cache 無鎖 — 並行 insert/lookup race condition。修復: threading.Lock 包裹 | 請求去重執行緒安全 |
+| Wave 121: stop suffix 洩漏 | SequenceStateMachine 匹配 stop 後不 reset trie cursor — 後續請求繼承殘留狀態。修復: 匹配後 reset | Stop 準確性 |
+| Wave 122: Chat router bugs | chat.py VLM 路由在模型名不含 "vlm" 時跳過 VLM（應檢查 modality）。修復: 檢查 modality 類型 | VLM 路由正確 |
+| Wave 122: Metrics 缺口 | token_scheduler / request_coalescer / memory_guard 3 個模組 metrics 未註冊到 Prometheus。修復: 註冊 | 監控完整 |
+| Wave 122: Tool call 修復 | tool_choice="auto" 在無工具時仍生成空 tool_call 區塊。修復: 無工具時跳過 | 輸出乾淨 |
+| Wave 123: Shutdown 生命週期 | shutdown 時 inflight 請求被強制中斷（不等待 drain）。修復: 實現 graceful drain timeout | 關機不丟請求 |
+| Wave 123: 輸入驗證 | max_tokens < 0 / negative temperature / empty messages 3 類無效輸入直接到引擎。修復: gateway 層 422 拒絕 | 輸入安全 |
+| Wave 123: 安全硬化 | /admin 端點無認證 — 任何用戶可觸及。修復: API key 檢查 + RBAC 權限 | 管理端點保護 |
+| Wave 124: Logger exc_info 清理 | 38 處 `logger.error("...", exc_info=True)` 在非例外上下文呼叫 — 多餘的 None traceback 日誌。修復: 移除非例外上下文的 exc_info | 日誌清潔 |
+
+### 已完成修復 (2026-05-17 Wave 125-127 — SAMP-2 + DISAGG-1 + SCHED-2 + Finish Reason + Warm Prompt)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 125: SAMP-2 logits processors | TopPWarper / MinPWarper / FrequencyPresencePenalty / Temperature / RepetitionPenalty — 5 個 logits processor 接入 SamplingPipeline。每個有單元測試 | 採樣管線完整 |
+| Wave 125: DISAGG-1 integration | DisaggregatedKVTransfer 接入 prefill/decode 分離路徑 — prefill 節點完成後 KV 傳輸到 decode 節點。添加 KV serialization/deserialization | 分離式推理基礎設施 |
+| Wave 125: SCHED-2 chunked prefill | ChunkedPrefillScheduler 接入 _schedule_waiting — 長 prompt 按 chunk 大小分段，與 decode batch 交錯。添加進度追蹤 | Sarathi 交錯排程啟用 |
+| Wave 126: Finish reason 正確性 | length/stop/tool_calls/eos/cancel 5 種 finish reason 在 3 條路徑（engine_core/batched/engine_loop）不一致。修復: 統一映射表 | Finish reason 全路徑一致 |
+| Wave 126: 最終參數轉發 | 6 個剩餘未轉發參數（logit_bias, seed, suffix, echo, user, metadata）補齊到 gateway → engine 路徑 | 參數完整性 100% |
+| Wave 127: Warm prompt preloading | ModelWarmupManager 在 start() 時預載 hot prompts — 常見 system prompt KV 快取預建。添加 warm_prompt 配置 | 首請求延遲降低 |
+| Wave 127: Compute utilization 度量 | GPU utilization 百分比度量 (gpu_compute_ms / wall_time_ms)。添加到 Prometheus metrics | GPU 利用率可觀測 |
+| Wave 127: Adaptive tuning | AutoTuner 根據歷史 TTFT/TPS 調整 batch_size / prefill_chunk_size。添加調優迴圈 + 度量輸出 | 自適應性能調優啟用 |
+
+### 已完成修復 (2026-05-17 Wave 128-129 — Production Hardening + Anthropic Tool Call Extraction)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 128: Cache 並發安全 | PrefixCache.get() 在併發下重複 prefill 相同前綴。修復: 添加 per-key lock + double-check | 快取併發正確 |
+| Wave 128: RequestCoalescer 競爭 | coalescer 在結果未寫入前喚醒等待者。修復: Future result 在 set_result 後才喚醒 | 合併器正確性 |
+| Wave 128: Process isolation | GPU error 崩潰整個進程。修復: GPU worker 在子進程運行 + heartbeat 監控 + 自動重啟 | 生產穩定性 |
+| Wave 128: Pipeline 錯誤傳播 | 多階段 pipeline 中間階段錯誤被靜默吞沒。修復: 每階段錯誤傳播 + 部分結果標記 | Pipeline 錯誤可見 |
+| Wave 129: Anthropic tool call extraction | Anthropic streaming 路徑 tool_use 區塊在 content_block_stop 時截斷。修復: 累積完整 tool input + 正確解析 JSON | Anthropic tool calling 完整 |
 
 ### 已完成修復 (2026-05-16 Wave 99 — Production Wiring + Agent Audit Deep Fixes)
 
