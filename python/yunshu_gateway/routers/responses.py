@@ -587,10 +587,14 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
       async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
         yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
     except MemoryError:
+        if _cancel_evt is not None:
+            _cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
         return
     except Exception as e:
+        if _cancel_evt is not None:
+            _cancel_evt.set()
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"

@@ -38,9 +38,11 @@ class BlockTable:
     def append_block(self, block: KVBlock) -> None:
         """Add a new physical block at the end."""
         self._blocks.append(block)
+        self.total_tokens = len(self._blocks) * self.block_size
 
     def append_blocks(self, blocks: list[KVBlock]) -> None:
         self._blocks.extend(blocks)
+        self.total_tokens = len(self._blocks) * self.block_size
 
     def get_block(self, logical_idx: int) -> KVBlock:
         if logical_idx < 0 or logical_idx >= len(self._blocks):
@@ -73,6 +75,7 @@ class BlockTable:
         """Clear and return all blocks for the caller to free."""
         blocks = self._blocks
         self._blocks = []
+        self.total_tokens = 0
         return blocks
 
     def block_id_for_token(self, token_position: int) -> int:

@@ -1272,9 +1272,15 @@ async def _stream_vlm_response(
 
     # Register with request tracker for cancellation support (before _token_source
     # so cancel_event is available to pass into the engine)
-    from yunshu_engine.request_tracker import get_request_tracker
-    _vlm_tracker = get_request_tracker()
-    _vlm_gen = _vlm_tracker.register(completion_id, req.model)
+    _vlm_tracker = None
+    _vlm_gen = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _vlm_tracker = get_request_tracker()
+        _vlm_gen = _vlm_tracker.register(completion_id, req.model)
+    except Exception:
+        _vlm_tracker = None
+    _vlm_cancel_evt = _vlm_gen.cancel_event if _vlm_gen is not None else None
 
     async def _token_source():
         nonlocal loaded_adapter
@@ -1311,7 +1317,7 @@ async def _stream_vlm_response(
             spec_decode=req.spec_decode,
             priority=req.priority,
             logits_processors=req.logits_processors,
-            cancel_event=_vlm_gen.cancel_event,
+            cancel_event=_vlm_cancel_evt,
             timeout_seconds=req.timeout,
         )
         if json_schema:
@@ -1385,21 +1391,27 @@ async def _stream_vlm_response(
       async for event in with_sse_keepalive(
           _token_source(),
           http_request=request,
-          cancel_event=_vlm_gen.cancel_event,
+          cancel_event=_vlm_cancel_evt,
       ):
           yield event.encode("utf-8")
     except MemoryError:
-        _vlm_gen.cancel_event.set()
+        if _vlm_cancel_evt is not None:
+            _vlm_cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
-        _vlm_gen.cancel_event.set()
+        if _vlm_cancel_evt is not None:
+            _vlm_cancel_evt.set()
         logger.error("VLM streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(vlm_engine, loaded_adapter)
-      _vlm_tracker.unregister(completion_id)
+      if _vlm_tracker is not None:
+          try:
+              _vlm_tracker.unregister(completion_id)
+          except Exception:
+              pass
 
 
 def _format_tool_call_chunk_multi(
@@ -1457,8 +1469,14 @@ async def _stream_response_multi(
     independent per-choice tool call extraction and correct finish_reason.
     """
     from yunshu_engine.request_tracker import get_request_tracker
-    tracker = get_request_tracker()
-    gen = tracker.register(completion_id, req.model)
+    tracker = None
+    gen = None
+    try:
+        tracker = get_request_tracker()
+        gen = tracker.register(completion_id, req.model)
+    except Exception:
+        tracker = None
+    _multi_cancel_evt = gen.cancel_event if gen is not None else None
     include_usage = (
         req.stream_options is not None and req.stream_options.include_usage
     )
@@ -1471,7 +1489,7 @@ async def _stream_response_multi(
     async def _token_source():
         nonlocal total_prompt_tok, total_completion_tok, total_reasoning_tok, total_cached_tok
         for choice_idx in range(req.n):
-            if gen.cancel_event.is_set():
+            if _multi_cancel_evt is not None and _multi_cancel_evt.is_set():
                 yield _format_choice_chunk(
                     completion_id, req.model, choice_idx, "", "stop",
                 )
@@ -1511,11 +1529,11 @@ async def _stream_response_multi(
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
-                    cancel_event=gen.cancel_event,
+                    cancel_event=_multi_cancel_evt,
                     timeout_seconds=req.timeout,
                 )
                 async for output in stream:
-                    if gen.cancel_event.is_set():
+                    if _multi_cancel_evt is not None and _multi_cancel_evt.is_set():
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
@@ -1599,11 +1617,11 @@ async def _stream_response_multi(
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
-                    cancel_event=gen.cancel_event,
+                    cancel_event=_multi_cancel_evt,
                     timeout_seconds=req.timeout,
                 )
                 async for output in stream:
-                    if gen.cancel_event.is_set():
+                    if _multi_cancel_evt is not None and _multi_cancel_evt.is_set():
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
@@ -1713,23 +1731,32 @@ async def _stream_response_multi(
       async for event in with_sse_keepalive(
           _token_source(),
           http_request=request,
-          cancel_event=gen.cancel_event,
+          cancel_event=_multi_cancel_evt,
       ):
           yield event.encode("utf-8")
     except MemoryError:
-        gen.cancel_event.set()
+        if _multi_cancel_evt is not None:
+            _multi_cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
-        gen.cancel_event.set()
+        if _multi_cancel_evt is not None:
+            _multi_cancel_evt.set()
         logger.error("Chat multi-choice streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(engine, loaded_adapter)
-      tracker.unregister(completion_id)
+      if tracker is not None:
+          try:
+              tracker.unregister(completion_id)
+          except Exception:
+              pass
       if total_prompt_tok > 0 or total_completion_tok > 0:
-          _record_metrics(total_prompt_tok, total_completion_tok)
+          try:
+              _record_metrics(total_prompt_tok, total_completion_tok)
+          except Exception:
+              pass
 
 
 def _format_choice_chunk(
@@ -1815,9 +1842,15 @@ async def _stream_response(
     """
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     # Register with request tracker for cancellation support
-    from yunshu_engine.request_tracker import get_request_tracker
-    _tracker = get_request_tracker()
-    _tracker_gen = _tracker.register(completion_id, req.model)
+    _tracker = None
+    _tracker_gen = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _tracker = get_request_tracker()
+        _tracker_gen = _tracker.register(completion_id, req.model)
+    except Exception:
+        _tracker = None
+    _cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
     use_tool_streamer = req.tools is not None and len(req.tools) > 0
     tool_streamer = ToolCallStreamer() if use_tool_streamer else None
     tool_call_index = 0  # Track index for streaming tool_calls delta
@@ -1896,7 +1929,7 @@ async def _stream_response(
                 top_logprobs=req.top_logprobs,
                 spec_decode=req.spec_decode,
                 logits_processors=req.logits_processors,
-                cancel_event=_tracker_gen.cancel_event,
+                cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
             ):
                 token_text = output.new_text
@@ -1980,7 +2013,7 @@ async def _stream_response(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
-                cancel_event=_tracker_gen.cancel_event,
+                cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
             ):
                 # Track token counts for usage reporting
@@ -2084,7 +2117,7 @@ async def _stream_response(
       async for event in with_sse_keepalive(
           _token_source(),
           http_request=request,
-          cancel_event=_tracker_gen.cancel_event,
+          cancel_event=_cancel_evt,
       ):
           encoded = event.encode("utf-8")
           # Best-effort write to streaming buffer
@@ -2095,19 +2128,28 @@ async def _stream_response(
                   logger.debug("StreamingResponseBuffer write failed", exc_info=True)
           yield encoded
     except MemoryError:
-        _tracker_gen.cancel_event.set()
+        if _cancel_evt is not None:
+            _cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
-        _tracker_gen.cancel_event.set()
+        if _cancel_evt is not None:
+            _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(engine, loaded_adapter)
-      _tracker.unregister(completion_id)
+      if _tracker is not None:
+          try:
+              _tracker.unregister(completion_id)
+          except Exception:
+              pass
       if prompt_tok > 0 or completion_tok > 0:
-          _record_metrics(prompt_tok, completion_tok)
+          try:
+              _record_metrics(prompt_tok, completion_tok)
+          except Exception:
+              pass
       # Log buffer stats at debug level
       if _stream_buf is not None:
           try:

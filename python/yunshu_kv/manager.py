@@ -162,7 +162,23 @@ class KVCacheManager:
             matched_node, remaining = self._radix_tree.match(token_ids)
             matched_blocks = matched_node.path_blocks()
             num_matched_tokens = matched_node.total_tokens()
-            if num_matched_tokens >= self.config.block_size:
+            # Validate matched blocks: evicted blocks may still be
+            # referenced by radix tree nodes.  A block is usable only
+            # if it has a non-None hash (still cached) or a positive
+            # ref_count (actively held by a request).
+            valid_blocks = [
+                b for b in matched_blocks
+                if b.block_hash is not None or b.ref_count > 0
+            ]
+            if len(valid_blocks) < len(matched_blocks):
+                # Some blocks were evicted — fall through to hash-chain
+                # lookup which correctly handles the block pool state.
+                logger.debug(
+                    "RadixTree match returned %d blocks but only %d are still valid; "
+                    "falling back to hash-chain lookup",
+                    len(matched_blocks), len(valid_blocks),
+                )
+            elif num_matched_tokens >= self.config.block_size:
                 # RadixTree hit: reuse matched blocks
                 self._total_hits += num_matched_tokens // self.config.block_size
                 self._total_lookups += len(token_ids) // self.config.block_size
@@ -386,7 +402,11 @@ class KVCacheManager:
         if remaining_tokens:
             # Insert new nodes for the unmatched portion
             bs = self.config.block_size
-            new_start_block = matched_len // bs
+            # Ceiling division: the boundary block that partially overlaps
+            # the matched prefix must stay with the matched portion, not
+            # the remaining tokens.  This matches the split logic in
+            # RadixTree._split_node.
+            new_start_block = (matched_len + bs - 1) // bs
             if new_start_block > len(blocks):
                 return  # Defensive: matched more than we have blocks for
             new_blocks = blocks[new_start_block:]

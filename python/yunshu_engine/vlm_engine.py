@@ -610,7 +610,7 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, stop_token_ids=stop_token_ids, repetition_penalty=repetition_penalty, frequency_penalty=freq_p, presence_penalty=pres_p, logit_bias=lb, json_schema=js, enable_thinking=_enable_thinking, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
+                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, stop_token_ids=stop_token_ids, repetition_penalty=repetition_penalty, frequency_penalty=freq_p, presence_penalty=pres_p, logit_bias=lb, json_schema=js, enable_thinking=_enable_thinking, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=thinking_budget)
 
                 from mlx_lm.generate import generate_step
                 from mlx_lm.sample_utils import make_sampler
@@ -657,8 +657,8 @@ class VLMEngine:
                                 _in_thinking = False
                     if token_id in stop_ids:
                         break
-                    # Thinking budget enforcement
-                    if thinking_budget is not None and enable_thinking and len(tokens) >= thinking_budget:
+                    # Thinking budget enforcement — cap thinking tokens, not total tokens
+                    if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
                         break
 
                 # Return (decoded_text, thinking_tokens, total_token_count).
@@ -781,7 +781,13 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
+                    _tb = kwargs.get('thinking_budget')
+                    # Resolve reasoning_effort → thinking_budget
+                    if _tb is None:
+                        _re = kwargs.get('reasoning_effort')
+                        if _re is not None:
+                            _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(_re, 8192)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -806,6 +812,22 @@ class VLMEngine:
                     detokenizer = self._tokenizer.detokenizer
                     detokenizer.reset()
 
+                # Thinking state tracking for streaming fast path
+                _in_thinking = False
+                _thinking_tokens = 0
+                thinking_budget = kwargs.get('thinking_budget')
+                # Resolve reasoning_effort → thinking_budget
+                if thinking_budget is None:
+                    reasoning_effort = kwargs.get('reasoning_effort')
+                    if reasoning_effort is not None:
+                        thinking_budget = {"low": 2048, "medium": 8192, "high": 32768}.get(reasoning_effort, 8192)
+                try:
+                    think_start_id = self._tokenizer.encode("<think")[-1]
+                    think_end_id = self._tokenizer.encode("</think")[-1]
+                except Exception:
+                    logger.debug("thinking token encode failed", exc_info=True)
+                    think_start_id = think_end_id = None
+
                 accumulated = ""
                 token_count = 0
                 _num_prompt_tokens = len(input_ids)
@@ -820,11 +842,13 @@ class VLMEngine:
                             try:
                                 remaining = detokenizer.finalize()
                                 if remaining:
+                                    _cancel_state = "reasoning" if _in_thinking else "normal"
                                     queue.put_nowait(RequestOutput(
                                         request_id=req_id,
                                         new_text=remaining,
                                         finish_reason=None,
                                         finished=False,
+                                        current_state=_cancel_state,
                                     ))
                             except Exception:
                                 logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
@@ -839,6 +863,39 @@ class VLMEngine:
                         return
                     token_count += 1
                     is_eos = token_id in stop_ids
+
+                    # Track thinking segment boundaries
+                    if think_start_id is not None:
+                        if not _in_thinking and token_id == think_start_id:
+                            _in_thinking = True
+                        elif _in_thinking:
+                            _thinking_tokens += 1
+                            if token_id == think_end_id:
+                                _in_thinking = False
+
+                    # Thinking budget enforcement
+                    if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget and think_end_id is not None:
+                        # Budget exceeded — stop generation
+                        if has_detokenizer:
+                            remaining = detokenizer.finalize()
+                            if remaining:
+                                queue.put_nowait(RequestOutput(
+                                    request_id=req_id,
+                                    new_text=remaining,
+                                    finish_reason=None,
+                                    finished=False,
+                                    current_state="reasoning" if _in_thinking else "normal",
+                                ))
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text="",
+                            finish_reason="stop",
+                            finished=True,
+                            completion_tokens=token_count,
+                            prompt_tokens=_num_prompt_tokens,
+                            current_state="reasoning" if _in_thinking else "normal",
+                        ))
+                        return
 
                     if not is_eos:
                         if has_detokenizer:
@@ -867,6 +924,7 @@ class VLMEngine:
                                 finish_reason = "stop"
                                 break
 
+                    _cur_state = "reasoning" if _in_thinking else "normal"
                     output = RequestOutput(
                         request_id=req_id,
                         new_text=token_text,
@@ -875,6 +933,7 @@ class VLMEngine:
                         finished=finish_reason is not None,
                         completion_tokens=token_count,
                         prompt_tokens=_num_prompt_tokens,
+                        current_state=_cur_state,
                     )
                     queue.put_nowait(output)
 
@@ -888,6 +947,7 @@ class VLMEngine:
                                     new_text=remaining,
                                     finish_reason=None,
                                     finished=False,
+                                    current_state=_cur_state,
                                 ))
                         return
 
@@ -900,7 +960,9 @@ class VLMEngine:
                             new_text=remaining,
                             finish_reason=None,
                             finished=False,
+                            current_state=_cur_state,
                         ))
+                _final_state = "reasoning" if _in_thinking else "normal"
                 output = RequestOutput(
                     request_id=req_id,
                     new_text="",
@@ -908,6 +970,7 @@ class VLMEngine:
                     finished=True,
                     completion_tokens=token_count,
                     prompt_tokens=_num_prompt_tokens,
+                    current_state=_final_state,
                 )
                 queue.put_nowait(output)
 
@@ -1126,6 +1189,7 @@ class VLMEngine:
         enable_thinking: bool | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        thinking_budget: int | None = None,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1257,6 +1321,9 @@ class VLMEngine:
                         _thinking_tokens += 1
                         if tok_id == think_end_id:
                             _in_thinking = False
+                # Thinking budget enforcement — cap thinking tokens
+                if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
+                    break
                 if tok_id in stop_ids:
                     break
 
@@ -1443,6 +1510,7 @@ class VLMEngine:
         stop_token_ids: list[int] | None = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        thinking_budget: int | None = None,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1612,6 +1680,28 @@ class VLMEngine:
                     _thinking_tokens += 1
                     if token_id == think_end_id:
                         _in_thinking = False
+            # Thinking budget enforcement in VLM streaming
+            if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
+                _state = "reasoning" if _in_thinking else "normal"
+                if has_detokenizer:
+                    remaining = detokenizer.finalize()
+                    if remaining:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text=remaining,
+                            finish_reason=None,
+                            finished=False,
+                            current_state=_state,
+                        ))
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text="",
+                    finish_reason="stop",
+                    finished=True,
+                    completion_tokens=token_count,
+                    current_state=_state,
+                ))
+                return
             is_eos = token_id in stop_ids
             token_text = ""
             suffix_hit = False

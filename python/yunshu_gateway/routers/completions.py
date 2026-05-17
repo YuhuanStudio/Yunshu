@@ -411,7 +411,7 @@ async def _stream_completion(
                 top_logprobs=req.top_logprobs,
                 priority=req.priority,
                 logits_processors=req.logits_processors,
-                cancel_event=_tracker_gen.cancel_event,
+                cancel_event=_comp_cancel_evt,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -462,7 +462,7 @@ async def _stream_completion(
                 logprobs=req.logprobs > 0,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
-                cancel_event=_tracker_gen.cancel_event,
+                cancel_event=_comp_cancel_evt,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count
@@ -515,29 +515,40 @@ async def _stream_completion(
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     # Register with request tracker for cancellation support
-    from yunshu_engine.request_tracker import get_request_tracker
-    _tracker = get_request_tracker()
-    _tracker_gen = _tracker.register(completion_id, req.model)
+    _tracker = None
+    _tracker_gen = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _tracker = get_request_tracker()
+        _tracker_gen = _tracker.register(completion_id, req.model)
+    except Exception:
+        _tracker = None
+    _comp_cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
     try:
         async for event in with_sse_keepalive(
             _token_source(),
             http_request=request,
-            cancel_event=_tracker_gen.cancel_event,
+            cancel_event=_comp_cancel_evt,
         ):
             yield event.encode("utf-8")
     except MemoryError:
+        if _comp_cancel_evt is not None:
+            _comp_cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
+        if _comp_cancel_evt is not None:
+            _comp_cancel_evt.set()
         logger.error(f"Completions streaming error: {e}", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     finally:
         _release_lora_adapter(engine, loaded_adapter)
-        try:
-            _tracker.unregister(completion_id)
-        except Exception:
-            pass
+        if _tracker is not None:
+            try:
+                _tracker.unregister(completion_id)
+            except Exception:
+                pass
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:

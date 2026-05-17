@@ -250,6 +250,10 @@ class BlockPool:
 
         # Allocate a fresh block
         new_block = self.free_queue.popleft()
+        # Clear any stale hash from a previous lifecycle to prevent
+        # _hash_to_block from returning this block for outdated lookups.
+        if new_block.block_hash is not None:
+            self._evict_cached_block(new_block)
         new_block.ref_count = 1
 
         # Decrement original's ref_count (we're detaching from it)

@@ -28,7 +28,6 @@ from pydantic import BaseModel, model_validator
 from ..engine import get_engine
 from .chat import _apply_lora_adapter, _release_lora_adapter
 from ..streaming import (
-    ThinkingParser,
     format_anthropic_chunk,
     with_sse_keepalive,
 )
@@ -744,7 +743,6 @@ async def _stream_anthropic(
     engine, messages, req, stop, request, is_batched=False, temp_files=None
 ) -> AsyncIterator[bytes]:
     """Anthropic SSE streaming with keepalive, disconnect detection, and tool-use deltas."""
-    parser = ThinkingParser()
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     input_tokens = 0
     output_tokens = 0
@@ -826,18 +824,26 @@ async def _stream_anthropic(
                 logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event,
             ):
-                parsed = parser.process_chunk(output.new_text)
+                # Use engine's current_state (token-level tracking) for
+                # thinking routing — more accurate than text-level ThinkingParser
+                # which may miss model-specific tags like Qwen3.5's special tokens.
+                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                _token_text = output.new_text
+
+                if output.prompt_tokens and not input_tokens:
+                    input_tokens = output.prompt_tokens
+                if hasattr(output, 'cached_tokens') and output.cached_tokens:
+                    cached_tokens = max(cached_tokens, output.cached_tokens)
 
                 # Thinking content
-                if enable_thinking and parsed["thinking"]:
+                if enable_thinking and _is_reasoning and _token_text:
                     if not thinking_block_started:
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': parsed['thinking']}})}\n\n"
-
-                # Visible text content
-                if parsed["visible"]:
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
+                elif _token_text:
+                    # Visible text content
                     if thinking_block_started and not text_block_started:
                         # Close thinking block, open text block
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
@@ -851,7 +857,7 @@ async def _stream_anthropic(
 
                     output_tokens += 1
                     _prev_len = len(accumulated_text)
-                    accumulated_text += parsed["visible"]
+                    accumulated_text += _token_text
 
                     # Once a stop sequence was already matched, suppress all further text
                     if matched_stop:
@@ -872,7 +878,7 @@ async def _stream_anthropic(
                             # Emit only the safe portion of the current token
                             _safe_len = len(accumulated_text) - _prev_len
                             if _safe_len > 0:
-                                _safe_delta = parsed["visible"][:_safe_len]
+                                _safe_delta = _token_text[:_safe_len]
                                 yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"
                         else:
                             # If tools are defined, try to detect and emit tool-use deltas
@@ -895,12 +901,7 @@ async def _stream_anthropic(
                                     return  # tool calls emitted; stop normal text streaming
 
                             # Normal text delta
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': parsed['visible']}})}\n\n"
-
-                if output.prompt_tokens and not input_tokens:
-                    input_tokens = output.prompt_tokens
-                if hasattr(output, 'cached_tokens') and output.cached_tokens:
-                    cached_tokens = max(cached_tokens, output.cached_tokens)
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
@@ -933,18 +934,21 @@ async def _stream_anthropic(
                     input_tokens = output.prompt_token_count
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
-                parsed = parser.process_chunk(output.token_text)
 
-                # Thinking content (legacy engine path)
-                if enable_thinking and parsed["thinking"]:
+                # Use engine's current_state (token-level tracking) when available,
+                # fall back to ThinkingParser for engines that don't set current_state
+                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                _token_text = output.token_text
+
+                if enable_thinking and _is_reasoning and _token_text:
+                    # Thinking content via token-level state
                     if not thinking_block_started:
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': parsed['thinking']}})}\n\n"
-
-                if parsed["visible"]:
-                    # Close thinking block if transitioning to text
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
+                elif _token_text:
+                    # Visible text content
                     if thinking_block_started and not text_block_started:
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                         block_index += 1
@@ -954,7 +958,7 @@ async def _stream_anthropic(
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                     output_tokens += 1
                     _prev_len = len(accumulated_text)
-                    accumulated_text += parsed["visible"]
+                    accumulated_text += _token_text
 
                     # Once a stop sequence was already matched, suppress all further text
                     if matched_stop:
@@ -975,7 +979,7 @@ async def _stream_anthropic(
                             # Emit only the safe portion of the current token
                             _safe_len = len(accumulated_text) - _prev_len
                             if _safe_len > 0:
-                                _safe_delta = parsed["visible"][:_safe_len]
+                                _safe_delta = _token_text[:_safe_len]
                                 yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"
                         else:
                             # Tool-use delta detection for legacy engine
@@ -995,15 +999,7 @@ async def _stream_anthropic(
                                     return
 
                             # Normal text delta
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': parsed['visible']}})}\n\n"
-
-        # Flush final
-        final = parser.finalize()
-        if final.get("visible"):
-            if not text_block_started:
-                text_block_started = True
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': final['visible']}})}\n\n"
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
 
         # If no content blocks were started at all (zero tokens), emit an empty text block
         # so that the response always has at least one content block (Anthropic protocol requirement)
