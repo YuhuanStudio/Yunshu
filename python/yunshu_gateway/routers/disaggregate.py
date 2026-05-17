@@ -27,6 +27,7 @@ import asyncio
 import collections
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import Any
@@ -45,30 +46,33 @@ _CACHE_MAX_SIZE = 100
 
 # OrderedDict for LRU: oldest entries at the front, newest at the back
 _cache_handles: collections.OrderedDict[str, dict[str, Any]] = collections.OrderedDict()
+_cache_lock = threading.Lock()
 
 # Background cleanup task reference
 _cleanup_task: asyncio.Task | None = None
 
 
 def _add_cache_handle(handle_id: str, data: dict[str, Any]) -> None:
-    """Add a cache handle, evicting LRU if over max size."""
-    if handle_id in _cache_handles:
-        _cache_handles.move_to_end(handle_id)
+    """Add a cache handle, evicting LRU if over max size. Thread-safe."""
+    with _cache_lock:
+        if handle_id in _cache_handles:
+            _cache_handles.move_to_end(handle_id)
+            _cache_handles[handle_id] = data
+            return
+        while len(_cache_handles) >= _CACHE_MAX_SIZE:
+            # Evict oldest (LRU)
+            evicted_key, _ = _cache_handles.popitem(last=False)
+            logger.debug("LRU eviction of cache handle %s", evicted_key)
         _cache_handles[handle_id] = data
-        return
-    while len(_cache_handles) >= _CACHE_MAX_SIZE:
-        # Evict oldest (LRU)
-        evicted_key, _ = _cache_handles.popitem(last=False)
-        logger.debug("LRU eviction of cache handle %s", evicted_key)
-    _cache_handles[handle_id] = data
 
 
 def _get_cache_handle(handle_id: str) -> dict[str, Any] | None:
-    """Get a cache handle and mark as recently used."""
-    data = _cache_handles.get(handle_id)
-    if data is not None:
-        _cache_handles.move_to_end(handle_id)
-    return data
+    """Get a cache handle and mark as recently used. Thread-safe."""
+    with _cache_lock:
+        data = _cache_handles.get(handle_id)
+        if data is not None:
+            _cache_handles.move_to_end(handle_id)
+        return data
 
 
 async def _cache_gc_loop() -> None:
@@ -79,13 +83,14 @@ async def _cache_gc_loop() -> None:
         except asyncio.CancelledError:
             return
         now = time.monotonic()
-        expired = [
-            hid for hid, data in _cache_handles.items()
-            if (now - data.get("created_at", 0)) > _CACHE_TTL_SECONDS
-        ]
-        for hid in expired:
-            _cache_handles.pop(hid, None)
-            logger.debug("TTL expiry of cache handle %s", hid)
+        with _cache_lock:
+            expired = [
+                hid for hid, data in _cache_handles.items()
+                if (now - data.get("created_at", 0)) > _CACHE_TTL_SECONDS
+            ]
+            for hid in expired:
+                _cache_handles.pop(hid, None)
+                logger.debug("TTL expiry of cache handle %s", hid)
         if expired:
             logger.info("Cache GC: removed %d expired handles", len(expired))
 
@@ -105,13 +110,21 @@ def _start_gc_task() -> None:
 
 # ── DisaggRouter singleton ───────────────────────────────────────────────
 
+# Cached singleton — avoids creating a new DisaggRouter on every call.
+_disagg_router_instance = None
+_disagg_router_nodes_registered = False
+
 
 def _get_disagg_router():
-    """Get or create the DisaggRouter singleton (lazy, env-driven)."""
+    """Get or create the DisaggRouter singleton (lazy, env-driven, cached)."""
+    global _disagg_router_instance
+    if _disagg_router_instance is not None:
+        return _disagg_router_instance
     try:
         from yunshu_mesh.disagg_pd import DisaggRouter, DisaggConfig
         config = DisaggConfig.from_env()
-        return DisaggRouter(config)
+        _disagg_router_instance = DisaggRouter(config)
+        return _disagg_router_instance
     except Exception:
         logger.debug("DisaggRouter not available", exc_info=True)
         return None
@@ -120,12 +133,16 @@ def _get_disagg_router():
 def _register_mesh_nodes(router_instance) -> None:
     """Register mesh nodes from environment into DisaggRouter.
 
+    Only registers once (idempotent). Subsequent calls are no-ops.
+
     Env vars:
       YUNSHU_PREFILL_NODES — comma-separated host:port list of prefill nodes
       YUNSHU_DECODE_NODES — comma-separated host:port list of decode nodes
     """
-    if router_instance is None:
+    global _disagg_router_nodes_registered
+    if router_instance is None or _disagg_router_nodes_registered:
         return
+    _disagg_router_nodes_registered = True
     from yunshu_mesh.disagg_pd import NodeRole
 
     for node_str in os.environ.get("YUNSHU_PREFILL_NODES", "").split(","):
@@ -271,6 +288,7 @@ async def prefill(req: PrefillRequest, request: Request):
 
     loop = asyncio.get_running_loop()
     t0 = time.monotonic()
+    result = None  # Will be set by either remote or local prefill
 
     if is_remote_prefill:
         # ── Remote prefill via ExternalPrefillClient ──
@@ -380,9 +398,11 @@ async def decode(req: DecodeRequest, request: Request):
         raise HTTPException(status_code=404, detail=f"Cache handle {req.cache_handle} not found")
 
     prompt_tokens = handle_data["prompt_tokens"]
+    kv_cache = handle_data.get("cache")
 
-    # Use engine's generate with the prefilled prompt
-    gen_output = await engine.generate(
+    # Build generate kwargs — pass KV cache if available so decode can
+    # reuse the prefilled cache instead of recomputing from scratch.
+    gen_kwargs: dict[str, Any] = dict(
         prompt=handle_data["token_ids"],
         max_tokens=req.max_tokens,
         temperature=req.temperature,
@@ -391,9 +411,18 @@ async def decode(req: DecodeRequest, request: Request):
         stop=req.stop,
         seed=req.seed,
     )
+    if kv_cache is not None and hasattr(engine, "generate_with_kv"):
+        gen_output = await engine.generate_with_kv(
+            kv_cache=kv_cache,
+            token_ids=handle_data["token_ids"],
+            **gen_kwargs,
+        )
+    else:
+        gen_output = await engine.generate(**gen_kwargs)
 
     # Remove handle after use (consumed)
-    _cache_handles.pop(req.cache_handle, None)
+    with _cache_lock:
+        _cache_handles.pop(req.cache_handle, None)
 
     return DecodeResponse(
         id=f"dec-{uuid.uuid4().hex[:8]}",
@@ -408,6 +437,8 @@ async def decode(req: DecodeRequest, request: Request):
 async def list_cache_handles():
     """List active cache handles (debug/monitoring)."""
     now = time.monotonic()
+    with _cache_lock:
+        handles_snapshot = list(_cache_handles.items())
     return {
         "handles": [
             {
@@ -417,9 +448,9 @@ async def list_cache_handles():
                 "age_s": round(now - data["created_at"], 2),
                 "source": data.get("source", "local"),
             }
-            for hid, data in _cache_handles.items()
+            for hid, data in handles_snapshot
         ],
-        "total": len(_cache_handles),
+        "total": len(handles_snapshot),
         "max_size": _CACHE_MAX_SIZE,
         "ttl_seconds": _CACHE_TTL_SECONDS,
     }
@@ -428,9 +459,10 @@ async def list_cache_handles():
 @router.delete("/cache-handles/{handle_id}")
 async def delete_cache_handle(handle_id: str):
     """Delete a cache handle to free GPU memory."""
-    if handle_id not in _cache_handles:
-        raise HTTPException(status_code=404, detail=f"Cache handle {handle_id} not found")
-    del _cache_handles[handle_id]
+    with _cache_lock:
+        if handle_id not in _cache_handles:
+            raise HTTPException(status_code=404, detail=f"Cache handle {handle_id} not found")
+        del _cache_handles[handle_id]
     return {"deleted": handle_id}
 
 
@@ -474,3 +506,14 @@ async def disagg_stats():
         result["kv_transfer"] = {"enabled": False}
 
     return result
+
+
+def _reset_disagg_state() -> None:
+    """Reset module-level state for testing.
+
+    Clears the cached DisaggRouter singleton and the node registration
+    flag so that tests can re-create the router with fresh env vars.
+    """
+    global _disagg_router_instance, _disagg_router_nodes_registered
+    _disagg_router_instance = None
+    _disagg_router_nodes_registered = False

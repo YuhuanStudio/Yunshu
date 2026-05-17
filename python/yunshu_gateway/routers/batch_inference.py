@@ -9,6 +9,7 @@ Features:
 - Progress tracking via in-memory store + status/results endpoints
 - Partial success: individual item failures don't abort the batch
 - CSV upload for bulk prompts and CSV download of results
+- File size limit on CSV uploads
 """
 
 import asyncio
@@ -31,6 +32,7 @@ router = APIRouter(tags=["batch"])
 # Configurable limits
 _BATCH_MAX_ITEMS = int(os.environ.get("YUNSHU_BATCH_MAX_ITEMS", "500"))
 _BATCH_DEFAULT_TIMEOUT = float(os.environ.get("YUNSHU_BATCH_TIMEOUT", "300"))
+_BATCH_MAX_CSV_SIZE = int(os.environ.get("YUNSHU_BATCH_MAX_CSV_SIZE", str(50 * 1024 * 1024)))  # 50 MB
 
 # In-memory progress tracking
 _batch_store: dict[str, dict] = {}
@@ -64,6 +66,8 @@ async def create_batch(req: BatchRequest):
     """Execute a batch of inference requests concurrently.
 
     Supports configurable concurrency, batch timeout, and partial success.
+    Progress is tracked in real-time so /batch/{id}/status reflects
+    completed items even while the batch is running.
     """
     if not req.requests:
         raise HTTPException(status_code=400, detail="Batch cannot be empty")
@@ -91,13 +95,30 @@ async def create_batch(req: BatchRequest):
 
     semaphore = asyncio.Semaphore(req.max_concurrent)
     processed = [None] * total
-    errors = 0
-    timed_out = 0
 
     async def _process_item(index: int, item: BatchItem) -> tuple[int, dict, str]:
-        async with semaphore:
-            result = await _execute_batch_item(item)
-        return index, result, "success"
+        try:
+            async with semaphore:
+                result = await _execute_batch_item(item)
+            status = "success"
+        except Exception as exc:
+            result = {"error": str(exc)}
+            status = "error"
+
+        # Update progress in real-time
+        processed[index] = {
+            "custom_id": req.requests[index].custom_id,
+            "status": status,
+            "response": result if status == "success" else None,
+            "error": result.get("error") if status == "error" else None,
+        }
+        _batch_store[batch_id]["completed"] += 1
+        if status == "success":
+            _batch_store[batch_id]["succeeded"] += 1
+        else:
+            _batch_store[batch_id]["failed"] += 1
+
+        return index, result, status
 
     tasks = [_process_item(i, item) for i, item in enumerate(req.requests)]
     task_handles = [asyncio.create_task(t) for t in tasks]
@@ -105,10 +126,13 @@ async def create_batch(req: BatchRequest):
     try:
         done, pending = await asyncio.wait(task_handles, timeout=req.timeout)
     except Exception as exc:
+        # Cancel everything before raising
+        for task in task_handles:
+            task.cancel()
         _batch_store[batch_id]["status"] = "error"
         raise HTTPException(status_code=500, detail=f"Batch execution failed: {exc}")
 
-    # Cancel pending tasks
+    # Cancel pending (timed-out) tasks
     for task in pending:
         task.cancel()
         try:
@@ -117,25 +141,13 @@ async def create_batch(req: BatchRequest):
             pass
     timed_out = len(pending)
 
-    # Collect results
+    # Collect results from completed tasks
+    # (processed[] is already filled by _process_item callbacks)
     for task in done:
         try:
-            index, result, status = task.result()
-            processed[index] = {
-                "custom_id": req.requests[index].custom_id,
-                "status": status,
-                "response": result,
-            }
-        except Exception as exc:
-            for i in range(total):
-                if processed[i] is None:
-                    processed[i] = {
-                        "custom_id": req.requests[i].custom_id,
-                        "status": "error",
-                        "error": str(exc),
-                    }
-                    errors += 1
-                    break
+            task.result()  # consume any CancelledError
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Handle timed-out items
     for i in range(total):
@@ -145,17 +157,18 @@ async def create_batch(req: BatchRequest):
                 "status": "error",
                 "error": "Timed out",
             }
-            errors += 1
 
-    final_status = "completed" if errors == 0 else ("partial" if errors < total else "failed")
+    succeeded = sum(1 for p in processed if p.get("status") == "success")
+    failed = sum(1 for p in processed if p.get("status") == "error")
+    final_status = "completed" if failed == 0 else ("partial" if failed < total else "failed")
 
     response_data = {
         "id": batch_id,
         "object": "batch",
         "status": final_status,
         "total": total,
-        "succeeded": total - errors,
-        "failed": errors,
+        "succeeded": succeeded,
+        "failed": failed,
         "timed_out": timed_out,
         "elapsed_s": round(time.time() - _batch_store[batch_id]["started_at"], 2),
         "results": processed,
@@ -164,8 +177,8 @@ async def create_batch(req: BatchRequest):
     _batch_store[batch_id].update({
         "status": final_status,
         "completed": total,
-        "succeeded": total - errors,
-        "failed": errors,
+        "succeeded": succeeded,
+        "failed": failed,
         "timed_out": timed_out,
         "results": processed,
         "finished_at": time.time(),
@@ -231,7 +244,7 @@ async def download_batch_csv(batch_id: str):
         if r is None:
             continue
         row = [r.get("custom_id", ""), r.get("status", "")]
-        resp = r.get("response", {})
+        resp = r.get("response")
         if resp:
             choices = resp.get("choices", [])
             if choices:
@@ -246,8 +259,11 @@ async def download_batch_csv(batch_id: str):
                 usage.get("completion_tokens", ""),
                 usage.get("total_tokens", ""),
             ])
+            row.append("")  # no error
         else:
-            row.extend(["", r.get("error", ""), "", "", ""])
+            row.extend(["", ""])  # finish_reason, content
+            row.extend(["", "", ""])  # prompt_tokens, completion_tokens, total_tokens
+            row.append(r.get("error", ""))
         writer.writerow(row)
 
     output.seek(0)
@@ -274,6 +290,11 @@ async def upload_batch_csv(
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
     content = await file.read()
+    if len(content) > _BATCH_MAX_CSV_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV file too large: {len(content)} bytes exceeds limit of {_BATCH_MAX_CSV_SIZE} bytes (set YUNSHU_BATCH_MAX_CSV_SIZE env var)",
+        )
     text_content = content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text_content))
 
@@ -323,17 +344,14 @@ async def _execute_batch_item(item: BatchItem) -> dict:
     body = item.body
     url = item.url
 
-    try:
-        if url == "/v1/chat/completions":
-            return await _execute_chat_completion(body)
-        elif url == "/v1/completions":
-            return await _execute_completion(body)
-        elif url == "/v1/embeddings":
-            return await _execute_embedding(body)
-        else:
-            raise ValueError(f"Unsupported batch URL: {url}")
-    except MemoryError:
-        raise ValueError("Out of GPU memory")
+    if url == "/v1/chat/completions":
+        return await _execute_chat_completion(body)
+    elif url == "/v1/completions":
+        return await _execute_completion(body)
+    elif url == "/v1/embeddings":
+        return await _execute_embedding(body)
+    else:
+        raise ValueError(f"Unsupported batch URL: {url}")
 
 
 async def _execute_chat_completion(body: dict) -> dict:
@@ -354,7 +372,6 @@ async def _execute_chat_completion(body: dict) -> dict:
     if engine is None or not engine.is_loaded or not engine.resolve_model_id(model):
         try:
             engine = await get_engine_for_model(model)
-            from yunshu_engine.batched_engine import BatchedEngine
             is_batched = isinstance(engine, BatchedEngine)
         except (KeyError, Exception):
             raise ValueError(f"Model '{model}' not available")

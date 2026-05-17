@@ -164,7 +164,9 @@ async def get_engine_for_model(model_id: str) -> Engine:
             node_id = _dp_router.select_node()
 
         if node_id is not None:
-            _dp_router.record_request_start(node_id)
+            # NOTE: Do NOT call record_request_start() here.
+            # select_node() already increments active_requests atomically
+            # inside its lock. Double-incrementing would corrupt load tracking.
             # In single-process mode, all DP nodes share the same engine
             # In multi-process mode, the node_id maps to a remote engine
             # For now, route to the local engine and track load

@@ -296,6 +296,17 @@ class DisaggRouter:
                     self._stats.kv_transfer_failures += 1
                 break
 
+        # Prune completed/failed transfers to prevent unbounded growth.
+        # Keep only pending transfers and recent completions (last 100).
+        if len(self._pending_transfers) > 200:
+            self._pending_transfers = [
+                t for t in self._pending_transfers
+                if t.status == "pending"
+            ] + [
+                t for t in self._pending_transfers
+                if t.status != "pending"
+            ][-100:]
+
     def get_pending_transfers(self) -> list[KVTransferRequest]:
         """Get all pending KV transfers."""
         return [t for t in self._pending_transfers if t.status == "pending"]

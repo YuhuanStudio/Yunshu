@@ -111,6 +111,10 @@ async def create_embedding(req: EmbeddingRequest):
         # Truncate to requested dimensions (Matryoshka embedding support)
         if req.dimensions is not None and req.dimensions > 0:
             emb = emb[:req.dimensions]
+            # Re-normalize after truncation to maintain unit vector property
+            norm = math.sqrt(sum(x * x for x in emb))
+            if norm > 0:
+                emb = [x / norm for x in emb]
 
         if req.encoding_format == "base64":
             import base64
@@ -131,6 +135,8 @@ async def create_embedding(req: EmbeddingRequest):
         else:
             total_tokens += max(1, len(text) // 4)
 
+    _record_embedding_metrics(total_tokens)
+
     return JSONResponse({
         "object": "list",
         "data": data,
@@ -140,6 +146,16 @@ async def create_embedding(req: EmbeddingRequest):
             "total_tokens": total_tokens,
         },
     })
+
+
+def _record_embedding_metrics(prompt_tokens: int) -> None:
+    """Record embedding request metrics."""
+    try:
+        from ..middleware.metrics import get_metrics
+        get_metrics().record_tokens(prompt_tokens, 0)
+        get_metrics().record_inference()
+    except Exception:
+        pass
 
 
 async def _resolve_embedding_engine(model_id: str):

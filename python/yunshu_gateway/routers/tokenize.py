@@ -24,6 +24,7 @@ class TokenCountRequest(BaseModel):
     model: str
     prompt: str | list[str]
     max_tokens: int = 0
+    add_special_tokens: bool = True
 
 
 class DetokenizeRequest(BaseModel):
@@ -50,6 +51,7 @@ async def tokenize(req: TokenizeRequest):
 
     return {
         "tokens": all_tokens if isinstance(req.text, list) else all_tokens[0],
+        "count": sum(len(t) for t in all_tokens),
         "model": req.model,
     }
 
@@ -73,7 +75,15 @@ async def token_count(req: TokenCountRequest):
     """Count tokens for a prompt."""
     tokenizer = _resolve_tokenizer(req.model)
     texts = req.prompt if isinstance(req.prompt, list) else [req.prompt]
-    counts = [len(tokenizer.encode(t)) for t in texts]
+    counts = []
+    for t in texts:
+        if req.add_special_tokens:
+            counts.append(len(tokenizer.encode(t)))
+        else:
+            try:
+                counts.append(len(tokenizer.encode(t, add_special_tokens=False)))
+            except TypeError:
+                counts.append(len(tokenizer.encode(t)))
     total = sum(counts)
     return {
         "token_count": total if isinstance(req.prompt, str) else counts,

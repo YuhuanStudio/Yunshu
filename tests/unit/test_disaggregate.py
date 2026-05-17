@@ -16,6 +16,7 @@ from python.yunshu_gateway.routers.disaggregate import (
     _get_cache_handle,
     _CACHE_MAX_SIZE,
     _CACHE_TTL_SECONDS,
+    _reset_disagg_state,
     router,
 )
 
@@ -228,6 +229,12 @@ class TestRouterDefinition:
 class TestDisaggRouterIntegration:
     """Test that _get_disagg_router and _register_mesh_nodes work with env."""
 
+    def setup_method(self):
+        _reset_disagg_state()
+
+    def teardown_method(self):
+        _reset_disagg_state()
+
     def test_get_disagg_router_returns_none_when_disabled(self):
         with patch.dict("os.environ", {"YUNSHU_DISAGG_PD": "0"}, clear=False):
             # Re-import to pick up env change
@@ -253,3 +260,30 @@ class TestDisaggRouterIntegration:
                 stats = router_inst.get_stats()
                 assert stats["prefill_nodes"] == 2
                 assert stats["decode_nodes"] == 1
+
+    def test_disagg_router_singleton_cached(self):
+        """_get_disagg_router should return the same instance on repeated calls."""
+        from python.yunshu_gateway.routers.disaggregate import _get_disagg_router
+        r1 = _get_disagg_router()
+        r2 = _get_disagg_router()
+        assert r1 is r2
+
+    def test_register_mesh_nodes_idempotent(self):
+        """Second call to _register_mesh_nodes should be a no-op."""
+        from python.yunshu_gateway.routers.disaggregate import (
+            _get_disagg_router, _register_mesh_nodes,
+        )
+        with patch.dict("os.environ", {
+            "YUNSHU_DISAGG_PD": "1",
+            "YUNSHU_PREFILL_NODES": "10.0.0.1:7891",
+            "YUNSHU_DECODE_NODES": "10.0.0.2:7890",
+        }, clear=False):
+            router_inst = _get_disagg_router()
+            if router_inst is not None:
+                _register_mesh_nodes(router_inst)
+                stats1 = router_inst.get_stats()
+                # Call again — should not double-register
+                _register_mesh_nodes(router_inst)
+                stats2 = router_inst.get_stats()
+                assert stats1["prefill_nodes"] == stats2["prefill_nodes"]
+                assert stats1["decode_nodes"] == stats2["decode_nodes"]

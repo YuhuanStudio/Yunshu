@@ -263,6 +263,9 @@ class KVTransferResult:
         duration_seconds: Wall-clock transfer duration.
         error: Error message if status is FAILED.
         checksum_verified: Whether payload checksum was verified.
+        completed_at: Monotonic timestamp when the transfer reached a terminal
+            state.  Used by cleanup_expired_transfers() to determine wall-clock
+            age (not duration_seconds, which is just the transfer time).
     """
     request_id: str
     status: TransferStatus
@@ -272,6 +275,7 @@ class KVTransferResult:
     duration_seconds: float = 0.0
     error: str | None = None
     checksum_verified: bool = False
+    completed_at: float = 0.0
 
     @property
     def compression_ratio(self) -> float:
@@ -632,6 +636,7 @@ class KVTransferProtocol:
                     f"Checksum mismatch: computed {computed_checksum[:16]}... "
                     f"!= expected {header.checksum[:16]}..."
                 ),
+                completed_at=time.monotonic(),
             )
             # Return empty message with error
             return KVTransferMessage(header=header, blocks=[]), result
@@ -647,6 +652,7 @@ class KVTransferProtocol:
             bytes_transferred=len(compressed_payload),
             bytes_original=len(raw_payload),
             checksum_verified=True,
+            completed_at=time.monotonic(),
         )
 
         return message, result
@@ -943,6 +949,7 @@ class KVTransferClient:
                 request_id=request_id or "",
                 status=TransferStatus.FAILED,
                 error="KV transfer not enabled",
+                completed_at=time.monotonic(),
             )
 
         request_id = request_id or f"kv-{uuid.uuid4().hex[:12]}"
@@ -993,6 +1000,7 @@ class KVTransferClient:
                     bytes_original=original_size,
                     duration_seconds=elapsed,
                     checksum_verified=True,
+                    completed_at=time.monotonic(),
                 )
                 self._stats.record_send(result)
                 return result
@@ -1002,6 +1010,7 @@ class KVTransferClient:
                     status=TransferStatus.FAILED,
                     error=f"Remote rejected transfer (ack={ack_data!r})",
                     duration_seconds=elapsed,
+                    completed_at=time.monotonic(),
                 )
 
         except asyncio.TimeoutError:
@@ -1011,6 +1020,7 @@ class KVTransferClient:
                 status=TransferStatus.FAILED,
                 error=f"Transfer timed out after {self._config.timeout_seconds}s",
                 duration_seconds=elapsed,
+                completed_at=time.monotonic(),
             )
         except Exception as e:
             elapsed = time.monotonic() - t0
@@ -1019,6 +1029,7 @@ class KVTransferClient:
                 status=TransferStatus.FAILED,
                 error=str(e),
                 duration_seconds=elapsed,
+                completed_at=time.monotonic(),
             )
 
     def send_blocks_sync(
@@ -1189,14 +1200,18 @@ class KVTransferServer:
                     break
 
                 # Process the transfer (with concurrency limit)
-                async with self._semaphore:
+                if self._semaphore is not None:
+                    async with self._semaphore:
+                        result = await self._process_frame(frame)
+                else:
                     result = await self._process_frame(frame)
-                    # Send ACK/NACK
-                    if result.status == TransferStatus.COMPLETED:
-                        writer.write(b"\x01")  # ACK
-                    else:
-                        writer.write(b"\x00")  # NACK
-                    await writer.drain()
+
+                # Send ACK/NACK
+                if result.status == TransferStatus.COMPLETED:
+                    writer.write(b"\x01")  # ACK
+                else:
+                    writer.write(b"\x00")  # NACK
+                await writer.drain()
 
         except Exception:
             logger.debug("Transfer connection error from %s", peer, exc_info=True)
@@ -1258,6 +1273,7 @@ class KVTransferServer:
                     )
 
             elapsed = time.monotonic() - t0
+            now = time.monotonic()
             result = KVTransferResult(
                 request_id=request_id,
                 status=TransferStatus.COMPLETED,
@@ -1266,6 +1282,7 @@ class KVTransferServer:
                 bytes_original=message.total_data_size,
                 duration_seconds=elapsed,
                 checksum_verified=decode_result.checksum_verified,
+                completed_at=now,
             )
             self._stats.record_receive(result)
 
@@ -1289,6 +1306,7 @@ class KVTransferServer:
                 status=TransferStatus.FAILED,
                 error=str(e),
                 duration_seconds=elapsed,
+                completed_at=time.monotonic(),
             )
             self._stats.record_receive(result)
             self._active_transfers[request_id] = result
@@ -1308,19 +1326,25 @@ class KVTransferServer:
         if not self._active_transfers:
             return 0
 
+        terminal_states = (
+            TransferStatus.COMPLETED, TransferStatus.FAILED,
+            TransferStatus.CHECKSUM_MISMATCH, TransferStatus.CANCELLED,
+        )
+
         now = time.monotonic()
         expired_keys = [
             rid for rid, result in self._active_transfers.items()
-            if result.status in (TransferStatus.COMPLETED, TransferStatus.FAILED,
-                                 TransferStatus.CHECKSUM_MISMATCH, TransferStatus.CANCELLED)
-            and result.duration_seconds > 0  # has timing info
+            if result.status in terminal_states
+            and result.completed_at > 0
+            and (now - result.completed_at) > ttl_seconds
         ]
-        # For entries without timing, we can't accurately determine age,
-        # so only remove completed entries older than TTL based on duration.
-        # Since duration_seconds is the transfer time (not wall age), we
-        # use a simpler heuristic: cap the dict size.
+        for rid in expired_keys:
+            del self._active_transfers[rid]
+
+        removed = len(expired_keys)
+
+        # Safety net: cap the dict size even if completed_at is missing
         max_tracked = 1000
-        removed = 0
         if len(self._active_transfers) > max_tracked:
             # Remove oldest completed entries (first-in, first-out)
             to_remove = len(self._active_transfers) - max_tracked

@@ -1576,6 +1576,8 @@ async def _stream_response_multi(
     finally:
       _release_lora_adapter(engine, loaded_adapter)
       tracker.unregister(completion_id)
+      if total_prompt_tok > 0 or total_completion_tok > 0:
+          _record_metrics(total_prompt_tok, total_completion_tok)
 
 
 def _format_choice_chunk(
@@ -1948,6 +1950,8 @@ async def _stream_response(
     finally:
       _release_lora_adapter(engine, loaded_adapter)
       _tracker.unregister(completion_id)
+      if prompt_tok > 0 or completion_tok > 0:
+          _record_metrics(prompt_tok, completion_tok)
       # Log buffer stats at debug level
       if _stream_buf is not None:
           try:

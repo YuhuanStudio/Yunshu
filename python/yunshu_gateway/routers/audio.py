@@ -460,6 +460,7 @@ class VoicePipelineRequest(BaseModel):
 
 @router.post("/audio/voice-pipeline")
 async def voice_pipeline(
+    request: Request,
     file: UploadFile = File(...),
     llm_model: str = Form(""),
     voice: Optional[str] = Form(None),

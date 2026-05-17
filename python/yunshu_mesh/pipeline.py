@@ -127,6 +127,10 @@ class PipelineParallel:
     ) -> None:
         """Send hidden states to the next pipeline stage."""
         if self._collective is None:
+            logger.warning(
+                "send_activations called without collective ops; "
+                "dropping hidden states for rank %d", dst_rank,
+            )
             return
         self._collective.send(hidden_states, dst_rank)
 
@@ -138,6 +142,11 @@ class PipelineParallel:
     ) -> mx.array:
         """Receive hidden states from the previous pipeline stage."""
         if self._collective is None:
+            logger.warning(
+                "recv_activations called without collective ops; "
+                "returning zeros from rank %d — inference will be incorrect!",
+                src_rank,
+            )
             return mx.zeros(shape, dtype=dtype)
         return self._collective.recv(shape, dtype, src_rank)
 

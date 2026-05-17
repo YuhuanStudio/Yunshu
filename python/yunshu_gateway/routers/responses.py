@@ -26,7 +26,7 @@ from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_chunk
-from .chat import _format_chat_logprobs
+from .chat import _format_chat_logprobs, _record_metrics
 
 router = APIRouter(tags=["responses"])
 
@@ -381,6 +381,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 **({"input_tokens_details": {"cached_tokens": _cached_tokens}} if _cached_tokens else {}),
             },
         })
+        _record_metrics(pt, ct)
     except MemoryError:
         return JSONResponse(
             status_code=507,
@@ -551,6 +552,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 cached_tokens=cached_tok,
             )
         yield format_openai_done()
+
+        _record_metrics(prompt_tok, completion_tok)
 
       async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
         yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
