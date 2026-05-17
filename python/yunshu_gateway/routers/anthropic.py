@@ -14,6 +14,7 @@ Supports:
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Optional
@@ -495,6 +496,28 @@ async def _non_stream_batched(engine, messages, req, stop):
 
     content.append(text_block)
 
+    # Extract tool calls from model output if tools were provided
+    has_tool_calls = False
+    if req.tools:
+        from ..streaming import extract_tool_calls_model_aware, clean_tool_call_markup
+        tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
+        if tool_calls:
+            has_tool_calls = True
+            # Remove the text block and replace with cleaned version
+            text_block["text"] = clean_tool_call_markup(visible_text)
+            for tc in tool_calls:
+                tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
+                try:
+                    inp = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                except (json.JSONDecodeError, TypeError):
+                    inp = {}
+                content.append({
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": tc["name"],
+                    "input": inp,
+                })
+
     matched_stop = None
     if stop and visible_text:
         for seq in stop:
@@ -502,7 +525,7 @@ async def _non_stream_batched(engine, messages, req, stop):
                 matched_stop = seq
                 break
 
-    stop_reason = _map_stop_reason(result.finish_reason, matched_stop)
+    stop_reason = _map_stop_reason(result.finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
     cache_creation = getattr(result, 'prompt_tokens', 0) - getattr(result, 'cached_tokens', 0)
     cache_read = getattr(result, 'cached_tokens', 0)
@@ -515,6 +538,7 @@ async def _non_stream_batched(engine, messages, req, stop):
         "model": req.model,
         "stop_reason": stop_reason,
         "stop_sequence": matched_stop,
+        "created_at": int(time.time()),
         "usage": {
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
@@ -598,6 +622,28 @@ async def _non_stream_legacy(engine, messages, req, stop):
 
     content.append(text_block)
 
+    # Extract tool calls from model output if tools were provided
+    has_tool_calls = False
+    if req.tools:
+        from ..streaming import extract_tool_calls_model_aware, clean_tool_call_markup
+        tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
+        if tool_calls:
+            has_tool_calls = True
+            # Remove the text block and replace with cleaned version
+            text_block["text"] = clean_tool_call_markup(visible_text)
+            for tc in tool_calls:
+                tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
+                try:
+                    inp = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
+                except (json.JSONDecodeError, TypeError):
+                    inp = {}
+                content.append({
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": tc["name"],
+                    "input": inp,
+                })
+
     # Check for matched stop sequences
     matched_stop = None
     if stop and visible_text:
@@ -606,7 +652,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
                 matched_stop = seq
                 break
 
-    stop_reason = _map_stop_reason(finish_reason, matched_stop)
+    stop_reason = _map_stop_reason(finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
     return JSONResponse({
         "id": message_id,
@@ -616,6 +662,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
         "model": req.model,
         "stop_reason": stop_reason,
         "stop_sequence": matched_stop,
+        "created_at": int(time.time()),
         "usage": {
             "input_tokens": prompt_toks,
             "output_tokens": completion_toks,
@@ -651,6 +698,7 @@ async def _stream_anthropic(
     _anth_gen = _anth_tracker.register(message_id, req.model)
 
     # message_start event
+    _start_ts = int(time.time())
     msg_start = {
         "type": "message_start",
         "message": {
@@ -661,6 +709,7 @@ async def _stream_anthropic(
             "model": req.model,
             "stop_reason": None,
             "stop_sequence": None,
+            "created_at": _start_ts,
             "usage": {"input_tokens": 0, "output_tokens": 0},
         },
     }

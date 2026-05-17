@@ -77,6 +77,7 @@ class ResponsesRequest(BaseModel):
     stream_options: Optional[dict] = None  # {"include_usage": true}
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
+    logits_processors: Optional[list] = None  # User-provided custom logits processors
 
 
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
