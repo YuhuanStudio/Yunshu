@@ -3391,7 +3391,31 @@ class BatchedEngine:
                     return token_ids[:i + 1], True
             return token_ids, False
 
-        token_ids, hit_stop = await loop.run_in_executor(executor, _run_spec)
+        _spec_gen_t0 = time.perf_counter()
+        try:
+            token_ids, hit_stop = await loop.run_in_executor(executor, _run_spec)
+        except MemoryError:
+            logger.warning("OOM during speculative generation — returning memory_limit finish reason")
+            return GenerationOutput(
+                finished=True,
+                finish_reason="memory_limit",
+                prompt_tokens=len(input_ids),
+                completion_tokens=0,
+            )
+        except RuntimeError as e:
+            if "memory" in str(e).lower() or "out of" in str(e).lower():
+                logger.warning(f"MLX OOM during speculative generation: {e}")
+                return GenerationOutput(
+                    finished=True,
+                    finish_reason="memory_limit",
+                    prompt_tokens=len(input_ids),
+                    completion_tokens=0,
+                )
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during speculative generation: {e}", exc_info=True)
+            raise
+        _spec_ttft_s = time.perf_counter() - _spec_gen_t0
         detokenizer.finalize()
 
         text = _clean_special_tokens(detokenizer.text)
@@ -3408,6 +3432,15 @@ class BatchedEngine:
                     "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
                 })
 
+        # Record TTFT in Prometheus for spec decode path
+        if _spec_ttft_s > 0:
+            try:
+                from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                pm = get_prometheus_metrics()
+                pm.observe_histogram("ttft_seconds", _spec_ttft_s)
+            except Exception:
+                logger.debug("TTFT prometheus recording failed in spec decode path", exc_info=True)
+
         return GenerationOutput(
             text=text,
             new_text=text,
@@ -3418,6 +3451,7 @@ class BatchedEngine:
             reasoning_tokens=0,
             cached_tokens=0,
             logprobs=_logprobs,
+            ttft_ms=round(_spec_ttft_s * 1000, 1),
         )
 
     async def _stream_generate_speculative(
@@ -3526,6 +3560,7 @@ class BatchedEngine:
         _spec_gen_t0 = time.perf_counter()  # TTFT timing starts after prefill
 
         try:
+          _spec_ttft_ms_val = 0.0
           _spec_ttft_recorded = False
           while len(generated_tokens) < max_tokens:
             if cancel_event is not None and cancel_event.is_set():
@@ -3555,6 +3590,18 @@ class BatchedEngine:
                     hit_eos = True
                     break
 
+            # Compute TTFT before first yield
+            if not _spec_ttft_recorded:
+                _spec_ttft_recorded = True
+                _spec_ttft_s = time.perf_counter() - _spec_gen_t0
+                _spec_ttft_ms_val = round(_spec_ttft_s * 1000, 1)
+                try:
+                    from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                    pm = get_prometheus_metrics()
+                    pm.observe_histogram("ttft_seconds", _spec_ttft_s)
+                except Exception:
+                    logger.debug("spec streaming TTFT prometheus recording failed", exc_info=True)
+
             # Yield accepted text via incremental detokenizer
             chunk_text = _clean_special_tokens(detokenizer.last_segment)
             finish_reason = None
@@ -3583,21 +3630,11 @@ class BatchedEngine:
                 completion_tokens=len(generated_tokens),
                 finished=finish_reason is not None,
                 finish_reason=finish_reason,
-                    reasoning_tokens=0,
-                    cached_tokens=0,
-                    logprobs=_chunk_logprobs,
+                reasoning_tokens=0,
+                cached_tokens=0,
+                logprobs=_chunk_logprobs,
+                ttft_ms=_spec_ttft_ms_val,
             )
-
-            # Record TTFT in Prometheus after first yield
-            if not _spec_ttft_recorded:
-                _spec_ttft_recorded = True
-                _spec_ttft_s = time.perf_counter() - _spec_gen_t0
-                try:
-                    from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
-                    pm = get_prometheus_metrics()
-                    pm.observe_histogram("ttft_seconds", _spec_ttft_s)
-                except Exception:
-                    logger.debug("spec streaming TTFT prometheus recording failed", exc_info=True)
 
             if finish_reason is not None:
                 detokenizer.finalize()
@@ -3737,6 +3774,16 @@ class BatchedEngine:
             _grammar_constraint.rollback()
             return filtered
 
+        # Inflight prefix sharing: defined at _run level so cleanup is accessible
+        _ng_inflight_req_id = f"ng-{id(_run)}-{int(time.monotonic()*1e6)}"
+
+        def _unregister_inflight():
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_ng_inflight_req_id)
+            except Exception:
+                logger.debug("inflight prefix unregister failed in n-gram spec", exc_info=True)
+
         def _run():
             if seed is not None:
                 mx.random.seed(seed)
@@ -3751,136 +3798,173 @@ class BatchedEngine:
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
-            gen_t0 = time.perf_counter()
-            detokenizer = tokenizer.detokenizer
-            detokenizer.reset()
-            all_token_ids = list(input_ids)  # Track full history for N-gram matching
+            # Inflight prefix sharing: register for concurrent KV block sharing
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().register(
+                    _ng_inflight_req_id,
+                    [int(t) for t in ids],
+                    cache,
+                    self.model_name or "",
+                )
+            except Exception:
+                logger.debug("inflight prefix register failed in n-gram spec", exc_info=True)
 
-            with _wired_limit_ctx(model):
-                # Step 1: Prefill
-                first_logits = None
-                for token, logits in generate_step(
-                    ids_to_prefill, model, max_tokens=1, sampler=sampler,
-                    prompt_cache=cache,
-                ):
-                    first_logits = logits
-                    break
+            try:
+                gen_t0 = time.perf_counter()
+                detokenizer = tokenizer.detokenizer
+                detokenizer.reset()
+                all_token_ids = list(input_ids)  # Track full history for N-gram matching
 
-                if first_logits is None:
-                    return tokens, "", [], time.perf_counter() - gen_t0, 0
-
-                ttft_s = time.perf_counter() - gen_t0
-
-                # Get first token from the model
-                first_token = int(mx.argmax(first_logits, axis=-1).flatten()[0])
-                tokens.append(first_token)
-                all_token_ids.append(first_token)
-
-                # Step 2: Decode loop with N-gram lookahead
-                remaining = max_tokens - 1
-                while remaining > 0:
-                    if cancel_event is not None and cancel_event.is_set():
-                        break
-                    # Propose K draft tokens via N-gram
-                    # Use adaptive K if controller is active, else use proposer default
-                    _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
-                    draft_ids = proposer.propose(all_token_ids)[:(_adaptive_k or len(all_token_ids))]
-                    # Grammar-aware draft filtering: reject drafts that violate constraints
-                    draft_ids = _grammar_filter_drafts(draft_ids, all_token_ids)
-                    n_draft = min(len(draft_ids), remaining)
-
-                    if n_draft == 0:
-                        # No N-gram proposal — generate one token normally
-                        step_input = mx.array([tokens[-1]]).reshape(1, -1)
-                        for token, logits in generate_step(
-                            step_input, model, max_tokens=1, sampler=sampler,
-                            prompt_cache=cache,
-                        ):
-                            token_id = int(token)
-                            tokens.append(token_id)
-                            all_token_ids.append(token_id)
-                            remaining -= 1
-                            if token_id in stop_ids:
-                                tokens.pop()
-                                break
-                            detokenizer.add_token(token_id)
-                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                break
-                        continue
-
-                    # C10: Batch verify all K draft tokens via SpecDraftVerifier
-                    self._ngram_stats["proposals"] += 1
-                    self._ngram_stats["total_draft"] += n_draft
-
-                    # Use SpecDraftVerifier for proper batch verification:
-                    # 1. One forward pass populates KV cache for all K positions
-                    # 2. Consecutive prefix match finds acceptance boundary
-                    # 3. KV cache trimmed to remove rejected entries
-                    # 4. Bonus token emitted from rejection point
-                    result = self._spec_draft_verifier.verify(
-                        model=model,
-                        draft_ids=draft_ids[:n_draft],
+                with _wired_limit_ctx(model):
+                    # Step 1: Prefill
+                    first_logits = None
+                    for token, logits in generate_step(
+                        ids_to_prefill, model, max_tokens=1, sampler=sampler,
                         prompt_cache=cache,
-                    )
+                    ):
+                        first_logits = logits
+                        break
 
-                    # Emit accepted tokens
-                    _stopped = False
-                    for tid in result.accepted_tokens:
-                        tokens.append(tid)
-                        all_token_ids.append(tid)
-                        remaining -= 1
-                        if tid in stop_ids:
-                            tokens.pop()
-                            _stopped = True
+                    if first_logits is None:
+                        return tokens, "", [], time.perf_counter() - gen_t0, 0
+
+                    ttft_s = time.perf_counter() - gen_t0
+
+                    # Get first token from the model
+                    first_token = int(mx.argmax(first_logits, axis=-1).flatten()[0])
+                    tokens.append(first_token)
+                    all_token_ids.append(first_token)
+
+                    # Step 2: Decode loop with N-gram lookahead
+                    remaining = max_tokens - 1
+                    while remaining > 0:
+                        if cancel_event is not None and cancel_event.is_set():
                             break
-                        detokenizer.add_token(tid)
-                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                            _stopped = True
-                            break
-                        # Advance sampler's grammar constraint to stay in sync
-                        if _grammar_constraint is not None:
-                            try:
-                                tok_text = tokenizer.decode([tid])
-                                _grammar_constraint.advance(tok_text)
-                            except Exception:
+                        # Propose K draft tokens via N-gram
+                        # Use adaptive K if controller is active, else use proposer default
+                        _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
+                        draft_ids = proposer.propose(all_token_ids)[:(_adaptive_k or len(all_token_ids))]
+                        # Grammar-aware draft filtering: reject drafts that violate constraints
+                        draft_ids = _grammar_filter_drafts(draft_ids, all_token_ids)
+                        n_draft = min(len(draft_ids), remaining)
+
+                        if n_draft == 0:
+                            # No N-gram proposal — generate one token normally
+                            step_input = mx.array([tokens[-1]]).reshape(1, -1)
+                            for token, logits in generate_step(
+                                step_input, model, max_tokens=1, sampler=sampler,
+                                prompt_cache=cache,
+                            ):
+                                token_id = int(token)
+                                tokens.append(token_id)
+                                all_token_ids.append(token_id)
+                                remaining -= 1
+                                if token_id in stop_ids:
+                                    tokens.pop()
+                                    break
+                                detokenizer.add_token(token_id)
+                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    break
+                            continue
+
+                        # C10: Batch verify all K draft tokens via SpecDraftVerifier
+                        self._ngram_stats["proposals"] += 1
+                        self._ngram_stats["total_draft"] += n_draft
+
+                        # Use SpecDraftVerifier for proper batch verification:
+                        # 1. One forward pass populates KV cache for all K positions
+                        # 2. Consecutive prefix match finds acceptance boundary
+                        # 3. KV cache trimmed to remove rejected entries
+                        # 4. Bonus token emitted from rejection point
+                        result = self._spec_draft_verifier.verify(
+                            model=model,
+                            draft_ids=draft_ids[:n_draft],
+                            prompt_cache=cache,
+                        )
+
+                        # Emit accepted tokens
+                        _stopped = False
+                        for tid in result.accepted_tokens:
+                            tokens.append(tid)
+                            all_token_ids.append(tid)
+                            remaining -= 1
+                            if tid in stop_ids:
+                                tokens.pop()
+                                _stopped = True
+                                break
+                            detokenizer.add_token(tid)
+                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                _stopped = True
+                                break
+                            # Advance sampler's grammar constraint to stay in sync
+                            if _grammar_constraint is not None:
+                                try:
+                                    tok_text = tokenizer.decode([tid])
+                                    _grammar_constraint.advance(tok_text)
+                                except Exception:
+                                    pass
+
+                        # Emit bonus token (model's own prediction at rejection/last point)
+                        if not _stopped and result.bonus_token is not None and remaining > 0:
+                            bonus = result.bonus_token
+                            tokens.append(bonus)
+                            all_token_ids.append(bonus)
+                            remaining -= 1
+                            if bonus not in stop_ids:
+                                detokenizer.add_token(bonus)
+                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                 pass
+                            # Advance sampler's grammar constraint for bonus token
+                            if _grammar_constraint is not None:
+                                try:
+                                    tok_text = tokenizer.decode([bonus])
+                                    _grammar_constraint.advance(tok_text)
+                                except Exception:
+                                    pass
 
-                    # Emit bonus token (model's own prediction at rejection/last point)
-                    if not _stopped and result.bonus_token is not None and remaining > 0:
-                        bonus = result.bonus_token
-                        tokens.append(bonus)
-                        all_token_ids.append(bonus)
-                        remaining -= 1
-                        if bonus not in stop_ids:
-                            detokenizer.add_token(bonus)
-                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                            pass
-                        # Advance sampler's grammar constraint for bonus token
-                        if _grammar_constraint is not None:
-                            try:
-                                tok_text = tokenizer.decode([bonus])
-                                _grammar_constraint.advance(tok_text)
-                            except Exception:
-                                pass
+                        self._ngram_stats["accepted"] += result.accepted_count
 
-                    self._ngram_stats["accepted"] += result.accepted_count
+                        # Feed back to adaptive spec controller
+                        if self._adaptive_spec is not None:
+                            self._adaptive_spec.record_step(n_draft, result.accepted_count)
 
-                    # Feed back to adaptive spec controller
-                    if self._adaptive_spec is not None:
-                        self._adaptive_spec.record_step(n_draft, result.accepted_count)
+                # Cache KV state
+                if self._kv_quant_bits is not None:
+                    _maybe_quantize_kv_cache(cache, self._kv_quant_start, self._kv_quant_group_size, self._kv_quant_bits)
+                prefix_cache.add(mx.array(input_ids), cache)
 
-            # Cache KV state
-            if self._kv_quant_bits is not None:
-                _maybe_quantize_kv_cache(cache, self._kv_quant_start, self._kv_quant_group_size, self._kv_quant_bits)
-            prefix_cache.add(mx.array(input_ids), cache)
-
-            output_text = tokenizer.decode(tokens, skip_special_tokens=True)
-            mx.synchronize()
-            return tokens, output_text, [], ttft_s, matched
+                output_text = tokenizer.decode(tokens, skip_special_tokens=True)
+                mx.synchronize()
+                return tokens, output_text, [], ttft_s, matched
+            finally:
+                _unregister_inflight()
 
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
-        tokens, output_text, _, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+        try:
+            tokens, output_text, _, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+        except MemoryError:
+            logger.warning("OOM during N-gram spec generation — returning memory_limit finish reason")
+            return GenerationOutput(
+                finished=True,
+                finish_reason="memory_limit",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+            )
+        except RuntimeError as e:
+            if "memory" in str(e).lower() or "out of" in str(e).lower():
+                logger.warning(f"MLX OOM during N-gram spec generation: {e}")
+                return GenerationOutput(
+                    finished=True,
+                    finish_reason="memory_limit",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
+                )
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during N-gram spec generation: {e}", exc_info=True)
+            raise
 
         finish_reason = "stop" if tokens and tokens[-1] in stop_ids else "length"
         output_text = _clean_special_tokens(output_text)
@@ -3993,6 +4077,16 @@ class BatchedEngine:
         def _put(item):
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
+        # Inflight prefix sharing for streaming n-gram spec
+        _ng_s_inflight_req_id = f"ng-s-{int(time.monotonic()*1e6)}"
+
+        def _unregister_inflight():
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().unregister(_ng_s_inflight_req_id)
+            except Exception:
+                logger.debug("inflight prefix unregister failed in streaming n-gram spec", exc_info=True)
+
         def _run():
             try:
                 _run_inner()
@@ -4000,6 +4094,7 @@ class BatchedEngine:
                 logger.error(f"N-gram streaming generation failed: {e}", exc_info=True)
                 _put(e)
             finally:
+                _unregister_inflight()
                 _put(_sentinel)
 
         def _run_inner():
@@ -4014,6 +4109,18 @@ class BatchedEngine:
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
+
+            # Inflight prefix sharing: register for concurrent KV block sharing
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                get_inflight_tracker().register(
+                    _ng_s_inflight_req_id,
+                    [int(t) for t in ids],
+                    cache,
+                    self.model_name or "",
+                )
+            except Exception:
+                logger.debug("inflight prefix register failed in streaming n-gram spec", exc_info=True)
 
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
@@ -4171,6 +4278,7 @@ class BatchedEngine:
         accumulated = ""
         n_tok = 0
         _ng_ttft_recorded = False
+        _ng_ttft_ms_val = 0.0
         _ng_gen_t0 = time.perf_counter()
         try:
             while True:
@@ -4201,10 +4309,11 @@ class BatchedEngine:
                     if _delay > 0:
                         await asyncio.sleep(_delay / 1000)
 
-                # Record TTFT in Prometheus on first token
+                # Record TTFT on first token
                 if not _ng_ttft_recorded and n_tok == 1:
                     _ng_ttft_recorded = True
                     _ng_ttft_s = time.perf_counter() - _ng_gen_t0
+                    _ng_ttft_ms_val = round(_ng_ttft_s * 1000, 1)
                     try:
                         from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
                         pm = get_prometheus_metrics()
@@ -4232,6 +4341,7 @@ class BatchedEngine:
                     reasoning_tokens=0,
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
+                    ttft_ms=_ng_ttft_ms_val,
                 )
                 if done:
                     break
@@ -4315,7 +4425,29 @@ class BatchedEngine:
             return mtp_decoder.generate(input_ids, max_tokens=max_tokens)
 
         _mtp_gen_t0 = time.perf_counter()
-        token_ids = await loop.run_in_executor(executor, _run)
+        try:
+            token_ids = await loop.run_in_executor(executor, _run)
+        except MemoryError:
+            logger.warning("OOM during MTP generation — returning memory_limit finish reason")
+            return GenerationOutput(
+                finished=True,
+                finish_reason="memory_limit",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+            )
+        except RuntimeError as e:
+            if "memory" in str(e).lower() or "out of" in str(e).lower():
+                logger.warning(f"MLX OOM during MTP generation: {e}")
+                return GenerationOutput(
+                    finished=True,
+                    finish_reason="memory_limit",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
+                )
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during MTP generation: {e}", exc_info=True)
+            raise
         _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
 
         # Truncate at stop tokens
@@ -4549,6 +4681,7 @@ class BatchedEngine:
         accumulated = ""
         n_tok = 0
         _mtp_ttft_recorded = False
+        _mtp_ttft_ms_val = 0.0
         _mtp_gen_t0 = time.perf_counter()
         try:
             while True:
@@ -4582,10 +4715,11 @@ class BatchedEngine:
                     if _delay > 0:
                         await asyncio.sleep(_delay / 1000)
 
-                # Record TTFT in Prometheus on first token
+                # Record TTFT on first token
                 if not _mtp_ttft_recorded and n_tok == 1:
                     _mtp_ttft_recorded = True
                     _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
+                    _mtp_ttft_ms_val = round(_mtp_ttft_s * 1000, 1)
                     try:
                         from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
                         pm = get_prometheus_metrics()
@@ -4613,6 +4747,7 @@ class BatchedEngine:
                     reasoning_tokens=0,
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
+                    ttft_ms=_mtp_ttft_ms_val,
                 )
                 if done:
                     break

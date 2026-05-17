@@ -377,6 +377,13 @@ async def _execute_chat_completion(body: dict) -> dict:
             presence_penalty=body.get("presence_penalty", 0.0),
             logit_bias=body.get("logit_bias"),
             priority=body.get("priority", 0),
+            reasoning_effort=body.get("reasoning_effort"),
+            spec_decode=body.get("spec_decode", False),
+            xtc_probability=body.get("xtc_probability", 0.0),
+            xtc_threshold=body.get("xtc_threshold", 0.0),
+            logprobs=body.get("logprobs", False),
+            top_logprobs=body.get("top_logprobs"),
+            logits_processors=body.get("logits_processors"),
         )
         text = result.text
         prompt_tokens = result.prompt_tokens
@@ -400,6 +407,13 @@ async def _execute_chat_completion(body: dict) -> dict:
             presence_penalty=body.get("presence_penalty", 0.0),
             logit_bias=body.get("logit_bias"),
             priority=body.get("priority", 0),
+            reasoning_effort=body.get("reasoning_effort"),
+            spec_decode=body.get("spec_decode", False),
+            xtc_probability=body.get("xtc_probability", 0.0),
+            xtc_threshold=body.get("xtc_threshold", 0.0),
+            logprobs=body.get("logprobs", False),
+            top_logprobs=body.get("top_logprobs"),
+            logits_processors=body.get("logits_processors"),
         )
         text = state.generated_text
         prompt_tokens = state.prompt_token_count
@@ -460,6 +474,13 @@ async def _execute_completion(body: dict) -> dict:
             logit_bias=body.get("logit_bias"),
             enable_thinking=body.get("enable_thinking"),
             thinking_budget=body.get("thinking_budget"),
+            reasoning_effort=body.get("reasoning_effort"),
+            spec_decode=body.get("spec_decode", False),
+            xtc_probability=body.get("xtc_probability", 0.0),
+            xtc_threshold=body.get("xtc_threshold", 0.0),
+            logprobs=body.get("logprobs", False),
+            top_logprobs=body.get("top_logprobs"),
+            logits_processors=body.get("logits_processors"),
             priority=body.get("priority", 0),
         )
         text = result.text
@@ -483,6 +504,13 @@ async def _execute_completion(body: dict) -> dict:
             logit_bias=body.get("logit_bias"),
             enable_thinking=body.get("enable_thinking"),
             thinking_budget=body.get("thinking_budget"),
+            reasoning_effort=body.get("reasoning_effort"),
+            spec_decode=body.get("spec_decode", False),
+            xtc_probability=body.get("xtc_probability", 0.0),
+            xtc_threshold=body.get("xtc_threshold", 0.0),
+            logprobs=body.get("logprobs", False),
+            top_logprobs=body.get("top_logprobs"),
+            logits_processors=body.get("logits_processors"),
             priority=body.get("priority", 0),
         )
         text = state.generated_text

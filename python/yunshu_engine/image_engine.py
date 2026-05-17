@@ -1647,6 +1647,7 @@ class ImageGenEngine:
         guidance_scale: float = 0.0,
         seed: int | None = None,
         preview_interval: int = 0,
+        cancel_event: Any = None,
         **kwargs,
     ):
         """Stream image generation progress, yielding step-by-step updates.
@@ -1661,6 +1662,8 @@ class ImageGenEngine:
         preview_interval: decode and emit intermediate preview images every N steps.
             0 = no intermediate previews (default), final image only.
             1 = preview at every step, 2 = every other step, etc.
+
+        cancel_event: Optional asyncio.Event — when set, aborts the diffusion loop.
         """
         if self._transformer is None:
             raise RuntimeError("Engine not started")
@@ -1703,6 +1706,12 @@ class ImageGenEngine:
                 sigmas = _compute_sigmas(num_inference_steps, width, height)
 
                 for t in range(num_inference_steps):
+                    # Check cancel before each expensive diffusion step
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info("Image stream cancelled at step %d/%d", t + 1, num_inference_steps)
+                        queue.put_nowait(None)
+                        return
+
                     sigma_t = sigmas[t].reshape((1,))
                     timestep = mx.ones_like(sigma_t) - sigma_t
                     noise_pred = self._transformer(
@@ -1745,15 +1754,19 @@ class ImageGenEngine:
                 queue.put_nowait(None)
 
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(self._executor, _stream_sync)
+        stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            yield chunk
-            if chunk.get("is_final"):
-                break
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+                if chunk.get("is_final"):
+                    break
+        finally:
+            if not stream_task.done():
+                stream_task.cancel()
 
     def _run_dflash_pipeline(
         self,

@@ -359,6 +359,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     stop = req.stop_sequences or []
 
+    # Convert logit_bias keys from str to int for engine compatibility
+    _logit_bias = _convert_logit_bias(req)
+
     # Inject tool definitions into system prompt if provided
     if req.tools:
         tool_prompt = "\n\nYou have access to the following tools. When you need to call a tool, "
@@ -449,40 +452,48 @@ async def _resolve_engine(model_id: str):
     return engine, is_batched
 
 
+def _convert_logit_bias(req):
+    """Convert logit_bias keys from str to int for engine compatibility."""
+    _lb = req.logit_bias
+    if _lb:
+        return {int(k): v for k, v in _lb.items()}
+    return None
+
+
 async def _non_stream_batched(engine, messages, req, stop):
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
-    effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
+    _logit_bias = _convert_logit_bias(req)
 
     try:
         result = await engine.chat(
-        messages=messages,
-        max_tokens=effective_max_tokens,
-        temperature=req.temperature,
-        top_p=req.top_p,
-        top_k=req.top_k,
-        min_p=getattr(req, 'min_p', 0.0),
-        repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
-        frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
-        presence_penalty=getattr(req, 'presence_penalty', 0.0),
-        logit_bias=getattr(req, 'logit_bias', None),
-        stop=stop,
-        seed=getattr(req, 'seed', None),
-        enable_thinking=enable_thinking,
-        thinking_budget=budget_tokens,
-        reasoning_effort=getattr(req, 'reasoning_effort', None),
-        stop_token_ids=getattr(req, 'stop_token_ids', None),
-        spec_decode=getattr(req, 'spec_decode', False),
-        xtc_probability=getattr(req, 'xtc_probability', 0.0),
-        xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-        priority=getattr(req, 'priority', 0),
-        json_schema=_resolve_json_schema(req),
-        logprobs=getattr(req, 'logprobs', False),
-        top_logprobs=getattr(req, 'top_logprobs', None),
-        logits_processors=getattr(req, 'logits_processors', None),
-    )
+            messages=messages,
+            max_tokens=req.max_tokens,
+            temperature=req.temperature,
+            top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=req.min_p,
+            repetition_penalty=req.repetition_penalty,
+            frequency_penalty=req.frequency_penalty,
+            presence_penalty=req.presence_penalty,
+            logit_bias=_logit_bias,
+            stop=stop,
+            seed=req.seed,
+            enable_thinking=enable_thinking,
+            thinking_budget=budget_tokens,
+            reasoning_effort=req.reasoning_effort,
+            stop_token_ids=req.stop_token_ids,
+            spec_decode=req.spec_decode,
+            xtc_probability=req.xtc_probability,
+            xtc_threshold=req.xtc_threshold,
+            priority=req.priority,
+            json_schema=_resolve_json_schema(req),
+            logprobs=req.logprobs,
+            top_logprobs=req.top_logprobs,
+            logits_processors=req.logits_processors,
+        )
     except MemoryError:
         return JSONResponse(
             status_code=507,
@@ -580,33 +591,33 @@ async def _non_stream_legacy(engine, messages, req, stop):
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
-    effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
+    _logit_bias = _convert_logit_bias(req)
     try:
         result = await engine.generate(
             prompt=messages,
-            max_tokens=effective_max_tokens,
+            max_tokens=req.max_tokens,
             temperature=req.temperature,
             top_p=req.top_p,
             top_k=req.top_k,
-            min_p=getattr(req, 'min_p', 0.0),
-            repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
-            frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
-            presence_penalty=getattr(req, 'presence_penalty', 0.0),
-            logit_bias=getattr(req, 'logit_bias', None),
+            min_p=req.min_p,
+            repetition_penalty=req.repetition_penalty,
+            frequency_penalty=req.frequency_penalty,
+            presence_penalty=req.presence_penalty,
+            logit_bias=_logit_bias,
             stop=stop,
-            seed=getattr(req, 'seed', None),
+            seed=req.seed,
             enable_thinking=enable_thinking,
             thinking_budget=budget_tokens,
-            reasoning_effort=getattr(req, 'reasoning_effort', None),
-            stop_token_ids=getattr(req, 'stop_token_ids', None),
-            spec_decode=getattr(req, 'spec_decode', False),
-            xtc_probability=getattr(req, 'xtc_probability', 0.0),
-            xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-            priority=getattr(req, 'priority', 0),
+            reasoning_effort=req.reasoning_effort,
+            stop_token_ids=req.stop_token_ids,
+            spec_decode=req.spec_decode,
+            xtc_probability=req.xtc_probability,
+            xtc_threshold=req.xtc_threshold,
+            priority=req.priority,
             json_schema=_resolve_json_schema(req),
-            logprobs=getattr(req, 'logprobs', False),
-            top_logprobs=getattr(req, 'top_logprobs', None),
-            logits_processors=getattr(req, 'logits_processors', None),
+            logprobs=req.logprobs,
+            top_logprobs=req.top_logprobs,
+            logits_processors=req.logits_processors,
         )
     except MemoryError:
         return JSONResponse(
@@ -708,7 +719,7 @@ async def _stream_anthropic(
     cached_tokens = 0
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
     budget_tokens = req.thinking.get("budget_tokens") if req.thinking else None
-    effective_max_tokens = min(req.max_tokens, budget_tokens) if budget_tokens else req.max_tokens
+    _logit_bias = _convert_logit_bias(req)
     has_tools = req.tools is not None and len(req.tools) > 0
     block_index = 0
     thinking_block_started = False
@@ -753,29 +764,29 @@ async def _stream_anthropic(
         if is_batched:
             async for output in engine.stream_chat(
                 messages=messages,
-                max_tokens=effective_max_tokens,
+                max_tokens=req.max_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
-                min_p=getattr(req, 'min_p', 0.0),
-                repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
-                frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
-                presence_penalty=getattr(req, 'presence_penalty', 0.0),
-                logit_bias=getattr(req, 'logit_bias', None),
+                min_p=req.min_p,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=_logit_bias,
                 stop=stop,
-                seed=getattr(req, 'seed', None),
+                seed=req.seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
-                reasoning_effort=getattr(req, 'reasoning_effort', None),
-                stop_token_ids=getattr(req, 'stop_token_ids', None),
-                spec_decode=getattr(req, 'spec_decode', False),
-                xtc_probability=getattr(req, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-                priority=getattr(req, 'priority', 0),
+                reasoning_effort=req.reasoning_effort,
+                stop_token_ids=req.stop_token_ids,
+                spec_decode=req.spec_decode,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
                 json_schema=_resolve_json_schema(req),
-                logprobs=getattr(req, 'logprobs', False),
-                top_logprobs=getattr(req, 'top_logprobs', None),
-                logits_processors=getattr(req, 'logits_processors', None),
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event,
             ):
                 parsed = parser.process_chunk(output.new_text)
@@ -843,29 +854,29 @@ async def _stream_anthropic(
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
-                max_tokens=effective_max_tokens,
+                max_tokens=req.max_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
-                min_p=getattr(req, 'min_p', 0.0),
-                repetition_penalty=getattr(req, 'repetition_penalty', 1.0),
-                frequency_penalty=getattr(req, 'frequency_penalty', 0.0),
-                presence_penalty=getattr(req, 'presence_penalty', 0.0),
-                logit_bias=getattr(req, 'logit_bias', None),
+                min_p=req.min_p,
+                repetition_penalty=req.repetition_penalty,
+                frequency_penalty=req.frequency_penalty,
+                presence_penalty=req.presence_penalty,
+                logit_bias=_logit_bias,
                 stop=stop,
-                seed=getattr(req, 'seed', None),
+                seed=req.seed,
                 enable_thinking=enable_thinking,
                 thinking_budget=budget_tokens,
-                reasoning_effort=getattr(req, 'reasoning_effort', None),
-                stop_token_ids=getattr(req, 'stop_token_ids', None),
-                spec_decode=getattr(req, 'spec_decode', False),
-                xtc_probability=getattr(req, 'xtc_probability', 0.0),
-                xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
-                priority=getattr(req, 'priority', 0),
+                reasoning_effort=req.reasoning_effort,
+                stop_token_ids=req.stop_token_ids,
+                spec_decode=req.spec_decode,
+                xtc_probability=req.xtc_probability,
+                xtc_threshold=req.xtc_threshold,
+                priority=req.priority,
                 json_schema=_resolve_json_schema(req),
-                logprobs=getattr(req, 'logprobs', False),
-                top_logprobs=getattr(req, 'top_logprobs', None),
-                logits_processors=getattr(req, 'logits_processors', None),
+                logprobs=req.logprobs,
+                top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:

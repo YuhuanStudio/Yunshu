@@ -390,6 +390,7 @@ class VideoEngine:
             with open(image_path, "wb") as f:
                 f.write(image)
 
+        output_path = None
         try:
             output_path = self._generate_with_mlx_video(
                 model_dir=model_dir,
@@ -408,6 +409,7 @@ class VideoEngine:
             if output_path and os.path.exists(output_path):
                 video_data = Path(output_path).read_bytes()
                 os.unlink(output_path)
+                output_path = None  # Mark as cleaned up
 
                 frames = []
                 if output_format == "frames":
@@ -427,6 +429,8 @@ class VideoEngine:
         finally:
             if image_path and os.path.exists(image_path):
                 os.unlink(image_path)
+            if output_path and os.path.exists(output_path):
+                os.unlink(output_path)
 
         return self._fallback_generation(
             prompt, width, height, num_frames, fps, output_format,
@@ -561,9 +565,16 @@ class VideoEngine:
                 try:
                     with open(img_path, "wb") as f:
                         f.write(image)
+                    # Load the saved image as an MLX array for the native pipeline.
+                    # The native pipeline expects (H, W, C) float tensor in [0, 1].
+                    import numpy as np
+                    from PIL import Image as PILImage
+                    pil_img = PILImage.open(img_path).convert("RGB")
+                    img_np = np.array(pil_img, dtype=np.float32) / 255.0
+                    img_mx = mx.array(img_np)
                     result = self._native_pipeline.generate_from_image(
                         request=request,
-                        image_path=img_path,
+                        image=img_mx,
                     )
                 finally:
                     if os.path.exists(img_path):
@@ -921,16 +932,20 @@ class VideoEngine:
 
         # Run decoder in executor
         loop = asyncio.get_running_loop()
-        loop.run_in_executor(self._executor, _decode_sync)
+        decode_task = loop.run_in_executor(self._executor, _decode_sync)
 
         # Yield frames as they arrive
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            yield chunk
-            if chunk.get("is_final"):
-                break
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+                if chunk.get("is_final"):
+                    break
+        finally:
+            if not decode_task.done():
+                decode_task.cancel()
 
     async def stream_frames_from_path(
         self,

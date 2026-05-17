@@ -210,9 +210,22 @@ class RadixTree:
         child.parent = new_node
 
         # Inherit ref_count: the new_node gets the child's ref_count
-        # so that eviction doesn't remove it while active requests use it
+        # so that eviction doesn't remove it while active requests use it.
+        # The child retains its own ref_count since any request that
+        # referenced child=[A,B,C] now references the path through
+        # new_node=[A,B] -> child=[C], so both must carry the count.
+        # However, to avoid ref_count inflation, we must NOT duplicate:
+        # the new_node should get the child's original ref_count, and
+        # the child's ref_count should be reset to 0 since the active
+        # requests now traverse through new_node to reach child.
         new_node.ref_count = child.ref_count
         new_node.last_access_time = child.last_access_time
+        # The child is now a suffix node under new_node. Any request
+        # that previously referenced child=[A,B,C] now references
+        # new_node=[A,B] (which carries the ref_count). The child=[C]
+        # inherits ref_count 0 — when a new request matches the full
+        # [A,B,C] path, inc_ref will increment both new_node and child.
+        child.ref_count = 0
 
         self._total_nodes += 1
         return new_node
@@ -310,12 +323,19 @@ class RadixTree:
         self._total_ref_count += 1
 
     def dec_ref(self, node: RadixNode) -> None:
-        """Decrement reference count from node to root."""
+        """Decrement reference count from node to root.
+
+        Guards against underflow: if a node's ref_count is already 0,
+        it is not decremented further. This prevents corruption from
+        double-decrement bugs.
+        """
         current = node
         while current is not None:
-            current.ref_count -= 1
+            if current.ref_count > 0:
+                current.ref_count -= 1
             current = current.parent
-        self._total_ref_count -= 1
+        if self._total_ref_count > 0:
+            self._total_ref_count -= 1
 
     def evict(self, n_nodes: int) -> list[KVBlock]:
         """Evict leaf nodes with ref_count == 0 using configured strategy.

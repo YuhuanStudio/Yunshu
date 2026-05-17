@@ -342,7 +342,16 @@ class TTSEngine:
                 try:
                     queue.put_nowait(None)
                 except asyncio.QueueFull:
-                    pass
+                    # Queue is full and we can't signal error — drain one
+                    # item and retry so the client sees the error sentinel.
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        queue.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
 
         loop = asyncio.get_running_loop()
         stream_task = loop.run_in_executor(self._executor, _stream_sync)

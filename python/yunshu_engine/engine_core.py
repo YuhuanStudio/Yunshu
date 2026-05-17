@@ -1604,7 +1604,17 @@ class EngineCore:
             except asyncio.CancelledError:
                 logger.info("Engine loop cancelled, failing all in-flight requests")
                 failed = self.scheduler.fail_all_requests()
+                from .request import RequestOutput
                 for req_id in failed:
+                    collector = self._output_collectors.get(req_id)
+                    if collector is not None:
+                        collector.put(RequestOutput(
+                            request_id=req_id,
+                            finished=True,
+                            finish_reason="error",
+                            error="Engine loop cancelled",
+                        ))
+                        collector.put(None)  # sentinel
                     self._signal_finished(req_id)
                     self._finalize_request(req_id)
                 raise

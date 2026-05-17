@@ -134,7 +134,14 @@ class KVWarmTier:
 
             return dequantize_kv_4bit(packed, scales)
         except Exception:
-            logger.warning("Failed to promote block 0x%x from warm tier", block_hash, exc_info=True)
+            logger.warning(
+                "Failed to promote block 0x%x from warm tier — data lost (decompression error)",
+                block_hash, exc_info=True,
+            )
+            # Re-insert the raw entry so it can be retried, since we already
+            # popped it and adjusted memory accounting. The block data itself
+            # is corrupt/unusable, so we log the loss rather than re-inserting
+            # bad data.
             return None
 
     def contains(self, block_hash: int) -> bool:

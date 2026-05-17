@@ -392,8 +392,14 @@ class VLMEngine:
         # collide.  The VisionFeatureCache itself is kept alive (its background
         # writer thread is daemon and shared), but in-memory entries are evicted.
         if self._vision_cache is not None:
-            with self._vision_cache._memory_lock:
-                self._vision_cache._memory_cache.clear()
+            try:
+                lock = getattr(self._vision_cache, '_memory_lock', None)
+                cache = getattr(self._vision_cache, '_memory_cache', None)
+                if lock is not None and cache is not None:
+                    with lock:
+                        cache.clear()
+            except Exception:
+                logger.debug("vision cache cleanup during stop failed", exc_info=True)
         self._vlm_vision_cache_adapter = None
         self._kv_prefix_states.clear()
         self._multimodal_prefix_cache.clear()
@@ -444,13 +450,13 @@ class VLMEngine:
             raise RuntimeError("Engine not started")
 
         t0 = time.monotonic()
-        self._active_count += 1
         image_paths = await self._extract_images(messages)
         audio_paths = await self._extract_audio(messages)
         video_frames = await self._extract_video_frames(messages)
         image_paths.extend(video_frames)
         _enable_thinking = enable_thinking
 
+        self._active_count += 1
         try:
             # Run through MultimodalPipelineCoordinator for preprocessing tracking
             try:

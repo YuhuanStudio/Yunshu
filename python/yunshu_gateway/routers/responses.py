@@ -132,6 +132,12 @@ async def create_response(req: ResponsesRequest, request: Request):
     messages = _convert_to_messages(req)
     json_schema = _parse_response_format(req.response_format, req.grammar)
 
+    # Convert logit_bias keys from str to int (API sends string keys,
+    # engine expects int keys for tensor indexing)
+    _logit_bias = req.logit_bias
+    if _logit_bias:
+        _logit_bias = {int(k): v for k, v in _logit_bias.items()}
+
     # Structured tracing
     from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
     tracer = get_inference_tracer()
@@ -178,7 +184,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             repetition_penalty=req.repetition_penalty,
             frequency_penalty=req.frequency_penalty,
             presence_penalty=req.presence_penalty,
-            logit_bias=req.logit_bias,
+            logit_bias=_logit_bias,
             seed=req.seed,
             enable_thinking=req.enable_thinking,
             thinking_budget=req.thinking_budget,
@@ -249,7 +255,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 repetition_penalty=req.repetition_penalty,
                 frequency_penalty=req.frequency_penalty,
                 presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
+                logit_bias=_logit_bias,
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
@@ -282,7 +288,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 repetition_penalty=req.repetition_penalty,
                 frequency_penalty=req.frequency_penalty,
                 presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
+                logit_bias=_logit_bias,
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
@@ -375,6 +381,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     from yunshu_engine.batched_engine import BatchedEngine
     from .chat import _release_lora_adapter
     is_batched = isinstance(engine, BatchedEngine)
+    _logit_bias = req.logit_bias
+    if _logit_bias:
+        _logit_bias = {int(k): v for k, v in _logit_bias.items()}
     include_usage = (
         req.stream_options is not None and req.stream_options.get("include_usage", False)
     )
@@ -395,6 +404,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     except Exception:
         _tracker = None
 
+    _cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
+
     try:
       async def _token_source():
         nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok
@@ -414,7 +425,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 repetition_penalty=req.repetition_penalty,
                 frequency_penalty=req.frequency_penalty,
                 presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
+                logit_bias=_logit_bias,
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
@@ -462,7 +473,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 repetition_penalty=req.repetition_penalty,
                 frequency_penalty=req.frequency_penalty,
                 presence_penalty=req.presence_penalty,
-                logit_bias=req.logit_bias,
+                logit_bias=_logit_bias,
                 min_p=req.min_p,
                 json_schema=json_schema,
                 stop=req.stop,
@@ -520,7 +531,6 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             )
         yield format_openai_done()
 
-      _cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
       async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
         yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
     except MemoryError:

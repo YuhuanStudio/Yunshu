@@ -546,7 +546,8 @@ class KVSynchronizationService:
             entry = self._local_hashes.get(request.prefix_hash)
 
         if entry is None:
-            self._stats.transfers_declined += 1
+            with self._lock:
+                self._stats.transfers_declined += 1
             return TransferResponse(
                 request_id=request.request_id,
                 status=TransferStatus.FAILED,
@@ -559,7 +560,8 @@ class KVSynchronizationService:
             and entry.model_name
             and request.model_name != entry.model_name
         ):
-            self._stats.transfers_declined += 1
+            with self._lock:
+                self._stats.transfers_declined += 1
             return TransferResponse(
                 request_id=request.request_id,
                 status=TransferStatus.FAILED,
@@ -576,16 +578,18 @@ class KVSynchronizationService:
                 blocks = self._block_provider(request.prefix_hash)
             except Exception as e:
                 logger.debug("Block provider failed: %s", e, exc_info=True)
-                self._stats.transfers_failed += 1
+                with self._lock:
+                    self._stats.transfers_failed += 1
                 return TransferResponse(
                     request_id=request.request_id,
                     status=TransferStatus.FAILED,
                     error=f"Block provider error: {e}",
                 )
 
-        self._stats.transfers_completed += 1
-        total_bytes = sum(b.data_size for b in blocks)
-        self._stats.bytes_sent += total_bytes
+        with self._lock:
+            self._stats.transfers_completed += 1
+            total_bytes = sum(b.data_size for b in blocks)
+            self._stats.bytes_sent += total_bytes
 
         return TransferResponse(
             request_id=request.request_id,
