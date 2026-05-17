@@ -1,9 +1,6 @@
 from __future__ import annotations
 """Yunshu Adaptive Batch Scheduler — load-aware batch sizing.
 
-.. deprecated:: This module is not used in the production pipeline. Kept for reference only.
-
-
 Dynamically adjusts batch size and prefill chunk size based on:
 - GPU memory pressure (UMA utilisation)
 - Generation latency (time-to-first-token + inter-token latency)

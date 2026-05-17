@@ -312,6 +312,17 @@ class BatchedEngine:
         from .kv_prefix_cache import KVPrefixCache
         self._kv_prefix_cache = KVPrefixCache(max_entries=64, min_prefix_length=32)
 
+        # Warm prompt prefill stats (tracked across _warm_prompt_prefill calls)
+        self._warm_prompt_stats: dict = {
+            "prompts_loaded": 0,
+            "prompts_prefilled": 0,
+            "prompts_skipped_cached": 0,
+            "prompts_failed": 0,
+            "total_tokens_prefilled": 0,
+            "prefill_time_s": 0.0,
+            "source": "none",
+        }
+
         # Prompt cache for exact-match KV state reuse (supplements KVPrefixCache)
         # When the same prompt text is submitted multiple times, the prompt cache
         # returns the full KV state directly — zero prefill compute.
@@ -2040,10 +2051,10 @@ class BatchedEngine:
                     pm.set_gauge("kv_prefix_cache_hits", 1)
                 else:
                     pm.set_gauge("kv_prefix_cache_misses", 1)
-                # ITL: average inter-token latency
+                # ITL: record individual inter-token latency samples into histogram
                 if _itl_samples:
-                    avg_itl = sum(_itl_samples) / len(_itl_samples)
-                    pm.observe_histogram("itl_seconds", avg_itl)
+                    for _itl_sample in _itl_samples:
+                        pm.observe_histogram("itl_seconds", _itl_sample)
             except Exception:
                 logger.debug("TTFT/ITL prometheus recording failed", exc_info=True)
 
@@ -2051,12 +2062,13 @@ class BatchedEngine:
         try:
             from .server_metrics import get_server_metrics
             _sm = get_server_metrics()
+            _total_gen_s = sum(_itl_samples) + ttft_s if _itl_samples else ttft_s
             _sm.record_request_complete(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=len(tokens),
                 cached_tokens=cached_tokens,
                 prefill_duration=ttft_s,
-                generation_duration=ttft_s,
+                generation_duration=_total_gen_s,
                 model_id=self.model_name,
             )
             if _itl_samples:
@@ -2541,6 +2553,7 @@ class BatchedEngine:
         _stream_gen_t0 = time.perf_counter()  # TTFT timing for streaming fast path
         _stream_ttft_recorded = [False]  # mutable box to track first-token observation
         _stream_ttft_box = [0.0]  # mutable box for TTFT value
+        _stream_itl_samples = []  # ITL samples for streaming fast path
 
         def _run_inner():
             import mlx.core as mx
@@ -2618,6 +2631,7 @@ class BatchedEngine:
                 logger.debug("inflight prefix register failed in streaming", exc_info=True)
 
             _lprocs = logits_processors if logits_processors else None
+            _last_stream_tok_time = 0.0
             with _wired_limit_ctx(model):
                 for token, logits in generate_step(
                     ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
@@ -2660,11 +2674,19 @@ class BatchedEngine:
                         if not _stream_ttft_recorded[0]:
                             _stream_ttft_recorded[0] = True
                             _stream_ttft_box[0] = time.perf_counter() - _stream_gen_t0
+                        _last_stream_tok_time = time.perf_counter()
                         if _prefill_tracker is not None:
                             _prefill_tracker.update(
                                 _prefill_req_id, prompt_tokens, prompt_tokens,
                                 self.model_name or "default",
                             )
+                    else:
+                        # ITL tracking for streaming fast path
+                        _tok_now = time.perf_counter()
+                        _itl = _tok_now - _last_stream_tok_time
+                        _last_stream_tok_time = _tok_now
+                        if _itl > 0 and _itl < 10:
+                            _stream_itl_samples.append(_itl)
                     new_text = detokenizer.last_segment
                     stop_hit = token in stop_ids
                     suffix_hit = False
@@ -2850,6 +2872,18 @@ class BatchedEngine:
                         generation_duration=(time.perf_counter() - _stream_gen_t0),
                         model_id=self.model_name,
                     )
+                    # Record ITL samples from streaming path
+                    if _stream_itl_samples:
+                        for _itl in _stream_itl_samples:
+                            _sm.record_itl(_itl)
+                        # Record average ITL in Prometheus
+                        try:
+                            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                            pm = get_prometheus_metrics()
+                            avg_itl = sum(_stream_itl_samples) / len(_stream_itl_samples)
+                            pm.observe_histogram("itl_seconds", avg_itl)
+                        except Exception:
+                            logger.debug("streaming ITL prometheus recording failed", exc_info=True)
                 except Exception:
                     logger.debug("ServerMetrics recording failed in streaming fast path", exc_info=True)
             # Stop pipeline and log stats
@@ -2930,67 +2964,57 @@ class BatchedEngine:
             yield output
 
     async def _warm_prompt_prefill(self) -> None:
-        """Prefill KV cache with common system prompts on startup.
+        """Prefill KV cache with warm prompts on startup.
 
-        Enabled via YUNSHU_WARM_PROMPTS env var (comma-separated paths or inline text).
-        Provides 1.3-2.25x TTFT improvement on first real request with matching prefix.
+        Delegates to ModelWarmupManager.warm_prompt_prefill() which:
+        - Reads prompts from YUNSHU_WARM_PROMPTS env var (||-separated)
+        - Tokenizes and prefills each into KV prefix cache
+        - Future requests with matching prefixes get instant cache hits
+
+        Provides 1.3-2.25x TTFT improvement on first real request with
+        matching prefix (vllm-mlx pattern).
         """
-        import os
-        warm_prompts_raw = os.environ.get("YUNSHU_WARM_PROMPTS", "").strip()
-        if not warm_prompts_raw:
+        from .model_optimizations import ModelWarmupManager
+        mgr = ModelWarmupManager()
+
+        # Quick check: skip entirely if no warm prompts configured
+        if not mgr.resolve_warm_prompts():
             return
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
-        prompts = [p.strip() for p in warm_prompts_raw.split("||") if p.strip()]
-        prefilled = 0
+        def _prefill_all():
+            return mgr.warm_prompt_prefill(
+                model=self._model,
+                tokenizer=self._tokenizer,
+                kv_prefix_cache=self._kv_prefix_cache,
+                max_tokens=1,
+                mem_pressure_threshold=self._mem_pressure_threshold,
+            )
 
-        for prompt_text in prompts:
-            # If it looks like a file path, try reading it
-            if prompt_text.startswith("/") or prompt_text.startswith("~"):
-                try:
-                    expanded = os.path.expanduser(prompt_text)
-                    with open(expanded) as f:
-                        prompt_text = f.read().strip()
-                except Exception:
-                    logger.debug(f"Warm prompt file not found: {prompt_text}", exc_info=True)
-                    continue
-
-            if not prompt_text:
-                continue
-
-            def _prefill(text=prompt_text):
-                from mlx_lm.models.cache import make_prompt_cache
-                import mlx.core as mx
-                from mlx_lm.generate import generate_step
-                from mlx_lm.sample_utils import make_sampler
-                ids = mx.array(self._tokenizer.encode(text))
-                prefix_cache = self._kv_prefix_cache
-                prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
-                cached_kv, _, __ = prefix_cache.get(ids)
-                if cached_kv is not None:
-                    return 0  # Already cached
-                cache = make_prompt_cache(self._model)
-                sampler = make_sampler(temp=0.0)
-                for _ in generate_step(ids, self._model, max_tokens=1, sampler=sampler,
-                                       prompt_cache=cache):
-                    break
-                prefix_cache.add(ids, cache)
-                mx.clear_cache()
-                return len(ids)
-
-            try:
-                n_tokens = await loop.run_in_executor(executor, _prefill)
-                if n_tokens > 0:
-                    prefilled += 1
-                    logger.info(f"Warm prompt prefilled: {n_tokens} tokens")
-            except Exception as e:
-                logger.warning(f"Warm prompt prefill failed: {e}")
-
-        if prefilled > 0:
-            logger.info(f"Warm prompt prefill complete: {prefilled}/{len(prompts)} prompts cached")
+        try:
+            result = await loop.run_in_executor(executor, _prefill_all)
+            # Store result in engine stats
+            self._warm_prompt_stats = {
+                "prompts_loaded": result.prompts_loaded,
+                "prompts_prefilled": result.prompts_prefilled,
+                "prompts_skipped_cached": result.prompts_skipped_cached,
+                "prompts_failed": result.prompts_failed,
+                "total_tokens_prefilled": result.total_tokens_prefilled,
+                "prefill_time_s": result.prefill_time_s,
+                "source": result.source,
+            }
+            if result.prompts_prefilled > 0:
+                logger.info(
+                    f"Warm prompt prefill: {result.prompts_prefilled} prefilled, "
+                    f"{result.prompts_skipped_cached} cached, "
+                    f"{result.total_tokens_prefilled} tokens, "
+                    f"{result.prefill_time_s:.3f}s"
+                )
+        except Exception as e:
+            logger.warning(f"Warm prompt prefill failed: {e}")
 
     def _init_spec_decode(self) -> None:
         """Initialize speculative decoding if the model supports it.
@@ -4605,6 +4629,16 @@ class BatchedEngine:
         # Prompt cache stats (exact-match KV state reuse)
         if hasattr(self, '_prompt_cache') and self._prompt_cache is not None:
             stats["prompt_cache"] = self._prompt_cache.get_stats()
+        # Warm prompt preloading stats (prefill popular prefixes at startup)
+        stats["warm_prompt_prefill"] = getattr(self, '_warm_prompt_stats', {
+            "prompts_loaded": 0,
+            "prompts_prefilled": 0,
+            "prompts_skipped_cached": 0,
+            "prompts_failed": 0,
+            "total_tokens_prefilled": 0,
+            "prefill_time_s": 0.0,
+            "source": "none",
+        })
         # Inflight prefix sharing stats (SGLang cache_unfinished_req pattern)
         try:
             from .inflight_prefix_sharing import get_inflight_tracker

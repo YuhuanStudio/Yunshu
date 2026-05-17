@@ -221,6 +221,17 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                             pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0))
                             pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0))
                             pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0))
+                            # Scheduler monitoring gauges from engine_core
+                            try:
+                                core = getattr(eng, '_engine_core', None)
+                                if core is not None:
+                                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
+                                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
+                                    pm.set_gauge("compute_utilization_pct",
+                                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0)
+                                    pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0))
+                            except Exception:
+                                logger.debug("scheduler monitoring gauge population failed", exc_info=True)
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
                     pass

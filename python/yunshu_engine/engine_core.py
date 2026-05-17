@@ -563,6 +563,35 @@ class EngineCore:
             return 0.0
         return min(self._total_step_time_ms / total_ms * 100.0, 100.0)
 
+    def _apply_tuning_to_config(self, decisions: list) -> None:
+        """Apply auto-tuner decisions to the live engine configuration.
+
+        Propagates parameter changes from AutoTuner's internal TunableParams
+        back into EngineCoreConfig so they take effect on subsequent steps.
+        """
+        try:
+            params = self._auto_tuner.params
+            # Apply batch size tuning (clamped by AdaptiveBatchSizer bounds)
+            if params.batch_size != self.config.completion_batch_size:
+                old = self.config.completion_batch_size
+                self.config.completion_batch_size = max(1, min(params.batch_size, 64))
+                if self.config.completion_batch_size != old:
+                    logger.info(
+                        "AutoTuner: batch_size %d -> %d",
+                        old, self.config.completion_batch_size,
+                    )
+            # Apply prefill chunk size tuning
+            if params.prefill_chunk_size != self.config.prefill_chunk_size:
+                old = self.config.prefill_chunk_size
+                self.config.prefill_chunk_size = params.prefill_chunk_size
+                if self.config.prefill_chunk_size != old:
+                    logger.info(
+                        "AutoTuner: prefill_chunk_size %d -> %d",
+                        old, self.config.prefill_chunk_size,
+                    )
+        except Exception:
+            logger.debug("auto-tuner config application failed", exc_info=True)
+
     def setup_memory_guard(
         self,
         num_layers: int,
@@ -1750,22 +1779,57 @@ class EngineCore:
                         o.completion_tokens for o in scheduler_output.outputs if o.completion_tokens
                     )
                     _throughput = _tokens_gen / (_step_wall_ms / 1000) if _step_wall_ms > 0 else 0.0
+
+                    # Estimate per-step ITL from step wall time and tokens generated
+                    _est_itl_ms = 0.0
+                    if _tokens_gen > 0 and batch_size > 0:
+                        _est_itl_ms = _step_wall_ms / _tokens_gen
+
+                    # Estimate TTFT from requests that just completed prefill
+                    _est_ttft_ms = 0.0
+                    _ttft_count = 0
+                    for o in scheduler_output.outputs:
+                        if o.finished and o.completion_tokens <= 1:
+                            _start_ts = self._request_timestamps.get(o.request_id)
+                            if _start_ts is not None:
+                                _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
+                                _ttft_count += 1
+                    if _ttft_count > 0:
+                        _est_ttft_ms /= _ttft_count
+
+                    # GPU memory utilisation for bottleneck classification
+                    _gpu_mem_util = 0.0
+                    try:
+                        import mlx.core as mx
+                        active_mem = mx.get_active_memory()
+                        from .utils.hardware import get_hardware_info as _ghw
+                        _hw = _ghw()
+                        _gpu_mem_util = active_mem / max(_hw.total_memory_bytes, 1)
+                    except Exception:
+                        pass
+
                     from .auto_tuner import StepMetrics
                     step_metrics = StepMetrics(
                         batch_size=batch_size,
                         tokens_generated=_tokens_gen,
                         wall_time_ms=_step_wall_ms,
                         throughput_tok_s=_throughput,
+                        ttft_ms=_est_ttft_ms,
+                        itl_ms=_est_itl_ms,
+                        gpu_memory_util=_gpu_mem_util,
                     )
                     self._profiler.record_step(step_metrics)
                     # Auto-tune every 100 steps
                     if self._profiler._total_steps % 100 == 0:
                         tuning_decisions = self._auto_tuner.auto_tune()
                         if tuning_decisions:
+                            self._apply_tuning_to_config(tuning_decisions)
                             logger.debug(f"AutoTuner applied: {[d.param_name for d in tuning_decisions]}")
                     # SLO checks
-                    self._slo_monitor.check_slo("ttft", step_metrics.ttft_ms)
-                    self._slo_monitor.check_slo("itl", step_metrics.itl_ms)
+                    if _est_ttft_ms > 0:
+                        self._slo_monitor.check_slo("ttft", _est_ttft_ms)
+                    if _est_itl_ms > 0:
+                        self._slo_monitor.check_slo("itl", _est_itl_ms)
                     self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
                     # Fairness tracker
                     for req_output in scheduler_output.outputs:
@@ -1808,7 +1872,7 @@ class EngineCore:
                     hw = get_hardware_info()
                     mem_usage = active_mem / max(hw.total_memory_bytes, 1)
                     self._adaptive_batch.update_metrics(
-                        latency_ms=0.0,  # Latency tracked per-request
+                        latency_ms=self._last_step_wall_ms,
                         memory_usage=mem_usage,
                         batch_size=len(scheduler_output.outputs),
                     )
@@ -2016,6 +2080,8 @@ class EngineCore:
             "num_requests_processed": self._num_requests_processed,
             "active_collectors": len(self._output_collectors),
             "uptime_seconds": round(uptime, 1),
+            "compute_utilization_pct": round(self.get_compute_utilization(), 2),
+            "last_step_duration_ms": round(self._last_step_wall_ms, 2),
             "cpu_gpu_overlap": self._overlap_scheduler.get_stats(),
             "tbo": self._tbo_scheduler.get_stats(),
             "adaptive_batch": self._adaptive_batch.get_stats(),

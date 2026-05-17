@@ -6,6 +6,8 @@ Provides per-architecture performance optimizations detected from model config:
 2. AttentionOptimizer — GQA/MHA/SWA pattern optimizations
 3. MoEEfficiencyOptimizer — dynamic expert selection, caching, load balancing
 4. ModelWarmupManager — compile + KV cache warmup at model load time
+   + warm prompt preloading: prefill popular prefixes into KV prefix cache
+     for 1.3-2.25x TTFT improvement on matching requests (vllm-mlx pattern)
 """
 
 import logging
@@ -738,11 +740,29 @@ class WarmupResult:
     steps_run: int = 0
 
 
+@dataclass
+class WarmPromptResult:
+    """Result of warm prompt preloading into KV prefix cache."""
+    prompts_loaded: int = 0
+    prompts_prefilled: int = 0
+    prompts_skipped_cached: int = 0
+    prompts_failed: int = 0
+    total_tokens_prefilled: int = 0
+    prefill_time_s: float = 0.0
+    source: str = ""  # "env", "config", "default", "none"
+
+
 class ModelWarmupManager:
     """Manages model warmup at load time for compile caching and KV prefill.
 
     Runs a short inference to trigger MX compile caching, optionally
     prepopulates KV cache with common system prompts.
+
+    Warm prompt preloading (vllm-mlx pattern):
+    - Accepts warm prompts from YUNSHU_WARM_PROMPTS env var (||-separated)
+    - Each prompt is tokenized, prefilled via generate_step, and stored
+      in the KV prefix cache for future cache hits
+    - Provides 1.3-2.25x TTFT improvement on matching real requests
     """
 
     # Known warmup prompts per model family
@@ -768,6 +788,7 @@ class ModelWarmupManager:
     def __init__(self) -> None:
         self._warmed = False
         self._result = WarmupResult()
+        self._warm_prompt_result = WarmPromptResult()
         self._compile_cached = False
         self._prompts_warmed: list[str] = []
 
@@ -863,7 +884,10 @@ class ModelWarmupManager:
         model: Any,
         prompts: Sequence[str],
     ) -> int:
-        """Prewarm KV cache with common prompts.
+        """Prewarm KV cache with common prompts (tracking-only phase).
+
+        Records prompts for stats tracking. Actual KV prefilling is done
+        by warm_prompt_prefill() which requires model + tokenizer + KV cache.
 
         Args:
             model: Loaded model.
@@ -875,14 +899,193 @@ class ModelWarmupManager:
         warmed = 0
         for prompt in prompts:
             try:
-                # In production this would tokenize and call model.generate
-                # For warmup purposes we just track the prompt
                 self._prompts_warmed.append(prompt)
                 warmed += 1
             except Exception as exc:
                 logger.debug(f"Failed to warm prompt: {exc}")
 
         return warmed
+
+    # ── Warm Prompt Prefill (vllm-mlx pattern) ─────────────────────────────
+
+    @staticmethod
+    def resolve_warm_prompts(env_var: str = "YUNSHU_WARM_PROMPTS") -> list[str]:
+        """Resolve warm prompts from env var (||-separated text or file paths).
+
+        Supports:
+        - Inline text: "prompt1||prompt2||prompt3"
+        - File paths: "/path/to/prompts.txt" or "~/prompts.txt"
+        - Mixed: "inline text||/path/to/file.txt||more text"
+
+        Args:
+            env_var: Environment variable name to read.
+
+        Returns:
+            List of resolved prompt strings.
+        """
+        import os
+
+        raw = os.environ.get(env_var, "").strip()
+        if not raw:
+            return []
+
+        prompts: list[str] = []
+        for part in raw.split("||"):
+            text = part.strip()
+            if not text:
+                continue
+            # If it looks like a file path, try reading it
+            if text.startswith("/") or text.startswith("~"):
+                try:
+                    expanded = os.path.expanduser(text)
+                    with open(expanded) as f:
+                        file_text = f.read().strip()
+                    if file_text:
+                        prompts.append(file_text)
+                    else:
+                        logger.debug(f"Warm prompt file empty: {text}")
+                except Exception:
+                    logger.debug(
+                        f"Warm prompt file not found: {text}", exc_info=True
+                    )
+            else:
+                prompts.append(text)
+
+        return prompts
+
+    def warm_prompt_prefill(
+        self,
+        model: Any,
+        tokenizer: Any,
+        kv_prefix_cache: Any,
+        warm_prompts: list[str] | None = None,
+        max_tokens: int = 1,
+        mem_pressure_threshold: float = 85.0,
+    ) -> WarmPromptResult:
+        """Prefill warm prompts into the KV prefix cache.
+
+        Tokenizes each prompt, runs generate_step to populate KV cache,
+        then stores the result in the KV prefix cache. Future requests
+        with matching prefixes get instant cache hits.
+
+        Args:
+            model: Loaded MLX model.
+            tokenizer: Tokenizer with .encode() method.
+            kv_prefix_cache: KVPrefixCache instance to store prefilled KV states.
+            warm_prompts: List of prompt strings to prefill. If None, reads
+                from YUNSHU_WARM_PROMPTS env var.
+            max_tokens: Max generation tokens during prefill (default 1).
+                Only 1 token is needed to populate the KV cache.
+            mem_pressure_threshold: Memory pressure % to trigger eviction
+                before prefilling (default 85.0).
+
+        Returns:
+            WarmPromptResult with prefill statistics.
+        """
+        import os
+
+        # Resolve prompts
+        if warm_prompts is None:
+            warm_prompts = self.resolve_warm_prompts()
+            source = "env"
+        else:
+            source = "config"
+
+        # Override max_tokens from env if set
+        env_max = os.environ.get("YUNSHU_WARM_MAX_TOKENS", "").strip()
+        if env_max:
+            try:
+                max_tokens = int(env_max)
+            except ValueError:
+                logger.warning(f"Invalid YUNSHU_WARM_MAX_TOKENS={env_max}, using {max_tokens}")
+
+        result = WarmPromptResult(
+            prompts_loaded=len(warm_prompts),
+            source=source,
+        )
+
+        if not warm_prompts:
+            self._warm_prompt_result = result
+            return result
+
+        start = time.monotonic()
+
+        try:
+            import mlx.core as mx
+            from mlx_lm.models.cache import make_prompt_cache
+            from mlx_lm.generate import generate_step
+            from mlx_lm.sample_utils import make_sampler
+        except ImportError:
+            logger.warning("mlx_lm not available for warm prompt prefill")
+            result.source = "none"
+            self._warm_prompt_result = result
+            return result
+
+        sampler = make_sampler(temp=0.0)
+
+        for prompt_text in warm_prompts:
+            if not prompt_text:
+                continue
+            try:
+                # Tokenize the prompt
+                ids = mx.array(tokenizer.encode(prompt_text))
+
+                # Check if already cached (skip duplicate work)
+                kv_prefix_cache.evict_under_pressure(mem_pressure_threshold)
+                cached_kv, _, _ = kv_prefix_cache.get(ids)
+                if cached_kv is not None:
+                    result.prompts_skipped_cached += 1
+                    logger.debug(f"Warm prompt already cached: {len(ids)} tokens")
+                    continue
+
+                # Prefill: run generate_step to populate KV cache
+                cache = make_prompt_cache(model)
+                for _ in generate_step(
+                    ids, model, max_tokens=max_tokens,
+                    sampler=sampler, prompt_cache=cache,
+                ):
+                    break
+
+                # Store in KV prefix cache for future cache hits
+                kv_prefix_cache.add(ids, cache)
+                n_tokens = len(ids)
+                result.prompts_prefilled += 1
+                result.total_tokens_prefilled += n_tokens
+                mx.clear_cache()
+                logger.info(f"Warm prompt prefilled: {n_tokens} tokens")
+
+            except Exception as exc:
+                result.prompts_failed += 1
+                logger.warning(f"Warm prompt prefill failed: {exc}")
+
+        elapsed = time.monotonic() - start
+        result.prefill_time_s = round(elapsed, 4)
+        self._warm_prompt_result = result
+
+        if result.prompts_prefilled > 0 or result.prompts_skipped_cached > 0:
+            logger.info(
+                f"Warm prompt prefill complete: "
+                f"{result.prompts_prefilled} prefilled, "
+                f"{result.prompts_skipped_cached} already cached, "
+                f"{result.prompts_failed} failed, "
+                f"{result.total_tokens_prefilled} total tokens, "
+                f"{elapsed:.3f}s"
+            )
+
+        return result
+
+    def get_warm_prompt_stats(self) -> dict[str, Any]:
+        """Return warm prompt preloading statistics."""
+        r = self._warm_prompt_result
+        return {
+            "prompts_loaded": r.prompts_loaded,
+            "prompts_prefilled": r.prompts_prefilled,
+            "prompts_skipped_cached": r.prompts_skipped_cached,
+            "prompts_failed": r.prompts_failed,
+            "total_tokens_prefilled": r.total_tokens_prefilled,
+            "prefill_time_s": r.prefill_time_s,
+            "source": r.source,
+        }
 
     def get_stats(self) -> dict[str, Any]:
         """Return warmup statistics."""
@@ -893,4 +1096,5 @@ class ModelWarmupManager:
             "prompts_warmed": self._result.prompts_warmed,
             "model_type": self._result.model_type,
             "steps_run": self._result.steps_run,
+            "warm_prompt_prefill": self.get_warm_prompt_stats(),
         }

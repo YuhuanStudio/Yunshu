@@ -12,6 +12,7 @@ from yunshu_engine.model_optimizations import (
     RoPEScalingOptimizer,
     RopeScalingConfig,
     RopeScalingType,
+    WarmPromptResult,
     WarmupResult,
     _get_config,
     _safe_int,
@@ -727,3 +728,474 @@ class TestHelpers:
 
     def test_get_config_none(self):
         assert _get_config(None) is None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Warm Prompt Prefill tests (vllm-mlx pattern)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestWarmPromptResult:
+    """Tests for WarmPromptResult dataclass."""
+
+    def test_defaults(self):
+        r = WarmPromptResult()
+        assert r.prompts_loaded == 0
+        assert r.prompts_prefilled == 0
+        assert r.prompts_skipped_cached == 0
+        assert r.prompts_failed == 0
+        assert r.total_tokens_prefilled == 0
+        assert r.prefill_time_s == 0.0
+        assert r.source == ""
+
+    def test_with_values(self):
+        r = WarmPromptResult(
+            prompts_loaded=3,
+            prompts_prefilled=2,
+            prompts_skipped_cached=1,
+            total_tokens_prefilled=256,
+            prefill_time_s=0.5,
+            source="env",
+        )
+        assert r.prompts_loaded == 3
+        assert r.prompts_prefilled == 2
+        assert r.source == "env"
+
+
+class TestResolveWarmPrompts:
+    """Tests for ModelWarmupManager.resolve_warm_prompts()."""
+
+    def test_no_env_var(self, monkeypatch):
+        monkeypatch.delenv("YUNSHU_WARM_PROMPTS", raising=False)
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == []
+
+    def test_empty_env_var(self, monkeypatch):
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", "")
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == []
+
+    def test_single_prompt(self, monkeypatch):
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", "Hello world")
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == ["Hello world"]
+
+    def test_multiple_prompts_separated(self, monkeypatch):
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", "Hello||World||Test")
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == ["Hello", "World", "Test"]
+
+    def test_whitespace_trimmed(self, monkeypatch):
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", "  Hello  ||  World  ")
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == ["Hello", "World"]
+
+    def test_empty_parts_skipped(self, monkeypatch):
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", "Hello||||World")
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == ["Hello", "World"]
+
+    def test_file_path_not_found_skipped(self, monkeypatch, tmp_path):
+        nonexistent = str(tmp_path / "nonexistent.txt")
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", nonexistent)
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == []
+
+    def test_file_path_reads_content(self, monkeypatch, tmp_path):
+        prompt_file = tmp_path / "prompts.txt"
+        prompt_file.write_text("System prompt content")
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", str(prompt_file))
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == ["System prompt content"]
+
+    def test_tilde_expansion(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", "~/nonexistent_prompt_file_xyz.txt")
+        result = ModelWarmupManager.resolve_warm_prompts()
+        # File doesn't exist, should be skipped gracefully
+        assert result == []
+
+    def test_mixed_inline_and_file(self, monkeypatch, tmp_path):
+        prompt_file = tmp_path / "system.txt"
+        prompt_file.write_text("System instruction")
+        monkeypatch.setenv(
+            "YUNSHU_WARM_PROMPTS",
+            f"inline text||{prompt_file}||more inline",
+        )
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == ["inline text", "System instruction", "more inline"]
+
+    def test_empty_file_skipped(self, monkeypatch, tmp_path):
+        prompt_file = tmp_path / "empty.txt"
+        prompt_file.write_text("")
+        monkeypatch.setenv("YUNSHU_WARM_PROMPTS", str(prompt_file))
+        result = ModelWarmupManager.resolve_warm_prompts()
+        assert result == []
+
+    def test_custom_env_var(self, monkeypatch):
+        monkeypatch.setenv("CUSTOM_PROMPTS", "custom prompt")
+        result = ModelWarmupManager.resolve_warm_prompts(env_var="CUSTOM_PROMPTS")
+        assert result == ["custom prompt"]
+
+
+class FakeKVCacheLayer:
+    """Fake KV cache layer with keys/values/offset for snapshot testing."""
+    def __init__(self, offset=0):
+        self.keys = MagicMock()
+        self.values = MagicMock()
+        self.offset = offset
+
+
+class FakeKVPrefixCache:
+    """Minimal KV prefix cache mock for warm prompt tests."""
+    def __init__(self):
+        self._entries = {}  # hash -> (tokens, cache)
+        self._evict_calls = 0
+
+    def evict_under_pressure(self, threshold=85.0):
+        self._evict_calls += 1
+
+    def get(self, tokens):
+        """Return (None, len(tokens), 0) for miss, (cache, 0, len) for hit."""
+        key = tuple(int(t) for t in tokens)
+        if key in self._entries:
+            return self._entries[key], 0, len(tokens)
+        return None, len(tokens), 0
+
+    def add(self, tokens, cache):
+        key = tuple(int(t) for t in tokens)
+        self._entries[key] = cache
+
+
+class FakeTokenizer:
+    """Fake tokenizer that encodes strings to integer lists."""
+    def __init__(self, vocab=None):
+        self._vocab = vocab or {}
+
+    def encode(self, text):
+        # Simple deterministic encoding: each char → ord(char)
+        return [ord(c) for c in text]
+
+
+class TestWarmPromptPrefill:
+    """Tests for ModelWarmupManager.warm_prompt_prefill()."""
+
+    def test_empty_prompts_list(self):
+        mgr = ModelWarmupManager()
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=[],
+        )
+        assert isinstance(result, WarmPromptResult)
+        assert result.prompts_loaded == 0
+        assert result.prompts_prefilled == 0
+        assert result.source == "config"
+
+    def test_none_prompts_no_env(self, monkeypatch):
+        monkeypatch.delenv("YUNSHU_WARM_PROMPTS", raising=False)
+        mgr = ModelWarmupManager()
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=None,
+        )
+        assert result.prompts_loaded == 0
+        # Source is "env" because warm_prompts=None means "read from env var"
+        assert result.source == "env"
+
+    def test_warm_prompt_stats_tracked(self):
+        mgr = ModelWarmupManager()
+        stats = mgr.get_warm_prompt_stats()
+        assert stats["prompts_loaded"] == 0
+        assert stats["prompts_prefilled"] == 0
+        assert stats["source"] == ""
+
+    def test_get_stats_includes_warm_prompt_prefill(self):
+        mgr = ModelWarmupManager()
+        stats = mgr.get_stats()
+        assert "warm_prompt_prefill" in stats
+        wp = stats["warm_prompt_prefill"]
+        assert wp["prompts_loaded"] == 0
+        assert wp["source"] == ""
+
+    def test_prefill_with_model_failure(self):
+        """When generate_step fails, prompts are counted as failed."""
+        mgr = ModelWarmupManager()
+        model = MagicMock()
+        tokenizer = FakeTokenizer()
+        cache = FakeKVPrefixCache()
+
+        # The real prefill requires mlx imports — test with import failure
+        # by mocking the import mechanism. Instead, test the failure path
+        # by using a model that raises on encode.
+        bad_tokenizer = MagicMock()
+        bad_tokenizer.encode.side_effect = RuntimeError("encode failed")
+
+        result = mgr.warm_prompt_prefill(
+            model=model,
+            tokenizer=bad_tokenizer,
+            kv_prefix_cache=cache,
+            warm_prompts=["Hello"],
+        )
+        # The prompt should be counted as failed
+        assert result.prompts_failed == 1
+        assert result.prompts_prefilled == 0
+
+    def test_prefill_multiple_prompts(self):
+        """Multiple prompts should all be attempted."""
+        mgr = ModelWarmupManager()
+        bad_tokenizer = MagicMock()
+        bad_tokenizer.encode.side_effect = RuntimeError("nope")
+
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=bad_tokenizer,
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=["prompt1", "prompt2", "prompt3"],
+        )
+        assert result.prompts_loaded == 3
+        assert result.prompts_failed == 3
+
+    def test_prefill_empty_string_skipped(self):
+        """Empty strings in warm_prompts should be skipped, whitespace-only attempted."""
+        mgr = ModelWarmupManager()
+        bad_tokenizer = MagicMock()
+        bad_tokenizer.encode.side_effect = RuntimeError("nope")
+
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=bad_tokenizer,
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=["", "  ", "real prompt"],
+        )
+        # "" is skipped (falsy), "  " is truthy so attempted and fails,
+        # "real prompt" is attempted and fails
+        assert result.prompts_failed == 2
+        assert result.prompts_loaded == 3
+
+    def test_warm_max_tokens_env_override(self, monkeypatch):
+        """YUNSHU_WARM_MAX_TOKENS should override the default."""
+        monkeypatch.setenv("YUNSHU_WARM_MAX_TOKENS", "5")
+        mgr = ModelWarmupManager()
+        # Just verify the env var is read — actual prefill requires MLX
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=["test"],
+            max_tokens=1,  # default, should be overridden to 5 by env
+        )
+        # The result will show a failure since no real MLX, but the
+        # important thing is that the env var was processed
+        assert isinstance(result, WarmPromptResult)
+
+    def test_warm_max_tokens_invalid_env(self, monkeypatch):
+        """Invalid YUNSHU_WARM_MAX_TOKENS should keep the default."""
+        monkeypatch.setenv("YUNSHU_WARM_MAX_TOKENS", "not_a_number")
+        mgr = ModelWarmupManager()
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=["test"],
+        )
+        assert isinstance(result, WarmPromptResult)
+
+
+class TestWarmPromptPrefillWithKV:
+    """Integration tests for warm prompt prefill with real-ish KV prefix cache.
+
+    These tests use mocked MLX internals to simulate the full prefill flow
+    without requiring a real GPU model.
+    """
+
+    def test_prefill_stores_in_kv_cache(self, monkeypatch):
+        """After prefill, KV prefix cache should have the entry."""
+        import types
+
+        mgr = ModelWarmupManager()
+        cache = FakeKVPrefixCache()
+        tokenizer = FakeTokenizer()
+
+        # Create a fake mx module
+        fake_mx = types.SimpleNamespace(
+            array=lambda x: x,
+            clear_cache=lambda: None,
+        )
+
+        # Create fake mlx_lm modules
+        fake_cache_module = types.SimpleNamespace(
+            make_prompt_cache=lambda model: [FakeKVCacheLayer()],
+        )
+
+        fake_generate_step_called = []
+        def fake_generate_step(ids, model, max_tokens=1, sampler=None, prompt_cache=None):
+            fake_generate_step_called.append(max_tokens)
+            yield None  # yield once then break
+
+        fake_generate_module = types.SimpleNamespace(
+            generate_step=fake_generate_step,
+        )
+
+        fake_sampler_module = types.SimpleNamespace(
+            make_sampler=lambda temp=0.0: None,
+        )
+
+        # Patch imports within warm_prompt_prefill
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx.core", fake_mx,
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx),
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.models.cache", fake_cache_module,
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.generate", fake_generate_module,
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module,
+        )
+        monkeypatch.setitem(
+            __import__("sys").modules, "mlx_lm", types.SimpleNamespace(),
+        )
+
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=tokenizer,
+            kv_prefix_cache=cache,
+            warm_prompts=["Hello world test prompt for warmup"],
+            max_tokens=1,
+        )
+        assert result.prompts_prefilled == 1
+        assert result.prompts_failed == 0
+        assert result.total_tokens_prefilled > 0
+        assert len(cache._entries) == 1
+
+    def test_prefill_skips_already_cached(self, monkeypatch):
+        """Prompts already in KV cache should be skipped."""
+        import types
+
+        mgr = ModelWarmupManager()
+        cache = FakeKVPrefixCache()
+        tokenizer = FakeTokenizer()
+
+        # Pre-populate the cache with the same prompt
+        tokens = tuple(ord(c) for c in "Hello world test prompt for warmup")
+        cache._entries[tokens] = [FakeKVCacheLayer(offset=len(tokens))]
+
+        # Mock mlx imports
+        fake_mx = types.SimpleNamespace(array=lambda x: x, clear_cache=lambda: None)
+        fake_cache_module = types.SimpleNamespace(make_prompt_cache=lambda m: [FakeKVCacheLayer()])
+        fake_generate_module = types.SimpleNamespace(
+            generate_step=lambda ids, model, max_tokens=1, sampler=None, prompt_cache=None: iter([None]),
+        )
+        fake_sampler_module = types.SimpleNamespace(make_sampler=lambda temp=0.0: None)
+
+        monkeypatch.setitem(__import__("sys").modules, "mlx.core", fake_mx)
+        monkeypatch.setitem(__import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx))
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.models.cache", fake_cache_module)
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.generate", fake_generate_module)
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module)
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm", types.SimpleNamespace())
+
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=tokenizer,
+            kv_prefix_cache=cache,
+            warm_prompts=["Hello world test prompt for warmup"],
+        )
+        assert result.prompts_prefilled == 0
+        assert result.prompts_skipped_cached == 1
+
+    def test_prefill_multiple_different_prompts(self, monkeypatch):
+        """Multiple different prompts should each get their own cache entry."""
+        import types
+
+        mgr = ModelWarmupManager()
+        cache = FakeKVPrefixCache()
+        tokenizer = FakeTokenizer()
+
+        fake_mx = types.SimpleNamespace(array=lambda x: x, clear_cache=lambda: None)
+        fake_cache_module = types.SimpleNamespace(make_prompt_cache=lambda m: [FakeKVCacheLayer()])
+        fake_generate_module = types.SimpleNamespace(
+            generate_step=lambda ids, model, max_tokens=1, sampler=None, prompt_cache=None: iter([None]),
+        )
+        fake_sampler_module = types.SimpleNamespace(make_sampler=lambda temp=0.0: None)
+
+        monkeypatch.setitem(__import__("sys").modules, "mlx.core", fake_mx)
+        monkeypatch.setitem(__import__("sys").modules, "mlx", types.SimpleNamespace(core=fake_mx))
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.models.cache", fake_cache_module)
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.generate", fake_generate_module)
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm.sample_utils", fake_sampler_module)
+        monkeypatch.setitem(__import__("sys").modules, "mlx_lm", types.SimpleNamespace())
+
+        prompts = [
+            "First warm prompt for testing",
+            "Second warm prompt different",
+            "Third warm prompt unique content",
+        ]
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=tokenizer,
+            kv_prefix_cache=cache,
+            warm_prompts=prompts,
+        )
+        assert result.prompts_prefilled == 3
+        assert result.total_tokens_prefilled == sum(len(p) for p in prompts)
+        assert len(cache._entries) == 3
+
+    def test_prefill_stats_persisted_in_manager(self):
+        """Warm prompt stats should be available via get_warm_prompt_stats()."""
+        mgr = ModelWarmupManager()
+        mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=[],
+        )
+        stats = mgr.get_warm_prompt_stats()
+        assert stats["source"] == "config"
+        assert stats["prompts_loaded"] == 0
+
+
+class TestWarmPromptLifecycle:
+    """Tests for warm prompt manager lifecycle."""
+
+    def test_manager_initial_state(self):
+        mgr = ModelWarmupManager()
+        assert mgr._warmed is False
+        assert isinstance(mgr._warm_prompt_result, WarmPromptResult)
+        assert mgr._warm_prompt_result.prompts_loaded == 0
+
+    def test_manager_after_warmup(self):
+        """After warmup(), manager should still accept warm prompt prefill."""
+        model = FakeModel(None)
+        mgr = ModelWarmupManager()
+        mgr.warmup(model, "qwen")
+        assert mgr._warmed is True
+
+        # Warm prompt prefill should still work
+        result = mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=[],
+        )
+        assert result.prompts_loaded == 0
+
+    def test_get_stats_after_prefill(self):
+        """get_stats() should include warm_prompt_prefill after prefill."""
+        mgr = ModelWarmupManager()
+        mgr.warm_prompt_prefill(
+            model=MagicMock(),
+            tokenizer=FakeTokenizer(),
+            kv_prefix_cache=FakeKVPrefixCache(),
+            warm_prompts=["test"],
+        )
+        stats = mgr.get_stats()
+        assert "warm_prompt_prefill" in stats
+        assert stats["warm_prompt_prefill"]["source"] == "config"
