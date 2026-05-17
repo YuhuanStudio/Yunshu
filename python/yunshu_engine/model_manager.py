@@ -387,6 +387,18 @@ class ModelManager:
                 entry.is_loading = False
                 entry.load_error = str(e)
                 logger.error(f"Failed to load model {model_id}: {e}")
+                # Clean up any partial Metal buffers from the failed load.
+                # Weight loading may have allocated Metal buffer temporaries
+                # that stay in the buffer pool even after the Python exception.
+                gc.collect()
+                try:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        self._get_mlx_executor(),
+                        lambda: (mx.synchronize(), mx.clear_cache()),
+                    )
+                except Exception:
+                    logger.debug("post-failure cache clear failed", exc_info=True)
                 raise
 
             finally:

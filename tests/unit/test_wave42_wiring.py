@@ -127,6 +127,7 @@ class TestBudgetWiringInAddRequest:
     async def test_budget_registered_on_add(self):
         core = _make_core()
         core._wake_event = asyncio.Event()
+        core._running = True  # Engine must be running to accept requests
 
         req_id = await core.add_request(prompt="hello", max_tokens=100)
         budget = core._budget_manager.get_budget(req_id)
@@ -141,6 +142,7 @@ class TestLifecycleWiringInAddRequest:
     async def test_lifecycle_tracked_on_add(self):
         core = _make_core()
         core._wake_event = asyncio.Event()
+        core._running = True  # Engine must be running to accept requests
 
         req_id = await core.add_request(prompt="hello", max_tokens=100)
 
@@ -157,6 +159,7 @@ class TestDedupWiringInAddRequest:
     async def test_dedup_registers_request(self):
         core = _make_core(YUNSHU_REQUEST_DEDUP="1")
         core._wake_event = asyncio.Event()
+        core._running = True  # Engine must be running to accept requests
 
         req_id = await core.add_request(prompt="hello", max_tokens=100)
         assert req_id in core._dedup_hashes
@@ -193,6 +196,7 @@ class TestCrossModuleIntegration:
     async def test_multiple_requests_budget_isolation(self):
         core = _make_core()
         core._wake_event = asyncio.Event()
+        core._running = True  # Engine must be running to accept requests
 
         req1 = await core.add_request(prompt="hello", max_tokens=50)
         req2 = await core.add_request(prompt="world", max_tokens=200)

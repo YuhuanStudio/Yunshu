@@ -263,6 +263,7 @@ class BatchedEngine:
         self._tokenizer = None
         self._engine_core = None
         self._loaded = False
+        self._starting = False  # Guard against concurrent start() calls
 
         # ── Wave 42: Wired production modules ──
         # Model preprocessor registry (auto-detects model family for multimodal input)
@@ -481,6 +482,27 @@ class BatchedEngine:
         if self._loaded:
             return
 
+        # Guard against concurrent start() calls from multiple coroutines.
+        # Without this, two concurrent generate() calls that both see
+        # _loaded=False can race and both load the model simultaneously,
+        # doubling memory usage and causing model ref leaks.
+        if getattr(self, '_starting', False):
+            # Another coroutine is already starting — wait for it
+            import asyncio
+            while getattr(self, '_starting', False):
+                await asyncio.sleep(0.05)
+            if self._loaded:
+                return
+            # If the other starter failed, we need to start ourselves
+        self._starting = True
+
+        try:
+            await self._do_start()
+        finally:
+            self._starting = False
+
+    async def _do_start(self) -> None:
+        """Internal start implementation (called under _starting guard)."""
         from .mlx_executor import get_mlx_executor
 
         executor = get_mlx_executor()
@@ -1678,6 +1700,20 @@ class BatchedEngine:
         input_ids = tokenizer.encode(text)
         prompt_tokens = len(input_ids)
 
+        # Guard against empty prompt: tokenizer.encode("") may return []
+        # which causes generate_step to produce zero tokens. Inject BOS token
+        # as a minimal prompt so the model can still generate.
+        if not input_ids:
+            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            if bos_id is not None:
+                input_ids = [bos_id]
+            else:
+                # Use EOS as fallback — the model will likely stop immediately
+                # but at least we won't crash with an empty tensor
+                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                input_ids = [eos_id]
+            prompt_tokens = len(input_ids)
+
         stop_ids = set()
         if hasattr(tokenizer, 'eos_token_id'):
             stop_ids.add(tokenizer.eos_token_id)
@@ -2086,6 +2122,7 @@ class BatchedEngine:
 
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
+            mx.clear_cache()
 
             # Unregister from inflight prefix tracker
             try:
@@ -2108,6 +2145,12 @@ class BatchedEngine:
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
                 logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
+            # Clear Metal buffers left behind by the OOM
+            try:
+                import mlx.core as _mx
+                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+            except Exception:
+                pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -2122,6 +2165,12 @@ class BatchedEngine:
                     get_inflight_tracker().unregister(_inflight_req_id)
                 except Exception:
                     logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
+                # Clear Metal buffers left behind by the OOM
+                try:
+                    import mlx.core as _mx
+                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+                except Exception:
+                    pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -2590,6 +2639,16 @@ class BatchedEngine:
         input_ids = tokenizer.encode(prompt)
         prompt_tokens = len(input_ids)
 
+        # Guard against empty prompt (same as _generate_fast)
+        if not input_ids:
+            bos_id = getattr(tokenizer, 'bos_token_id', None)
+            if bos_id is not None:
+                input_ids = [bos_id]
+            else:
+                eos_id = getattr(tokenizer, 'eos_token_id', 1)
+                input_ids = [eos_id]
+            prompt_tokens = len(input_ids)
+
         stop_ids = set()
         if hasattr(tokenizer, 'eos_token_id'):
             stop_ids.add(tokenizer.eos_token_id)
@@ -2784,6 +2843,7 @@ class BatchedEngine:
                     # Check cancellation
                     if cancel_event is not None and cancel_event.is_set():
                         mx.synchronize()
+                        mx.clear_cache()
                         # Flush remaining detokenizer bytes before cancelling
                         try:
                             remaining = detokenizer.finalize()
@@ -2840,6 +2900,7 @@ class BatchedEngine:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
                             mx.synchronize()
+                            mx.clear_cache()
                             if _prefill_tracker is not None:
                                 _prefill_tracker.remove(_prefill_req_id)
                             _unregister_inflight()
@@ -2868,6 +2929,7 @@ class BatchedEngine:
                             _pipeline.finish()
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
+                        mx.clear_cache()
                         _unregister_inflight()
                         return
                 # Store thinking segment at end of generation
@@ -2880,6 +2942,7 @@ class BatchedEngine:
                     _put((remaining, n_tok, None, len(_thinking_tokens), None))
                 _put(("", n_tok, "length", len(_thinking_tokens), None))
                 mx.synchronize()
+                mx.clear_cache()
                 # Finish pipeline tracking at end of generation
                 if _pipeline is not None:
                     _pipeline.finish()
@@ -2893,6 +2956,11 @@ class BatchedEngine:
                 _run_inner()
             except (MemoryError, RuntimeError) as e:
                 _unregister_inflight()
+                try:
+                    mx.synchronize()
+                    mx.clear_cache()
+                except Exception:
+                    pass
                 if isinstance(e, MemoryError) or "memory" in str(e).lower():
                     logger.warning(f"OOM during streaming: {e}")
                     _put(e)
@@ -2900,6 +2968,11 @@ class BatchedEngine:
                     _put(e)
             except Exception as e:
                 _unregister_inflight()
+                try:
+                    mx.synchronize()
+                    mx.clear_cache()
+                except Exception:
+                    pass
                 _put(e)
             finally:
                 _put(_sentinel)

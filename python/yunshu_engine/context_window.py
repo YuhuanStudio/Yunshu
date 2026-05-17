@@ -249,6 +249,9 @@ class ContextWindowManager:
         Preserves tool call/response pairs: if an assistant message with
         tool_calls is at the truncation boundary, also removes the following
         tool role messages to keep the message sequence valid for chat templates.
+
+        When even a single non-system message exceeds the budget, returns just
+        the system messages (if any) rather than looping infinitely.
         """
         if not messages:
             return []
@@ -259,8 +262,14 @@ class ContextWindowManager:
         non_system = [m for m in result if m.get("role") != "system"]
 
         # Remove oldest non-system messages first
+        prev_len = -1
         while non_system and self._count_messages_tokens(system_msgs + non_system) > max_tokens:
-            # Check if removing the first message would orphan tool results
+            # Guard against infinite loop: if the last iteration didn't remove
+            # anything, the remaining message(s) are simply too large for the
+            # budget.  Return just the system messages in that case.
+            if len(non_system) == prev_len:
+                return deepcopy(system_msgs) if system_msgs else []
+            prev_len = len(non_system)
             _truncate_first_message_group(non_system)
 
         return system_msgs + non_system

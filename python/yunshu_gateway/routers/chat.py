@@ -1363,6 +1363,42 @@ async def _stream_vlm_response(
       _vlm_tracker.unregister(completion_id)
 
 
+def _format_tool_call_chunk_multi(
+    completion_id: str,
+    model: str,
+    choice_index: int,
+    tc,
+    tc_index: int,
+    include_role: bool = False,
+) -> str:
+    """Format a tool_call as an OpenAI streaming chunk for a specific choice index."""
+    delta: dict[str, Any] = {}
+    if include_role:
+        delta["role"] = "assistant"
+    delta["content"] = None
+    delta["tool_calls"] = [{
+        "index": tc_index,
+        "id": tc.id,
+        "type": "function",
+        "function": {
+            "name": tc.name,
+            "arguments": tc.arguments,
+        },
+    }]
+    chunk = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": choice_index,
+            "delta": delta,
+            "finish_reason": None,
+        }],
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+
 async def _stream_response_multi(
     engine,
     messages: list[dict],
@@ -1377,6 +1413,9 @@ async def _stream_response_multi(
     On single-GPU systems parallel generation would serialize anyway, so we
     run choices one after another and interleave their SSE events.
     Each choice gets its own streaming loop with its `index` set correctly.
+
+    When tools are provided, each choice gets its own ToolCallStreamer for
+    independent per-choice tool call extraction and correct finish_reason.
     """
     from yunshu_engine.request_tracker import get_request_tracker
     tracker = get_request_tracker()
@@ -1384,6 +1423,7 @@ async def _stream_response_multi(
     include_usage = (
         req.stream_options is not None and req.stream_options.include_usage
     )
+    use_tool_streamer = req.tools is not None and len(req.tools) > 0
     total_prompt_tok = 0
     total_completion_tok = 0
     total_reasoning_tok = 0
@@ -1401,6 +1441,10 @@ async def _stream_response_multi(
             choice_completion_tok = 0
             choice_finish_reason = None  # track actual finish_reason from engine
             choice_reasoning_tok = 0  # track per-choice reasoning tokens
+            # Per-choice tool call streamer for independent tool call extraction
+            choice_tool_streamer = ToolCallStreamer() if use_tool_streamer else None
+            choice_tool_call_index = 0
+            choice_has_tool_call = False
 
             if is_batched:
                 stream = engine.stream_chat(
@@ -1460,6 +1504,27 @@ async def _stream_response_multi(
                             logprobs=_chunk_lp,
                             thinking_content=token_text,
                         )
+                        first_chunk_for_choice = False
+                    elif use_tool_streamer and choice_tool_streamer and token_text:
+                        # Process through per-choice tool call streamer
+                        for out in choice_tool_streamer.process_token(token_text):
+                            if out.text:
+                                yield _format_choice_chunk(
+                                    completion_id, req.model, choice_idx,
+                                    out.text, None,
+                                    include_role=first_chunk_for_choice,
+                                    logprobs=_chunk_lp,
+                                )
+                                first_chunk_for_choice = False
+                            elif out.tool_call:
+                                yield _format_tool_call_chunk_multi(
+                                    completion_id, req.model, choice_idx,
+                                    out.tool_call, choice_tool_call_index,
+                                    include_role=first_chunk_for_choice,
+                                )
+                                choice_tool_call_index += 1
+                                choice_has_tool_call = True
+                                first_chunk_for_choice = False
                     else:
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx,
@@ -1467,7 +1532,7 @@ async def _stream_response_multi(
                             include_role=first_chunk_for_choice,
                             logprobs=_chunk_lp,
                         )
-                    first_chunk_for_choice = False
+                        first_chunk_for_choice = False
             else:
                 stream = engine.generate_stream(
                     prompt=messages,
@@ -1526,6 +1591,27 @@ async def _stream_response_multi(
                             logprobs=_chunk_lp,
                             thinking_content=token_text,
                         )
+                        first_chunk_for_choice = False
+                    elif use_tool_streamer and choice_tool_streamer and token_text:
+                        # Process through per-choice tool call streamer
+                        for out in choice_tool_streamer.process_token(token_text):
+                            if out.text:
+                                yield _format_choice_chunk(
+                                    completion_id, req.model, choice_idx,
+                                    out.text, None,
+                                    include_role=first_chunk_for_choice,
+                                    logprobs=_chunk_lp,
+                                )
+                                first_chunk_for_choice = False
+                            elif out.tool_call:
+                                yield _format_tool_call_chunk_multi(
+                                    completion_id, req.model, choice_idx,
+                                    out.tool_call, choice_tool_call_index,
+                                    include_role=first_chunk_for_choice,
+                                )
+                                choice_tool_call_index += 1
+                                choice_has_tool_call = True
+                                first_chunk_for_choice = False
                     else:
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx,
@@ -1533,17 +1619,40 @@ async def _stream_response_multi(
                             include_role=first_chunk_for_choice,
                             logprobs=_chunk_lp,
                         )
-                    first_chunk_for_choice = False
+                        first_chunk_for_choice = False
+
+            # Flush any remaining content from per-choice tool streamer
+            if use_tool_streamer and choice_tool_streamer:
+                for out in choice_tool_streamer.flush():
+                    if out.text:
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx,
+                            out.text, None,
+                        )
+                    elif out.tool_call:
+                        yield _format_tool_call_chunk_multi(
+                            completion_id, req.model, choice_idx,
+                            out.tool_call, choice_tool_call_index,
+                            include_role=first_chunk_for_choice,
+                        )
+                        choice_tool_call_index += 1
+                        choice_has_tool_call = True
+                        first_chunk_for_choice = False
 
             total_completion_tok += choice_completion_tok
             total_reasoning_tok += choice_reasoning_tok
 
             # Emit final chunk with actual finish_reason for this choice.
+            # If tool calls were detected, override finish_reason to "tool_calls".
+            if choice_has_tool_call:
+                final_reason = "tool_calls"
+            else:
+                final_reason = choice_finish_reason or "stop"
             # If no tokens were emitted for this choice, this is also the first
             # chunk for this choice and must include role=assistant per OpenAI spec.
             yield _format_choice_chunk(
                 completion_id, req.model, choice_idx,
-                "", choice_finish_reason or "stop",
+                "", final_reason,
                 include_role=first_chunk_for_choice,
             )
 

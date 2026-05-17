@@ -402,6 +402,7 @@ class EngineCore:
         # RUNNING → REQUESTED (drain in-flight) → SHUTTING_DOWN (force stop)
         self._running = False
         self._shutdown_requested = False
+        self._was_started = False  # True after first start(), even if later stopped
         self._loop_task: asyncio.Task | None = None
         self._start_time: float | None = None
         self._wake_event: asyncio.Event | None = None  # Event-driven wake-up for idle loop
@@ -731,6 +732,7 @@ class EngineCore:
         if self._running:
             return
         self._running = True
+        self._was_started = True
         self._start_time = time.monotonic()
         self._wake_event = asyncio.Event()
         # Start KV offload manager (async tier migration, §12.3)
@@ -964,6 +966,32 @@ class EngineCore:
 
         req_id = request_id or f"req-{uuid.uuid4().hex[:8]}"
 
+        # Reject new requests when engine was started but has since stopped.
+        # Note: we do NOT reject when engine was never started -- the batched
+        # engine test suite calls add_request on an EngineCore without start(),
+        # driving the scheduler loop manually. Only reject when the engine was
+        # explicitly stopped (i.e., stop() was called after a successful start).
+        if self._was_started and not self._running:
+            from .output_collector import RequestOutputCollector, RequestStreamState
+            from .request import RequestOutput
+            self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+            self._stream_states[req_id] = RequestStreamState(
+                stream_interval=self.config.stream_interval
+            )
+            self._finished_events[req_id] = asyncio.Event()
+            error_output = RequestOutput(
+                request_id=req_id,
+                finished=True,
+                finish_reason="error",
+                error="Engine is not running",
+                prompt_tokens=0,
+                completion_tokens=0,
+            )
+            self._output_collectors[req_id].put(error_output)
+            self._output_collectors[req_id].put(None)
+            self._finished_events[req_id].set()
+            return req_id
+
         # Reject new requests during graceful shutdown (vLLM REQUESTED state)
         if self._shutdown_requested:
             from .output_collector import RequestOutputCollector, RequestStreamState
@@ -1028,6 +1056,16 @@ class EngineCore:
             token_ids = self._tokenizer.encode(text)
         else:
             token_ids = list(prompt)
+
+        # Guard against empty prompt: inject BOS/EOS so the scheduler
+        # doesn't crash with a zero-length token sequence.
+        if not token_ids:
+            bos_id = getattr(self._tokenizer, 'bos_token_id', None)
+            if bos_id is not None:
+                token_ids = [bos_id]
+            else:
+                eos_id = getattr(self._tokenizer, 'eos_token_id', 1)
+                token_ids = [eos_id]
 
         num_prompt_tokens = len(token_ids)
 
