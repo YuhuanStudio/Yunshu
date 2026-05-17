@@ -210,7 +210,8 @@ def _send_stream(url: str, payload: dict) -> None:
 
     with httpx.stream("POST", f"{url}/v1/chat/completions", json=payload, timeout=120) as resp:
         if resp.status_code != 200:
-            console.print(f"[red]Error {resp.status_code}:[/] {resp.text[:200]}")
+            error_body = "".join(resp.iter_text())
+            console.print(f"[red]Error {resp.status_code}:[/] {error_body[:200]}")
             HISTORY.pop()
             return
 

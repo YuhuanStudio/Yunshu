@@ -674,7 +674,6 @@ async def _build_multi_choice(
                 for i, tc in enumerate(tool_calls)
             ]
 
-        _record_metrics(pt, ct)
         _gen_result = result if is_batched else state
         _rt = getattr(_gen_result, 'reasoning_tokens', 0)
         _ct_cached = getattr(_gen_result, 'cached_tokens', 0)
@@ -711,6 +710,10 @@ async def _build_multi_choice(
             status_code=500,
             content={"error": {"message": str(exc), "type": type(exc).__name__}},
         )
+
+    # Record metrics once for the entire n>1 request (not per-choice)
+    if prompt_tok > 0 or completion_tok > 0:
+        _record_metrics(prompt_tok, completion_tok)
 
     usage = {
         "prompt_tokens": prompt_tok,
@@ -1206,6 +1209,10 @@ async def _handle_vlm_chat(
     if total_reasoning_tok > 0:
         vlm_usage["completion_tokens_details"] = {"reasoning_tokens": total_reasoning_tok}
 
+    # Record metrics for VLM non-streaming path
+    if prompt_tok > 0 or total_completion_tok > 0:
+        _record_metrics(prompt_tok, total_completion_tok)
+
     return JSONResponse({
         "id": completion_id,
         "object": "chat.completion",
@@ -1279,15 +1286,29 @@ async def _stream_vlm_response(
                 vlm_reasoning_tok = output.reasoning_tokens
             if hasattr(output, 'cached_tokens') and output.cached_tokens:
                 vlm_cached_tok = max(vlm_cached_tok, output.cached_tokens)
+            if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                vlm_prompt_tok = output.prompt_tokens
             if output.finish_reason is not None:
                 vlm_last_finish_reason = output.finish_reason
-            yield format_openai_chunk(
-                completion_id=completion_id,
-                model=req.model,
-                delta_content=output.token_text,
-                finish_reason=None,  # intermediate: always None
-                include_role=first_chunk,
-            )
+            # Route thinking content based on engine's current_state
+            _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+            if _is_reasoning:
+                yield format_openai_chunk(
+                    completion_id=completion_id,
+                    model=req.model,
+                    delta_content="",
+                    thinking_content=output.token_text,
+                    finish_reason=None,
+                    include_role=first_chunk,
+                )
+            else:
+                yield format_openai_chunk(
+                    completion_id=completion_id,
+                    model=req.model,
+                    delta_content=output.token_text,
+                    finish_reason=None,  # intermediate: always None
+                    include_role=first_chunk,
+                )
             first_chunk = False
 
         # Final chunk with finish_reason
@@ -1317,6 +1338,10 @@ async def _stream_vlm_response(
                 reasoning_tokens=vlm_reasoning_tok,
                 cached_tokens=vlm_cached_tok,
             )
+
+        # Record metrics for VLM streaming path
+        if vlm_prompt_tok > 0 or vlm_completion_tok > 0:
+            _record_metrics(vlm_prompt_tok, vlm_completion_tok)
 
         yield format_openai_done()
     try:

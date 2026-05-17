@@ -115,7 +115,7 @@ def serve(
         env["YUNSHU_MULTI_MODEL"] = "1"
         env["YUNSHU_MODELS_DIR"] = models_dir
     if max_memory:
-        env["YUNSHU_MAX_MEMORY"] = max_memory
+        env["YUNSHU_MAX_MEMORY_GB"] = max_memory
     if auth_token:
         env["YUNSHU_AUTH_TOKEN"] = auth_token
     if mcp_config:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Settings2,
   Key,
@@ -294,7 +294,7 @@ function LogViewer() {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [level, setLevel] = useState("all");
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     try {
       const resp = await fetch(`/api/v1/admin/logs?level=${level}&lines=100`);
@@ -304,17 +304,17 @@ function LogViewer() {
       }
     } catch {}
     setLoading(false);
-  };
+  }, [level]);
 
   useEffect(() => {
     fetchLogs();
-  }, [level]);
+  }, [fetchLogs]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(fetchLogs, 3000);
     return () => clearInterval(id);
-  }, [autoRefresh]);
+  }, [autoRefresh, fetchLogs]);
 
   const getLogColor = (line: string) => {
     if (line.includes(" ERROR ") || line.includes(" CRITICAL ")) return "text-[var(--color-danger)]";

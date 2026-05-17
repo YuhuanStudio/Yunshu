@@ -16,7 +16,7 @@ import time
 from collections import OrderedDict
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 
 class _TokenBucket:
@@ -168,11 +168,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
 
+        # Apply rate limiting to WebSocket upgrade requests as well
+        is_websocket = (
+            request.headers.get("upgrade", "").lower() == "websocket"
+        )
+
         # Check RBAC key-level rate limit first
         rbac_key = getattr(request.state, "rbac_key", None)
         if rbac_key is not None and rbac_key.requests_per_minute is not None:
             bucket = self._get_key_bucket(rbac_key.name, rbac_key.requests_per_minute)
             if not bucket.consume():
+                if is_websocket:
+                    # WebSocket upgrades can't return JSON bodies; return HTTP 429
+                    return Response(status_code=429, content="Rate limit exceeded")
                 return JSONResponse(
                     status_code=429,
                     content={
@@ -195,6 +203,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         bucket = self._bucket_cache.get_or_create(client_ip)
 
         if not bucket.consume():
+            if is_websocket:
+                return Response(status_code=429, content="Rate limit exceeded")
             return JSONResponse(
                 status_code=429,
                 content={

@@ -2784,6 +2784,13 @@ class BatchedEngine:
                     # Check cancellation
                     if cancel_event is not None and cancel_event.is_set():
                         mx.synchronize()
+                        # Flush remaining detokenizer bytes before cancelling
+                        try:
+                            remaining = detokenizer.finalize()
+                            if remaining:
+                                _put((remaining, n_tok, None, len(_thinking_tokens), None))
+                        except Exception:
+                            logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
                         if _pipeline is not None:
                             _pipeline.finish()
                         if _prefill_tracker is not None:

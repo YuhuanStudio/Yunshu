@@ -77,7 +77,7 @@ export default function RealtimePage() {
     };
 
     wsRef.current = ws;
-  }, [url]);
+  }, [url, addMsg]);
 
   const disconnect = useCallback(() => {
     wsRef.current?.close();
@@ -99,7 +99,7 @@ export default function RealtimePage() {
     } catch (err) {
       setError(`Invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [inputJson]);
+  }, [inputJson, addMsg]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);

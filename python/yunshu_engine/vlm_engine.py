@@ -776,6 +776,19 @@ class VLMEngine:
 
             except Exception as e:
                 logger.error(f"VLM stream error: {e}", exc_info=True)
+                # Flush remaining detokenizer bytes on error
+                if has_detokenizer:
+                    try:
+                        remaining = detokenizer.finalize()
+                        if remaining:
+                            queue.put_nowait(RequestOutput(
+                                request_id=req_id,
+                                new_text=remaining,
+                                finish_reason=None,
+                                finished=False,
+                            ))
+                    except Exception:
+                        logger.debug("detokenizer finalize in error handler failed", exc_info=True)
             finally:
                 try:
                     queue.put_nowait(None)
@@ -1368,6 +1381,8 @@ class VLMEngine:
         else:
             token_text = ""
 
+        # Track thinking state for gateway routing
+        _state = "reasoning" if (think_start_id is not None and token_id == think_start_id) else "normal"
         queue.put_nowait(RequestOutput(
             request_id=req_id,
             new_text=token_text,
@@ -1375,6 +1390,7 @@ class VLMEngine:
             finish_reason=finish_reason,
             finished=finish_reason is not None,
             completion_tokens=token_count,
+            current_state=_state,
         ))
         if finish_reason:
             return
@@ -1383,6 +1399,16 @@ class VLMEngine:
         try:
           for _ in range(max_tokens - 1):
             if cancel_event is not None and cancel_event.is_set():
+                # Flush remaining detokenizer bytes before cancelling
+                if has_detokenizer:
+                    remaining = detokenizer.finalize()
+                    if remaining:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text=remaining,
+                            finish_reason=None,
+                            finished=False,
+                        ))
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
                     new_text="",
@@ -1453,6 +1479,7 @@ class VLMEngine:
             # When suffix_hit or is_eos, token_text stays "" (stop text is trimmed)
 
             finish_reason = "stop" if (is_eos or suffix_hit) else None
+            _state = "reasoning" if _in_thinking else "normal"
 
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
@@ -1461,6 +1488,7 @@ class VLMEngine:
                 finish_reason=finish_reason,
                 finished=finish_reason is not None,
                 completion_tokens=token_count,
+                current_state=_state,
             ))
 
             if finish_reason:
@@ -1494,6 +1522,19 @@ class VLMEngine:
           ))
         except Exception as e:
             logger.error(f"VLM text streaming error: {e}", exc_info=True)
+            # Flush remaining detokenizer bytes before reporting error
+            if has_detokenizer:
+                try:
+                    remaining = detokenizer.finalize()
+                    if remaining:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text=remaining,
+                            finish_reason=None,
+                            finished=False,
+                        ))
+                except Exception:
+                    logger.debug("detokenizer finalize in error handler failed", exc_info=True)
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
                 new_text="",

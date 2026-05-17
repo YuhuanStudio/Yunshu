@@ -160,7 +160,7 @@ export default function AudioPage() {
     setDragOver(false);
     const file = e.dataTransfer.files?.[0];
     if (file && file.type.startsWith("audio/")) handleAsr(file);
-  }, [selectedModel]);
+  }, [selectedModel, handleAsr]);
 
   const filteredModels = models.filter((m) =>
     mode === "tts" ? /tts|voice/i.test(m.id) : /asr|whisper/i.test(m.id)

@@ -279,6 +279,7 @@ export default function ChatPage() {
 
     const startTime = Date.now();
     abortRef.current = new AbortController();
+    setStreaming(true);
 
     try {
       const history = newMessages.filter((m) => m.role !== "system" && !m.streaming).slice(0, -1);
@@ -453,7 +454,7 @@ export default function ChatPage() {
         })
       );
     }
-  }, [input, streaming, model, conversations, activeId, temperature, maxTokens, enableThinking, autoTitle]);
+  }, [input, streaming, model, conversations, activeId, temperature, maxTokens, enableThinking, thinkingBudget, systemPrompt, jsonMode, specDecode, showLogprobs, toolsJson, attachedImage, autoTitle]);
 
   const stopGeneration = useCallback(() => {
     abortRef.current?.abort();

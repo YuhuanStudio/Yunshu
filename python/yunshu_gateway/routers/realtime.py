@@ -990,6 +990,19 @@ async def realtime_endpoint(ws: WebSocket):
     """OpenAI-compatible Realtime API WebSocket endpoint."""
     import os
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+
+    # Origin validation: reject cross-origin WebSocket connections unless CORS is wildcard
+    origin = ws.headers.get("origin", "")
+    if origin:
+        cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "*")
+        if cors_origins_str != "*":
+            allowed = {o.strip().rstrip("/") for o in cors_origins_str.split(",") if o.strip()}
+            # Normalize the origin for comparison
+            origin_stripped = origin.rstrip("/")
+            if origin_stripped not in allowed:
+                await ws.close(code=4003, reason="Origin not allowed")
+                return
+
     if auth_token:
         # WebSocket doesn't go through HTTP middleware, so check auth manually.
         # Prefer header over query param to avoid token leaking into logs/history.

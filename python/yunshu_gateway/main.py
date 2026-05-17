@@ -272,8 +272,9 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Accept"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
     )
 
     # Gateway middleware (order: outermost first)
@@ -404,9 +405,15 @@ def create_app() -> FastAPI:
         from .engine import get_engine, get_model_manager
         engine = get_engine()
         manager = get_model_manager()
+        engine_info = {"loaded": False}
+        if engine:
+            try:
+                engine_info = engine.get_stats()
+            except Exception:
+                engine_info = {"loaded": getattr(engine, 'is_loaded', False)}
         result = {
             "status": "ok",
-            "engine": engine.get_stats() if engine else {"loaded": False},
+            "engine": engine_info,
             "model_manager": manager.memory_usage if manager else None,
         }
         if _memory_enforcer is not None:
@@ -453,7 +460,7 @@ def create_app() -> FastAPI:
                 if entry.is_loaded:
                     has_loaded_model = True
                     break
-        elif engine and engine.is_loaded:
+        elif engine and getattr(engine, 'is_loaded', False):
             has_loaded_model = True
 
         checks["model_loaded"] = has_loaded_model
@@ -466,9 +473,12 @@ def create_app() -> FastAPI:
             active = mx.get_active_memory()
             total_uma = 0
             try:
+                import asyncio as _asyncio
                 import subprocess
-                r = subprocess.run(
-                    ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+                r = await _asyncio.to_thread(
+                    subprocess.run,
+                    ["sysctl", "-n", "hw.memsize"],
+                    capture_output=True, text=True,
                 )
                 total_uma = int(r.stdout.strip())
             except Exception:
