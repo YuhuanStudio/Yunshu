@@ -269,6 +269,7 @@ class EngineCore:
         )
         self._prefill_server: ExternalPrefillServer | None = None
         self._prefill_client: ExternalPrefillClient | None = None
+        self._prefill_task: asyncio.Task | None = None
         self._prefill_role: str | None = None
         prefill_role = get_prefill_role()
         self._prefill_role = prefill_role
@@ -691,8 +692,10 @@ class EngineCore:
             logger.debug("KV migration start failed", exc_info=True)
 
         # Start external prefill server if configured
+        # NOTE: task is fire-and-forget but will be stopped cleanly via
+        # _prefill_server.stop() in our stop() method.
         if self._prefill_server is not None:
-            asyncio.get_running_loop().create_task(
+            self._prefill_task = asyncio.get_running_loop().create_task(
                 self._prefill_server.serve()
             )
             logger.info("ExternalPrefillServer started")
@@ -725,7 +728,13 @@ class EngineCore:
 
         RUNNING → REQUESTED: reject new requests, let in-flight finish.
         REQUESTED → SHUTTING_DOWN: after drain timeout, force-stop remaining.
+
+        Idempotent: safe to call multiple times or before start().
         """
+        # Guard: already stopped or never started
+        if not self._running and self._loop_task is None:
+            return
+
         # Phase 1: REQUESTED — signal graceful shutdown, reject new requests
         self._shutdown_requested = True
 
@@ -804,12 +813,19 @@ class EngineCore:
             except Exception:
                 logger.debug("composition scheduler shutdown failed", exc_info=True)
 
-        # Stop external prefill server
+        # Stop external prefill server and its background task
         if self._prefill_server is not None:
             try:
                 await self._prefill_server.stop()
             except Exception:
                 logger.debug("prefill server stop failed", exc_info=True)
+        if self._prefill_task is not None and not self._prefill_task.done():
+            self._prefill_task.cancel()
+            try:
+                await self._prefill_task
+            except asyncio.CancelledError:
+                pass
+            self._prefill_task = None
 
         # Stop KV transfer server
         if self._kv_transfer_server is not None:
@@ -819,12 +835,12 @@ class EngineCore:
                 logger.debug("kv transfer server stop failed", exc_info=True)
 
         # Signal all active collectors with sentinel
-        for collector in self._output_collectors.values():
+        for collector in list(self._output_collectors.values()):
             try:
                 collector.put(None)
             except Exception:
                 logger.debug("collector sentinel put failed", exc_info=True)
-        for event in self._finished_events.values():
+        for event in list(self._finished_events.values()):
             event.set()
 
         # Clean up all running requests (inflight prefix sharing, etc.)
@@ -833,6 +849,12 @@ class EngineCore:
         self._output_collectors.clear()
         self._stream_states.clear()
         self._finished_events.clear()
+        self._request_timestamps.clear()
+        self._request_lora_adapters.clear()
+        self._kv_prefix_hashes.clear()
+        if self._request_dedup is not None:
+            self._dedup_hashes.clear()
+            self._dedup_shadows.clear()
 
         self.scheduler.shutdown()
 

@@ -1,5 +1,6 @@
 """Tests for request tracking and cancellation."""
 import asyncio
+import os
 import pytest
 
 
@@ -94,25 +95,36 @@ class TestGetRequestTracker:
 
 
 class TestCancelEndpoint:
+    @staticmethod
+    def _make_mock_request(headers: dict | None = None):
+        """Create a mock FastAPI Request object for testing."""
+        from unittest.mock import MagicMock
+        mock_req = MagicMock()
+        mock_req.headers = headers or {}
+        return mock_req
+
     def test_cancel_specific_request(self):
+        # Ensure no auth token is set so _check_auth passes
+        os.environ.pop("YUNSHU_AUTH_TOKEN", None)
         from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
         from yunshu_engine.request_tracker import get_request_tracker
         tracker = get_request_tracker()
         gen = tracker.register("test-cancel-1", "test")
         result = asyncio.run(
-            cancel_generation(CancelRequest(request_id="test-cancel-1"))
+            cancel_generation(CancelRequest(request_id="test-cancel-1"), self._make_mock_request())
         )
         assert result["status"] == "cancelled"
         tracker.unregister("test-cancel-1")
 
     def test_cancel_all_requests(self):
+        os.environ.pop("YUNSHU_AUTH_TOKEN", None)
         from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
         from yunshu_engine.request_tracker import get_request_tracker
         tracker = get_request_tracker()
         tracker.register("test-cancel-all-1")
         tracker.register("test-cancel-all-2")
         result = asyncio.run(
-            cancel_generation(CancelRequest(cancel_all=True))
+            cancel_generation(CancelRequest(cancel_all=True), self._make_mock_request())
         )
         assert result["status"] == "cancelled"
         assert result["count"] >= 2
@@ -120,19 +132,65 @@ class TestCancelEndpoint:
         tracker.unregister("test-cancel-all-2")
 
     def test_cancel_not_found(self):
+        os.environ.pop("YUNSHU_AUTH_TOKEN", None)
         from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
-                cancel_generation(CancelRequest(request_id="nonexistent"))
+                cancel_generation(CancelRequest(request_id="nonexistent"), self._make_mock_request())
             )
         assert exc_info.value.status_code == 404
 
     def test_cancel_no_params(self):
+        os.environ.pop("YUNSHU_AUTH_TOKEN", None)
         from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
-                cancel_generation(CancelRequest())
+                cancel_generation(CancelRequest(), self._make_mock_request())
             )
         assert exc_info.value.status_code == 400
+
+    def test_cancel_rejects_missing_auth(self):
+        """Cancel endpoint should require auth when YUNSHU_AUTH_TOKEN is set."""
+        # Must also ensure YUNSHU_AUTH_DISABLED is not set (conftest sets it by default)
+        old_disabled = os.environ.pop("YUNSHU_AUTH_DISABLED", None)
+        os.environ["YUNSHU_AUTH_TOKEN"] = "test-secret-key"
+        try:
+            from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
+            from fastapi import HTTPException
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(
+                    cancel_generation(
+                        CancelRequest(request_id="anything"),
+                        self._make_mock_request(),
+                    )
+                )
+            assert exc_info.value.status_code == 401
+        finally:
+            os.environ.pop("YUNSHU_AUTH_TOKEN", None)
+            if old_disabled is not None:
+                os.environ["YUNSHU_AUTH_DISABLED"] = old_disabled
+
+    def test_cancel_accepts_valid_auth(self):
+        """Cancel endpoint should accept requests with valid auth token."""
+        # Must also ensure YUNSHU_AUTH_DISABLED is not set
+        old_disabled = os.environ.pop("YUNSHU_AUTH_DISABLED", None)
+        os.environ["YUNSHU_AUTH_TOKEN"] = "test-secret-key"
+        try:
+            from yunshu_gateway.routers.cancel import cancel_generation, CancelRequest
+            from yunshu_engine.request_tracker import get_request_tracker
+            tracker = get_request_tracker()
+            tracker.register("test-cancel-auth-1")
+            result = asyncio.run(
+                cancel_generation(
+                    CancelRequest(request_id="test-cancel-auth-1"),
+                    self._make_mock_request({"Authorization": "Bearer test-secret-key"}),
+                )
+            )
+            assert result["status"] == "cancelled"
+            tracker.unregister("test-cancel-auth-1")
+        finally:
+            os.environ.pop("YUNSHU_AUTH_TOKEN", None)
+            if old_disabled is not None:
+                os.environ["YUNSHU_AUTH_DISABLED"] = old_disabled

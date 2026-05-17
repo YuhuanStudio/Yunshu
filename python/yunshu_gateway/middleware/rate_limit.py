@@ -113,10 +113,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Memory-safe: LRU eviction prevents unbounded bucket growth from unique-IP
     DoS. Buckets also expire after a configurable TTL of inactivity.
 
+    IP source security:
+    - By default, uses the direct client IP (ignores X-Forwarded-For).
+    - Set YUNSHU_TRUSTED_PROXIES to a comma-separated list of trusted proxy IPs.
+      Only when the direct client is a trusted proxy will X-Forwarded-For be used.
+    - Without trusted proxies configured, X-Forwarded-For is ignored to prevent
+      spoofing attacks where clients inject arbitrary IPs to bypass rate limits.
+
     Configured via environment:
       YUNSHU_RATE_LIMIT_RPM — requests per minute (default: 120)
       YUNSHU_RATE_LIMIT_MAX_BUCKETS — max per-IP buckets (default: 10000)
       YUNSHU_RATE_LIMIT_TTL_SECONDS — bucket TTL in seconds (default: 600)
+      YUNSHU_TRUSTED_PROXIES — comma-separated trusted proxy IPs (default: none)
     """
 
     PUBLIC_PATHS = {"/health", "/health/ready", "/health/live", "/docs", "/openapi.json", "/redoc", "/metrics"}
@@ -135,6 +143,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         )
         self._key_buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
         self._max_key_buckets = max_buckets
+        # Parse trusted proxies for X-Forwarded-For validation
+        trusted_raw = os.environ.get("YUNSHU_TRUSTED_PROXIES", "").strip()
+        self._trusted_proxies: set[str] = (
+            {ip.strip() for ip in trusted_raw.split(",") if ip.strip()}
+            if trusted_raw else set()
+        )
 
     def _get_key_bucket(self, key_name: str, rpm: int) -> _TokenBucket:
         if key_name in self._key_buckets:
@@ -170,11 +184,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Fall back to per-IP rate limiting (LRU + TTL safe)
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            client_ip = forwarded.split(",")[0].strip()
-        else:
-            client_ip = request.client.host if request.client else "unknown"
+        # Security: only trust X-Forwarded-For when the direct client is a
+        # configured trusted proxy. This prevents header spoofing attacks.
+        direct_ip = request.client.host if request.client else "unknown"
+        client_ip = direct_ip
+        if self._trusted_proxies and direct_ip in self._trusted_proxies:
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
         bucket = self._bucket_cache.get_or_create(client_ip)
 
         if not bucket.consume():

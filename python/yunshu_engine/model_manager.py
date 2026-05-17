@@ -414,10 +414,16 @@ class ModelManager:
         - Stop engine, clear reference BEFORE settle barrier
         - gc.collect() + sync + clear_cache on MLX executor
         - Poll mx.get_active_memory() until Metal buffers released
+
+        Idempotent: safe to call on already-unloaded or non-existent models.
         """
         entry = self._entries.get(model_id)
         if entry is None or not entry.is_loaded:
             return
+
+        # Mark as not loaded early to prevent concurrent get_engine() from
+        # seeing an inconsistent state (loading=False, is_loaded=True, engine=None)
+        entry.is_loaded = False
 
         pre_unload_active = mx.get_active_memory()
 
@@ -439,7 +445,8 @@ class ModelManager:
                 logger.warning(f"Error stopping engine for {model_id}: {e}")
             entry.engine = None
 
-        entry.is_loaded = False
+        # Clear load_error so a subsequent load gets a clean slate
+        entry.load_error = None
 
         # Force GC + clear cache on MLX executor (oMLX #85, #300)
         gc.collect()

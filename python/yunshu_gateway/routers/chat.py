@@ -231,11 +231,14 @@ class ChatCompletionRequest(BaseModel):
     grammar: Optional[dict] = None  # {"type": "json", "schema": {...}} or {"type": "regex", "pattern": "..."}
     lora_adapter: Optional[str] = None  # LoRA adapter ID to apply for this request
     logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
+    timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
 
     @model_validator(mode="after")
     def validate_request(self):
         if self.stop and len(self.stop) > 16:
             raise ValueError("stop: maximum 16 stop sequences")
+        if self.stop_token_ids and len(self.stop_token_ids) > 16:
+            raise ValueError("stop_token_ids: maximum 16 stop token IDs")
         return self
 
 

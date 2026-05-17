@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 _engine: Engine | None = None
 _model_manager: ModelManager | None = None
 _dp_router = None  # DataParallelRouter for multi-replica routing
+_engine_start_lock = None  # asyncio.Lock, created lazily in _get_engine_start_lock()
+
+
+def _get_engine_start_lock():
+    """Get or create the asyncio.Lock for engine startup.
+
+    Must be called from an async context (has a running event loop).
+    """
+    global _engine_start_lock
+    import asyncio
+    if _engine_start_lock is None:
+        _engine_start_lock = asyncio.Lock()
+    return _engine_start_lock
 
 
 def get_engine() -> Engine | None:
@@ -195,16 +208,34 @@ async def get_engine_for_model(model_id: str) -> Engine:
 
 
 async def _ensure_engine_started(engine) -> None:
-    """Ensure an engine is started, handling both Engine and BatchedEngine."""
+    """Ensure an engine is started, handling both Engine and BatchedEngine.
+
+    Uses an asyncio.Lock to prevent concurrent start() calls when multiple
+    requests arrive for the same unloaded model simultaneously.
+    """
+    needs_start = False
     if hasattr(engine, 'is_loaded') and not engine.is_loaded:
-        if hasattr(engine, 'start'):
-            await engine.start()
+        needs_start = True
     elif hasattr(engine, '_running') and not engine._running:
-        if hasattr(engine, 'start'):
-            await engine.start()
+        needs_start = True
     elif hasattr(engine, 'is_running') and callable(engine.is_running):
         if not engine.is_running():
-            await engine.start()
+            needs_start = True
+
+    if not needs_start:
+        return
+
+    async with _get_engine_start_lock():
+        # Double-check after acquiring lock
+        if hasattr(engine, 'is_loaded') and not engine.is_loaded:
+            if hasattr(engine, 'start'):
+                await engine.start()
+        elif hasattr(engine, '_running') and not engine._running:
+            if hasattr(engine, 'start'):
+                await engine.start()
+        elif hasattr(engine, 'is_running') and callable(engine.is_running):
+            if not engine.is_running():
+                await engine.start()
 
 
 def init_data_parallel(strategy: str = "least_loaded"):

@@ -263,6 +263,16 @@ class RealtimeSession:
             conversation={"id": self.conversation.conversation_id, "items": []},
         ))
 
+        # Warn if no engine is available — prevents silent failures on response.create
+        if self._resolve_engine() is None:
+            await self.send_event(_event(
+                RealtimeEvent.ERROR,
+                error={
+                    "message": "No inference engine is loaded. Requests will fail until a model is loaded.",
+                    "type": "server_error",
+                },
+            ))
+
         try:
             while True:
                 raw = await self.ws.receive_text()

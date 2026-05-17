@@ -453,39 +453,23 @@ class BatchedEngine:
                 kwargs["quantization"] = qconfig
             return load_model(self.model_name, **kwargs)
 
-        def _warmup():
-            import mlx.core as mx
-            from mlx_lm.generate import generate_step
-            from mlx_lm.sample_utils import make_sampler
-            ids = mx.array(self._tokenizer.encode("Hi"))
-            sampler = make_sampler(temp=0.0)
-            for _ in generate_step(ids, self._model, max_tokens=1, sampler=sampler):
-                break
-            mx.synchronize()
-            mx.clear_cache()
-
-        def _model_warmup():
-            """Full warmup using ModelWarmupManager (compile + KV cache prefill)."""
-            from .model_optimizations import ModelWarmupManager
-            mgr = ModelWarmupManager()
-            model_type = "generic"
-            name_lower = self.model_name.lower()
-            for family in ("qwen", "llama", "deepseek", "gemma"):
-                if family in name_lower:
-                    model_type = family
-                    break
-            use_compile = self._use_compile and not self._compiled
-            result = mgr.warmup(self._model, model_type=model_type, compile=use_compile)
-            logger.info(
-                f"Model warmup: {result.warmup_time_s:.3f}s, "
-                f"compile={result.compile_cached}, prompts={result.prompts_warmed}"
-            )
-            # Also do basic warmup to ensure MX compile cache is populated
-            _warmup()
-
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
         self._loaded = True
 
+        try:
+            await self._finish_start(loop, executor)
+        except Exception:
+            # Partial init: clean up model that was loaded but subsystems failed
+            logger.error("BatchedEngine start failed after model load, cleaning up", exc_info=True)
+            await self.stop()
+            raise
+
+    async def _finish_start(self, loop, executor) -> None:
+        """Complete engine initialization after model loading.
+
+        Split from start() so that if this phase fails, the already-loaded
+        model can be properly cleaned up via stop().
+        """
         # Apply model-specific patches (DeepSeek MLA, Qwen 3.5 YARN, Gemma softcap)
         try:
             from .model_patches import apply_model_patches
@@ -563,6 +547,36 @@ class BatchedEngine:
 
         # Warmup: ModelWarmupManager handles compile caching + KV prefill
         # The basic generate_step warmup is wrapped inside _model_warmup()
+        def _warmup():
+            import mlx.core as mx
+            from mlx_lm.generate import generate_step
+            from mlx_lm.sample_utils import make_sampler
+            ids = mx.array(self._tokenizer.encode("Hi"))
+            sampler = make_sampler(temp=0.0)
+            for _ in generate_step(ids, self._model, max_tokens=1, sampler=sampler):
+                break
+            mx.synchronize()
+            mx.clear_cache()
+
+        def _model_warmup():
+            """Full warmup using ModelWarmupManager (compile + KV cache prefill)."""
+            from .model_optimizations import ModelWarmupManager
+            mgr = ModelWarmupManager()
+            model_type = "generic"
+            name_lower = self.model_name.lower()
+            for family in ("qwen", "llama", "deepseek", "gemma"):
+                if family in name_lower:
+                    model_type = family
+                    break
+            use_compile = self._use_compile and not self._compiled
+            result = mgr.warmup(self._model, model_type=model_type, compile=use_compile)
+            logger.info(
+                f"Model warmup: {result.warmup_time_s:.3f}s, "
+                f"compile={result.compile_cached}, prompts={result.prompts_warmed}"
+            )
+            # Also do basic warmup to ensure MX compile cache is populated
+            _warmup()
+
         await loop.run_in_executor(executor, _model_warmup)
 
         # mx.compile() for Metal kernel caching (SGLang CUDA Graphs equivalent)
@@ -1000,43 +1014,77 @@ class BatchedEngine:
             logger.info("Wired N-gram proposer into scheduler batch path")
 
     async def stop(self) -> None:
-        """Stop engine and release resources."""
+        """Stop engine and release resources.
+
+        Idempotent: safe to call multiple times or before start().
+        Order of shutdown:
+        1. EngineCore (stops engine loop, drains in-flight requests)
+        2. Subsystem cleanup (KV caches, spec decoder, LoRA, Metal kernels)
+        3. Model/tokenizer release + GC + MLX cache clear
+        """
+        if not self._loaded and self._engine_core is None:
+            return  # Never started or already stopped
+
+        # 1. Stop EngineCore (continuous batching loop, drain in-flight)
         if self._engine_core is not None:
             await self._engine_core.stop()
             self._engine_core = None
-        # Release KV prefix cache (holds MLX array refs) and flush SSD tier
+
+        # 2. Release KV prefix cache (holds MLX array refs) and flush SSD tier
         if self._kv_prefix_cache is not None:
             self._kv_prefix_cache.close()
             self._kv_prefix_cache.clear()
+            self._kv_prefix_cache = None
+
         # Prompt cache: clear on shutdown (in-memory only; for cross-restart
         # persistence use SSD cache via YUNSHU_SSD_CACHE=1)
         if self._prompt_cache is not None:
             self._prompt_cache.invalidate_all()
+            self._prompt_cache = None
+
+        # Speculative decoding subsystems
         self._spec_decoder = None
         self._ngram_proposer = None
         self._adaptive_spec = None
         self._mtp_decoder = None
         self._mtp_strategy = None
+        self._medusa_proposer = None
+        self._medusa_strategy = None
         self._warm_prompts = None
         self._thinking_store = None
         self._metal_kernel_manager = None
+
         # Unregister DeltaNet inversion hooks to restore original class methods
         if self._deltanet_inverter is not None:
             self._deltanet_inverter.unregister_hooks()
             self._deltanet_inverter = None
+
         # Stop KV transfer client (close network connections)
+        # NOTE: must await directly, not run_until_complete (we are already
+        # inside an async context so run_until_complete would crash).
         if self._kv_transfer_client is not None:
             try:
-                import asyncio
-                asyncio.get_event_loop().run_until_complete(
-                    self._kv_transfer_client.stop()
-                )
+                await self._kv_transfer_client.stop()
             except Exception:
                 logger.debug("KV transfer client stop failed", exc_info=True)
             self._kv_transfer_client = None
+
+        # Stop LoRA adapter manager (unload all adapters, release weights)
+        if self._lora_manager is not None:
+            try:
+                from .lora_manager import get_lora_manager
+                lora_mgr = get_lora_manager()
+                if lora_mgr is not None:
+                    lora_mgr.unload_all()
+            except Exception:
+                logger.debug("LoRA manager cleanup failed", exc_info=True)
+            self._lora_manager = None
+
+        # 3. Release model + tokenizer refs, then GC + clear MLX cache
         self._model = None
         self._tokenizer = None
         self._loaded = False
+        self._compiled = False
 
         import gc
         gc.collect()

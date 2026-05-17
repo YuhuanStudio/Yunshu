@@ -48,7 +48,7 @@ class ResponsesRequest(BaseModel):
     model: str
     input: str | list[ResponseInputText]
     instructions: Optional[str] = None
-    max_output_tokens: int = 2048
+    max_output_tokens: int = Field(default=2048, ge=1, le=131072)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)

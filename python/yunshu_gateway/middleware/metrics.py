@@ -102,21 +102,28 @@ class _Metrics:
                         f'yunshu_request_latency_seconds_count{{endpoint="{endpoint}"}} {len(latencies)}'
                     )
 
+        # Snapshot counters under lock to avoid torn reads during concurrent updates
+        with self._lock:
+            prompt_tok = self.prompt_tokens
+            completion_tok = self.completion_tokens
+            inf_count = self.inference_count
+            err_count = self.error_count
+
         lines.append("")
         lines.append("# HELP yunshu_tokens_total Token counts")
         lines.append("# TYPE yunshu_tokens_total counter")
-        lines.append(f'yunshu_tokens_total{{type="prompt"}} {self.prompt_tokens}')
-        lines.append(f'yunshu_tokens_total{{type="completion"}} {self.completion_tokens}')
+        lines.append(f'yunshu_tokens_total{{type="prompt"}} {prompt_tok}')
+        lines.append(f'yunshu_tokens_total{{type="completion"}} {completion_tok}')
 
         lines.append("")
         lines.append("# HELP yunshu_inference_count Total inference operations")
         lines.append("# TYPE yunshu_inference_count counter")
-        lines.append(f"yunshu_inference_count {self.inference_count}")
+        lines.append(f"yunshu_inference_count {inf_count}")
 
         lines.append("")
         lines.append("# HELP yunshu_error_count Total errors")
         lines.append("# TYPE yunshu_error_count counter")
-        lines.append(f"yunshu_error_count {self.error_count}")
+        lines.append(f"yunshu_error_count {err_count}")
 
         # GPU memory gauges
         try:

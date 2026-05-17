@@ -18,7 +18,7 @@ from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine, get_engine_for_model
 from .chat import _apply_lora_adapter, _release_lora_adapter
@@ -37,36 +37,44 @@ class StreamOptions(BaseModel):
 class CompletionRequest(BaseModel):
     model: str
     prompt: str | list[int]
-    max_tokens: int = 128
-    temperature: float = 0.7
-    top_p: float = 1.0
-    top_k: int = 0
-    min_p: float = 0.0
-    repetition_penalty: float = 1.0
-    frequency_penalty: float = 0.0
-    presence_penalty: float = 0.0
+    max_tokens: int = Field(default=128, ge=1, le=131072)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    top_k: int = Field(default=0, ge=0)
+    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
+    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: Optional[dict[int, float]] = None
     stream: bool = False
     stream_options: Optional[StreamOptions] = None
     stop: Optional[list[str]] = None
     stop_token_ids: Optional[list[int]] = None
     echo: bool = False
-    logprobs: int = 0
-    top_logprobs: Optional[int] = None
+    logprobs: int = Field(default=0, ge=0, le=20)
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
     seed: Optional[int] = None
     spec_decode: bool = False
     enable_thinking: Optional[bool] = None
-    thinking_budget: Optional[int] = None
+    thinking_budget: Optional[int] = Field(default=None, ge=1, le=32768)
     response_format: Optional[dict] = None
     reasoning_effort: Optional[str] = None
-    xtc_probability: float = 0.0
-    xtc_threshold: float = 0.0
+    xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     lora_adapter: Optional[str] = None
     grammar: Optional[dict] = None  # {"type": "regex", "pattern": "..."} etc.
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=128)
     logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if self.stop and len(self.stop) > 16:
+            raise ValueError("stop: maximum 16 stop sequences")
+        if self.stop_token_ids and len(self.stop_token_ids) > 16:
+            raise ValueError("stop_token_ids: maximum 16 stop token IDs")
+        return self
 
 
 @router.post("/completions", response_model=None)
