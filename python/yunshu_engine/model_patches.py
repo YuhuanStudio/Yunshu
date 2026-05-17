@@ -24,7 +24,7 @@ def apply_model_patches(model: Any, tokenizer: Any, model_name: str) -> list[str
 
     if "deepseek" in name_lower:
         patches.extend(_apply_deepseek_patches(model, tokenizer))
-    elif "qwen" in name_lower and ("3.5" in name_lower or "3-5" in name_lower):
+    elif "qwen" in name_lower and ("3.5" in name_lower or "3-5" in name_lower or "3_5" in name_lower):
         patches.extend(_apply_qwen35_patches(model, tokenizer))
     elif "gemma" in name_lower:
         patches.extend(_apply_gemma_patches(model, tokenizer))

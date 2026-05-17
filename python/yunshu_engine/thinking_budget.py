@@ -49,6 +49,7 @@ class ThinkingBudgetProcessor:
     def __init__(self, config: ThinkingBudgetConfig | None = None) -> None:
         self.config = config or ThinkingBudgetConfig()
         self._thinking_token_count: int = 0
+        self._segment_start_count: int = 0
         self._in_thinking: bool = False
         self._budget_exceeded: bool = False
 
@@ -89,8 +90,9 @@ class ThinkingBudgetProcessor:
         self._in_thinking = current_state == 'reasoning'
 
         if self._in_thinking:
+            # Track per-segment count for multi-segment reasoning awareness
             if not was_thinking:
-                self._thinking_token_count = 0
+                self._segment_start_count = self._thinking_token_count
             self._thinking_token_count += 1
 
             if self._thinking_token_count > self.config.max_thinking_tokens:
@@ -131,6 +133,7 @@ class ThinkingBudgetProcessor:
     def reset(self) -> None:
         """Reset for a new request."""
         self._thinking_token_count = 0
+        self._segment_start_count = 0
         self._in_thinking = False
         self._budget_exceeded = False
 

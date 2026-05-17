@@ -76,10 +76,10 @@ def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse DeepSeek-style tool calls with special token markers."""
     results = []
-    pattern = r'･tool_callBegin･function･tool_sep･(\w+)\s*```json\s*(\{.*?\})\s*```'
+    pattern = r'･tool_callBegin･function･tool_sep･([\w.\-]+)\s*```json\s*(\{.*?\})\s*```'
     # Also try the visible form
     if not re.search(pattern, text):
-        pattern = r'function\s*:\s*(\w+)\s*```json\s*(\{.*?\})\s*```'
+        pattern = r'function\s*:\s*([\w.\-]+)\s*```json\s*(\{.*?\})\s*```'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
         try:
@@ -94,7 +94,7 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse GLM-style tool calls: <|tool_call_block_begin|>name\n```json\n{...}\n```"""
     results = []
-    pattern = r'<\|tool_call_block_begin\|>\s*(\w+)\s*```(?:json)?\s*(\{.*?\})\s*```'
+    pattern = r'<\|tool_call_block_begin\|>\s*([\w.\-]+)\s*```(?:json)?\s*(\{.*?\})\s*```'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
         try:
@@ -109,7 +109,7 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_llama_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Llama-style: [TOOL_CALL] name arguments_json [/TOOL_CALL]"""
     results = []
-    pattern = r'\[TOOL_CALL\]\s*(\w+)\s*(\{.*?\})\s*\[/TOOL_CALL\]'
+    pattern = r'\[TOOL_CALL\]\s*([\w.\-]+)\s*(\{.*?\})\s*\[/TOOL_CALL\]'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
         try:

@@ -89,6 +89,13 @@ class TestQwen35Patches:
         patches = apply_model_patches(model, None, "Qwen2.5-7B")
         assert len(patches) == 0
 
+    def test_qwen35_underscore_variant(self):
+        """Bug fix: 'qwen3_5' was not matched — only '3.5' and '3-5' were."""
+        config = FakeConfig(rope_scaling={"type": "yarn", "factor": 4.0})
+        model = FakeModel(config)
+        patches = apply_model_patches(model, None, "Qwen3_5-7B")
+        assert "qwen35_yarn_rope" in patches
+
 
 class TestGemmaPatches:
     def test_attn_softcap(self):

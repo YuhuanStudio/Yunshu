@@ -74,8 +74,8 @@ class HermesToolCallParser(ToolCallParser):
 # ── Format 2: Qwen/Llama XML <function=name> ──
 
 class QwenXMLToolCallParser(ToolCallParser):
-    _FUNC_RE = re.compile(r"<function\s*=\s*(\w+)>(.*?)</function>", re.DOTALL)
-    _PARAM_RE = re.compile(r"<parameter\s*=\s*(\w+)>(.*?)</parameter>", re.DOTALL)
+    _FUNC_RE = re.compile(r"<function\s*=\s*([\w.\-]+)>(.*?)</function>", re.DOTALL)
+    _PARAM_RE = re.compile(r"<parameter\s*=\s*([\w.\-]+)>(.*?)</parameter>", re.DOTALL)
 
     def parse(self, text: str) -> list[ToolCall]:
         calls = []
@@ -100,20 +100,45 @@ class QwenXMLToolCallParser(ToolCallParser):
 # ── Format 3: Direct JSON ──
 
 class DirectJSONToolCallParser(ToolCallParser):
-    _RE = re.compile(r'\{[^{}]*?"name"\s*:\s*"[^"]+?"[^{}]*?\}', re.DOTALL)
+    """Parses bare JSON objects containing a 'name' key.
+
+    Uses brace counting instead of a naive regex so that nested JSON
+    objects in ``arguments`` are captured correctly.  The previous
+    ``[^{}]*`` pattern could never match real tool calls whose
+    ``arguments`` value is a dict (it contains ``{``/``}``).
+    """
+
+    # Quick pre-filter: must contain "name" key somewhere
+    _HAS_NAME = re.compile(r'"name"\s*:', re.DOTALL)
 
     def parse(self, text: str) -> list[ToolCall]:
         calls = []
-        for m in self._RE.finditer(text):
-            try:
-                data = json.loads(m.group(0))
-                if isinstance(data, dict) and "name" in data:
-                    calls.append(ToolCall(
-                        name=data["name"],
-                        arguments=_sanitize_arguments(data.get("arguments", data.get("parameters", {}))),
-                    ))
-            except json.JSONDecodeError:
-                continue
+        if not self._HAS_NAME.search(text):
+            return calls
+
+        depth = 0
+        start = -1
+        for i, ch in enumerate(text):
+            if ch == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    candidate = text[start:i + 1]
+                    try:
+                        data = json.loads(candidate)
+                        if isinstance(data, dict) and "name" in data:
+                            calls.append(ToolCall(
+                                name=data["name"],
+                                arguments=_sanitize_arguments(
+                                    data.get("arguments", data.get("parameters", {}))
+                                ),
+                            ))
+                    except json.JSONDecodeError:
+                        pass
+                    start = -1
         return calls
 
     def format_name(self) -> str:
@@ -159,13 +184,27 @@ class MistralToolCallParser(ToolCallParser):
 # ── Format 6: ChatML [TOOL_CALLS] ──
 
 class ChatMLToolCallParser(ToolCallParser):
-    _RE = re.compile(r'\[TOOL_CALLS\]\s*(\[.*?\])', re.DOTALL)
+    """Parses Mistral-style ``[TOOL_CALLS] [...]`` blocks.
+
+    Uses bracket counting instead of ``\\[.*?\\]`` so that tool call
+    arguments containing nested arrays (e.g. ``\"tags\": [\"a\"]``) are
+    captured correctly.
+    """
+
+    _PREFIX_RE = re.compile(r'\[TOOL_CALLS\]\s*', re.DOTALL)
 
     def parse(self, text: str) -> list[ToolCall]:
         calls = []
-        for m in self._RE.finditer(text):
+        for m in self._PREFIX_RE.finditer(text):
+            rest = text[m.end():]
+            # Extract the JSON array using bracket counting
+            arr_text = self._extract_array(rest)
+            if arr_text is None:
+                continue
             try:
-                arr = json.loads(m.group(1))
+                arr = json.loads(arr_text)
+                if not isinstance(arr, list):
+                    continue
                 for item in arr:
                     if isinstance(item, dict):
                         name = item.get("name", item.get("function", {}).get("name", ""))
@@ -177,6 +216,21 @@ class ChatMLToolCallParser(ToolCallParser):
             except (json.JSONDecodeError, KeyError):
                 continue
         return calls
+
+    @staticmethod
+    def _extract_array(text: str) -> str | None:
+        """Extract a JSON array from the start of *text* using bracket counting."""
+        if not text or text[0] != '[':
+            return None
+        depth = 0
+        for i, ch in enumerate(text):
+            if ch == '[':
+                depth += 1
+            elif ch == ']':
+                depth -= 1
+                if depth == 0:
+                    return text[:i + 1]
+        return None
 
     def format_name(self) -> str:
         return "chatml"

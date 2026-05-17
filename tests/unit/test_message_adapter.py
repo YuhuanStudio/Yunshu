@@ -197,4 +197,41 @@ class TestRegisterMessageAdapter:
         _REGISTRY.pop("custom", None)
 
 
+class TestGemma4MultiPartContent:
+    """Bug fix: multi-part content (list format) was str()-repr'd."""
+
+    def test_multipart_content_extracted(self):
+        adapter = Gemma4MessageAdapter()
+        msgs = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "World"},
+            ]},
+        ]
+        result = adapter.adapt(msgs)
+        assert len(result) == 1
+        assert "Hello" in result[0]["content"]
+        assert "World" in result[0]["content"]
+        # Must NOT contain list repr garbage like "[{'type':"
+        assert "[{'type':" not in result[0]["content"]
+
+    def test_none_content_handled(self):
+        adapter = Gemma4MessageAdapter()
+        msgs = [
+            {"role": "user", "content": None},
+        ]
+        result = adapter.adapt(msgs)
+        assert result[0]["content"] == ""
+
+    def test_string_content_unchanged(self):
+        adapter = Gemma4MessageAdapter()
+        msgs = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "Hello"},
+        ]
+        result = adapter.adapt(msgs)
+        assert result[0]["content"] == "Be helpful.\n\nHello"
+
+
 from yunshu_engine.message_adapter import _REGISTRY

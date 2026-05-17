@@ -58,10 +58,13 @@ class MeshTopology:
         for existing in self._nodes:
             if existing.node_id == node.node_id:
                 return existing.rank
-        if node.rank >= 0:
+        if node.rank >= 0 and node.rank not in self._rank_map:
             rank = node.rank
         else:
+            # Assign the first unused rank (handles sparse rank maps).
             rank = len(self._nodes)
+            while rank in self._rank_map:
+                rank += 1
         node.rank = rank
         self._nodes.append(node)
         self._rank_map[rank] = node

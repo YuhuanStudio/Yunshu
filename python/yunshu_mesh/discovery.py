@@ -41,6 +41,7 @@ class NodeDiscovery:
         self._udp_socket: Optional[socket.socket] = None
         self._udp_thread: Optional[threading.Thread] = None
         self._use_zeroconf = False
+        self._lock = threading.Lock()
 
     def start(self, local_node: MeshNode) -> None:
         self._local_node = local_node
@@ -185,20 +186,24 @@ class NodeDiscovery:
         logger.info("UDP broadcast discovery started")
 
     def _add_discovered(self, node: MeshNode) -> None:
-        is_new = node.node_id not in self._discovered_nodes
-        self._discovered_nodes[node.node_id] = node
+        with self._lock:
+            is_new = node.node_id not in self._discovered_nodes
+            self._discovered_nodes[node.node_id] = node
+            callbacks = list(self._on_discovered_callbacks)
         if is_new:
             logger.info(f"Discovered node: {node.hostname} ({node.ip}:{node.port})")
-            for cb in self._on_discovered_callbacks:
+            for cb in callbacks:
                 try:
                     cb(node)
                 except Exception:
                     logger.debug("on_discovered callback failed", exc_info=True)
 
     def _remove_discovered(self, node_id: str) -> None:
-        node = self._discovered_nodes.pop(node_id, None)
+        with self._lock:
+            node = self._discovered_nodes.pop(node_id, None)
+            callbacks = list(self._on_lost_callbacks)
         if node:
-            for cb in self._on_lost_callbacks:
+            for cb in callbacks:
                 try:
                     cb(node)
                 except Exception:
@@ -228,4 +233,5 @@ class NodeDiscovery:
         self._on_lost_callbacks.append(callback)
 
     def get_discovered_nodes(self) -> list[MeshNode]:
-        return list(self._discovered_nodes.values())
+        with self._lock:
+            return list(self._discovered_nodes.values())

@@ -147,10 +147,10 @@ class InferenceBudgetManager:
         """Register a budget for a new request."""
         budget = InferenceBudget(
             request_id=request_id,
-            max_tokens=max_tokens or self._default_max_tokens,
+            max_tokens=self._default_max_tokens if max_tokens is None else max_tokens,
             prompt_tokens=prompt_tokens,
             thinking_budget=thinking_budget,
-            max_wall_time_ms=max_wall_time_ms or self._default_wall_time,
+            max_wall_time_ms=self._default_wall_time if max_wall_time_ms is None else max_wall_time_ms,
             cost_per_1k_tokens=cost_per_1k_tokens,
             max_cost=max_cost,
             priority=priority,

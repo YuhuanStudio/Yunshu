@@ -545,31 +545,32 @@ class KVSynchronizationService:
         with self._lock:
             entry = self._local_hashes.get(request.prefix_hash)
 
-        if entry is None:
-            with self._lock:
+            if entry is None:
                 self._stats.transfers_declined += 1
-            return TransferResponse(
-                request_id=request.request_id,
-                status=TransferStatus.FAILED,
-                error=f"Prefix hash 0x{request.prefix_hash:x} not found locally",
-            )
+                return TransferResponse(
+                    request_id=request.request_id,
+                    status=TransferStatus.FAILED,
+                    error=f"Prefix hash 0x{request.prefix_hash:x} not found locally",
+                )
 
-        # Check model compatibility
-        if (
-            request.model_name
-            and entry.model_name
-            and request.model_name != entry.model_name
-        ):
-            with self._lock:
+            # Check model compatibility (inside lock to avoid TOCTOU)
+            if (
+                request.model_name
+                and entry.model_name
+                and request.model_name != entry.model_name
+            ):
                 self._stats.transfers_declined += 1
-            return TransferResponse(
-                request_id=request.request_id,
-                status=TransferStatus.FAILED,
-                error=(
-                    f"Model mismatch: request={request.model_name}, "
-                    f"cached={entry.model_name}"
-                ),
-            )
+                return TransferResponse(
+                    request_id=request.request_id,
+                    status=TransferStatus.FAILED,
+                    error=(
+                        f"Model mismatch: request={request.model_name}, "
+                        f"cached={entry.model_name}"
+                    ),
+                )
+
+            # Entry found and compatible — proceed outside lock to call
+            # the block provider (which may do I/O or acquire its own locks).
 
         # Get blocks via provider callback
         blocks: list[KVBlockData] = []
@@ -608,29 +609,34 @@ class KVSynchronizationService:
         Returns:
             Number of blocks loaded into local cache.
         """
+        # Snapshot data under lock, then call consumer outside lock to
+        # avoid deadlock if the callback tries to acquire _lock.
         with self._lock:
             if response.status != TransferStatus.COMPLETED:
                 self._stats.transfers_failed += 1
                 self._transfer_history[response.request_id] = response
                 return 0
 
-            loaded = 0
-            if self._block_consumer is not None and response.blocks:
-                try:
-                    model_name = ""
-                    # Try to get model from the original request
-                    req = self._pending_transfers.get(response.request_id)
-                    if req:
-                        model_name = req.model_name
-                    loaded = self._block_consumer(response.blocks, model_name)
-                except Exception as e:
-                    logger.debug("Block consumer failed: %s", e, exc_info=True)
+            blocks = response.blocks
+            model_name = ""
+            req = self._pending_transfers.get(response.request_id)
+            if req:
+                model_name = req.model_name
+            consumer = self._block_consumer
 
-            total_bytes = sum(b.data_size for b in response.blocks)
+            total_bytes = sum(b.data_size for b in blocks)
             self._stats.bytes_received += total_bytes
 
             self._transfer_history[response.request_id] = response
             self._pending_transfers.pop(response.request_id, None)
+
+        # Call consumer outside lock — it may do I/O or acquire other locks.
+        loaded = 0
+        if consumer is not None and blocks:
+            try:
+                loaded = consumer(blocks, model_name)
+            except Exception as e:
+                logger.debug("Block consumer failed: %s", e, exc_info=True)
 
         return loaded
 
@@ -916,11 +922,12 @@ class MeshHealthMonitor:
             if status is None:
                 return
 
-            # If the node was healthy (direct call from external code or
-            # tests), count this as a failure.  If already unhealthy
-            # (called from _run_health_check after threshold counting),
-            # consecutive_failures was already set.
-            if status.healthy:
+            # If the node was healthy and consecutive_failures hasn't
+            # already been incremented by _run_health_check (i.e., the
+            # count is below threshold), count this as a new failure.
+            # When _run_health_check has already pushed consecutive_failures
+            # to >= threshold, we must NOT increment again (double-count).
+            if status.healthy and status.consecutive_failures < self._failure_threshold:
                 status.consecutive_failures += 1
 
             status.healthy = False
@@ -930,12 +937,13 @@ class MeshHealthMonitor:
             if node:
                 node.state = MeshNodeState.OFFLINE
 
-        # Record event
-        event = RebalanceEvent(
-            event_type="node_failure",
-            node_id=node_id,
-        )
-        self._rebalance_events.append(event)
+        # Record event (append is atomic for CPython list, but use lock for
+        # consistency with get_rebalance_history which reads the list).
+        with self._lock:
+            self._rebalance_events.append(RebalanceEvent(
+                event_type="node_failure",
+                node_id=node_id,
+            ))
 
         # Fire callbacks (outside lock)
         for cb in self._on_node_failure_callbacks:
@@ -969,11 +977,11 @@ class MeshHealthMonitor:
                 status.consecutive_failures = 0
 
         # Record event
-        event = RebalanceEvent(
-            event_type="node_join",
-            node_id=node_id,
-        )
-        self._rebalance_events.append(event)
+        with self._lock:
+            self._rebalance_events.append(RebalanceEvent(
+                event_type="node_join",
+                node_id=node_id,
+            ))
 
         # Fire callbacks (outside lock)
         for cb in self._on_node_join_callbacks:
@@ -1101,7 +1109,9 @@ class MeshHealthMonitor:
 
         For each timed-out healthy node, increments its consecutive_failures
         counter.  When the counter reaches the failure threshold, triggers
-        failover via on_node_failure.
+        failover via on_node_failure.  on_node_failure detects that the node
+        was already counted by checking consecutive_failures >= threshold
+        and avoids double-counting.
         """
         timed_out = self._detect_failures()
         for node_id in timed_out:
@@ -1152,11 +1162,12 @@ class MeshHealthMonitor:
 
     def get_rebalance_history(self) -> list[dict]:
         """Return history of rebalance events."""
-        return [
-            {
-                "event_type": e.event_type,
-                "node_id": e.node_id,
-                "timestamp": e.timestamp,
-            }
-            for e in self._rebalance_events
-        ]
+        with self._lock:
+            return [
+                {
+                    "event_type": e.event_type,
+                    "node_id": e.node_id,
+                    "timestamp": e.timestamp,
+                }
+                for e in self._rebalance_events
+            ]

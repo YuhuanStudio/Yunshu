@@ -77,6 +77,23 @@ class Gemma4MessageAdapter(MessageAdapter):
     - Tool calls as function_call blocks in assistant messages
     """
 
+    @staticmethod
+    def _extract_text(content) -> str:
+        """Extract plain text from content, handling list-format multi-part."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+                elif isinstance(part, str):
+                    parts.append(part)
+            return "\n".join(parts)
+        return str(content)
+
     def adapt(self, messages: list[dict]) -> list[dict]:
         adapted = []
         system_prefix = ""
@@ -84,7 +101,7 @@ class Gemma4MessageAdapter(MessageAdapter):
 
         for msg in messages:
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = self._extract_text(msg.get("content", ""))
 
             if role == "system":
                 system_prefix = content

@@ -53,15 +53,16 @@ class TestThinkingBudgetProcessor:
         assert proc.thinking_tokens_used == 0
         assert proc.is_budget_exceeded is False
 
-    def test_transition_from_normal_to_reasoning_resets_count(self):
+    def test_transition_from_normal_to_reasoning_accumulates_count(self):
         proc = ThinkingBudgetProcessor(ThinkingBudgetConfig(max_thinking_tokens=5))
         proc.process_token("reasoning")
         proc.process_token("reasoning")
         proc.process_token("normal")
         assert proc.thinking_tokens_used == 2
-        # Re-entering reasoning resets count
+        # Re-entering reasoning continues accumulating total count
+        # (budget applies across ALL thinking segments, not per-segment)
         result = proc.process_token("reasoning")
-        assert result['thinking_tokens_used'] == 1
+        assert result['thinking_tokens_used'] == 3
 
     def test_get_stats(self):
         proc = ThinkingBudgetProcessor(ThinkingBudgetConfig(max_thinking_tokens=100))

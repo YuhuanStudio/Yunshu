@@ -198,26 +198,28 @@ class RequestDeduplicator:
         del self._entries[oldest_hash]
 
     def get_entry(self, content_hash: str) -> DeduplicationEntry | None:
-        return self._entries.get(content_hash)
+        with self._lock:
+            return self._entries.get(content_hash)
 
     def get_stats(self) -> dict:
-        active = sum(1 for e in self._entries.values() if not e.is_completed)
-        avg_fan_out = (
-            sum(e.fan_out for e in self._entries.values())
-            / len(self._entries)
-            if self._entries
-            else 0.0
-        )
-        return {
-            "active_entries": active,
-            "total_entries": len(self._entries),
-            "total_deduplicated": self._total_deduplicated,
-            "total_saved_requests": self._total_saved_requests,
-            "total_inferences": self._total_inferences,
-            "avg_fan_out": round(avg_fan_out, 2),
-            "dedup_rate": (
-                self._total_deduplicated / max(self._total_inferences, 1)
-            ),
-            "max_fan_out": self._max_fan_out,
-            "window_ms": self._window_ms,
-        }
+        with self._lock:
+            active = sum(1 for e in self._entries.values() if not e.is_completed)
+            avg_fan_out = (
+                sum(e.fan_out for e in self._entries.values())
+                / len(self._entries)
+                if self._entries
+                else 0.0
+            )
+            return {
+                "active_entries": active,
+                "total_entries": len(self._entries),
+                "total_deduplicated": self._total_deduplicated,
+                "total_saved_requests": self._total_saved_requests,
+                "total_inferences": self._total_inferences,
+                "avg_fan_out": round(avg_fan_out, 2),
+                "dedup_rate": (
+                    self._total_deduplicated / max(self._total_inferences, 1)
+                ),
+                "max_fan_out": self._max_fan_out,
+                "window_ms": self._window_ms,
+            }

@@ -125,7 +125,86 @@ class TestParseToolCallsFactory:
         assert len(calls) == 0
 
 
-class TestCleanToolMarkup:
+class TestDirectJSONToolCallParser:
+    def test_nested_arguments(self):
+        """Bug fix: DirectJSON regex [^{}]* could never match dict arguments."""
+        from yunshu_engine.tool_call_parser import DirectJSONToolCallParser
+        parser = DirectJSONToolCallParser()
+        calls = parser.parse('{"name": "get_weather", "arguments": {"city": "Taipei"}}')
+        assert len(calls) == 1
+        assert calls[0].name == "get_weather"
+        args = json.loads(calls[0].arguments)
+        assert args["city"] == "Taipei"
+
+    def test_deeply_nested_arguments(self):
+        from yunshu_engine.tool_call_parser import DirectJSONToolCallParser
+        parser = DirectJSONToolCallParser()
+        calls = parser.parse('{"name": "search", "arguments": {"filter": {"type": "pdf", "tags": ["a","b"]}}}')
+        assert len(calls) == 1
+        assert calls[0].name == "search"
+
+    def test_multiple_json_objects(self):
+        from yunshu_engine.tool_call_parser import DirectJSONToolCallParser
+        parser = DirectJSONToolCallParser()
+        text = '{"name": "f1", "arguments": {"x": 1}} and {"name": "f2", "arguments": {"y": 2}}'
+        calls = parser.parse(text)
+        assert len(calls) == 2
+        assert calls[0].name == "f1"
+        assert calls[1].name == "f2"
+
+    def test_name_only_no_arguments(self):
+        from yunshu_engine.tool_call_parser import DirectJSONToolCallParser
+        parser = DirectJSONToolCallParser()
+        calls = parser.parse('{"name": "simple"}')
+        assert len(calls) == 1
+        assert calls[0].name == "simple"
+
+    def test_format_name(self):
+        from yunshu_engine.tool_call_parser import DirectJSONToolCallParser
+        assert DirectJSONToolCallParser().format_name() == "direct_json"
+
+
+class TestChatMLToolCallParserNested:
+    def test_nested_array_in_arguments(self):
+        """Bug fix: ChatML [.*?] stopped at first ] inside argument arrays."""
+        from yunshu_engine.tool_call_parser import ChatMLToolCallParser
+        parser = ChatMLToolCallParser()
+        calls = parser.parse('[TOOL_CALLS] [{"name": "search", "arguments": {"tags": ["a", "b"]}}]')
+        assert len(calls) == 1
+        assert calls[0].name == "search"
+        args = json.loads(calls[0].arguments)
+        assert args["tags"] == ["a", "b"]
+
+    def test_multiple_calls_with_nested_args(self):
+        from yunshu_engine.tool_call_parser import ChatMLToolCallParser
+        parser = ChatMLToolCallParser()
+        text = '[TOOL_CALLS] [{"name": "f1", "arguments": {"items": [1,2]}}, {"name": "f2", "arguments": {"x": 1}}]'
+        calls = parser.parse(text)
+        assert len(calls) == 2
+
+    def test_format_name(self):
+        from yunshu_engine.tool_call_parser import ChatMLToolCallParser
+        assert ChatMLToolCallParser().format_name() == "chatml"
+
+
+class TestQwenXMLToolCallParserExtended:
+    def test_function_name_with_dot(self):
+        """Bug fix: \\w+ rejected function names with dots/dashes."""
+        from yunshu_engine.tool_call_parser import QwenXMLToolCallParser
+        parser = QwenXMLToolCallParser()
+        calls = parser.parse('<function=tools.search>{"query": "test"}</function>')
+        assert len(calls) == 1
+        assert calls[0].name == "tools.search"
+
+    def test_function_name_with_dash(self):
+        from yunshu_engine.tool_call_parser import QwenXMLToolCallParser
+        parser = QwenXMLToolCallParser()
+        calls = parser.parse('<function=my-func>{"x": 1}</function>')
+        assert len(calls) == 1
+        assert calls[0].name == "my-func"
+
+
+
     def test_clean_hermes(self):
         from yunshu_engine.tool_call_parser import clean_tool_markup
         text = 'before <tool_call/>{"name": "f"}</tool_call/> after'

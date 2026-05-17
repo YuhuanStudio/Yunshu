@@ -421,6 +421,15 @@ class FaultRecoveryManager:
         self, request_id: str, error: Exception
     ) -> RecoveryResult:
         """Retry from last checkpoint."""
+        # Check checkpoint availability BEFORE consuming a retry slot
+        state = self._checkpoints.load(request_id)
+        if state is None:
+            return RecoveryResult(
+                strategy=RecoveryStrategy.RETRY,
+                success=False,
+                error_message="No checkpoint available for retry",
+            )
+
         with self._lock:
             retries = self._retry_counts.get(request_id, 0)
             if retries >= self._max_retries:
@@ -430,14 +439,6 @@ class FaultRecoveryManager:
                     error_message=f"Max retries ({self._max_retries}) exceeded",
                 )
             self._retry_counts[request_id] = retries + 1
-
-        state = self._checkpoints.load(request_id)
-        if state is None:
-            return RecoveryResult(
-                strategy=RecoveryStrategy.RETRY,
-                success=False,
-                error_message="No checkpoint available for retry",
-            )
 
         with self._lock:
             self._strategy_stats[RecoveryStrategy.RETRY.value]["successes"] += 1

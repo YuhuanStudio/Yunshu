@@ -41,6 +41,7 @@ class RequestLifecycleState:
     phase: RequestPhase = RequestPhase.QUEUED
     # Timing
     created_at: float = field(default_factory=time.monotonic)
+    last_active_at: float = 0.0  # Updated on retry; used for timeout check
     queued_at: float = 0.0
     prefill_start: float = 0.0
     prefill_end: float = 0.0
@@ -276,6 +277,7 @@ class RequestLifecycleOrchestrator:
             metadata=metadata or {},
         )
         state.queued_at = time.monotonic()
+        state.last_active_at = state.created_at
         self._states[request_id] = state
         self._total_requests += 1
         self._model_counts[model]["total"] += 1
@@ -368,8 +370,12 @@ class RequestLifecycleOrchestrator:
                 state.transition(RequestPhase.REJECTED)
             state.transition(RequestPhase.RETRYING)
             state.transition(RequestPhase.QUEUED)
+            # Reset timeout baseline so retried requests get a fresh timeout window
+            state.last_active_at = time.monotonic()
             self._active_count = max(0, self._active_count - 1)
             self._total_retried += 1
+            # Re-queue the request so it can be promoted when a slot opens
+            self._pending_queue.append(request_id)
             return state
 
         # Terminal failure — go to REJECTED then FINISHED
@@ -394,14 +400,20 @@ class RequestLifecycleOrchestrator:
         del self._states[request_id]
 
     def check_timeouts(self) -> list[str]:
-        """Check for timed-out requests and abort them."""
+        """Check for timed-out requests and abort them.
+
+        Uses last_active_at (updated on retry) so retried requests get
+        a fresh timeout window instead of being measured from creation.
+        """
         now = time.monotonic()
         timeout_s = self._default_timeout / 1000.0
         timed_out = []
         for rid, state in list(self._states.items()):
             if state.phase in (RequestPhase.FINISHED, RequestPhase.ABORTED):
                 continue
-            if now - state.created_at > timeout_s:
+            # Use last_active_at for timeout: set at creation and reset on retry
+            reference_time = state.last_active_at or state.created_at
+            if now - reference_time > timeout_s:
                 self.on_request_failed(rid, error="timeout", retryable=False)
                 self._total_timeouts += 1
                 timed_out.append(rid)
