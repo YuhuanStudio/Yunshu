@@ -97,6 +97,21 @@ def _create_prompt_cache_with_quant(model, kv_quant_bits: int | None = None, kv_
     return cache
 
 
+def _wrap_custom_logits_processor(proc):
+    """SAMP-2: Wrap a user-provided logits processor to adapt its signature.
+
+    User-provided processors follow the vLLM convention:
+        (token_ids: list[int], logits: mx.array) -> mx.array
+
+    But mlx-lm's generate_step passes (tokens: mx.array, logits: mx.array).
+    This wrapper converts mx.array tokens → list[int] before calling the user processor.
+    """
+    def _wrapped(tokens_mx, logits):
+        token_ids = [int(t) for t in tokens_mx]
+        return proc(token_ids, logits)
+    return _wrapped
+
+
 def _maybe_quantize_kv_cache(
     prompt_cache: list,
     quantized_kv_start: int,
@@ -1582,9 +1597,11 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_logit_bias_proc)
 
-        # SAMP-2: Include user-provided custom logits processors
+        # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
+        # User processors take (token_ids: list[int], logits: mx.array) -> mx.array
+        # but generate_step passes (tokens: mx.array, logits: mx.array).
         if _custom_logits_processors:
-            logits_processors.extend(_custom_logits_processors)
+            logits_processors.extend(_wrap_custom_logits_processor(p) for p in _custom_logits_processors)
 
         def _run():
             import mlx.core as mx
@@ -2481,9 +2498,9 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_logit_bias_proc)
 
-        # SAMP-2: Include user-provided custom logits processors
+        # SAMP-2: Wrap user-provided custom logits processors to adapt signature.
         if _custom_logits_processors:
-            logits_processors.extend(_custom_logits_processors)
+            logits_processors.extend(_wrap_custom_logits_processor(p) for p in _custom_logits_processors)
 
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.

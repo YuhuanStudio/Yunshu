@@ -65,6 +65,10 @@ class EngineCoreConfig:
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     enable_hybrid_prefill: bool = False
     hybrid_chunk_size: int = 512
+    # Chunked prefill production hardening
+    chunked_prefill_budget: int = 4     # Max chunks per scheduling round (fairness)
+    chunked_prefill_timeout_seconds: float = 30.0  # Per-request prefill timeout (0 = no timeout)
+    chunked_prefill_abort_on_timeout: bool = True  # Abort request on timeout (vs force-feed)
     # Per-request generation timeout (seconds, 0 = no timeout)
     request_timeout_seconds: float = 300.0
 
@@ -119,6 +123,9 @@ class EngineCore:
             use_external_prefill=self.config.use_external_prefill,
             prefill_chunk_size=self.config.prefill_chunk_size,
             request_timeout_seconds=self.config.request_timeout_seconds,
+            chunked_prefill_budget=self.config.chunked_prefill_budget,
+            chunked_prefill_timeout_seconds=self.config.chunked_prefill_timeout_seconds,
+            chunked_prefill_abort_on_timeout=self.config.chunked_prefill_abort_on_timeout,
         )
 
         if self.config.enable_paged_kv:

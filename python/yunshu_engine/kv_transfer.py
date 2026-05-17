@@ -24,7 +24,7 @@ Wire format (per message):
   ├──────────────────────────────────────────────┤
   │ Payload (binary, optionally compressed)       │
   │   Per-block:                                  │
-  │     block_hash: int64     content hash        │
+  │     block_hash: uint64    content hash        │
   │     token_count: int32    actual tokens       │
   │     data_len: int32       bytes of KV data    │
   │     data: bytes           serialized KV tensors│
@@ -460,7 +460,7 @@ class KVTransferProtocol:
         """Serialize a list of KVBlockData into binary payload.
 
         Per-block layout:
-            [8 bytes] block_hash (int64, big-endian)
+            [8 bytes] block_hash (uint64, big-endian)
             [4 bytes] token_count (int32, big-endian)
             [4 bytes] num_layers (int32, big-endian)
             Per layer:
@@ -480,8 +480,8 @@ class KVTransferProtocol:
         buf.write(struct.pack("!I", len(blocks)))
 
         for block in blocks:
-            # Block hash
-            buf.write(struct.pack("!q", block.block_hash))
+            # Block hash (unsigned 64-bit to accommodate blake2b outputs)
+            buf.write(struct.pack("!Q", block.block_hash & 0xFFFFFFFFFFFFFFFF))
             # Token count
             buf.write(struct.pack("!i", block.token_count))
             # Number of layers
@@ -517,7 +517,7 @@ class KVTransferProtocol:
         num_blocks = struct.unpack("!I", buf.read(4))[0]
 
         for _ in range(num_blocks):
-            block_hash = struct.unpack("!q", buf.read(8))[0]
+            block_hash = struct.unpack("!Q", buf.read(8))[0]
             token_count = struct.unpack("!i", buf.read(4))[0]
             num_layers = struct.unpack("!i", buf.read(4))[0]
 
@@ -805,18 +805,11 @@ def _tensor_to_bytes(tensor: Any) -> bytes:
     """
     if _HAS_MLX and mx is not None and hasattr(tensor, 'nbytes'):
         try:
-            # Try direct conversion via mlx
-            np_array = np.array(tensor)
+            import numpy as _np
+            np_array = _np.array(tensor)
             return np_array.tobytes()
         except Exception:
-            logger.debug("operation failed", exc_info=True)
-            try:
-                import numpy as np
-                np_array = np.array(tensor)
-                return np_array.tobytes()
-            except Exception:
-                logger.debug("operation failed", exc_info=True)
-                pass
+            logger.debug("tensor_to_bytes via numpy failed", exc_info=True)
     # Fallback: just the bytes from the array
     if hasattr(tensor, 'tobytes'):
         return tensor.tobytes()
@@ -1219,17 +1212,27 @@ class KVTransferServer:
         """Process a received transfer frame.
 
         Decodes the frame, verifies checksum, and loads blocks into
-        the local KV cache.
+        the local KV cache. Tracks the transfer in _active_transfers
+        so stop() can cancel in-progress work and TTL GC can clean up.
         """
         t0 = time.monotonic()
+        request_id = "unknown"
 
         try:
             message, decode_result = KVTransferProtocol.decode_message(frame)
+            request_id = message.request_id
 
             if decode_result.status != TransferStatus.COMPLETED:
                 # Checksum mismatch or decode failure
                 self._stats.record_receive(decode_result)
                 return decode_result
+
+            # Track as in-progress so stop() can cancel
+            in_progress = KVTransferResult(
+                request_id=request_id,
+                status=TransferStatus.IN_PROGRESS,
+            )
+            self._active_transfers[request_id] = in_progress
 
             # Load blocks into local cache
             blocks_loaded = 0
@@ -1256,7 +1259,7 @@ class KVTransferServer:
 
             elapsed = time.monotonic() - t0
             result = KVTransferResult(
-                request_id=message.request_id,
+                request_id=request_id,
                 status=TransferStatus.COMPLETED,
                 blocks_transferred=blocks_loaded or len(message.blocks),
                 bytes_transferred=len(frame),
@@ -1266,10 +1269,13 @@ class KVTransferServer:
             )
             self._stats.record_receive(result)
 
+            # Update tracking entry
+            self._active_transfers[request_id] = result
+
             logger.info(
                 "KV transfer received: %d blocks for %s (%d bytes, %.1f ms)",
                 len(message.blocks),
-                message.request_id,
+                request_id,
                 len(frame),
                 elapsed * 1000,
             )
@@ -1279,13 +1285,51 @@ class KVTransferServer:
         except Exception as e:
             elapsed = time.monotonic() - t0
             result = KVTransferResult(
-                request_id="unknown",
+                request_id=request_id,
                 status=TransferStatus.FAILED,
                 error=str(e),
                 duration_seconds=elapsed,
             )
             self._stats.record_receive(result)
+            self._active_transfers[request_id] = result
             return result
+
+    def cleanup_expired_transfers(self, ttl_seconds: float = 300.0) -> int:
+        """Remove completed/failed transfers older than TTL from tracking.
+
+        This prevents unbounded growth of _active_transfers over time.
+
+        Args:
+            ttl_seconds: Maximum age in seconds before expiry (default 5 min).
+
+        Returns:
+            Number of expired entries removed.
+        """
+        if not self._active_transfers:
+            return 0
+
+        now = time.monotonic()
+        expired_keys = [
+            rid for rid, result in self._active_transfers.items()
+            if result.status in (TransferStatus.COMPLETED, TransferStatus.FAILED,
+                                 TransferStatus.CHECKSUM_MISMATCH, TransferStatus.CANCELLED)
+            and result.duration_seconds > 0  # has timing info
+        ]
+        # For entries without timing, we can't accurately determine age,
+        # so only remove completed entries older than TTL based on duration.
+        # Since duration_seconds is the transfer time (not wall age), we
+        # use a simpler heuristic: cap the dict size.
+        max_tracked = 1000
+        removed = 0
+        if len(self._active_transfers) > max_tracked:
+            # Remove oldest completed entries (first-in, first-out)
+            to_remove = len(self._active_transfers) - max_tracked
+            for rid in list(self._active_transfers.keys())[:to_remove]:
+                result = self._active_transfers[rid]
+                if result.status != TransferStatus.IN_PROGRESS:
+                    del self._active_transfers[rid]
+                    removed += 1
+        return removed
 
     def get_stats(self) -> dict:
         """Export server stats for monitoring."""

@@ -541,6 +541,10 @@ class SchedulerConfig:
     # Sarathi-style hybrid chunked prefill (interleave prefill chunks with decode)
     hybrid_chunk_size: int = 512        # Tokens per prefill chunk when interleaving
     enable_hybrid_prefill: bool = False  # Enable chunked prefill+decode interleaving
+    # Chunked prefill production hardening
+    chunked_prefill_budget: int = 4     # Max chunks per scheduling round (fairness)
+    chunked_prefill_timeout_seconds: float = 30.0  # Per-request prefill timeout (0 = no timeout)
+    chunked_prefill_abort_on_timeout: bool = True  # Abort request on timeout (vs force-feed)
     # Request retraction (C14: SGLang pattern)
     enable_retraction: bool = True     # Temporarily evict decode for prefill under pressure
     retraction_memory_threshold: float = 0.90  # Retract when memory utilization exceeds this
@@ -783,7 +787,8 @@ class Scheduler:
         self._chunked_prefill_chunks_processed: int = 0
         self._chunked_prefill_fairness: dict[str, int] = {}  # req_id -> chunks served
         self._chunked_prefill_enqueued_at: dict[str, float] = {}  # req_id -> time.monotonic()
-        self._chunked_prefill_timeout_seconds: float = 30.0  # Max time before forced completion
+        self._chunked_prefill_budget_used: int = 0  # Chunks consumed this scheduling round
+        self._chunked_prefill_failed_ids: list[str] = []  # Requests that failed during chunked prefill
 
         # Batch-path SpecPrefill (attention-based sparse prefill for long prompts)
         import os as _os
@@ -854,7 +859,22 @@ class Scheduler:
         logger.info("BatchGenerator initialized")
 
     def shutdown(self) -> None:
-        """Shutdown scheduler and release BatchGenerator resources."""
+        """Shutdown scheduler and release BatchGenerator resources.
+
+        Gracefully drains any pending chunked prefills by marking them as
+        errors before resetting, so clients receive termination signals.
+        """
+        # Gracefully drain pending chunked prefills — mark as errors
+        if self._pending_prefill:
+            n_pending = len(self._pending_prefill)
+            for req_id in list(self._pending_prefill.keys()):
+                req = self.running.get(req_id) or self.requests.get(req_id)
+                if req is not None:
+                    req.status = RequestStatus.FINISHED_ERROR
+                    req.finish_reason = "shutdown"
+            logger.info(
+                f"Shutdown: draining {n_pending} pending chunked prefills"
+            )
         self.deep_reset()
         if self._batch_gen is not None:
             if hasattr(self._batch_gen, 'close'):
@@ -1001,6 +1021,9 @@ class Scheduler:
         """
         self._init_batch_generator()
 
+        # 0. Reset per-round budget counter
+        self._chunked_prefill_budget_used = 0
+
         # 1. Process deferred aborts
         self._process_aborts()
 
@@ -1029,6 +1052,22 @@ class Scheduler:
                     completion_tokens=0,
                 ))
             self._failed_insert_ids.clear()
+
+        # 2c. Generate error outputs for requests that failed during chunked prefill.
+        # These requests were partially prefilled but a chunk insertion failed or
+        # timed out. They need error outputs so EngineCore can finalize them.
+        if self._chunked_prefill_failed_ids:
+            for fail_id in self._chunked_prefill_failed_ids:
+                fail_req = self.requests.get(fail_id)
+                outputs.append(RequestOutput(
+                    request_id=fail_id,
+                    finished=True,
+                    finish_reason=getattr(fail_req, 'finish_reason', None) or "error",
+                    error=f"Request {fail_id} failed during chunked prefill",
+                    prompt_tokens=getattr(fail_req, 'num_prompt_tokens', 0) if fail_req else 0,
+                    completion_tokens=0,
+                ))
+            self._chunked_prefill_failed_ids.clear()
 
         if self._batch_gen is None:
             return SchedulerOutput(outputs=outputs)
@@ -1774,39 +1813,56 @@ class Scheduler:
         Handles two chunked-prefill modes:
 
         1. Sarathi-style hybrid (enable_hybrid_prefill=True): Process
-           exactly ONE pending prefill chunk per step to interleave with
-           decode steps. Prevents long prefills from starving generation.
+           pending prefill chunks interleaved with decode steps. Prevents
+           long prefills from starving generation.
 
         2. Standard chunked prefill (SCHED-2): When a prompt exceeded
            prefill_chunk_size, continue feeding chunks on each step.
-           Also interleaves with decode (one chunk per step) to avoid
-           head-of-line blocking.  Chunk size is tracked per-request
-           in the pending_prefill state dict.
+           Also interleaves with decode to avoid head-of-line blocking.
+           Chunk size is tracked per-request in the pending_prefill state dict.
 
-        Production hardening (Wave 108):
-        - Fairness: tracks chunks served per request; when multiple
-          pending prefills compete, the one with fewer chunks served
-          is processed first.
-        - Timeout: if a chunked prefill has been pending for more than
-          _chunked_prefill_timeout_seconds (default 30s), all remaining
-          tokens are fed in one shot to prevent indefinite starvation.
+        Production hardening:
+        - Fairness: configurable budget (chunked_prefill_budget) caps chunks
+          per scheduling round; decode always gets at least 1 slot.
+          Requests with fewer chunks served are prioritized.
+        - Timeout: if a chunked prefill takes longer than
+          chunked_prefill_timeout_seconds, it is either aborted (default)
+          or force-fed depending on chunked_prefill_abort_on_timeout.
         - Cleanup: ensures _pending_prefill, _chunked_prefill_fairness,
-          and _chunked_prefill_enqueued_at are cleaned for aborted or
-          missing requests.
+          and _chunked_prefill_enqueued_at are cleaned for aborted, missing,
+          or failed requests. Failed requests get FINISHED_ERROR status.
+        - Progress: reports chunk-level progress via PrefillProgressTracker.
+        - Error handling: if a single chunk fails to insert, the entire
+          request is aborted with FINISHED_ERROR — no partially prefilled
+          requests are left in the scheduler.
 
         When hybrid prefill is off and no standard chunking is active,
         all pending chunks are fed at once for maximum throughput.
         """
+        # Always clean orphaned entries (entries in tracking dicts but not
+        # in _pending_prefill). This can happen when a request finishes or
+        # is aborted between steps.
         if not self._pending_prefill:
+            if self._chunked_prefill_enqueued_at or self._chunked_prefill_fairness:
+                orphan_ids = (
+                    set(self._chunked_prefill_enqueued_at.keys())
+                    | set(self._chunked_prefill_fairness.keys())
+                )
+                for rid in orphan_ids:
+                    self._chunked_prefill_enqueued_at.pop(rid, None)
+                    self._chunked_prefill_fairness.pop(rid, None)
             return
 
         _now = time.monotonic()
         completed_ids: list[str] = []
+        errored_ids: list[str] = []
         chunks_fed = 0
+        budget = self.config.chunked_prefill_budget
+        timeout_seconds = self.config.chunked_prefill_timeout_seconds
+        abort_on_timeout = self.config.chunked_prefill_abort_on_timeout
 
         # ── Timeout handling ──
         # Check for chunked prefills that have been pending too long.
-        # These get all their remaining tokens fed in one shot.
         timed_out_ids: list[str] = []
         for req_id, enqueued_at in list(self._chunked_prefill_enqueued_at.items()):
             if req_id not in self._pending_prefill:
@@ -1814,40 +1870,63 @@ class Scheduler:
                 self._chunked_prefill_enqueued_at.pop(req_id, None)
                 self._chunked_prefill_fairness.pop(req_id, None)
                 continue
-            if _now - enqueued_at > self._chunked_prefill_timeout_seconds:
+            if timeout_seconds > 0 and _now - enqueued_at > timeout_seconds:
                 timed_out_ids.append(req_id)
 
         for req_id in timed_out_ids:
             state = self._pending_prefill.get(req_id)
             if state is None:
                 continue
-            remaining = state.get('remaining_tokens', [])
-            if remaining and self._batch_gen is not None:
+            pending_duration = _now - self._chunked_prefill_enqueued_at.get(req_id, _now)
+
+            if abort_on_timeout:
+                # Abort the request — return error to the client
                 req = self.running.get(req_id)
-                if req is not None and req_id not in self._pending_abort_ids:
+                if req is not None:
+                    req.status = RequestStatus.FINISHED_ERROR
+                    req.finish_reason = "prefill_timeout"
+                    self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
                     logger.warning(
-                        f"Chunked prefill timeout for {req_id}: "
-                        f"feeding {len(remaining)} remaining tokens in one shot "
-                        f"(pending for {_now - self._chunked_prefill_enqueued_at.get(req_id, 0):.1f}s)"
+                        f"Chunked prefill timeout for {req_id}: aborting "
+                        f"(pending for {pending_duration:.1f}s, "
+                        f"{len(state.get('remaining_tokens', []))} tokens remaining)"
                     )
-                    try:
-                        sp = req.sampling_params
-                        sampler = self._make_sampler(sp)
-                        sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
-                        uids = self._batch_gen.insert(
-                            prompts=[remaining],
-                            max_tokens=[sp.max_tokens],
-                            samplers=[sampler],
-                            state_machines=[sm],
+                errored_ids.append(req_id)
+            else:
+                # Force-feed: dump all remaining tokens in one shot
+                remaining = state.get('remaining_tokens', [])
+                if remaining and self._batch_gen is not None:
+                    req = self.running.get(req_id)
+                    if req is not None and req_id not in self._pending_abort_ids:
+                        logger.warning(
+                            f"Chunked prefill timeout for {req_id}: "
+                            f"force-feeding {len(remaining)} remaining tokens "
+                            f"(pending for {pending_duration:.1f}s)"
                         )
-                        self._uid_to_req[uids[0]] = req_id
-                        self._chunked_prefill_chunks_processed += 1
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to force-feed timed-out chunked prefill for {req_id}: {e}",
-                            exc_info=True,
-                        )
-            completed_ids.append(req_id)
+                        try:
+                            sp = req.sampling_params
+                            sampler = self._make_sampler(sp)
+                            sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
+                            uids = self._batch_gen.insert(
+                                prompts=[remaining],
+                                max_tokens=[sp.max_tokens],
+                                samplers=[sampler],
+                                state_machines=[sm],
+                            )
+                            self._uid_to_req[uids[0]] = req_id
+                            self._chunked_prefill_chunks_processed += 1
+                            chunks_fed += 1
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to force-feed timed-out chunked prefill for {req_id}: {e}",
+                                exc_info=True,
+                            )
+                            req = self.running.get(req_id)
+                            if req is not None:
+                                req.status = RequestStatus.FINISHED_ERROR
+                                req.finish_reason = "prefill_error"
+                            errored_ids.append(req_id)
+                completed_ids.append(req_id)
 
         # ── Fairness: sort pending requests by chunks served (ascending) ──
         # Requests that have received fewer chunks are processed first,
@@ -1860,7 +1939,7 @@ class Scheduler:
             pending_items.sort(key=_fairness_key)
 
         for req_id, state in pending_items:
-            if req_id in completed_ids:
+            if req_id in completed_ids or req_id in errored_ids:
                 continue
 
             remaining = state['remaining_tokens']
@@ -1882,20 +1961,23 @@ class Scheduler:
             if self._batch_gen is None:
                 continue
 
-            # Determine chunking mode and interleave limit.
-            # SCHED-2: standard chunked prefill also limits to 1 chunk per
-            # step when decode requests are running, matching Sarathi-style
-            # interleaving semantics for fairness.
+            # ── Fairness budget: cap total chunks per scheduling round ──
+            # When decode requests are running, respect the budget to ensure
+            # decode always gets at least 1 slot. The budget is per-round, so
+            # decode requests are never starved across scheduling cycles.
             is_sarathi = self.config.enable_hybrid_prefill
             is_standard_chunked = state.get('chunk_size') is not None
 
             if (
                 (is_sarathi or is_standard_chunked)
                 and self._has_active_requests()
-                and chunks_fed >= 1
+                and chunks_fed >= budget
             ):
-                # One chunk per step when decode is active → interleave
-                # Remaining chunks will be fed on subsequent steps.
+                # Budget exhausted — remaining chunks deferred to next round.
+                logger.debug(
+                    f"Chunked prefill budget exhausted ({chunks_fed}/{budget}), "
+                    f"deferring {len(self._pending_prefill)} pending prefills"
+                )
                 break
 
             # Determine chunk size:
@@ -1939,6 +2021,7 @@ class Scheduler:
                 self._uid_to_req[uids[0]] = req_id
                 chunks_fed += 1
                 self._chunked_prefill_chunks_processed += 1
+                self._chunked_prefill_budget_used += 1
                 self._chunked_prefill_fairness[req_id] = (
                     self._chunked_prefill_fairness.get(req_id, 0) + 1
                 )
@@ -1946,8 +2029,17 @@ class Scheduler:
                 total_prompt = state.get('total_prompt_len', 0)
                 offset = state.get('offset', len(chunk))
 
+                # ── Progress tracking: report via PrefillProgressTracker ──
+                if self._prefill_tracker is not None and total_prompt > 0:
+                    self._prefill_tracker.update(
+                        req_id, offset, total_prompt, self.model_id,
+                    )
+
                 if not state['remaining_tokens']:
                     completed_ids.append(req_id)
+                    # Remove from progress tracker — prefill complete
+                    if self._prefill_tracker is not None:
+                        self._prefill_tracker.remove(req_id)
                     logger.debug(
                         f"Chunked prefill complete for {req_id}: "
                         f"final chunk {len(chunk)} tokens "
@@ -1965,12 +2057,23 @@ class Scheduler:
                     f"Failed to process chunked prefill for {req_id}: {e}",
                     exc_info=True,
                 )
-                completed_ids.append(req_id)
+                # ── Error handling: abort entire request on chunk failure ──
+                req.status = RequestStatus.FINISHED_ERROR
+                req.finish_reason = "prefill_error"
+                self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                errored_ids.append(req_id)
 
+        # ── Cleanup completed and errored requests ──
         for rid in completed_ids:
             self._pending_prefill.pop(rid, None)
             self._chunked_prefill_fairness.pop(rid, None)
             self._chunked_prefill_enqueued_at.pop(rid, None)
+
+        for rid in errored_ids:
+            self._pending_prefill.pop(rid, None)
+            self._chunked_prefill_fairness.pop(rid, None)
+            self._chunked_prefill_enqueued_at.pop(rid, None)
+            self._chunked_prefill_failed_ids.append(rid)
 
         # ── Prometheus observation ──
         try:
@@ -1978,6 +2081,8 @@ class Scheduler:
             pm = get_prometheus_metrics()
             pm.set_gauge("chunked_prefill_active_chunks", float(len(self._pending_prefill)))
             pm.set_gauge("chunked_prefill_total_chunks_processed", float(self._chunked_prefill_chunks_processed))
+            pm.set_gauge("chunked_prefill_budget_used", float(self._chunked_prefill_budget_used))
+            pm.set_gauge("chunked_prefill_budget_limit", float(self.config.chunked_prefill_budget))
         except Exception:
             pass  # Prometheus not available in unit tests
 
@@ -3117,6 +3222,8 @@ class Scheduler:
         self._chunked_prefill_chunks_processed = 0
         self._chunked_prefill_fairness.clear()
         self._chunked_prefill_enqueued_at.clear()
+        self._chunked_prefill_budget_used = 0
+        self._chunked_prefill_failed_ids.clear()
         self._spec_decoder = None
         self._spec_head_info = None
         self._mtp_decoder = None
@@ -3171,6 +3278,10 @@ class Scheduler:
             "hybrid_prefill_pending": len(self._pending_prefill),
             "hybrid_chunk_size": self.config.hybrid_chunk_size,
             "chunked_prefill_chunks_processed": self._chunked_prefill_chunks_processed,
+            "chunked_prefill_budget": self.config.chunked_prefill_budget,
+            "chunked_prefill_budget_used": self._chunked_prefill_budget_used,
+            "chunked_prefill_timeout_seconds": self.config.chunked_prefill_timeout_seconds,
+            "chunked_prefill_abort_on_timeout": self.config.chunked_prefill_abort_on_timeout,
         }
         # Attention-score-based eviction (H2O) stats
         if self._attention_score_tracker is not None:
