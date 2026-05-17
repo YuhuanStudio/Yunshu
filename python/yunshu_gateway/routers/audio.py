@@ -133,8 +133,8 @@ class TTSRequest(BaseModel):
             raise ValueError("model: field is required and cannot be empty")
         if not self.input or not self.input.strip():
             raise ValueError("input: field is required and cannot be empty")
-        if self.response_format not in ("wav", "mp3", "opus", "aac", "flac"):
-            raise ValueError(f"response_format: unsupported format '{self.response_format}'")
+        if self.response_format not in ("wav",):
+            raise ValueError(f"response_format: unsupported format '{self.response_format}'. Only 'wav' is currently supported.")
         return self
 
 
@@ -446,18 +446,6 @@ async def list_voices() -> dict:
     }
 
 
-class VoicePipelineRequest(BaseModel):
-    """Request for the STT → LLM → TTS pipeline."""
-    file: UploadFile = File(...)
-    llm_model: str = ""
-    voice: str | None = None
-    speed: float = 1.0
-    llm_temperature: float = 0.7
-    llm_max_tokens: int = 256
-    system_prompt: str = "You are a helpful voice assistant. Keep responses concise."
-    stream: bool = False
-
-
 @router.post("/audio/voice-pipeline")
 async def voice_pipeline(
     request: Request,
@@ -655,11 +643,27 @@ async def sts_transform(req: STSTransformRequest, request: Request):
 
 
 def _get_sts_engine(request: Request):
-    """Get or create the STS engine."""
+    """Get or create the STS engine.
+
+    Registers a shutdown callback on app.state so the engine is stopped
+    when the FastAPI application shuts down (via lifespan or atexit).
+    """
     from yunshu_engine.sts_engine import STSEngine
     sts = getattr(request.app.state, "sts_engine", None)
     if sts is None:
         sts = STSEngine()
         sts.start()
         request.app.state.sts_engine = sts
+        # Register shutdown hook so the engine is cleaned up on app teardown
+        _prev_shutdown = getattr(request.app.state, "_sts_shutdown_hook", None)
+        if _prev_shutdown is None:
+            async def _shutdown_sts():
+                engine = getattr(request.app.state, "sts_engine", None)
+                if engine is not None:
+                    try:
+                        engine.stop()
+                    except Exception:
+                        logger.debug("STS engine shutdown error", exc_info=True)
+                    request.app.state.sts_engine = None
+            request.app.state._sts_shutdown_hook = _shutdown_sts
     return sts

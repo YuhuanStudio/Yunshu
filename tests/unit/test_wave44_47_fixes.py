@@ -96,11 +96,13 @@ class TestWave45TTSParams:
         assert r.repetition_penalty == 1.2 and r.max_tokens == 2048
 
 class TestWave45AudioFormatValidation:
-    """7. Audio format validation happens before synthesis."""
+    """7. Audio format validation happens at model level (not just endpoint)."""
     def test_invalid_format_detected(self):
+        """mp3 is rejected by the model validator since only wav is supported."""
+        from pydantic import ValidationError
         from yunshu_gateway.routers.audio import TTSRequest
-        r = TTSRequest(model="kokoro", input="Hello", response_format="mp3")
-        assert r.response_format not in ("wav",)
+        with pytest.raises(ValidationError):
+            TTSRequest(model="kokoro", input="Hello", response_format="mp3")
 
 class TestWave45AnthropicRouter:
     """8. Anthropic router forwards top_k and thinking_budget."""

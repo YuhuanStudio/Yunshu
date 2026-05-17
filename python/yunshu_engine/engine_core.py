@@ -1200,17 +1200,17 @@ class EngineCore:
         self._lifecycle_orchestrator.on_request_added(req_id)
 
         # ── Wave 46: KV lifecycle admission ──
+        _block_id = hash(req_id) % (10**9)
         try:
             estimated_kv_bytes = num_prompt_tokens * 2048
-            block_id = hash(req_id) % (10**9)
             self._kv_lifecycle.admit(
-                block_id=block_id,
+                block_id=_block_id,
                 size_bytes=estimated_kv_bytes,
                 prefix_hash="",
             )
             # Register block in migration manager for temperature-based tier management
             from .kv_migration import KVTier
-            self._kv_migration.register_block(block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes)
+            self._kv_migration.register_block(_block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes)
         except Exception:
             logger.debug("kv_lifecycle admit failed", exc_info=True)
 
@@ -1257,11 +1257,11 @@ class EngineCore:
                 except Exception:
                     logger.debug(f"lifecycle cleanup failed in memguard rejection for {req_id}", exc_info=True)
                 try:
-                    self._kv_lifecycle.release(hash(req_id) % (10**9))
+                    self._kv_lifecycle.release(_block_id)
                 except Exception:
                     logger.debug(f"kv_lifecycle release failed in memguard rejection for {req_id}", exc_info=True)
                 try:
-                    self._kv_migration.unregister_block(hash(req_id) % (10**9))
+                    self._kv_migration.unregister_block(_block_id)
                 except Exception:
                     logger.debug(f"kv_migration unregister failed in memguard rejection for {req_id}", exc_info=True)
                 if self._sliding_window_mgr is not None:
@@ -1538,6 +1538,9 @@ class EngineCore:
 
             try:
                 _step_start = time.monotonic()
+                # Cache hardware info once per step (avoid 3+ repeated syscalls per step)
+                _hw_info = None
+                _total_mem_bytes = 0
 
                 # Wave 43: CompositionScheduler pre_step hooks (metrics, memory pressure)
                 if self._composition_scheduler is not None:
@@ -1636,10 +1639,12 @@ class EngineCore:
                 try:
                     _step_wall_ms = (time.monotonic() - _step_start) * 1000
                     queue_depth = len(self.scheduler.waiting)
-                    from .utils.hardware import get_hardware_info as _ghw
-                    _hw = _ghw()
+                    if _hw_info is None:
+                        from .utils.hardware import get_hardware_info as _ghw
+                        _hw_info = _ghw()
+                        _total_mem_bytes = _hw_info.total_memory_bytes
                     import mlx.core as _mx
-                    _mem_avail = 1.0 - (_mx.get_active_memory() / max(_hw.total_memory_bytes, 1))
+                    _mem_avail = 1.0 - (_mx.get_active_memory() / max(_total_mem_bytes, 1))
                     suggested = self._adaptive_batch_sizer.compute_optimal_batch(
                         queue_depth=queue_depth,
                         memory_available=_mem_avail,
@@ -1653,7 +1658,7 @@ class EngineCore:
 
                 # MON-2/4/5: Track monitoring gauges for Prometheus export
                 try:
-                    self._last_step_wall_ms = (time.monotonic() - _step_start) * 1000
+                    self._last_step_wall_ms = _step_wall_ms
                     self._total_step_time_ms += self._last_step_wall_ms
                     self._last_batch_size = len(scheduler_output.outputs) if hasattr(scheduler_output, 'outputs') else 0
                     self._last_queue_depth = len(self.scheduler.waiting)
@@ -1679,9 +1684,6 @@ class EngineCore:
                 continue
 
             # Distribute outputs to per-request collectors
-            # Iterate live dict (abort may insert between steps, we need to see it)
-            active_ids = list(self._output_collectors.keys())
-
             for req_output in scheduler_output.outputs:
                 rid = req_output.request_id
                 collector = self._output_collectors.get(rid)
@@ -1825,7 +1827,7 @@ class EngineCore:
                 # ── Wave 42: Profiler + auto-tuner + fairness ──
                 try:
                     batch_size = len(scheduler_output.outputs)
-                    _step_wall_ms = (time.monotonic() - _step_start) * 1000
+                    _step_wall_ms = self._last_step_wall_ms
                     _tokens_gen = sum(
                         o.completion_tokens for o in scheduler_output.outputs if o.completion_tokens
                     )
@@ -1853,9 +1855,11 @@ class EngineCore:
                     try:
                         import mlx.core as mx
                         active_mem = mx.get_active_memory()
-                        from .utils.hardware import get_hardware_info as _ghw
-                        _hw = _ghw()
-                        _gpu_mem_util = active_mem / max(_hw.total_memory_bytes, 1)
+                        if _hw_info is None:
+                            from .utils.hardware import get_hardware_info as _ghw
+                            _hw_info = _ghw()
+                            _total_mem_bytes = _hw_info.total_memory_bytes
+                        _gpu_mem_util = active_mem / max(_total_mem_bytes, 1)
                     except Exception:
                         pass
 
@@ -1923,9 +1927,11 @@ class EngineCore:
                 try:
                     import mlx.core as mx
                     active_mem = mx.get_active_memory()
-                    from .utils.hardware import get_hardware_info
-                    hw = get_hardware_info()
-                    mem_usage = active_mem / max(hw.total_memory_bytes, 1)
+                    if _hw_info is None:
+                        from .utils.hardware import get_hardware_info
+                        _hw_info = get_hardware_info()
+                        _total_mem_bytes = _hw_info.total_memory_bytes
+                    mem_usage = active_mem / max(_total_mem_bytes, 1)
                     self._adaptive_batch.update_metrics(
                         latency_ms=self._last_step_wall_ms,
                         memory_usage=mem_usage,

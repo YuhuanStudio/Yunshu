@@ -40,6 +40,11 @@ class EmbeddingRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        if self.encoding_format not in _VALID_ENCODING_FORMATS:
+            raise ValueError(
+                f"encoding_format: must be one of {', '.join(sorted(_VALID_ENCODING_FORMATS))}, "
+                f"got '{self.encoding_format}'"
+            )
         return self
 
 

@@ -325,7 +325,6 @@ class VLMEngine:
             self._vision_encoder_factory = VisionEncoderFactory()
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
         self._mm_prefix_hits = 0
         self._mm_prefix_misses = 0
 
@@ -587,8 +586,7 @@ class VLMEngine:
 
             # Resolve reasoning_effort → thinking_budget
             if thinking_budget is None and reasoning_effort is not None:
-                effort_map = {"low": 2048, "medium": 8192, "high": 32768}
-                thinking_budget = effort_map.get(reasoning_effort, 8192)
+                thinking_budget = {"low": 2048, "medium": 8192, "high": 32768}.get(reasoning_effort, 8192)
 
             # logprobs is not supported by VLM engine (mlx_vlm.generate() and
             # model.language_model don't expose per-token logprobs).

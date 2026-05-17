@@ -33,9 +33,31 @@ router = APIRouter(tags=["batch"])
 _BATCH_MAX_ITEMS = int(os.environ.get("YUNSHU_BATCH_MAX_ITEMS", "500"))
 _BATCH_DEFAULT_TIMEOUT = float(os.environ.get("YUNSHU_BATCH_TIMEOUT", "300"))
 _BATCH_MAX_CSV_SIZE = int(os.environ.get("YUNSHU_BATCH_MAX_CSV_SIZE", str(50 * 1024 * 1024)))  # 50 MB
+_BATCH_STORE_TTL = int(os.environ.get("YUNSHU_BATCH_STORE_TTL", "3600"))  # 1 hour default
+_BATCH_STORE_MAX_SIZE = int(os.environ.get("YUNSHU_BATCH_STORE_MAX_SIZE", "1000"))
 
 # In-memory progress tracking
 _batch_store: dict[str, dict] = {}
+
+
+def _cleanup_batch_store() -> None:
+    """Remove expired batch entries and enforce max size.
+
+    Called after each batch creation. TTL-based expiry prevents unbounded
+    memory growth from accumulated batch results.
+    """
+    now = time.time()
+    expired = [
+        bid for bid, info in _batch_store.items()
+        if (now - info.get("started_at", 0)) > _BATCH_STORE_TTL
+    ]
+    for bid in expired:
+        del _batch_store[bid]
+
+    # Enforce max size — evict oldest first
+    while len(_batch_store) > _BATCH_STORE_MAX_SIZE:
+        oldest_id = min(_batch_store, key=lambda k: _batch_store[k].get("started_at", 0))
+        del _batch_store[oldest_id]
 
 
 class BatchItem(BaseModel):
@@ -183,6 +205,9 @@ async def create_batch(req: BatchRequest):
         "results": processed,
         "finished_at": time.time(),
     })
+
+    # Evict expired/oversized batch entries to prevent memory leak
+    _cleanup_batch_store()
 
     return JSONResponse(response_data)
 
@@ -408,8 +433,22 @@ async def _execute_chat_completion(body: dict) -> dict:
         completion_tokens = result.completion_tokens
         finish_reason = result.finish_reason or "stop"
     else:
+        # Non-batched engine: apply chat template to convert messages to string
+        if isinstance(messages, list) and messages:
+            tokenizer = getattr(engine, '_tokenizer', None)
+            if tokenizer and hasattr(tokenizer, 'apply_chat_template'):
+                prompt_text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                )
+            else:
+                # Last resort: concatenate message content
+                prompt_text = "\n".join(
+                    m.get("content", str(m)) for m in messages
+                )
+        else:
+            prompt_text = str(messages)
         state = await engine.generate(
-            prompt=messages,
+            prompt=prompt_text,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,

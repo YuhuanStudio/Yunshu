@@ -23,11 +23,17 @@ from python.yunshu_gateway.routers.disaggregate import (
 
 class TestPrefillRequest:
     def test_defaults(self):
-        req = PrefillRequest()
+        req = PrefillRequest(prompt="hello")
         assert req.model == ""
-        assert req.prompt == ""
+        assert req.prompt == "hello"
         assert req.max_prefill_tokens is None
         assert req.temperature == 0.0
+
+    def test_empty_prompt_rejected(self):
+        """Empty prompt should be rejected by the model validator."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            PrefillRequest()
 
     def test_with_params(self):
         req = PrefillRequest(
@@ -42,15 +48,40 @@ class TestPrefillRequest:
 
 class TestDecodeRequest:
     def test_defaults(self):
-        req = DecodeRequest()
-        assert req.cache_handle == ""
+        req = DecodeRequest(cache_handle="pf-test")
+        assert req.cache_handle == "pf-test"
         assert req.max_tokens == 256
         assert req.stream is False
+
+    def test_empty_handle_rejected(self):
+        """Empty cache_handle should be rejected by the model validator."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            DecodeRequest()
 
     def test_with_handle(self):
         req = DecodeRequest(cache_handle="pf-abc123", max_tokens=512)
         assert req.cache_handle == "pf-abc123"
         assert req.max_tokens == 512
+
+    def test_with_all_params(self):
+        req = DecodeRequest(
+            cache_handle="pf-abc123",
+            max_tokens=512,
+            temperature=0.5,
+            top_p=0.9,
+            top_k=10,
+            min_p=0.05,
+            repetition_penalty=1.2,
+            frequency_penalty=0.1,
+            presence_penalty=0.1,
+            stop=["</s>"],
+            seed=42,
+            enable_thinking=True,
+        )
+        assert req.min_p == 0.05
+        assert req.repetition_penalty == 1.2
+        assert req.enable_thinking is True
 
 
 class TestCacheHandles:

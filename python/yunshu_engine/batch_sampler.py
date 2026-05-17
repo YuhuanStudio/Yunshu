@@ -357,7 +357,11 @@ class BatchSampler:
 
     def _record_op(self, op_name: str, t_start: float) -> None:
         elapsed = (time.perf_counter() - t_start) * 1000
-        self._per_op_times.setdefault(op_name, []).append(elapsed)
+        times = self._per_op_times.setdefault(op_name, [])
+        times.append(elapsed)
+        # Cap at 1000 entries to prevent unbounded memory growth
+        if len(times) > 1000:
+            del times[:500]
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +458,11 @@ class LogitsProcessorBatch:
                 if modified is not None:
                     result[i : i + 1] = modified
             elapsed = (time.perf_counter() - t0) * 1000
-            self._processor_times.setdefault(name, []).append(elapsed)
+            times = self._processor_times.setdefault(name, [])
+            times.append(elapsed)
+            # Cap at 1000 entries to prevent unbounded memory growth
+            if len(times) > 1000:
+                del times[:500]
 
         return result
 

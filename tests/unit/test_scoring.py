@@ -117,10 +117,19 @@ class TestClassifyRequest:
         assert req.model == "test"
         assert len(req.labels) == 3
 
-    def test_classify_request_empty_labels(self):
+    def test_classify_request_empty_labels_rejected(self):
+        """Empty labels should be rejected by the model validator."""
+        from pydantic import ValidationError
         from yunshu_gateway.routers.scoring import ClassifyRequest
-        req = ClassifyRequest(model="test", input="hello")
-        assert req.labels == []
+        with pytest.raises(ValidationError):
+            ClassifyRequest(model="test", input="hello")
+
+    def test_classify_request_single_label_rejected(self):
+        """Single label should be rejected (need at least 2)."""
+        from pydantic import ValidationError
+        from yunshu_gateway.routers.scoring import ClassifyRequest
+        with pytest.raises(ValidationError):
+            ClassifyRequest(model="test", input="hello", labels=["only_one"])
 
 
 class TestClassifyTemperature:

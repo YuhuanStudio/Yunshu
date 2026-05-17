@@ -33,7 +33,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +179,14 @@ class PrefillRequest(BaseModel):
     enable_thinking: bool | None = None
     chunk_size: int | None = None
 
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.prompt:
+            raise ValueError("prompt: field is required and cannot be empty")
+        if isinstance(self.prompt, str) and not self.prompt.strip():
+            raise ValueError("prompt: field is required and cannot be empty")
+        return self
+
 
 class PrefillResponse(BaseModel):
     id: str = ""
@@ -194,9 +202,20 @@ class DecodeRequest(BaseModel):
     temperature: float = 0.7
     top_p: float = 1.0
     top_k: int = 0
+    min_p: float = 0.0
+    repetition_penalty: float = 1.0
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
     stop: list[str] | None = None
     seed: int | None = None
+    enable_thinking: bool | None = None
     stream: bool = False
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.cache_handle or not self.cache_handle.strip():
+            raise ValueError("cache_handle: field is required and cannot be empty")
+        return self
 
 
 class DecodeResponse(BaseModel):
@@ -418,8 +437,13 @@ async def decode(req: DecodeRequest, request: Request):
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
+        min_p=req.min_p,
+        repetition_penalty=req.repetition_penalty,
+        frequency_penalty=req.frequency_penalty,
+        presence_penalty=req.presence_penalty,
         stop=req.stop,
         seed=req.seed,
+        enable_thinking=req.enable_thinking,
     )
 
     # Pass KV cache if the engine supports it (prefill reuse).

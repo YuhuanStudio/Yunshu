@@ -27,6 +27,8 @@ from typing import Any, AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
+_REASONING_EFFORT_MAP = {"low": 2048, "medium": 8192, "high": 32768}
+
 
 @contextmanager
 def _wired_limit_ctx(model):
@@ -42,13 +44,13 @@ def _wired_limit_ctx(model):
         old_limit = mx.set_wired_limit(max_rec) if model_bytes > max_rec * 0.5 else None
     except Exception:
         logger.debug("wired limit setup failed", exc_info=True)
+        mx = None
         old_limit = None
     try:
         yield
     finally:
-        if old_limit is not None:
+        if old_limit is not None and mx is not None:
             try:
-                import mlx.core as mx
                 mx.synchronize()
                 mx.set_wired_limit(old_limit)
             except Exception:
@@ -1305,8 +1307,11 @@ class BatchedEngine:
             return output[0]
         if hasattr(output, 'last_hidden_state'):
             return output.last_hidden_state
-        # Fallback
-        return output[0] if isinstance(output, (tuple, list)) else output
+        # Fallback: try subscript access, otherwise return as-is
+        try:
+            return output[0]
+        except (TypeError, IndexError):
+            return output
 
     def _get_hidden_size(self) -> int:
         """Get the model's hidden dimension size."""
@@ -1382,8 +1387,7 @@ class BatchedEngine:
 
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
-            effort_map = {"low": 2048, "medium": 8192, "high": 32768}
-            thinking_budget = effort_map.get(reasoning_effort, 8192)
+            thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
             if enable_thinking is None:
                 enable_thinking = True
 
@@ -2391,8 +2395,7 @@ class BatchedEngine:
         _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
         # Resolve reasoning_effort → thinking_budget if not explicitly set
         if thinking_budget is None and reasoning_effort is not None:
-            effort_map = {"low": 2048, "medium": 8192, "high": 32768}
-            thinking_budget = effort_map.get(reasoning_effort, 8192)
+            thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
             if enable_thinking is None:
                 enable_thinking = True
 

@@ -49,12 +49,6 @@ async def sleep_server(req: SleepRequest, request: Request):
         engine = get_engine()
         manager = get_model_manager()
 
-        if level >= 0:
-            # L0: pause — stop accepting new requests
-            _sleeping = True
-            os.environ["YUNSHU_SLEEPING"] = "1"
-            logger.info("Server entering L0 sleep (pause)")
-
         if level >= 1 and engine:
             # Save model name before unloading so wake-up can restore it
             _saved_model_name = (
@@ -62,6 +56,15 @@ async def sleep_server(req: SleepRequest, request: Request):
                 or getattr(engine, 'model_name', None)
                 or os.environ.get("YUNSHU_MODEL")
             )
+
+        # Set sleep level BEFORE any fallible operations so the state
+        # is always consistent even if engine.stop() raises.
+        _sleep_level = level
+        _sleeping = True
+        os.environ["YUNSHU_SLEEPING"] = "1"
+        logger.info("Server entering L%d sleep", level)
+
+        if level >= 1 and engine:
             # L1: unload model weights but keep KV cache
             if engine.is_loaded:
                 # Release model weights from GPU
@@ -76,12 +79,6 @@ async def sleep_server(req: SleepRequest, request: Request):
         if level >= 2:
             # L2: unload everything
             if engine:
-                if not _saved_model_name:
-                    _saved_model_name = (
-                        getattr(engine, '_model_name', None)
-                        or getattr(engine, 'model_name', None)
-                        or os.environ.get("YUNSHU_MODEL")
-                    )
                 await engine.stop()
             if manager:
                 for entry in manager.list_entries():
@@ -92,8 +89,13 @@ async def sleep_server(req: SleepRequest, request: Request):
                             logger.debug("failed", exc_info=True)
             logger.info("L2 sleep: all models and caches released")
 
-        _sleep_level = level
         return {"status": "sleeping", "level": level}
+    except Exception:
+        # Roll back sleep state on error so the server isn't stuck
+        _sleeping = False
+        _sleep_level = -1
+        os.environ.pop("YUNSHU_SLEEPING", None)
+        raise
     finally:
         _sleep_transitioning = False
 
@@ -124,12 +126,18 @@ async def wake_up_server(request: Request):
             await engine.start()
             logger.info("Woke up: model reloaded from %s", model_name)
 
+        # Clear sleep state only after all operations succeed
         _sleeping = False
         _sleep_level = -1
         _saved_model_name = None
         os.environ.pop("YUNSHU_SLEEPING", None)
 
         return {"status": "awake", "previous_level": level}
+    except Exception:
+        # If wake-up fails, clear transitioning flag but leave sleeping=True
+        # so the server is still marked as sleeping (it wasn't fully woken up).
+        _sleep_transitioning = False
+        raise
     finally:
         _sleep_transitioning = False
 

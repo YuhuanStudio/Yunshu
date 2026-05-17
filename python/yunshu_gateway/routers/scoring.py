@@ -57,6 +57,12 @@ class ScoreRequest(BaseModel):
             raise ValueError("model: field is required and cannot be empty")
         if self.scoring_type not in _VALID_SCORING_TYPES:
             raise ValueError(f"scoring_type: must be one of {', '.join(sorted(_VALID_SCORING_TYPES))}, got '{self.scoring_type}'")
+        texts_a = self.text_1 if isinstance(self.text_1, list) else [self.text_1]
+        texts_b = self.text_2 if isinstance(self.text_2, list) else [self.text_2]
+        if not texts_a or all(not t.strip() for t in texts_a):
+            raise ValueError("text_1: field is required and cannot be empty")
+        if not texts_b or all(not t.strip() for t in texts_b):
+            raise ValueError("text_2: field is required and cannot be empty")
         return self
 
 
@@ -71,6 +77,10 @@ class RerankRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        if not self.query or not self.query.strip():
+            raise ValueError("query: field is required and cannot be empty")
+        if not self.documents:
+            raise ValueError("documents: field is required and cannot be empty")
         if self.top_n is not None and self.top_n <= 0:
             raise ValueError("top_n: must be a positive integer")
         return self
@@ -85,6 +95,10 @@ class ClassifyRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        if not self.input or not self.input.strip():
+            raise ValueError("input: field is required and cannot be empty")
+        if len(self.labels) < 2:
+            raise ValueError("labels: at least 2 labels required for classification")
         return self
 
 
