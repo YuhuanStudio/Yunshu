@@ -588,7 +588,11 @@ class SlidingWindowKVManager:
 
     def get_stats(self) -> WindowStats:
         """Return sliding window statistics."""
-        total_active = sum(len(b) for b in self._request_blocks.values())
+        # Count only blocks within the sliding window (not all stored blocks).
+        total_active = sum(
+            len(self.get_active_blocks(rid))
+            for rid in self._request_blocks
+        )
         self._stats.active_blocks = total_active
         # Estimate memory saved: evicted blocks * per-block memory
         blocks_evicted = self._stats.total_evictions

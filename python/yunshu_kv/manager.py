@@ -225,7 +225,10 @@ class KVCacheManager:
                             h,
                         )
                         break
-                    new_block.block_hash = h
+                    # Register in prefix cache so future lookups can find it.
+                    # Directly setting block_hash without cache_block() would
+                    # make the block invisible to lookup_hash().
+                    self.block_pool.cache_block(new_block, h)
                     # ref_count is already 1 from allocate(); do NOT touch again
                     _warm_promoted_blocks.add(id(new_block))
                     matched_blocks.append(new_block)

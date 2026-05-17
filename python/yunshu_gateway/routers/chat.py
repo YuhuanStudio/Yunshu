@@ -2029,7 +2029,7 @@ async def _stream_response(
                     last_finish_reason = output.finish_reason
                 _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
-                if output.current_state == "reasoning":
+                if getattr(output, 'current_state', None) == "reasoning":
                     yield format_openai_chunk(
                         completion_id=completion_id,
                         model=req.model,

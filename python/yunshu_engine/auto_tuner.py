@@ -643,7 +643,7 @@ class AutoTuner:
     ) -> None:
         self._params = params or TunableParams()
         self._params.clamp()
-        self._proposer = profiler or PerformanceProfiler()
+        self._profiler = profiler or PerformanceProfiler()
         self._slo_monitor = slo_monitor or SLOMonitor()
         self._regression_threshold = regression_threshold
         # Bounded history — prevents unbounded memory growth on long-running servers.
@@ -659,7 +659,7 @@ class AutoTuner:
 
     @property
     def profiler(self) -> PerformanceProfiler:
-        return self._proposer
+        return self._profiler
 
     @property
     def slo_monitor(self) -> SLOMonitor:
@@ -791,7 +791,7 @@ class AutoTuner:
         Returns:
             List of tuning decisions made.
         """
-        recommendations = self._proposer.get_recommendations()
+        recommendations = self._profiler.get_recommendations()
         decisions: list[TuningDecision] = []
 
         for rec in recommendations:
@@ -810,7 +810,7 @@ class AutoTuner:
         Gets bottleneck analysis from the profiler and applies the
         first recommended change. Returns the list of decisions made.
         """
-        recommendations = self._proposer.get_recommendations()
+        recommendations = self._profiler.get_recommendations()
         if not recommendations:
             return []
 
@@ -855,6 +855,6 @@ class AutoTuner:
                 "improvements": self._improvements,
                 "regressions": self._regressions,
                 "history_size": len(self._history),
-                "profiler_stats": self._proposer.get_stats(),
+                "profiler_stats": self._profiler.get_stats(),
                 "slo_stats": self._slo_monitor.get_stats(),
             }

@@ -3053,21 +3053,21 @@ class BatchedEngine:
                 _unregister_inflight()
                 _finalize_detokenizer()
                 try:
-                    mx.synchronize()
-                    mx.clear_cache()
+                    import mlx.core as _cleanup_mx
+                    _cleanup_mx.synchronize()
+                    _cleanup_mx.clear_cache()
                 except Exception:
                     pass
                 if isinstance(e, MemoryError) or "memory" in str(e).lower():
                     logger.warning(f"OOM during streaming: {e}")
-                    _put(e)
-                else:
-                    _put(e)
+                _put(e)
             except Exception as e:
                 _unregister_inflight()
                 _finalize_detokenizer()
                 try:
-                    mx.synchronize()
-                    mx.clear_cache()
+                    import mlx.core as _cleanup_mx
+                    _cleanup_mx.synchronize()
+                    _cleanup_mx.clear_cache()
                 except Exception:
                     pass
                 _put(e)
@@ -4422,8 +4422,9 @@ class BatchedEngine:
             except Exception as e:
                 logger.error(f"N-gram streaming generation failed: {e}", exc_info=True)
                 try:
-                    mx.synchronize()
-                    mx.clear_cache()
+                    import mlx.core as _cleanup_mx
+                    _cleanup_mx.synchronize()
+                    _cleanup_mx.clear_cache()
                 except Exception:
                     pass
                 _put(e)

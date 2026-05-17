@@ -204,8 +204,14 @@ class BlockPool:
         cached = self._hash_to_block.pop(block.block_hash, None)
         if cached is not None:
             cached.reset_hash()
-            return True
-        return False
+        # Always clear the requesting block's hash, even if the hash
+        # map pointed to a different block (e.g. hash was reassigned
+        # via cache_block after this block was freed).  Leaving a
+        # stale block_hash on an allocated block causes _evict_cached_block
+        # to do redundant work on the next allocation and can mislead
+        # callers that check block_hash for cache membership.
+        block.reset_hash()
+        return cached is not None
 
     def get_cached_blocks(self) -> list[KVBlock]:
         """Return all blocks currently in the prefix cache."""

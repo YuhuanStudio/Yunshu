@@ -239,7 +239,11 @@ class CollectiveOps:
             send_chunk_idx = (rank - step + n) % n
             recv_chunk_idx = (rank - step - 1 + n) % n
 
-            # Avoid deadlock: even ranks send first, odd ranks recv first.
+            # Avoid deadlock in ring: even ranks send first, odd ranks recv
+            # first.  In a ring, rank R sends to (R+1) and rank (R+1) receives
+            # from R.  Since consecutive integers always differ in parity, one
+            # side of every edge sends while the other receives — no circular
+            # wait.
             if rank % 2 == 0:
                 self.send(chunks[send_chunk_idx].astype(mx.float32), send_rank)
                 received = self.recv(
@@ -267,6 +271,7 @@ class CollectiveOps:
             send_chunk_idx = (rank - step + 1 + n) % n
             recv_chunk_idx = (rank - step + n) % n
 
+            # Same even/odd rank pattern as Phase 1.
             if rank % 2 == 0:
                 self.send(chunks[send_chunk_idx].astype(mx.float32), send_rank)
                 received = self.recv(
@@ -381,8 +386,14 @@ class CollectiveOps:
             world = self.size
             dst = (rank + 1) % world
             src = (rank - 1) % world
-            mx.distributed.send(x, dst=dst, **kwargs)
-            return mx.distributed.recv(x.shape, x.dtype, src=src, **kwargs)
+            # Even ranks send first, odd ranks recv first to avoid deadlock.
+            if rank % 2 == 0:
+                mx.distributed.send(x, dst=dst, **kwargs)
+                return mx.distributed.recv(x.shape, x.dtype, src=src, **kwargs)
+            else:
+                received = mx.distributed.recv(x.shape, x.dtype, src=src, **kwargs)
+                mx.distributed.send(x, dst=dst, **kwargs)
+                return received
         else:
             raise ValueError(f"Unknown collective op: {op_name}")
 

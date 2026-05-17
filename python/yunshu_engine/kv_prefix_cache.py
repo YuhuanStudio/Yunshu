@@ -466,9 +466,9 @@ class KVPrefixCache:
                                 best_entry = entry_idx
                                 best_blocks = matched
                             found_at_position = True
-            if not found_at_position and qi > 0:
+            if not found_at_position:
                 # No entry has this hash at the correct chain position,
-                # so no longer prefix can match.
+                # so no longer prefix can match.  Break for all qi >= 0.
                 break
 
         return best_entry, best_blocks
