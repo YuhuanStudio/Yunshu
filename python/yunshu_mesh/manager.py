@@ -152,6 +152,7 @@ class MeshManager:
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+            self._heartbeat_task = None
         self.stop_discovery()
         self._collective.shutdown()
         # C22: Take final snapshot before shutdown
@@ -159,6 +160,7 @@ class MeshManager:
             state = {n.node_id: n.to_dict() for n in self._topology.nodes}
             self._event_log.take_snapshot(state)
             self._event_log.close()
+            self._event_log = None
         logger.info("Mesh manager shut down")
 
     async def _heartbeat_loop(self) -> None:
@@ -297,11 +299,18 @@ class MeshManager:
             info["healthy"] = health.get(n.node_id, True)
             nodes.append(info)
 
+        # When no heartbeat monitor is running, all nodes are assumed
+        # healthy, so count from the node list rather than the empty dict.
+        healthy_count = (
+            sum(1 for h in health.values() if h) if health
+            else len(nodes)
+        )
+
         return {
             "distributed": self.is_distributed,
             "topology": self._topology.topo_type.value,
             "nodes": nodes,
-            "healthy_count": sum(1 for h in health.values() if h),
+            "healthy_count": healthy_count,
             "total_count": len(self._topology.nodes),
         }
 

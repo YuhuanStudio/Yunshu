@@ -42,6 +42,8 @@ class JsonState(Enum):
     OBJECT_OPEN = auto()        # just emitted `{`
     OBJECT_KEY = auto()         # expecting a key string (or `}`)
     OBJECT_KEY_STRING = auto()  # inside a key string
+    OBJECT_KEY_STRING_ESCAPE = auto()  # after \ in a key string
+    OBJECT_KEY_STRING_UNICODE = auto()  # after \u in a key string
     OBJECT_COLON = auto()       # expecting `:` after key
     OBJECT_VALUE = auto()       # expecting a value (depends on schema)
     OBJECT_COMMA = auto()       # expecting `,` or `}`
@@ -56,6 +58,7 @@ class JsonState(Enum):
     NUMBER = auto()             # inside a number
     NUMBER_FRACTION = auto()    # after `.` in a number
     NUMBER_EXPONENT = auto()    # after `e`/`E` in a number
+    NUMBER_EXPONENT_SIGN = auto()  # after `e`/`E`+`+/-` — digit required
     BOOLEAN_TRUE = auto()       # expecting `true`
     BOOLEAN_FALSE = auto()      # expecting `false`
     NULL = auto()               # expecting `null`
@@ -202,9 +205,14 @@ class JsonSchemaConstraint:
             # Expecting key string or close brace
             return {'"', '}', ' ', '\t', '\n', '\r'}
 
-        if state == JsonState.OBJECT_KEY_STRING:
-            # Inside a string key — any char except unescaped `"`
-            return None  # any char allowed
+        if state in (JsonState.OBJECT_KEY_STRING, JsonState.OBJECT_KEY_STRING_ESCAPE,
+                     JsonState.OBJECT_KEY_STRING_UNICODE):
+            if state == JsonState.OBJECT_KEY_STRING:
+                return None  # any char inside key string
+            if state == JsonState.OBJECT_KEY_STRING_ESCAPE:
+                return {'"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'}
+            if state == JsonState.OBJECT_KEY_STRING_UNICODE:
+                return _HEX_CHARS
 
         if state == JsonState.OBJECT_COLON:
             return {':', ' ', '\t', '\n', '\r'}
@@ -235,8 +243,13 @@ class JsonSchemaConstraint:
             # Must provide hex digits
             return _HEX_CHARS
 
-        if state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION, JsonState.NUMBER_EXPONENT):
+        if state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION,
+                     JsonState.NUMBER_EXPONENT):
             return None  # digits and number chars handled separately
+
+        if state == JsonState.NUMBER_EXPONENT_SIGN:
+            # After e+/e-, only digits are valid
+            return _DIGIT_CHARS
 
         if state == JsonState.BOOLEAN_TRUE:
             return {'t'}
@@ -435,8 +448,10 @@ class JsonSchemaConstraint:
 
             if self._state == JsonState.OBJECT_KEY_STRING:
                 if ch == '\\':
-                    # Next char is escaped
-                    i += 2  # skip escape and escaped char
+                    # Transition to escape handling state to properly track
+                    # escapes that span token boundaries.
+                    self._state = JsonState.OBJECT_KEY_STRING_ESCAPE
+                    i += 1
                     continue
                 if ch == '"':
                     # End of key
@@ -447,6 +462,24 @@ class JsonSchemaConstraint:
                     self._state = JsonState.OBJECT_COLON
                     i += 1
                     continue
+                i += 1
+                continue
+
+            if self._state == JsonState.OBJECT_KEY_STRING_ESCAPE:
+                # Consuming the escaped character after \ in an object key
+                if ch == 'u':
+                    self._state = JsonState.OBJECT_KEY_STRING_UNICODE
+                    self._unicode_remaining = 4
+                else:
+                    self._state = JsonState.OBJECT_KEY_STRING
+                i += 1
+                continue
+
+            if self._state == JsonState.OBJECT_KEY_STRING_UNICODE:
+                # Consuming hex digits after \u in an object key
+                self._unicode_remaining -= 1
+                if self._unicode_remaining <= 0:
+                    self._state = JsonState.OBJECT_KEY_STRING
                 i += 1
                 continue
 
@@ -561,16 +594,18 @@ class JsonSchemaConstraint:
                 i += 1
                 continue
 
-            if self._state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION, JsonState.NUMBER_EXPONENT):
+            if self._state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION,
+                               JsonState.NUMBER_EXPONENT, JsonState.NUMBER_EXPONENT_SIGN):
                 # JSON number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
-                # We use three sub-states to track what's valid next:
-                #   NUMBER_FRACTION: after '.', digits required, '.' not allowed
-                #   NUMBER_EXPONENT: after 'e'/'E', optional +/- then digits
+                # We use four sub-states to track what's valid next:
                 #   NUMBER: initial digits, '.' and 'e'/'E' allowed
+                #   NUMBER_FRACTION: after '.', digits required
+                #   NUMBER_EXPONENT: after 'e'/'E', sign or digit required
+                #   NUMBER_EXPONENT_SIGN: after 'e+/e-', digit required
                 if ch in _DIGIT_CHARS:
                     i += 1
-                    # Digits advance to a more specific state if we were in exponent
-                    if self._state == JsonState.NUMBER_EXPONENT:
+                    if self._state == JsonState.NUMBER_EXPONENT_SIGN:
+                        # Got a digit after e+/-, back to exponent body
                         self._state = JsonState.NUMBER_EXPONENT
                     continue
                 if ch == '.' and self._state == JsonState.NUMBER:
@@ -579,20 +614,19 @@ class JsonSchemaConstraint:
                     i += 1
                     continue
                 if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION):
-                    # Exponent part
+                    # Exponent part — require at least one digit after
                     self._state = JsonState.NUMBER_EXPONENT
                     i += 1
                     continue
                 if ch in '+-' and self._state == JsonState.NUMBER_EXPONENT:
-                    # Sign after 'e'/'E' — only allowed once
-                    # After the sign, we stay in NUMBER_EXPONENT but
-                    # need to ensure digits follow. We use a simple
-                    # heuristic: the next char must be a digit.
-                    # Setting a sub-state isn't needed since the generic
-                    # check above handles digits.
+                    # Sign after 'e'/'E' — only allowed once, then digit required
+                    self._state = JsonState.NUMBER_EXPONENT_SIGN
                     i += 1
                     continue
-                # Number ended — transition to completed state
+                # Number ended — transition to completed state.
+                # But NUMBER_EXPONENT / NUMBER_EXPONENT_SIGN without digits is
+                # invalid JSON; we still transition to avoid a stuck state and
+                # let downstream validation catch the issue.
                 self._value_completed()
                 # Re-process the terminating char in the new state
                 # (e.g., ',' or '}' or ']')

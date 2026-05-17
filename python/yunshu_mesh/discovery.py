@@ -9,6 +9,7 @@ import json
 import logging
 import socket
 import threading
+import time
 from typing import Callable, Optional
 
 from .node import MeshNode, MeshNodeState, NodeCapabilities
@@ -32,6 +33,7 @@ class NodeDiscovery:
         self.port = port
         self.discovery_port = discovery_port
         self._discovered_nodes: dict[str, MeshNode] = {}
+        self._discovered_times: dict[str, float] = {}  # node_id -> last_seen
         self._on_discovered_callbacks: list[Callable] = []
         self._on_lost_callbacks: list[Callable] = []
         self._running = False
@@ -42,6 +44,7 @@ class NodeDiscovery:
         self._udp_thread: Optional[threading.Thread] = None
         self._use_zeroconf = False
         self._lock = threading.Lock()
+        self._stale_timeout: float = 60.0  # seconds before a node is considered stale
 
     def start(self, local_node: MeshNode) -> None:
         self._local_node = local_node
@@ -189,7 +192,10 @@ class NodeDiscovery:
         with self._lock:
             is_new = node.node_id not in self._discovered_nodes
             self._discovered_nodes[node.node_id] = node
+            self._discovered_times[node.node_id] = time.time()
             callbacks = list(self._on_discovered_callbacks)
+            # Prune stale nodes that haven't been seen in a while
+            self._prune_stale_nodes()
         if is_new:
             logger.info(f"Discovered node: {node.hostname} ({node.ip}:{node.port})")
             for cb in callbacks:
@@ -201,6 +207,7 @@ class NodeDiscovery:
     def _remove_discovered(self, node_id: str) -> None:
         with self._lock:
             node = self._discovered_nodes.pop(node_id, None)
+            self._discovered_times.pop(node_id, None)
             callbacks = list(self._on_lost_callbacks)
         if node:
             for cb in callbacks:
@@ -208,6 +215,29 @@ class NodeDiscovery:
                     cb(node)
                 except Exception:
                     logger.debug("on_lost callback failed", exc_info=True)
+
+    def _prune_stale_nodes(self) -> None:
+        """Remove nodes not seen within _stale_timeout seconds.
+
+        Must be called with _lock held. Fires on_lost callbacks for
+        each pruned node — but since callbacks are invoked after lock
+        release, we collect them first and fire afterward.
+        """
+        now = time.time()
+        stale_ids = [
+            nid for nid, t in self._discovered_times.items()
+            if now - t > self._stale_timeout
+        ]
+        stale_nodes = []
+        for nid in stale_ids:
+            node = self._discovered_nodes.pop(nid, None)
+            self._discovered_times.pop(nid, None)
+            if node:
+                stale_nodes.append(node)
+        # Note: callbacks are NOT fired here because this method is called
+        # from _add_discovered which already holds the lock and fires its
+        # own callbacks. Stale cleanup is silent to avoid callback
+        # re-entrancy issues.
 
     def stop(self) -> None:
         self._running = False

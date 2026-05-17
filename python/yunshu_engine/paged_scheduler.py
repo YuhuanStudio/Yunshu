@@ -142,11 +142,20 @@ class PagedScheduler(Scheduler):
                         all_tokens = prompt_ids + output_ids
                         if all_tokens:
                             self._kv_manager.cache_completed_blocks(table, all_tokens)
-                            # Insert completed blocks into RadixTree for O(k) prefix matching
+                            # Insert completed blocks into RadixTree for O(k) prefix matching.
+                            # Only pass blocks that have a hash — uncached blocks would
+                            # misalign with the hashes list since they are filtered.
                             blocks = table.get_blocks()
-                            hashes = [b.block_hash for b in blocks if b.block_hash is not None]
-                            if hashes:
-                                self._kv_manager.cache_to_radix_tree(all_tokens, blocks, hashes)
+                            cached_blocks = []
+                            cached_hashes = []
+                            for b in blocks:
+                                if b.block_hash is not None:
+                                    cached_blocks.append(b)
+                                    cached_hashes.append(b.block_hash)
+                            if cached_hashes:
+                                self._kv_manager.cache_to_radix_tree(
+                                    all_tokens, cached_blocks, cached_hashes,
+                                )
                     self._kv_manager.free_request(table)
             else:
                 req = self.requests.get(req_id)
@@ -154,7 +163,14 @@ class PagedScheduler(Scheduler):
                     table = self._block_tables.get(req_id)
                     if table is not None and self._kv_manager is not None:
                         total_tokens = len(req.prompt_token_ids) + req.num_output_tokens
-                        if total_tokens % self._kv_manager.block_size == 0:
+                        # Allocate a new block when the current blocks can no
+                        # longer hold all tokens.  The old check
+                        # (total_tokens % block_size == 0) missed the case
+                        # where the prompt length was an exact multiple of
+                        # block_size and the first decode token spilled into a
+                        # new block that hadn't been allocated yet.
+                        current_capacity = table.num_blocks * self._kv_manager.block_size
+                        if total_tokens > current_capacity:
                             try:
                                 self._kv_manager.allocate_block_for_decode(table)
                             except ValueError:
@@ -168,6 +184,25 @@ class PagedScheduler(Scheduler):
                 if RequestStatus.is_finished(req.status):
                     table = self._block_tables.pop(req_id, None)
                     if table is not None:
+                        # Cache completed blocks into prefix cache and
+                        # radix tree BEFORE freeing, so that future
+                        # requests can reuse the prefix.
+                        prompt_ids = req.prompt_token_ids or []
+                        output_ids = list(req.output_token_ids) if hasattr(req, 'output_token_ids') else []
+                        all_tokens = prompt_ids + output_ids
+                        if all_tokens:
+                            self._kv_manager.cache_completed_blocks(table, all_tokens)
+                            blocks = table.get_blocks()
+                            cached_blocks = []
+                            cached_hashes = []
+                            for b in blocks:
+                                if b.block_hash is not None:
+                                    cached_blocks.append(b)
+                                    cached_hashes.append(b.block_hash)
+                            if cached_hashes:
+                                self._kv_manager.cache_to_radix_tree(
+                                    all_tokens, cached_blocks, cached_hashes,
+                                )
                         self._kv_manager.free_request(table)
         super()._cleanup_finished()
 

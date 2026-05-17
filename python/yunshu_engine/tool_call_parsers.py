@@ -50,20 +50,57 @@ class ToolCallResult:
 
 # ── Format-specific parsers ──
 
+def _extract_brace_block(text: str, start: int) -> str | None:
+    """Extract a brace-balanced block from *text* starting at *start*.
+
+    Handles braces inside JSON strings correctly.
+    """
+    if start >= len(text) or text[start] != '{':
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Qwen-style tool calls: <tool_call/>{"name": "...", "arguments": {...}}</tool_call/>"""
     results = []
-    pattern = r'<tool_call[^>]*>\s*(\{.*?\})\s*</tool_call[^>]*>'
-    for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
+    tag_re = re.compile(r'<tool_call[^>]*>\s*', re.DOTALL)
+    for i, m in enumerate(tag_re.finditer(text)):
+        brace_start = text.find('{', m.end())
+        if brace_start == -1:
+            continue
+        block = _extract_brace_block(text, brace_start)
+        if block is None:
+            continue
         try:
-            data = json.loads(match.group(1))
+            data = json.loads(block)
             name = data.get("name", "")
             args = data.get("arguments", data.get("parameters", {}))
             args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
             results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
         except json.JSONDecodeError:
-            # Fallback regex
-            name_match = re.search(r'"name"\s*:\s*"([^"]+)"', match.group(1))
+            name_match = re.search(r'"name"\s*:\s*"([^"]+)"', block)
             if name_match:
                 results.append(ToolCallResult(
                     id=f"call_{i}",
@@ -76,17 +113,23 @@ def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse DeepSeek-style tool calls with special token markers."""
     results = []
-    pattern = r'･tool_callBegin･function･tool_sep･([\w.\-]+)\s*```json\s*(\{.*?\})\s*```'
+    pattern = r'･tool_callBegin･function･tool_sep･([\w.\-]+)\s*```json\s*'
     # Also try the visible form
     if not re.search(pattern, text):
-        pattern = r'function\s*:\s*([\w.\-]+)\s*```json\s*(\{.*?\})\s*```'
+        pattern = r'function\s*:\s*([\w.\-]+)\s*```json\s*'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
+        brace_start = text.find('{', match.end())
+        if brace_start == -1:
+            continue
+        block = _extract_brace_block(text, brace_start)
+        if block is None:
+            continue
         try:
-            args = json.loads(match.group(2))
+            args = json.loads(block)
             args_str = json.dumps(args, ensure_ascii=False)
         except json.JSONDecodeError:
-            args_str = match.group(2)
+            args_str = block
         results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
     return results
 
@@ -94,14 +137,20 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse GLM-style tool calls: <|tool_call_block_begin|>name\n```json\n{...}\n```"""
     results = []
-    pattern = r'<\|tool_call_block_begin\|>\s*([\w.\-]+)\s*```(?:json)?\s*(\{.*?\})\s*```'
+    pattern = r'<\|tool_call_block_begin\|>\s*([\w.\-]+)\s*```(?:json)?\s*'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
+        brace_start = text.find('{', match.end())
+        if brace_start == -1:
+            continue
+        block = _extract_brace_block(text, brace_start)
+        if block is None:
+            continue
         try:
-            args = json.loads(match.group(2))
+            args = json.loads(block)
             args_str = json.dumps(args, ensure_ascii=False)
         except json.JSONDecodeError:
-            args_str = match.group(2)
+            args_str = block
         results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
     return results
 
@@ -109,26 +158,69 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_llama_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Llama-style: [TOOL_CALL] name arguments_json [/TOOL_CALL]"""
     results = []
-    pattern = r'\[TOOL_CALL\]\s*([\w.\-]+)\s*(\{.*?\})\s*\[/TOOL_CALL\]'
-    for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
+    tag_re = re.compile(r'\[TOOL_CALL\]\s*([\w.\-]+)\s*', re.DOTALL)
+    for i, match in enumerate(tag_re.finditer(text)):
         name = match.group(1)
+        brace_start = text.find('{', match.end())
+        if brace_start == -1:
+            continue
+        block = _extract_brace_block(text, brace_start)
+        if block is None:
+            continue
         try:
-            args = json.loads(match.group(2))
+            args = json.loads(block)
             args_str = json.dumps(args, ensure_ascii=False)
         except json.JSONDecodeError:
-            args_str = match.group(2)
+            args_str = block
         results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
     return results
+
+
+def _extract_bracket_block(text: str, start: int) -> str | None:
+    """Extract a bracket-balanced block from *text* starting at *start*.
+
+    Handles brackets inside JSON strings correctly.
+    """
+    if start >= len(text) or text[start] != '[':
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
 
 
 def parse_mistral_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Mistral-style: [TOOL_CALLS] [{"name": "...", "arguments": {...}}] [/TOOL_CALLS]"""
     results = []
-    pattern = r'\[TOOL_CALLS\]\s*(\[.*?\])\s*\[/TOOL_CALLS\]'
-    match = re.search(pattern, text, re.DOTALL)
-    if match:
+    tag_re = re.compile(r'\[TOOL_CALLS\]\s*', re.DOTALL)
+    for m in tag_re.finditer(text):
+        bracket_start = text.find('[', m.end())
+        if bracket_start == -1:
+            continue
+        block = _extract_bracket_block(text, bracket_start)
+        if block is None:
+            continue
         try:
-            calls = json.loads(match.group(1))
+            calls = json.loads(block)
             if isinstance(calls, list):
                 for i, call in enumerate(calls):
                     name = call.get("name", "")
@@ -143,16 +235,26 @@ def parse_mistral_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
     """Generic fallback: look for JSON objects with 'name' and 'arguments' keys."""
     results = []
-    # Look for function_name(args) pattern
-    pattern = r'"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})'
-    for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
+    # Find "name": then extract the surrounding JSON object
+    name_re = re.compile(r'"name"\s*:\s*"([^"]+)"')
+    for i, match in enumerate(name_re.finditer(text)):
         name = match.group(1)
+        # Walk backward to find the opening brace
+        brace_start = text.rfind('{', 0, match.start())
+        if brace_start == -1:
+            continue
+        block = _extract_brace_block(text, brace_start)
+        if block is None:
+            continue
         try:
-            args = json.loads(match.group(2))
-            args_str = json.dumps(args, ensure_ascii=False)
+            data = json.loads(block)
+            if not isinstance(data, dict) or "name" not in data:
+                continue
+            args = data.get("arguments", data.get("parameters", {}))
+            args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
+            results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
         except json.JSONDecodeError:
-            args_str = match.group(2)
-        results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
+            results.append(ToolCallResult(id=f"call_{i}", name=name, arguments="{}"))
     return results
 
 

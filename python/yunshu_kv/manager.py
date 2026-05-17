@@ -197,8 +197,18 @@ class KVCacheManager:
                 promoted = self._warm_tier.promote(h)
                 if promoted is not None:
                     self._total_hits += 1
-                    # Re-allocate a hot block and copy the promoted data
-                    new_block = self.block_pool.allocate(1)[0]
+                    # Re-allocate a hot block and copy the promoted data.
+                    # If allocation fails the promoted data is already lost
+                    # (promote() pops from the warm store), but we cannot
+                    # do anything about it — treat as a miss.
+                    try:
+                        new_block = self.block_pool.allocate(1)[0]
+                    except ValueError:
+                        logger.warning(
+                            "Warm tier promotion failed: no free blocks for hash 0x%x",
+                            h,
+                        )
+                        break
                     new_block.block_hash = h
                     # ref_count is already 1 from allocate(); do NOT touch again
                     _warm_promoted_blocks.add(id(new_block))
@@ -354,19 +364,31 @@ class KVCacheManager:
         """Insert completed blocks into the RadixTree (C8: SGLang pattern).
 
         The tree enables O(k) prefix matching for future requests.
+
+        Args:
+            token_ids: Full token sequence (prompt + output).
+            blocks: KVBlocks with non-None block_hash (must be 1:1 with block_hashes).
+            block_hashes: Hashes for the blocks.
         """
         if not self.config.enable_caching:
+            return
+        if len(blocks) != len(block_hashes):
+            logger.warning(
+                "cache_to_radix_tree: blocks(%d) != block_hashes(%d), skipping",
+                len(blocks), len(block_hashes),
+            )
             return
 
         # Find the longest existing prefix match
         matched_node, remaining_tokens = self._radix_tree.match(token_ids)
         matched_len = len(token_ids) - len(remaining_tokens)
-        matched_blocks = matched_node.path_blocks()
 
         if remaining_tokens:
             # Insert new nodes for the unmatched portion
             bs = self.config.block_size
             new_start_block = matched_len // bs
+            if new_start_block > len(blocks):
+                return  # Defensive: matched more than we have blocks for
             new_blocks = blocks[new_start_block:]
             new_hashes = block_hashes[new_start_block:]
 

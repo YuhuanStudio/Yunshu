@@ -72,7 +72,14 @@ class TestParseQwenToolCalls:
     def test_malformed_json(self):
         text = '<tool_call\n>{"name": "test", "arguments": {broken}\n</tool_call\n>'
         calls = parse_qwen_tool_calls(text)
-        # Should still extract name via regex fallback
+        # Unbalanced braces cannot be extracted — returns empty
+        assert len(calls) == 0
+
+    def test_malformed_json_with_name_fallback(self):
+        """If the JSON object is brace-balanced but invalid, fallback extracts name."""
+        text = '<tool_call\n>{"name": "test", "arguments": {broken}}\n</tool_call\n>'
+        calls = parse_qwen_tool_calls(text)
+        # Brace-balanced but JSON is invalid → fallback regex extracts name
         assert len(calls) == 1
         assert calls[0].name == "test"
 

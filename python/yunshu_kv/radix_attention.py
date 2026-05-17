@@ -174,29 +174,25 @@ class RadixTree:
             The new intermediate node containing the shared prefix.
         """
         # Convert token-based split_pos to block-based index.
-        # Each block covers self._block_size tokens, so we must slice the
-        # blocks and block_hashes lists at the block boundary, not the
-        # token boundary.
-        split_block_idx = split_pos // self._block_size
+        # Each block covers self._block_size tokens.  When split_pos is
+        # NOT block-aligned the boundary block must go to the new_node
+        # (prefix), because its tokens span both sides of the split.
+        # Ceiling division gives the correct number of blocks for the
+        # prefix portion.
+        split_block_idx = (split_pos + self._block_size - 1) // self._block_size
 
         # Create the intermediate node with the shared prefix
         new_node = RadixNode(
             token_ids=child.token_ids[:split_pos],
-            blocks=child.blocks[:split_block_idx] if len(child.blocks) > split_block_idx else list(child.blocks),
-            block_hashes=child.block_hashes[:split_block_idx] if len(child.block_hashes) > split_block_idx else list(child.block_hashes),
+            blocks=child.blocks[:split_block_idx],
+            block_hashes=child.block_hashes[:split_block_idx],
             parent=parent,
         )
 
         # Shorten the original child to the suffix
         child.token_ids = child.token_ids[split_pos:]
-        if len(child.blocks) > split_block_idx:
-            child.blocks = child.blocks[split_block_idx:]
-        else:
-            child.blocks = []
-        if len(child.block_hashes) > split_block_idx:
-            child.block_hashes = child.block_hashes[split_block_idx:]
-        else:
-            child.block_hashes = []
+        child.blocks = child.blocks[split_block_idx:]
+        child.block_hashes = child.block_hashes[split_block_idx:]
 
         # Rewire parent: replace child with new_node
         first_tok = new_node.token_ids[0] if new_node.token_ids else None
@@ -270,18 +266,24 @@ class RadixTree:
                 match_len += 1
 
             if match_len == 0:
-                # No shared prefix (shouldn't happen since first_token matched)
-                pass
+                # No shared prefix — cannot happen because first_token
+                # was used to look up the child, so at minimum the first
+                # token matches.  Defensive: return existing to avoid
+                # overwriting the child subtree at line node.children[first_token].
+                return existing
             elif match_len < len(existing.token_ids):
                 # Partial overlap: split existing child at match point
                 split_node = self._split_node(node, existing, match_len)
                 # split_node now holds the shared prefix
                 # Recurse: insert remaining new tokens as child of split_node
                 remaining_new = token_ids[match_len:]
-                # Convert token offset to block offset for slicing
-                match_block_idx = match_len // self._block_size
-                remaining_blocks = blocks[match_block_idx:] if len(blocks) > match_block_idx else []
-                remaining_hashes = block_hashes[match_block_idx:] if len(block_hashes) > match_block_idx else []
+                # Convert token offset to block offset for slicing.
+                # Ceiling division: same logic as _split_node so that the
+                # boundary block stays with the prefix (split_node), not
+                # the remaining new tokens.
+                match_block_idx = (match_len + self._block_size - 1) // self._block_size
+                remaining_blocks = blocks[match_block_idx:]
+                remaining_hashes = block_hashes[match_block_idx:]
                 return self.insert(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
             else:
                 # New tokens are a prefix of or equal to existing child
@@ -377,6 +379,12 @@ class RadixTree:
                 first_tok = leaf.token_ids[0] if leaf.token_ids else None
                 if first_tok is not None:
                     parent.children.pop(first_tok, None)
+                else:
+                    # Leaf has empty token_ids — find and remove by identity
+                    for key, child in list(parent.children.items()):
+                        if child is leaf:
+                            parent.children.pop(key)
+                            break
 
                 # Compact: merge parent with single remaining child
                 self._try_merge(parent)

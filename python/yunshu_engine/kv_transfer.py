@@ -1231,7 +1231,7 @@ class KVTransferServer:
         so stop() can cancel in-progress work and TTL GC can clean up.
         """
         t0 = time.monotonic()
-        request_id = "unknown"
+        request_id = f"err-{uuid.uuid4().hex[:8]}"
 
         try:
             message, decode_result = KVTransferProtocol.decode_message(frame)

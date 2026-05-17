@@ -74,6 +74,7 @@ class RegexConstraint:
         valid = set()
         test_chars = [chr(i) for i in range(32, 127)]
         test_chars.extend(['\n', '\t', '\r'])
+        total_tested = len(test_chars)
 
         for ch in test_chars:
             candidate = self._text_buffer + ch
@@ -88,7 +89,9 @@ class RegexConstraint:
             if m is not None and m.end() == len(candidate):
                 valid.add(ch)
 
-        if len(valid) > 90:  # almost all chars valid — unrestricted
+        # If >90% of tested chars are valid, treat as unrestricted.
+        # This avoids false negatives for permissive patterns like ".*".
+        if len(valid) > total_tested * 0.9:
             return None
         return valid
 
@@ -351,17 +354,21 @@ class LarkGrammarConstraint:
             candidate = self._text_buffer + ch
             try:
                 self._parser.parse(candidate)
+                # Full parse succeeded — char completes the grammar
                 valid.add(ch)
             except Exception:
                 # Incomplete parse — the char might still be valid as a
                 # prefix. Use parse_interactive if available (Lark >= 1.2).
-                try:
-                    interactive = self._parser.parse_interactive(candidate)
-                    interactive.exhaust_lexer()
-                    # If we get here without error, char extends a valid partial parse
-                    valid.add(ch)
-                except Exception:
-                    pass
+                if hasattr(self._parser, 'parse_interactive'):
+                    try:
+                        interactive = self._parser.parse_interactive(candidate)
+                        interactive.exhaust_lexer()
+                        # If exhaust_lexer succeeds, the candidate is a valid prefix
+                        valid.add(ch)
+                    except Exception:
+                        pass
+                # If parse_interactive is unavailable, we cannot confirm
+                # the char is a valid prefix — do NOT add it.
 
         if len(valid) > 90:
             return None

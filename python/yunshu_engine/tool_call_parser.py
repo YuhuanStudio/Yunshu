@@ -48,6 +48,39 @@ def _sanitize_arguments(args) -> str:
     return json.dumps(args, ensure_ascii=False)
 
 
+def _extract_brace_block(text: str, start: int) -> str | None:
+    """Extract a brace-balanced JSON object starting at position *start*.
+
+    Handles braces inside JSON strings correctly.
+    Returns the matched substring or None if unmatched.
+    """
+    if start >= len(text) or text[start] != '{':
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
 # ── Format 1: Hermes <tool_call/> ──
 
 class HermesToolCallParser(ToolCallParser):
@@ -118,7 +151,20 @@ class DirectJSONToolCallParser(ToolCallParser):
 
         depth = 0
         start = -1
+        in_string = False
+        escape_next = False
         for i, ch in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if ch == '{':
                 if depth == 0:
                     start = i
@@ -152,7 +198,20 @@ class MistralToolCallParser(ToolCallParser):
         calls = []
         depth = 0
         start = -1
+        in_string = False
+        escape_next = False
         for i, ch in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if ch == '{':
                 if depth == 0:
                     start = i
@@ -219,11 +278,27 @@ class ChatMLToolCallParser(ToolCallParser):
 
     @staticmethod
     def _extract_array(text: str) -> str | None:
-        """Extract a JSON array from the start of *text* using bracket counting."""
+        """Extract a JSON array from the start of *text* using bracket counting.
+
+        Handles brackets inside JSON strings correctly by tracking quote state.
+        """
         if not text or text[0] != '[':
             return None
         depth = 0
+        in_string = False
+        escape_next = False
         for i, ch in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if ch == '[':
                 depth += 1
             elif ch == ']':
@@ -239,13 +314,39 @@ class ChatMLToolCallParser(ToolCallParser):
 # ── Format 7: DeepSeek ✿FUNCTION✿ ──
 
 class DeepSeekToolCallParser(ToolCallParser):
-    _RE = re.compile(r'✿FUNCTION✿\s*(\{.*?\})\s*✿', re.DOTALL)
+    """Parses DeepSeek-style ✿FUNCTION✿ blocks.
+
+    Uses brace counting instead of ``\\{.*?\\}`` so that nested JSON
+    objects in ``arguments`` are captured correctly.  The previous
+    ``\\{.*?\\}`` pattern stopped at the first ``}`` and truncated
+    any dict/array arguments.
+    """
+
+    _PREFIX = "✿FUNCTION✿"
+    _SUFFIX = "✿"
 
     def parse(self, text: str) -> list[ToolCall]:
         calls = []
-        for m in self._RE.finditer(text):
+        idx = 0
+        while True:
+            start = text.find(self._PREFIX, idx)
+            if start == -1:
+                break
+            brace_start = text.find('{', start + len(self._PREFIX))
+            if brace_start == -1:
+                break
+            depth = 0
+            end = brace_start
+            for end in range(brace_start, len(text)):
+                if text[end] == '{':
+                    depth += 1
+                elif text[end] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        break
+            candidate = text[brace_start:end + 1]
             try:
-                data = json.loads(m.group(1))
+                data = json.loads(candidate)
                 name = data.get("name", "")
                 if name:
                     args = data.get("arguments", data.get("parameters", {}))
@@ -253,7 +354,8 @@ class DeepSeekToolCallParser(ToolCallParser):
                         args = json.loads(args)
                     calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
             except (json.JSONDecodeError, KeyError):
-                continue
+                pass
+            idx = end + 1
         return calls
 
     def format_name(self) -> str:
@@ -308,16 +410,10 @@ class GeminiToolCallParser(ToolCallParser):
             brace_start = text.find('{', pos + len(key))
             if brace_start == -1:
                 break
-            depth = 0
-            end = brace_start
-            for end in range(brace_start, len(text)):
-                if text[end] == '{':
-                    depth += 1
-                elif text[end] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        break
-            candidate = text[brace_start:end + 1]
+            # Use string-aware brace counting
+            candidate = _extract_brace_block(text, brace_start)
+            if candidate is None:
+                break
             try:
                 data = json.loads(candidate)
                 name = data.get("name", "")
@@ -326,7 +422,7 @@ class GeminiToolCallParser(ToolCallParser):
                     calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
             except (json.JSONDecodeError, KeyError):
                 pass
-            idx = end + 1
+            idx = brace_start + len(candidate)
         return calls
 
     def format_name(self) -> str:
@@ -383,12 +479,38 @@ def parse_tool_calls(text: str, model_name: str | None = None) -> list[ToolCall]
     return []
 
 
+def _remove_chatml_blocks(text: str) -> str:
+    """Remove [TOOL_CALLS] [...] blocks with proper bracket nesting."""
+    result = []
+    i = 0
+    prefix = "[TOOL_CALLS]"
+    while i < len(text):
+        pos = text.find(prefix, i)
+        if pos == -1:
+            result.append(text[i:])
+            break
+        # Keep text before the block
+        result.append(text[i:pos])
+        # Find the JSON array after the prefix
+        rest = text[pos + len(prefix):]
+        stripped = rest.lstrip()
+        skip = len(rest) - len(stripped)
+        if stripped and stripped[0] == '[':
+            block = ChatMLToolCallParser._extract_array(stripped)
+            if block is not None:
+                i = pos + len(prefix) + skip + len(block)
+                continue
+        # If we can't extract, skip the prefix and move on
+        i = pos + len(prefix)
+    return "".join(result)
+
+
 def clean_tool_markup(text: str) -> str:
     """Remove tool call markup from text, leaving clean content."""
     text = re.sub(r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<function\s*=\s*\w+>.*?</function>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<function\s*=\s*[\w.\-]+>.*?</function>", "", text, flags=re.DOTALL)
     text = re.sub(r"<tool_use\b[^>]*>.*?</tool_use>", "", text, flags=re.DOTALL)
-    text = re.sub(r"\[TOOL_CALLS\]\s*\[.*?\]", "", text, flags=re.DOTALL)
+    text = _remove_chatml_blocks(text)
     text = re.sub(r"✿FUNCTION✿.*?✿", "", text, flags=re.DOTALL)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

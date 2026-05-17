@@ -423,13 +423,14 @@ class KVSynchronizationService:
                 if h in self._local_hashes
             }
 
-        if not entries:
-            return {}
+            if not entries:
+                return {}
 
-        self._stats.broadcasts_sent += 1
-        self._stats.hashes_advertised += len(entries)
+            self._stats.broadcasts_sent += 1
+            self._stats.hashes_advertised += len(entries)
 
-        results: dict[str, bool] = {}
+            peer_ids = list(self._peers.keys())
+
         # In production: serialize and send over network
         # For testing: we return the broadcast payload so tests can
         # call receive_broadcast on peer services
@@ -444,7 +445,8 @@ class KVSynchronizationService:
             "timestamp": time.time(),
         }
 
-        for peer_id in self._peers:
+        results: dict[str, bool] = {}
+        for peer_id in peer_ids:
             results[peer_id] = True  # Simulated success
 
         return results
@@ -569,14 +571,16 @@ class KVSynchronizationService:
                     ),
                 )
 
-            # Entry found and compatible — proceed outside lock to call
-            # the block provider (which may do I/O or acquire its own locks).
+            # Snapshot the provider reference under lock to prevent
+            # a TOCTOU race where _block_provider is set to None
+            # between the lock release and the provider call.
+            provider = self._block_provider
 
-        # Get blocks via provider callback
+        # Get blocks via provider callback (outside lock — may do I/O)
         blocks: list[KVBlockData] = []
-        if self._block_provider is not None:
+        if provider is not None:
             try:
-                blocks = self._block_provider(request.prefix_hash)
+                blocks = provider(request.prefix_hash)
             except Exception as e:
                 logger.debug("Block provider failed: %s", e, exc_info=True)
                 with self._lock:
@@ -617,7 +621,7 @@ class KVSynchronizationService:
                 self._transfer_history[response.request_id] = response
                 return 0
 
-            blocks = response.blocks
+            blocks = list(response.blocks)
             model_name = ""
             req = self._pending_transfers.get(response.request_id)
             if req:
@@ -922,24 +926,22 @@ class MeshHealthMonitor:
             if status is None:
                 return
 
-            # If the node was healthy and consecutive_failures hasn't
-            # already been incremented by _run_health_check (i.e., the
-            # count is below threshold), count this as a new failure.
-            # When _run_health_check has already pushed consecutive_failures
-            # to >= threshold, we must NOT increment again (double-count).
-            if status.healthy and status.consecutive_failures < self._failure_threshold:
+            # Only mark unhealthy if not already done by _run_health_check.
+            # Direct callers (e.g., MeshManager._on_node_timeout) may invoke
+            # this without going through the health-check loop, in which case
+            # we need to mark unhealthy here.
+            if status.healthy:
                 status.consecutive_failures += 1
+                status.healthy = False
+                status.state = MeshNodeState.OFFLINE
 
-            status.healthy = False
-            status.state = MeshNodeState.OFFLINE
+                node = self._nodes.get(node_id)
+                if node:
+                    node.state = MeshNodeState.OFFLINE
 
-            node = self._nodes.get(node_id)
-            if node:
-                node.state = MeshNodeState.OFFLINE
+            # Capture failure count under lock for logging.
+            fail_count = status.consecutive_failures
 
-        # Record event (append is atomic for CPython list, but use lock for
-        # consistency with get_rebalance_history which reads the list).
-        with self._lock:
             self._rebalance_events.append(RebalanceEvent(
                 event_type="node_failure",
                 node_id=node_id,
@@ -955,7 +957,7 @@ class MeshHealthMonitor:
         logger.warning(
             "Node failure detected: %s (failures=%d)",
             node_id,
-            status.consecutive_failures if status else 0,
+            fail_count,
         )
 
     def on_node_join(self, node_id: str, node: MeshNode | None = None) -> None:
@@ -976,8 +978,6 @@ class MeshHealthMonitor:
                 status.last_heartbeat = time.time()
                 status.consecutive_failures = 0
 
-        # Record event
-        with self._lock:
             self._rebalance_events.append(RebalanceEvent(
                 event_type="node_join",
                 node_id=node_id,
@@ -1108,22 +1108,32 @@ class MeshHealthMonitor:
         """Execute a single health check cycle.
 
         For each timed-out healthy node, increments its consecutive_failures
-        counter.  When the counter reaches the failure threshold, triggers
-        failover via on_node_failure.  on_node_failure detects that the node
-        was already counted by checking consecutive_failures >= threshold
-        and avoids double-counting.
+        counter.  When the counter reaches the failure threshold, marks the
+        node unhealthy immediately (under lock) to prevent TOCTOU races where
+        a concurrent heartbeat could reset the count between the threshold
+        check and the failover call.  Then triggers on_node_failure outside
+        the lock for callback invocation.
         """
         timed_out = self._detect_failures()
         for node_id in timed_out:
+            should_failover = False
             with self._lock:
                 status = self._node_status.get(node_id)
                 if status is None:
                     continue
                 status.consecutive_failures += 1
-                if status.consecutive_failures < self._failure_threshold:
-                    continue
-            # Trigger failover outside the lock to avoid deadlock.
-            self.on_node_failure(node_id)
+                if status.consecutive_failures >= self._failure_threshold:
+                    # Mark unhealthy immediately under lock to prevent
+                    # a heartbeat from resetting consecutive_failures
+                    # between this check and the on_node_failure call.
+                    status.healthy = False
+                    status.state = MeshNodeState.OFFLINE
+                    node = self._nodes.get(node_id)
+                    if node:
+                        node.state = MeshNodeState.OFFLINE
+                    should_failover = True
+            if should_failover:
+                self.on_node_failure(node_id)
 
     # ── Stats ────────────────────────────────────────────────────────
 
