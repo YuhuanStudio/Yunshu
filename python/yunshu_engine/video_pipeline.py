@@ -334,7 +334,7 @@ class VideoVAEDecoder(nn.Module):
             # (C, T, H, W) -> (1, C, T, H, W)
             latents = mx.expand_dims(latents, axis=0)
 
-        b, c, t, h_lat, w_lat = latents.shape
+        b, c, t, h_lat, w_lat = latents.shape  # noqa: F841
 
         frames = []
         for frame_idx in range(t):
@@ -520,7 +520,7 @@ class WanVideoPipeline(VideoPipeline):
         # Check for required subdirectories
         has_transformer = (path / "transformer").is_dir()
         has_vae = (path / "vae").is_dir()
-        has_text_encoder = (path / "text_encoder").is_dir()
+        has_text_encoder = (path / "text_encoder").is_dir()  # noqa: F841
 
         if not has_transformer:
             logger.error(
@@ -805,9 +805,9 @@ class WanVideoPipeline(VideoPipeline):
 
         # Basic decode fallback: normalize and upscale
         if latents.ndim == 5:
-            _, c, t, h, w = latents.shape
+            _, c, t, h, w = latents.shape  # noqa: F841
         elif latents.ndim == 4:
-            c, t, h, w = latents.shape
+            c, t, h, w = latents.shape  # noqa: F841
         else:
             return []
 
@@ -944,7 +944,7 @@ class VideoLoRAManager:
             with open(config_path) as f:
                 config = json.load(f)
         except Exception as e:
-            logger.error(f"Failed to load adapter config: {e}")
+            logger.error(f"Failed to load adapter config: {e}", exc_info=True)
             return False
 
         lora_params = config.get("lora_parameters", {})
@@ -975,7 +975,7 @@ class VideoLoRAManager:
                 f"size={adapter_mb:.1f}MB, {len(adapter_weights)} tensors)"
             )
         except Exception as e:
-            logger.error(f"Failed to load adapter weights: {e}")
+            logger.error(f"Failed to load adapter weights: {e}", exc_info=True)
             return False
 
         self._current_adapter_path = str(path)

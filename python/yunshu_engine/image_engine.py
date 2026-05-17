@@ -1709,7 +1709,7 @@ class ImageGenEngine:
                     "is_final": True,
                 })
             except Exception as e:
-                logger.error(f"Image stream error: {e}")
+                logger.error(f"Image stream error: {e}", exc_info=True)
                 queue.put_nowait(None)
 
         loop = asyncio.get_running_loop()

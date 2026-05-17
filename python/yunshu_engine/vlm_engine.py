@@ -769,7 +769,7 @@ class VLMEngine:
                 queue.put_nowait(output)
 
             except Exception as e:
-                logger.error(f"VLM stream error: {e}")
+                logger.error(f"VLM stream error: {e}", exc_info=True)
             finally:
                 try:
                     queue.put_nowait(None)

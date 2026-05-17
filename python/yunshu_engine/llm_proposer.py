@@ -213,7 +213,7 @@ class LLMProposer:
             return False
 
         except Exception as e:
-            logger.error(f"LLMProposer: failed to load draft model '{name}': {e}")
+            logger.error(f"LLMProposer: failed to load draft model '{name}': {e}", exc_info=True)
             self._model = None
             self._tokenizer = None
             self._stats.draft_model_loaded = False

@@ -588,7 +588,7 @@ class MedusaProposer:
                             f"(got {w.shape}, expected {head.linear.weight.shape})"
                         )
             except Exception as e:
-                logger.error(f"Failed to load weights for head {i}: {e}")
+                logger.error(f"Failed to load weights for head {i}: {e}", exc_info=True)
 
         logger.info(f"Medusa: loaded weights for {loaded}/{len(self._heads)} heads from {path}")
         return loaded == len(self._heads)

@@ -83,7 +83,7 @@ class MCPServerConnection:
             await self._discover_tools()
             return True
         except Exception as e:
-            logger.error(f"Failed to connect to MCP server {self.config.server_id}: {e}")
+            logger.error(f"Failed to connect to MCP server {self.config.server_id}: {e}", exc_info=True)
             return False
 
     async def _connect_http(self) -> bool:
@@ -166,7 +166,7 @@ class MCPServerConnection:
                         data = await resp.json()
                         return data.get("result")
         except Exception as e:
-            logger.error(f"HTTP MCP request failed: {e}")
+            logger.error(f"HTTP MCP request failed: {e}", exc_info=True)
         return None
 
     async def disconnect(self) -> None:
@@ -260,7 +260,7 @@ class MCPClientManager:
                 ))
             return configs
         except Exception as e:
-            logger.error(f"Failed to parse MCP config from {path}: {e}")
+            logger.error(f"Failed to parse MCP config from {path}: {e}", exc_info=True)
             return []
 
     async def call_tool(self, tool_name: str, arguments: dict) -> Any:

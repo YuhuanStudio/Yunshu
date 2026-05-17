@@ -338,7 +338,7 @@ class TTSEngine:
                 except asyncio.QueueFull:
                     pass
             except Exception as e:
-                logger.error(f"TTS stream error: {e}")
+                logger.error(f"TTS stream error: {e}", exc_info=True)
                 try:
                     queue.put_nowait(None)
                 except asyncio.QueueFull:

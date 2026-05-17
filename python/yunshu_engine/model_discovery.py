@@ -138,4 +138,4 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
             model_dir.name, mt, _engine_for_type(mt), size / 1024 ** 3,
         )
     except Exception as e:
-        logger.error("Failed to discover model %s: %s", model_dir.name, e)
+        logger.error("Failed to discover model %s: %s", model_dir.name, e, exc_info=True)

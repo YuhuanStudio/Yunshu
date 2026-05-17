@@ -1109,7 +1109,7 @@ class Scheduler:
                         if req_id not in self._spec_drafts:
                             self._try_spec_decode_draft(req)
         except Exception as e:
-            logger.error(f"BatchGenerator step error: {e}")
+            logger.error(f"BatchGenerator step error: {e}", exc_info=True)
             from .exceptions import is_cache_corruption_error
             if is_cache_corruption_error(e):
                 logger.warning("Cache corruption detected — resetting BatchGenerator")
@@ -1505,7 +1505,7 @@ class Scheduler:
                     self._try_init_spec_decoder()
 
             except Exception as e:
-                logger.error(f"Failed to insert request {req.request_id}: {e}")
+                logger.error(f"Failed to insert request {req.request_id}: {e}", exc_info=True)
                 req.status = RequestStatus.FINISHED_ERROR
                 req.finish_reason = "error"
                 # Signal completion so callers don't hang
@@ -1575,7 +1575,8 @@ class Scheduler:
                 )
             else:
                 logger.error(
-                    f"External prefill failed for {req.request_id}: {e}"
+                    f"External prefill failed for {req.request_id}: {e}",
+                    exc_info=True,
                 )
             req.status = RequestStatus.FINISHED_ERROR
             req.finish_reason = "error"
@@ -1843,7 +1844,8 @@ class Scheduler:
                         self._chunked_prefill_chunks_processed += 1
                     except Exception as e:
                         logger.error(
-                            f"Failed to force-feed timed-out chunked prefill for {req_id}: {e}"
+                            f"Failed to force-feed timed-out chunked prefill for {req_id}: {e}",
+                            exc_info=True,
                         )
             completed_ids.append(req_id)
 
@@ -1960,7 +1962,8 @@ class Scheduler:
                     )
             except Exception as e:
                 logger.error(
-                    f"Failed to process chunked prefill for {req_id}: {e}"
+                    f"Failed to process chunked prefill for {req_id}: {e}",
+                    exc_info=True,
                 )
                 completed_ids.append(req_id)
 
@@ -2046,7 +2049,7 @@ class Scheduler:
                         break
 
             except Exception as e:
-                logger.error(f"Hybrid prefill step error: {e}")
+                logger.error(f"Hybrid prefill step error: {e}", exc_info=True)
                 from .exceptions import is_cache_corruption_error
                 if is_cache_corruption_error(e):
                     logger.warning("Cache corruption in hybrid prefill — resetting BatchGenerator")

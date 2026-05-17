@@ -309,7 +309,7 @@ class RealtimeSession:
         try:
             await handler(self, event)
         except Exception as e:
-            logger.error(f"Handler error for {event_type}: {e}")
+            logger.error(f"Handler error for {event_type}: {e}", exc_info=True)
             await self.send_event(_event(
                 RealtimeEvent.ERROR,
                 error={"message": str(e), "type": "server_error"},
@@ -759,7 +759,7 @@ class RealtimeSession:
                     ))
                     break
         except Exception as e:
-            logger.error(f"TTS error in realtime session: {e}")
+            logger.error(f"TTS error in realtime session: {e}", exc_info=True)
 
     async def _handle_input_audio_buffer_append(self, event: dict) -> None:
         """Handle input_audio_buffer.append — receive audio chunk.
@@ -896,7 +896,7 @@ class RealtimeSession:
                             ))
                         break
         except Exception as e:
-            logger.error(f"ASR error in realtime session: {e}")
+            logger.error(f"ASR error in realtime session: {e}", exc_info=True)
         finally:
             try:
                 os.unlink(tmp_path)

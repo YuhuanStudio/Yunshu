@@ -739,7 +739,7 @@ class Engine:
                 self._total_prompt_tokens += state.prompt_token_count
 
             except Exception as e:
-                logger.error(f"Failed to insert request {state.request_id}: {e}")
+                logger.error(f"Failed to insert request {state.request_id}: {e}", exc_info=True)
                 state.finish_reason = "error"
                 state.output_queue.put_nowait(None)
                 state.done_event.set()

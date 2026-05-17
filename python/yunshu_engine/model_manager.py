@@ -694,7 +694,7 @@ class ModelManager:
                 try:
                     await self.unload_model(model_id)
                 except Exception as e:
-                    logger.error(f"Error unloading {model_id} during shutdown: {e}")
+                    logger.error(f"Error unloading {model_id} during shutdown: {e}", exc_info=True)
 
     def get_status(self) -> dict:
         """Return detailed pool status (oMLX EnginePool.get_status pattern)."""
