@@ -1352,6 +1352,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         priority: int = 0,
         logits_processors: list | None = None,
+        timeout_seconds: float | None = None,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -1365,6 +1366,9 @@ class BatchedEngine:
                              (defaults to False if not set).
             logprobs: If True, return log probabilities for each generated token.
             top_logprobs: Number of top logprobs to return per token (max 20).
+            timeout_seconds: Per-request generation timeout. If None, uses the
+                             engine's default (300s). Overrides the engine default
+                             for this request only.
         """
         if not self._loaded:
             await self.start()
@@ -1546,6 +1550,7 @@ class BatchedEngine:
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
                 priority=priority,
+                timeout_seconds=timeout_seconds or 300.0,
             )
             if _rc_hash is not None and result.finish_reason != "error":
                 try:
@@ -2368,6 +2373,7 @@ class BatchedEngine:
         top_logprobs: int | None = None,
         logits_processors: list | None = None,
         cancel_event: asyncio.Event | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -2524,6 +2530,7 @@ class BatchedEngine:
                     top_logprobs=top_logprobs,
                     logits_processors=logits_processors,
                     priority=priority,
+                    timeout_seconds=timeout_seconds or 300.0,
                 ):
                     yield output
             finally:
@@ -2635,6 +2642,7 @@ class BatchedEngine:
         top_logprobs: int | None = None,
         logits_processors: list | None = None,
         priority: int = 0,
+        timeout_seconds: float = 300.0,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
 
@@ -3067,9 +3075,9 @@ class BatchedEngine:
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(_q.get(), timeout=120)
+                    item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except asyncio.TimeoutError:
-                    logger.warning("Streaming fast path timeout: no token for 120s")
+                    logger.warning(f"Streaming fast path timeout: no token for {timeout_seconds}s")
                     break
                 if item is _sentinel:
                     break
@@ -3199,6 +3207,18 @@ class BatchedEngine:
                 )
             if not future.done():
                 future.cancel()
+                try:
+                    await future
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Drain remaining queue items to unblock the executor thread's
+            # call_soon_threadsafe calls, preventing GPU work from continuing
+            # after the consumer has stopped iterating.
+            while not _q.empty():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     async def chat(
         self,

@@ -956,6 +956,17 @@ class VLMEngine:
             self._active_count -= 1
             if not stream_task.done():
                 stream_task.cancel()
+                try:
+                    await stream_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Drain remaining queue items to unblock the executor thread
+            # so it can observe the cancellation and exit promptly.
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
             self._cleanup_temp_files()
 
     def _generate_vlm_vision(

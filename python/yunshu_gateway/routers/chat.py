@@ -273,8 +273,8 @@ class ChatCompletionRequest(BaseModel):
         # Validate response_format type if provided
         if self.response_format is not None:
             rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
-            if rf_type not in ("json_object", "json_schema", None):
-                raise ValueError(f"response_format.type: must be 'json_object' or 'json_schema', got '{rf_type}'")
+            if rf_type not in ("json_object", "json_schema", "text", None):
+                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
         # Validate grammar type if provided
         if self.grammar is not None:
             gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
@@ -638,6 +638,7 @@ async def _build_multi_choice(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                timeout_seconds=req.timeout,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -674,6 +675,7 @@ async def _build_multi_choice(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                timeout_seconds=req.timeout,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -931,6 +933,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         xtc_threshold=req.xtc_threshold,
                         priority=req.priority,
                         logits_processors=req.logits_processors,
+                        timeout_seconds=req.timeout,
                     )
                     raw_text = result.text
                     prompt_tok = result.prompt_tokens
@@ -969,6 +972,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         top_logprobs=req.top_logprobs,
                         priority=req.priority,
                         logits_processors=req.logits_processors,
+                        timeout_seconds=req.timeout,
                     )
                     raw_text = state.generated_text
                     prompt_tok = state.prompt_token_count
@@ -1152,6 +1156,7 @@ async def _handle_vlm_chat(
         spec_decode=req.spec_decode,
         priority=req.priority,
         logits_processors=req.logits_processors,
+        timeout_seconds=req.timeout,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
@@ -1307,6 +1312,7 @@ async def _stream_vlm_response(
             priority=req.priority,
             logits_processors=req.logits_processors,
             cancel_event=_vlm_gen.cancel_event,
+            timeout_seconds=req.timeout,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
@@ -1506,6 +1512,7 @@ async def _stream_response_multi(
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
                     cancel_event=gen.cancel_event,
+                    timeout_seconds=req.timeout,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1593,6 +1600,7 @@ async def _stream_response_multi(
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
                     cancel_event=gen.cancel_event,
+                    timeout_seconds=req.timeout,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1889,6 +1897,7 @@ async def _stream_response(
                 spec_decode=req.spec_decode,
                 logits_processors=req.logits_processors,
                 cancel_event=_tracker_gen.cancel_event,
+                timeout_seconds=req.timeout,
             ):
                 token_text = output.new_text
                 if output.finish_reason is not None:
@@ -1972,6 +1981,7 @@ async def _stream_response(
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
                 cancel_event=_tracker_gen.cancel_event,
+                timeout_seconds=req.timeout,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:

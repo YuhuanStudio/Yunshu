@@ -560,27 +560,18 @@ class VideoEngine:
 
             try:
                 if image is not None:
-                    import tempfile
-                    fd, img_path = tempfile.mkstemp(suffix=".png")
-                    os.close(fd)
-                    try:
-                        with open(img_path, "wb") as f:
-                            f.write(image)
-                        # Load the saved image as an MLX array for the native pipeline.
-                        # The native pipeline expects (H, W, C) float tensor in [0, 1].
-                        import numpy as np
-                        import mlx.core as mx
-                        from PIL import Image as PILImage
-                        pil_img = PILImage.open(img_path).convert("RGB")
-                        img_np = np.array(pil_img, dtype=np.float32) / 255.0
-                        img_mx = mx.array(img_np)
-                        result = self._native_pipeline.generate_from_image(
-                            request=request,
-                            image=img_mx,
-                        )
-                    finally:
-                        if os.path.exists(img_path):
-                            os.unlink(img_path)
+                    # Load image bytes directly as an MLX array for the
+                    # native pipeline — avoids unnecessary disk write.
+                    import numpy as np
+                    import mlx.core as mx
+                    from PIL import Image as PILImage
+                    pil_img = PILImage.open(io.BytesIO(image)).convert("RGB")
+                    img_np = np.array(pil_img, dtype=np.float32) / 255.0
+                    img_mx = mx.array(img_np)
+                    result = self._native_pipeline.generate_from_image(
+                        request=request,
+                        image=img_mx,
+                    )
                 else:
                     result = self._native_pipeline.generate_frames(request)
 
@@ -867,6 +858,7 @@ class VideoEngine:
 
                     frame_size = target_w * target_h * 3
                     frame_idx = 0
+                    _queue_full = False
 
                     while True:
                         raw = proc.stdout.read(frame_size)
@@ -878,6 +870,11 @@ class VideoEngine:
 
                         # Enforce max_frames limit
                         if max_frames > 0 and frames_emitted >= max_frames:
+                            proc.terminate()
+                            break
+
+                        # If queue was previously full (consumer gone), stop decoding
+                        if _queue_full:
                             proc.terminate()
                             break
 
@@ -909,7 +906,13 @@ class VideoEngine:
                             "timestamp_ms": round(elapsed_decode, 1),
                             "is_final": is_final,
                         }
-                        queue.put_nowait(frame_data)
+                        try:
+                            queue.put_nowait(frame_data)
+                        except asyncio.QueueFull:
+                            logger.warning("Video stream queue full — consumer likely gone, stopping decode")
+                            _queue_full = True
+                            proc.terminate()
+                            break
 
                         frames_emitted += 1
                         frame_idx += frame_interval
@@ -927,11 +930,17 @@ class VideoEngine:
                     self._stats.total_frame_decode_ms += decode_total_ms
 
                 # Signal final frame
-                queue.put_nowait(None)
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
             except Exception as e:
                 logger.error(f"Frame streaming error: {e}", exc_info=True)
-                queue.put_nowait(None)
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         # Run decoder in executor
         loop = asyncio.get_running_loop()
@@ -949,6 +958,16 @@ class VideoEngine:
         finally:
             if not decode_task.done():
                 decode_task.cancel()
+                try:
+                    await decode_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Drain remaining queue items to unblock the executor thread
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     async def stream_frames_from_path(
         self,

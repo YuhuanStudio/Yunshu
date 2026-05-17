@@ -183,10 +183,31 @@ class DiffusionScheduler:
         return result
 
     def _compute_timesteps(self) -> list[int]:
-        """Compute inference timesteps by spacing within train timesteps."""
-        step_ratio = self.num_train_timesteps // self.num_inference_steps
-        timesteps = list(range(0, self.num_train_timesteps, step_ratio))
-        timesteps = timesteps[:self.num_inference_steps]
+        """Compute inference timesteps by evenly spacing within train timesteps.
+
+        Uses rounding to ensure exactly num_inference_steps timesteps that
+        span the full training range, avoiding the truncation error that
+        floor-division-based spacing introduces.
+        """
+        if self.num_inference_steps <= 1:
+            # Single step: use the middle of the training range
+            return [self.num_train_timesteps // 2]
+
+        timesteps = [
+            int(round(i * (self.num_train_timesteps - 1) / (self.num_inference_steps - 1)))
+            for i in range(self.num_inference_steps)
+        ]
+        # Deduplicate (can happen with very few inference steps) and sort
+        timesteps = sorted(set(timesteps))
+        # If deduplication reduced the count, backfill with nearby values
+        while len(timesteps) < self.num_inference_steps:
+            # Insert midpoints between consecutive timesteps
+            gaps = [(timesteps[i + 1] - timesteps[i], i) for i in range(len(timesteps) - 1)]
+            gaps.sort(reverse=True)
+            gap_size, gap_idx = gaps[0]
+            mid = timesteps[gap_idx] + gap_size // 2
+            timesteps.append(mid)
+            timesteps = sorted(set(timesteps))
         return list(reversed(timesteps))
 
     def _compute_sigmas(self) -> list[float]:
@@ -233,11 +254,14 @@ class DiffusionScheduler:
     def add_noise(self, sample: Any, noise: Any, timestep: int) -> Any:
         """Add noise to a sample at a given timestep (forward process).
 
-        Returns the noisy sample. In production, these are mx.arrays;
-        for scheduling purposes, this returns the formula parameters.
+        Returns (sqrt_alpha_prod, sqrt_one_minus_alpha_prod) scaling factors
+        that the caller applies as: noisy_sample = sqrt_alpha * sample +
+        sqrt_one_minus_alpha * noise.  For scheduling purposes, this returns
+        the formula parameters rather than operating on arrays directly.
         """
-        if timestep >= len(self._alphas_cumprod):
-            return noise
+        if timestep < 0 or timestep >= len(self._alphas_cumprod):
+            # Out-of-range timestep: treat as pure noise
+            return 0.0, 1.0
         alpha_prod = self._alphas_cumprod[timestep]
         sqrt_alpha = math.sqrt(alpha_prod)
         sqrt_one_minus_alpha = math.sqrt(1 - alpha_prod)
@@ -380,7 +404,7 @@ class DiffusionLoRAOffloader:
 
             # Check if we need to evict to make room
             if self._memory.total_bytes > 0:
-                if not self._evict_for(adapter.memory_bytes, lora_id):
+                if not self._evict_for(adapter.memory_bytes, lora_id, step):
                     logger.warning(f"Cannot load {lora_id}: insufficient memory after eviction")
                     continue
 
@@ -443,7 +467,7 @@ class DiffusionLoRAOffloader:
         self._memory.free(adapter.memory_bytes)
         self._unload_count += 1
 
-    def _evict_for(self, needed_bytes: int, exclude_id: str) -> bool:
+    def _evict_for(self, needed_bytes: int, exclude_id: str, step: int = 0) -> bool:
         """Evict loaded adapters to free memory, excluding a specific adapter."""
         if needed_bytes <= self._memory.available_bytes:
             return True
@@ -458,7 +482,7 @@ class DiffusionLoRAOffloader:
             if freed >= needed_bytes - self._memory.available_bytes:
                 break
             self._unload(lid)
-            self._load_history.append((0, lid, "evict"))
+            self._load_history.append((step, lid, "evict"))
             freed += adapter.memory_bytes
 
         return self._memory.available_bytes >= needed_bytes

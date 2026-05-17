@@ -376,6 +376,16 @@ class TTSEngine:
         finally:
             if not stream_task.done():
                 stream_task.cancel()
+                try:
+                    await stream_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Drain remaining queue items to unblock the executor thread
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     def list_voices(self) -> list[str]:
         """Return voices available on this TTS model.

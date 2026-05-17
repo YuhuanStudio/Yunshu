@@ -131,10 +131,12 @@ class FlowMatchingScheduler:
         seed: int = -1,
         dtype: mx.Dtype = mx.float16,
     ) -> mx.array:
-        """Generate initial latent noise."""
+        """Generate initial latent noise using a per-call key (avoids global seed mutation)."""
         if seed >= 0:
-            mx.random.seed(seed)
-        return mx.random.normal(shape=shape, dtype=dtype)
+            key = mx.random.key(seed)
+        else:
+            key = mx.random.key(int(time.time_ns()) % (2**31))
+        return mx.random.normal(shape=shape, dtype=dtype, key=key)
 
     def apply_guidance(
         self,
@@ -174,9 +176,12 @@ class EulerScheduler:
         seed: int = -1,
         dtype: mx.Dtype = mx.float16,
     ) -> mx.array:
+        """Generate initial latent noise using a per-call key (avoids global seed mutation)."""
         if seed >= 0:
-            mx.random.seed(seed)
-        return mx.random.normal(shape=shape, dtype=dtype)
+            key = mx.random.key(seed)
+        else:
+            key = mx.random.key(int(time.time_ns()) % (2**31))
+        return mx.random.normal(shape=shape, dtype=dtype, key=key)
 
     def apply_guidance(
         self,
@@ -341,14 +346,16 @@ class VideoVAEDecoder(nn.Module):
             # Extract single time step latent: (1, C, H_lat, W_lat) -> NHWC
             frame_lat = latents[:, :, frame_idx, :, :].transpose(0, 2, 3, 1)
 
-            # Apply temporal context (average of neighboring frames)
+            # Apply temporal context (average of neighboring frames, excluding current)
             if t > 1:
-                prev_idx = max(0, frame_idx - 1)
-                next_idx = min(t - 1, frame_idx + 1)
-                ctx_prev = latents[:, :, prev_idx, :, :].transpose(0, 2, 3, 1)
-                ctx_next = latents[:, :, next_idx, :, :].transpose(0, 2, 3, 1)
-                context = (ctx_prev + ctx_next) / 2.0
-                frame_lat = frame_lat + 0.1 * context
+                neighbors = []
+                if frame_idx > 0:
+                    neighbors.append(latents[:, :, frame_idx - 1, :, :].transpose(0, 2, 3, 1))
+                if frame_idx < t - 1:
+                    neighbors.append(latents[:, :, frame_idx + 1, :, :].transpose(0, 2, 3, 1))
+                if neighbors:
+                    context = sum(neighbors) / len(neighbors)
+                    frame_lat = frame_lat + 0.1 * context
 
             # Spatial decode via NHWC Conv2d
             x = self.conv_in(frame_lat)  # (1, H, W, base_ch)
@@ -708,6 +715,29 @@ class WanVideoPipeline(VideoPipeline):
             dtype=mx.float16,
         )
 
+        # Blend source image into the first latent frame so the I2V
+        # generation starts from a meaningful state.  Use a simple
+        # mean-pool downscale to latent resolution as a rough encode.
+        try:
+            img_h, img_w = request.height, request.width
+            src = image  # (1, H, W, C) or (H, W, C)
+            if src.ndim == 4:
+                src = src[0]  # (H, W, C)
+            # Downscale to latent size via slicing (nearest)
+            step_h = max(1, src.shape[0] // h_lat)
+            step_w = max(1, src.shape[1] // w_lat)
+            src_small = src[::step_h, ::step_w, :3]  # (h_lat, w_lat, 3)
+            # Take only h_lat x w_lat
+            src_small = src_small[:h_lat, :w_lat, :]
+            # Convert to float16 and distribute across latent channels
+            src_small = src_small.astype(mx.float16)
+            # Use first 3 channels as RGB approximation, rest stays as noise
+            src_latent = latents[0, :, 0, :, :]  # (C, h_lat, w_lat)
+            src_latent = src_latent.at[:3, :, :].set(src_small.transpose(2, 0, 1) * 2.0 - 1.0)
+            latents = latents.at[0, :, 0, :, :].set(src_latent)
+        except Exception as e:
+            logger.warning(f"I2V image blending failed (using pure noise): {e}")
+
         # Denoise
         if self._model is not None:
             latents = self._denoise(latents, request, scheduler)
@@ -770,10 +800,11 @@ class WanVideoPipeline(VideoPipeline):
             if self._model is not None and hasattr(self._model, '__call__'):
                 # Real transformer forward pass
                 if teacache_hook is not None and hasattr(self._model, 't_embedder'):
-                    # TeaCache-accelerated forward
-                    sigmas = scheduler.sigmas if hasattr(scheduler, 'sigmas') else None
+                    # TeaCache-accelerated forward — pass the float timestep,
+                    # not the integer step_idx
+                    t_tensor = mx.array(t, dtype=mx.float32).reshape((1,))
                     noise_pred = teacache_hook.forward(
-                        self._model, latents, step_idx, sigmas,
+                        self._model, latents, t_tensor, None,
                         cap_feats=getattr(self, '_text_embeddings', None),
                     )
                 else:
