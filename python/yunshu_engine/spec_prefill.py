@@ -237,8 +237,22 @@ def score_tokens(
         _unpatch_attention_capture(draft_model, originals, attn_layers)
 
     # Compute attention-based importance scores: Q @ K^T / sqrt(d_k)
+    # Build a mapping from cache index to layer index for correct query pairing.
+    # Cache entries and attention layers are in 1:1 correspondence: cache[i]
+    # corresponds to attn_layers[i].  We track which cache indices have valid
+    # keys so we can look up the right captured queries.
+    _cache_to_layer: dict[int, int] = {}
+    _valid_cache_idx = 0
+    for _ci, c in enumerate(cache):
+        if not hasattr(c, 'keys') or c.keys is None:
+            continue
+        if c.keys.shape[-2] < n_prompt:
+            continue
+        _cache_to_layer[_ci] = _valid_cache_idx
+        _valid_cache_idx += 1
+
     importance_scores = []
-    for c in cache:
+    for cache_idx, c in enumerate(cache):
         if not hasattr(c, 'keys') or c.keys is None:
             continue
         keys = c.keys
@@ -246,11 +260,9 @@ def score_tokens(
             continue
         prompt_keys = keys[..., :n_prompt, :].astype(mx.float32)
 
-        # Collect captured queries for this cache entry's layer
-        layer_queries = []
-        for layer_idx in query_buffer:
-            layer_queries = query_buffer[layer_idx]
-            break
+        # Look up captured queries for this cache entry's layer
+        layer_idx = _cache_to_layer.get(cache_idx)
+        layer_queries = query_buffer.get(layer_idx, []) if layer_idx is not None else []
 
         if not layer_queries:
             scores = mx.mean(mx.abs(prompt_keys), axis=-1)

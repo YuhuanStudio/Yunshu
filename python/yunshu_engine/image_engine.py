@@ -1309,6 +1309,38 @@ class ImageGenEngine:
         from .image_pipeline import PipelineType
         self._pipeline_type = PipelineType
 
+        # DiffusionLoRAOffloader — priority-based LoRA adapter memory management.
+        # Opt-in via YUNSHU_LORA_BUDGET_MB env var (GPU memory budget in MB).
+        # When set, LoRA adapters are swapped in/out per diffusion step based on
+        # priority and assigned step ranges.
+        self._lora_offloader = None
+        lora_budget_mb = os.environ.get("YUNSHU_LORA_BUDGET_MB", "").strip()
+        if lora_budget_mb:
+            try:
+                budget_bytes = int(float(lora_budget_mb) * 1024 * 1024)
+                from .diffusion_infra import DiffusionLoRAOffloader
+                self._lora_offloader = DiffusionLoRAOffloader(memory_budget_bytes=budget_bytes)
+                logger.info(f"DiffusionLoRAOffloader enabled ({lora_budget_mb} MB budget)")
+            except ValueError:
+                logger.warning(f"Invalid YUNSHU_LORA_BUDGET_MB={lora_budget_mb!r}, expected number in MB")
+
+        # DistributedDiffusionCoordinator — splits diffusion steps across mesh nodes.
+        # Opt-in via YUNSHU_DIFFUSION_NODES env var (number of nodes >= 2).
+        # Uses contiguous step assignment by default.
+        self._diffusion_coordinator = None
+        diffusion_nodes = os.environ.get("YUNSHU_DIFFUSION_NODES", "").strip()
+        if diffusion_nodes:
+            try:
+                n_nodes = int(diffusion_nodes)
+                if n_nodes >= 2:
+                    from .diffusion_infra import DistributedDiffusionCoordinator
+                    self._diffusion_coordinator = DistributedDiffusionCoordinator(num_nodes=n_nodes)
+                    logger.info(f"DistributedDiffusionCoordinator enabled ({n_nodes} nodes)")
+                else:
+                    logger.warning(f"YUNSHU_DIFFUSION_NODES must be >= 2 for distributed diffusion, got {n_nodes}")
+            except ValueError:
+                logger.warning(f"Invalid YUNSHU_DIFFUSION_NODES={diffusion_nodes!r}, expected integer >= 2")
+
         # TeaCache (opt-in via YUNSHU_TEACACHE=1 or threshold value)
         self._teacache = None
         teacache_env = os.environ.get("YUNSHU_TEACACHE", "").strip()
@@ -1958,9 +1990,27 @@ class ImageGenEngine:
         # 4. Compute sigma schedule
         sigmas = self._resolve_sigmas(num_steps, width, height)
 
+        # 4b. Initialize distributed coordinator step assignment if active
+        if self._diffusion_coordinator is not None:
+            self._diffusion_coordinator.assign_steps(
+                num_nodes=self._diffusion_coordinator.num_nodes,
+                total_steps=num_steps,
+            )
+            # Log step distribution across nodes
+            for nid, assign in self._diffusion_coordinator.assignments.items():
+                logger.info(
+                    f"DistributedDiffusion: node {nid} -> "
+                    f"steps {assign.first_step}..{assign.last_step} "
+                    f"({assign.step_count} steps)"
+                )
+
         # 5. Denoising loop
         if self._teacache is not None:
             self._teacache.reset()
+
+        # 5b. LoRA offloader: load adapters needed for step 0
+        if self._lora_offloader is not None:
+            self._lora_offloader.load_for_step(0)
 
         for t in range(num_steps):
             sigma_t = sigmas[t].reshape((1,))
@@ -1984,11 +2034,38 @@ class ImageGenEngine:
             mx.eval(latents)
             logger.debug(f"Step {t+1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
 
+            # LoRA offloader: swap adapters for next step
+            if self._lora_offloader is not None:
+                self._lora_offloader.unload_after_step(t)
+                if t + 1 < num_steps:
+                    self._lora_offloader.load_for_step(t + 1)
+
+            # Distributed coordinator: record sync checkpoint at interval boundaries
+            if self._diffusion_coordinator is not None:
+                self._diffusion_coordinator.sync_latents(
+                    source_node=0, target_node=0, step=t, latent_data=latents,
+                )
+
         if self._teacache is not None:
             tc_stats = self._teacache.get_stats()
             logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
                         f"{tc_stats['cache_misses']} misses, "
                         f"hit_rate={tc_stats['hit_rate']:.1%}")
+
+        # LoRA offloader cleanup after denoising
+        if self._lora_offloader is not None:
+            unloaded = self._lora_offloader.unload_all()
+            if unloaded:
+                logger.info(f"LoRA offloader: unloaded {len(unloaded)} adapters after denoising")
+
+        # Distributed coordinator progress report
+        if self._diffusion_coordinator is not None:
+            progress = self._diffusion_coordinator.get_progress()
+            logger.info(
+                f"DistributedDiffusion: {progress['progress_pct']:.0f}% complete, "
+                f"{progress['checkpoints_count']} checkpoints, "
+                f"{progress['sync_points_count']} sync points"
+            )
 
         # 6. VAE decode (auto-tile for large images to reduce peak memory)
         if width * height > 1024 * 1024:
@@ -2617,6 +2694,20 @@ class ImageGenEngine:
 
             mx.eval(self._transformer.parameters())
             logger.info(f"LoRA adapter loaded: {adapter_path}, {applied} layers")
+
+            # Register with LoRA offloader if active
+            if self._lora_offloader is not None:
+                import sys
+                adapter_id = adapter_path.rsplit("/", 1)[-1] if "/" in adapter_path else adapter_path
+                # Estimate memory: rank * (in + out) * 4 bytes per layer
+                est_bytes = applied * _rank * (256 + 256) * 4  # rough estimate
+                self._lora_offloader.register_adapter(
+                    lora_id=adapter_id,
+                    memory_bytes=est_bytes,
+                    priority=int(_scale),
+                )
+                logger.info(f"LoRA adapter registered with offloader: {adapter_id}")
+
             return True
         except Exception as e:
             logger.error(f"Failed to load LoRA adapter: {e}", exc_info=True)

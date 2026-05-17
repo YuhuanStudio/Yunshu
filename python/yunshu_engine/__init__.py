@@ -83,6 +83,18 @@ def __getattr__(name):
     "BatchedDetokenizer": ".streaming_optimizer",
     "StreamingBackpressureController": ".streaming_optimizer",
     "BackpressureConfig": ".streaming_optimizer",
+    # Diffusion Infrastructure (scheduler + LoRA offloader + distributed coordinator)
+    "DiffusionScheduler": ".diffusion_infra",
+    "SchedulerType": ".diffusion_infra",
+    "NoiseScheduleType": ".diffusion_infra",
+    "DiffusionStep": ".diffusion_infra",
+    "DiffusionLoRAOffloader": ".diffusion_infra",
+    "LoRAAdapter": ".diffusion_infra",
+    "MemoryBudget": ".diffusion_infra",
+    "DistributedDiffusionCoordinator": ".diffusion_infra",
+    "NodeAssignment": ".diffusion_infra",
+    "SyncCheckpoint": ".diffusion_infra",
+    "StepAssignmentStrategy": ".diffusion_infra",
     # Checkpoint / Restore (fault recovery)
     "InferenceCheckpoint": ".checkpoint",
     "InferenceState": ".checkpoint",
