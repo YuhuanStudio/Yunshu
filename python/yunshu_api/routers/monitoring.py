@@ -67,7 +67,7 @@ def _aggregate_model_stats() -> dict:
     loaded_count = 0
     running_count = 0
 
-    for entry in manager._entries.values():
+    for entry in manager.list_entries():
         if entry.is_loaded:
             loaded_count += 1
             model_names.append(entry.model_id)
@@ -75,12 +75,19 @@ def _aggregate_model_stats() -> dict:
                 running_count += 1
                 if hasattr(entry.engine, "get_stats"):
                     stats = entry.engine.get_stats()
-                    total_active += stats.get("active", 0)
-                    total_waiting += stats.get("waiting", 0)
+                    total_active += stats.get("active_collectors",
+                                              stats.get("scheduler_running",
+                                                        stats.get("active", 0)))
+                    total_waiting += stats.get("scheduler_waiting",
+                                               stats.get("waiting", 0))
                     total_processed += stats.get("num_requests_processed", 0)
-                    total_prompt_tokens += stats.get("total_prompt_tokens", 0)
-                    total_completion_tokens += stats.get("total_completion_tokens", 0)
-                    step_counter = max(step_counter, stats.get("step_counter", 0))
+                    total_prompt_tokens += stats.get("scheduler_total_prompt_tokens",
+                                                     stats.get("total_prompt_tokens", 0))
+                    total_completion_tokens += stats.get("scheduler_total_completion_tokens",
+                                                         stats.get("total_completion_tokens", 0))
+                    step_counter = max(step_counter,
+                                       stats.get("scheduler_step_counter",
+                                                 stats.get("step_counter", 0)))
 
     return {
         "model": ", ".join(model_names) if model_names else None,
@@ -93,7 +100,7 @@ def _aggregate_model_stats() -> dict:
         "total_prompt_tokens": total_prompt_tokens,
         "total_completion_tokens": total_completion_tokens,
         "models_loaded": loaded_count,
-        "models_registered": len(manager._entries),
+        "models_registered": len(list(manager.list_entries())),
     }
 
 
@@ -232,13 +239,13 @@ async def get_model_stats():
     results = []
 
     if manager is not None:
-        for mid, entry in manager._entries.items():
+        for entry in manager.list_entries():
             engine_stats = {}
             if entry.is_loaded and entry.engine:
                 if hasattr(entry.engine, "get_stats"):
                     engine_stats = entry.engine.get_stats()
             results.append({
-                "model_id": mid,
+                "model_id": entry.model_id,
                 "type": entry.model_type.name if isinstance(entry.model_type, ModelType) else str(entry.model_type),
                 "loaded": entry.is_loaded,
                 "pinned": entry.is_pinned,

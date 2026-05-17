@@ -1183,6 +1183,12 @@ async def _handle_vlm_chat(
         rt = r.get("reasoning_tokens", 0)
         ct = r.get("completion_tokens", 0) or (len(tok.encode(content)) if tok else max(1, len(content) // 4))
         finish_reason = _normalize_finish_reason(r.get("finish_reason"))
+
+        # Extract thinking content if enabled (consistent with LLM path)
+        thinking_content = None
+        if req.enable_thinking:
+            thinking_content, content = extract_thinking(content, req.model)
+
         tool_calls = None
         if req.tools:
             tool_calls = extract_tool_calls_model_aware(content, req.model)
@@ -1191,6 +1197,7 @@ async def _handle_vlm_chat(
                 finish_reason = "tool_calls"
         return idx, {
             "content": content.strip(),
+            "reasoning_content": thinking_content,
             "reasoning_tokens": rt,
             "completion_tokens": ct,
             "finish_reason": finish_reason,
@@ -1225,6 +1232,8 @@ async def _handle_vlm_chat(
         total_completion_tok += data["completion_tokens"]
         total_reasoning_tok += data["reasoning_tokens"]
         message = {"role": "assistant", "content": data["content"]}
+        if data.get("reasoning_content"):
+            message["reasoning_content"] = data["reasoning_content"]
         if data["tool_calls"]:
             from ..streaming import _sanitize_arguments
             message["tool_calls"] = [

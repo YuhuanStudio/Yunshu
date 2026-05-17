@@ -158,14 +158,20 @@ class _Metrics:
                         total_running += 1
                         if entry.engine and hasattr(entry.engine, "get_stats"):
                             s = entry.engine.get_stats()
-                            total_active += s.get("active", 0)
-                            total_waiting += s.get("waiting", 0)
+                            total_active += s.get("active_collectors",
+                                                  s.get("scheduler_running",
+                                                        s.get("active", 0)))
+                            total_waiting += s.get("scheduler_waiting",
+                                                   s.get("waiting", 0))
             else:
                 engine = get_engine()
                 if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
                     s = engine.get_stats()
-                    total_active = s.get("active", 0)
-                    total_waiting = s.get("waiting", 0)
+                    total_active = s.get("active_collectors",
+                                        s.get("scheduler_running",
+                                              s.get("active", 0)))
+                    total_waiting = s.get("scheduler_waiting",
+                                          s.get("waiting", 0))
                     if s.get("loaded"):
                         total_running = 1
 

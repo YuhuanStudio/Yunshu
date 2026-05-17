@@ -139,10 +139,28 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     from yunshu_engine.image_engine import ImageGenEngine
 
     img_engine = None
+    # Match by model name first (consistent with non-streaming path)
     for entry in manager.list_entries():
         if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
-            img_engine = entry.engine
-            break
+            if req.model in {entry.model_id, entry.model_id.lower()}:
+                img_engine = entry.engine
+                break
+
+    if img_engine is None:
+        # Try loading by model name
+        try:
+            engine = await manager.get_engine(req.model)
+            if isinstance(engine, ImageGenEngine):
+                img_engine = engine
+        except (KeyError, Exception):
+            logger.debug(f"failed to load image engine for {req.model}", exc_info=True)
+
+    if img_engine is None:
+        # Fallback: first loaded ImageGenEngine
+        for entry in manager.list_entries():
+            if entry.is_loaded and isinstance(getattr(entry, 'engine', None), ImageGenEngine):
+                img_engine = entry.engine
+                break
 
     if img_engine is None:
         raise HTTPException(status_code=404, detail="No image generation engine available")

@@ -354,6 +354,9 @@ async def create_transcription(
     model: str = Form(...),
     language: Optional[str] = Form(None),
     response_format: str = Form("json"),
+    prompt: Optional[str] = Form(None),
+    temperature: float = Form(0.0),
+    timestamp_granularities: Optional[list[str]] = Form(None),
 ) -> dict:
     """Transcribe audio file (OpenAI /v1/audio/transcriptions compatible)."""
     manager = get_model_manager()
@@ -406,6 +409,9 @@ async def create_transcription(
         result = await asr_engine.transcribe(
             audio_path=asr_path,
             language=language,
+            prompt=prompt,
+            temperature=temperature,
+            timestamp_granularities=timestamp_granularities,
         )
     except HTTPException:
         raise
@@ -434,6 +440,26 @@ async def create_transcription(
         resp["segments"] = result["segments"]
     if result.get("duration"):
         resp["duration"] = result["duration"]
+
+    # Handle response_format variants per OpenAI API
+    if response_format == "verbose_json":
+        # verbose_json always includes these fields (even if empty)
+        resp.setdefault("segments", [])
+        resp.setdefault("duration", 0.0)
+        if "words" not in resp and result.get("words"):
+            resp["words"] = result["words"]
+    elif response_format == "text":
+        return Response(content=result.get("text", ""), media_type="text/plain")
+    elif response_format == "srt":
+        return Response(
+            content=_format_srt(result.get("segments", [])),
+            media_type="text/plain",
+        )
+    elif response_format == "vtt":
+        return Response(
+            content=_format_vtt(result.get("segments", [])),
+            media_type="text/vtt",
+        )
     return resp
 
 
@@ -532,6 +558,58 @@ async def voice_pipeline(
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+# ── Subtitle formatters ──
+
+
+def _format_srt(segments: list[dict]) -> str:
+    """Format transcription segments as SRT subtitle format."""
+    lines = []
+    for i, seg in enumerate(segments, 1):
+        start = seg.get("start", 0.0)
+        end = seg.get("end", 0.0)
+        text = seg.get("text", "")
+        start_ts = _seconds_to_srt_timestamp(start)
+        end_ts = _seconds_to_srt_timestamp(end)
+        lines.append(f"{i}")
+        lines.append(f"{start_ts} --> {end_ts}")
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_vtt(segments: list[dict]) -> str:
+    """Format transcription segments as WebVTT subtitle format."""
+    lines = ["WEBVTT", ""]
+    for seg in segments:
+        start = seg.get("start", 0.0)
+        end = seg.get("end", 0.0)
+        text = seg.get("text", "")
+        start_ts = _seconds_to_vtt_timestamp(start)
+        end_ts = _seconds_to_vtt_timestamp(end)
+        lines.append(f"{start_ts} --> {end_ts}")
+        lines.append(text)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _seconds_to_srt_timestamp(seconds: float) -> str:
+    """Convert seconds to SRT timestamp format HH:MM:SS,mmm."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _seconds_to_vtt_timestamp(seconds: float) -> str:
+    """Convert seconds to WebVTT timestamp format HH:MM:SS.mmm."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
 # ── STS (Speech-to-Speech) Endpoints ──

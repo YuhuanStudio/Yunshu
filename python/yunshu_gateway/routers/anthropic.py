@@ -383,9 +383,6 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     stop = req.stop_sequences or []
 
-    # Convert logit_bias keys from str to int for engine compatibility
-    _logit_bias = _convert_logit_bias(req)
-
     # Inject tool definitions into system prompt if provided
     if req.tools:
         tool_prompt = "\n\nYou have access to the following tools. When you need to call a tool, "
@@ -806,8 +803,9 @@ async def _stream_anthropic(
 
     _start_ts = int(time.time())
 
-    # content_block_start for thinking (if enabled) is deferred along with
-    # message_start — emitted inside _token_source after message_start.
+    # content_block_start for thinking is NOT eagerly emitted — it opens
+    # only when the first reasoning token arrives, avoiding empty thinking
+    # blocks when the model decides not to think.
 
     async def _token_source():
         nonlocal input_tokens, output_tokens, block_index, cached_tokens
@@ -857,12 +855,14 @@ async def _stream_anthropic(
                 # Emit message_start on first output with prompt_tokens.
                 # Deferred from the initial yield so that cache token counts
                 # are populated from the engine rather than reporting 0.
+                # NOTE: Do NOT eagerly open the thinking block here — only
+                # open it when the first reasoning token actually arrives.
+                # Opening it eagerly causes an empty thinking block when the
+                # model decides not to think (Anthropic spec: thinking blocks
+                # appear only when the model produces reasoning output).
                 if not _message_start_emitted:
                     _message_start_emitted = True
                     yield _emit_message_start(input_tokens, cached_tokens)
-                    if enable_thinking:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
-                        thinking_block_started = True
 
                 # Thinking content
                 if enable_thinking and _is_reasoning and _token_text:
@@ -967,12 +967,11 @@ async def _stream_anthropic(
 
                 # Emit message_start on first output with prompt_tokens
                 # (deferred from the initial yield for accurate cache tokens).
+                # NOTE: Do NOT eagerly open the thinking block here — only
+                # open it when the first reasoning token actually arrives.
                 if not _message_start_emitted:
                     _message_start_emitted = True
                     yield _emit_message_start(input_tokens, cached_tokens)
-                    if enable_thinking:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
-                        thinking_block_started = True
 
                 # Use engine's current_state (token-level tracking) when available,
                 # fall back to ThinkingParser for engines that don't set current_state
@@ -1047,14 +1046,12 @@ async def _stream_anthropic(
             yield _emit_message_start(input_tokens, cached_tokens)
 
         # If no content blocks were started at all (zero tokens), emit an empty text block
-        # so that the response always has at least one content block (Anthropic protocol requirement)
+        # so that the response always has at least one content block (Anthropic protocol requirement).
+        # Always use text block, NOT thinking — thinking blocks should only appear when
+        # the model actually produces reasoning output.
         if not text_block_started and not thinking_block_started:
-            if enable_thinking:
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
-                thinking_block_started = True
-            else:
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                text_block_started = True
+            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+            text_block_started = True
 
         # Close last content block (only if one was actually started)
         if text_block_started or thinking_block_started:

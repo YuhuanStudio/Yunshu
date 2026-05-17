@@ -164,15 +164,21 @@ def _get_active_requests() -> dict[str, Any]:
         for entry in manager.list_entries():
             if entry.is_loaded and entry.engine and hasattr(entry.engine, "get_stats"):
                 s = entry.engine.get_stats()
-                active += s.get("active", 0)
-                waiting += s.get("waiting", 0)
+                active += s.get("active_collectors",
+                                s.get("scheduler_running",
+                                      s.get("active", 0)))
+                waiting += s.get("scheduler_waiting",
+                                 s.get("waiting", 0))
                 processed += s.get("num_requests_processed", 0)
     else:
         engine = get_engine()
         if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
             s = engine.get_stats()
-            active = s.get("active", 0)
-            waiting = s.get("waiting", 0)
+            active = s.get("active_collectors",
+                           s.get("scheduler_running",
+                                 s.get("active", 0)))
+            waiting = s.get("scheduler_waiting",
+                            s.get("waiting", 0))
             processed = s.get("num_requests_processed", 0)
 
     # Also include metrics aggregator data.
@@ -457,10 +463,10 @@ async def memory_guard_stats() -> dict[str, Any]:
             if core:
                 guard = getattr(core, '_memory_guard', None)
         if guard is not None:
+            guard_stats = guard.get_stats() if hasattr(guard, 'get_stats') else {}
             results.append({
                 "model_id": model_id,
-                "pressure_level": getattr(guard, 'pressure_level', 'unknown'),
-                "eviction_count": getattr(guard, '_eviction_count', 0),
+                **guard_stats,
             })
     if not results:
         return {"active": False}
@@ -824,3 +830,74 @@ async def batch_size_stats() -> dict[str, Any]:
     except Exception:
         logger.debug("batch size stats failed", exc_info=True)
         return {"enabled": False}
+
+
+@router.get("/auto-tuner")
+async def auto_tuner_stats() -> dict[str, Any]:
+    """Auto-tuner state and tuning decisions.
+
+    Returns the current tunable parameters, profiling state, SLO compliance,
+    and recent tuning history from the auto-tuner for each loaded engine.
+    """
+    engines = _collect_engines_from_globals()
+    results = []
+    for model_id, engine in engines:
+        info: dict[str, Any] = {"model_id": model_id}
+        if hasattr(engine, "get_stats"):
+            stats = engine.get_stats()
+            if "auto_tuner" in stats:
+                info["auto_tuner"] = stats["auto_tuner"]
+            if "profiler" in stats:
+                info["profiler"] = stats["profiler"]
+            if "slo" in stats:
+                info["slo"] = stats["slo"]
+            if not any(k in stats for k in ("auto_tuner", "profiler", "slo")):
+                info["enabled"] = False
+        else:
+            info["enabled"] = False
+        results.append(info)
+    if not results:
+        return {"enabled": False, "reason": "no engines loaded"}
+    return {"models": results}
+
+
+@router.get("/memory-pressure")
+async def memory_pressure_stats() -> dict[str, Any]:
+    """Memory pressure and guard statistics across all loaded engines.
+
+    Combines MemoryGuard admission-control stats with memory monitor
+    information for a complete picture of memory pressure state.
+    """
+    engines = _collect_engines_from_globals()
+    results = []
+    for model_id, engine in engines:
+        entry: dict[str, Any] = {"model_id": model_id}
+
+        # MemoryGuard (admission control)
+        guard = getattr(engine, '_memory_guard', None)
+        if guard is None:
+            core = getattr(engine, '_engine_core', None)
+            if core:
+                guard = getattr(core, '_memory_guard', None)
+        if guard is not None:
+            entry["guard"] = guard.get_stats() if hasattr(guard, 'get_stats') else {}
+
+        # MemoryAwareScheduler stats (memory-pressure-driven scheduling)
+        core = getattr(engine, '_engine_core', None)
+        if core is not None:
+            mas = getattr(core, '_memory_aware_scheduler', None)
+            if mas is not None and hasattr(mas, 'get_stats'):
+                entry["memory_aware_scheduler"] = mas.get_stats().__dict__
+
+        # KV prefix compression stats (memory savings)
+        if hasattr(engine, 'get_stats'):
+            stats = engine.get_stats()
+            if "kv_prefix_compression" in stats:
+                entry["kv_compression"] = stats["kv_prefix_compression"]
+
+        if entry.keys() - {"model_id"}:
+            results.append(entry)
+
+    if not results:
+        return {"active": False}
+    return {"active": True, "models": results}

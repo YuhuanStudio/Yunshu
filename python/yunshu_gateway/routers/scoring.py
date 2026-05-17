@@ -40,6 +40,8 @@ class PoolingRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        if self.pooling_type.upper() not in _VALID_POOLING_TYPES:
+            raise ValueError(f"pooling_type: must be one of {', '.join(sorted(_VALID_POOLING_TYPES))}, got '{self.pooling_type}'")
         if self.encoding_format not in ("float", "base64"):
             raise ValueError(f"encoding_format: must be 'float' or 'base64', got '{self.encoding_format}'")
         return self
