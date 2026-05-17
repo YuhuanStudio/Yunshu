@@ -38,6 +38,24 @@ class LoRAAdapterEntry:
     ref_count: int = 0  # Number of active requests using this adapter
 
 
+# ── Module-level singleton ──
+
+_global_lora_manager: LoRAAdapterManager | None = None
+_global_lora_lock = threading.Lock()
+
+
+def get_lora_manager() -> LoRAAdapterManager | None:
+    """Return the global LoRAAdapterManager singleton, or None if not initialized."""
+    return _global_lora_manager
+
+
+def set_lora_manager(mgr: LoRAAdapterManager | None) -> None:
+    """Set the global LoRAAdapterManager singleton."""
+    global _global_lora_manager
+    with _global_lora_lock:
+        _global_lora_manager = mgr
+
+
 class LoRAAdapterManager:
     """Manages LoRA adapters for a single loaded model.
 
@@ -274,13 +292,13 @@ class LoRAAdapterManager:
             if adapter_id not in self._adapters:
                 return False
             entry = self._adapters[adapter_id]
-            if not entry.is_loaded:
-                # load_adapter takes its own lock; release ours first
-                pass
-            elif entry.is_merged:
+            if entry.is_merged:
                 return True  # Already merged
+            needs_load = not entry.is_loaded
 
-        if not entry.is_loaded:
+        # Load outside lock to avoid holding _lock during GPU work;
+        # load_adapter takes its own _lock (RLock, reentrant-safe).
+        if needs_load:
             if not self.load_adapter(adapter_id):
                 return False
 
@@ -380,6 +398,21 @@ class LoRAAdapterManager:
                 self._lru_order.remove(candidate_id)
                 if self._active_adapter_id == candidate_id:
                     self._active_adapter_id = None
+                # Restore base model weights under gpu_lock so the LoRA
+                # layers don't remain stale on the model after eviction.
+                with self._gpu_lock:
+                    try:
+                        self._restore_base()
+                    except Exception as e:
+                        # Revert state on failure so the adapter isn't lost
+                        entry.is_loaded = True
+                        self._touch(candidate_id)
+                        self._active_adapter_id = candidate_id
+                        logger.error(
+                            f"Failed to restore base during LRU eviction of "
+                            f"{candidate_id}: {e}", exc_info=True,
+                        )
+                        return False
                 logger.info(f"Unloaded LoRA adapter (LRU eviction): {candidate_id}")
                 return True
         # All loaded adapters have active requests

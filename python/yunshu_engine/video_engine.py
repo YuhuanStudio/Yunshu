@@ -568,6 +568,7 @@ class VideoEngine:
                     # Load the saved image as an MLX array for the native pipeline.
                     # The native pipeline expects (H, W, C) float tensor in [0, 1].
                     import numpy as np
+                    import mlx.core as mx
                     from PIL import Image as PILImage
                     pil_img = PILImage.open(img_path).convert("RGB")
                     img_np = np.array(pil_img, dtype=np.float32) / 255.0

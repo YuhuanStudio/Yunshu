@@ -906,9 +906,10 @@ class BatchedEngine:
     def _init_lora(self):
         """Initialize LoRA adapter manager after model load."""
         max_loras = int(os.environ.get("YUNSHU_MAX_LORAS", "4"))
-        from .lora_manager import LoRAAdapterManager
+        from .lora_manager import LoRAAdapterManager, set_lora_manager
         self._lora_manager = LoRAAdapterManager(max_loras=max_loras)
         self._lora_manager.set_base_model(self._model)
+        set_lora_manager(self._lora_manager)
 
         # Auto-discover adapters in model directory
         model_path = ""
@@ -1137,13 +1138,12 @@ class BatchedEngine:
         # Stop LoRA adapter manager (unload all adapters, release weights)
         if self._lora_manager is not None:
             try:
-                from .lora_manager import get_lora_manager
-                lora_mgr = get_lora_manager()
-                if lora_mgr is not None:
-                    lora_mgr.unload_all()
+                self._lora_manager.shutdown()
             except Exception:
                 logger.debug("LoRA manager cleanup failed", exc_info=True)
             self._lora_manager = None
+            from .lora_manager import set_lora_manager
+            set_lora_manager(None)
 
         # 3. Release model + tokenizer refs, then GC + clear MLX cache
         self._model = None
@@ -3655,13 +3655,32 @@ class BatchedEngine:
             self._spec_decoder.target(input_array, cache=target_cache)
             self._spec_decoder.draft(input_array, cache=draft_cache)
 
+            # Roll back both caches by 1 position so the last prompt token is
+            # NOT in the cache.  This prevents double-feeding:
+            #   - generate_draft will feed current_ids (last prompt token) into
+            #     the draft cache — correct since it was rolled back.
+            #   - verify_draft will feed [current_ids, d0, ...] into the target
+            #     cache — correct since current_ids was rolled back.
+            # Without this rollback, both methods would double-feed the last
+            # prompt token (it's already in both caches from prefill).
+            try:
+                from mlx_lm.models.cache import trim_prompt_cache
+                trim_prompt_cache(target_cache, 1)
+                trim_prompt_cache(draft_cache, 1)
+            except Exception:
+                for c in target_cache:
+                    if hasattr(c, "trim"):
+                        c.trim(1)
+                for c in draft_cache:
+                    if hasattr(c, "trim"):
+                        c.trim(1)
+
         await loop.run_in_executor(executor, _prefill)
         _spec_gen_t0 = time.perf_counter()  # TTFT timing starts after prefill
 
-        # After prefill, both caches have the prompt.
-        # For generate_draft, feed only the last prompt token to get first draft
-        # (not the full prompt again — that would double-prefill).
-        # For verify_draft, current_ids provides the alignment token.
+        # After prefill + rollback, both caches have prompt[:-1].
+        # current_ids is the last prompt token, which will be fed into both
+        # caches by generate_draft and verify_draft respectively — no double-feed.
         current_ids = input_array[:, -1:]  # [1, 1] last prompt token
 
         try:
@@ -3783,10 +3802,12 @@ class BatchedEngine:
                             if hasattr(c, "trim"):
                                 c.trim(trim_count)
 
-                    # Restore draft cache to pre-draft state and refeed accepted + bonus
+                    # Restore draft cache to pre-draft state and refeed accepted tokens.
+                    # Do NOT refeed the bonus token here — generate_draft will feed
+                    # current_ids (= bonus token) at the start of the next iteration,
+                    # so including it now would cause a double-feed.
                     self._spec_decoder._restore_cache(draft_cache, draft_snap)
-                    refeed_tokens = verify_result.accepted_ids + [verify_result.bonus_token_id]
-                    for tok in refeed_tokens:
+                    for tok in verify_result.accepted_ids:
                         self._spec_decoder.draft(mx.array([[tok]]), cache=draft_cache)
 
                 # Feed bonus token to both caches (target already has it from verify_draft
@@ -3926,8 +3947,10 @@ class BatchedEngine:
             _grammar_constraint.rollback()
             return filtered
 
-        # Inflight prefix sharing: defined at _run level so cleanup is accessible
-        _ng_inflight_req_id = f"ng-{id(_run)}-{int(time.monotonic()*1e6)}"
+        # Inflight prefix sharing: defined before _run so cleanup is accessible
+        # in exception handlers. Use timestamp instead of id(_run) since _run
+        # is not yet defined at this point.
+        _ng_inflight_req_id = f"ng-{int(time.monotonic()*1e6)}"
 
         def _unregister_inflight():
             try:

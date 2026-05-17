@@ -195,17 +195,32 @@ class SpecDraftVerifier:
         else:
             model_picks = mx.argmax(batch_logits, axis=-1).tolist()
 
-        # Step 4: Find acceptance boundary (consecutive prefix match)
-        accepted_tokens, rejection_position = _find_acceptance_boundary(
-            model_picks, draft_ids, K
-        )
+        # Step 4: Find acceptance boundary (shifted comparison).
+        # logits[i] predicts what comes AFTER d[i], so we compare:
+        #   model_picks[0]  ->  draft_ids[1]   (verifies d1)
+        #   model_picks[i]  ->  draft_ids[i+1] (verifies d_{i+1})
+        # d0 is trusted (comes from pattern match) and always included.
+        accepted_tokens = [draft_ids[0]]  # d0 is always accepted (trusted)
+        rejection_position = None
+        for i in range(K - 1):
+            if model_picks[i] == draft_ids[i + 1]:
+                accepted_tokens.append(draft_ids[i + 1])
+            else:
+                rejection_position = i + 1
+                break
 
         accepted_count = len(accepted_tokens)
         all_accepted = accepted_count == K
         rejected_count = K - accepted_count
 
-        # Step 5: Bonus token from rejection point or last position
-        bonus_token = _compute_bonus_token(model_picks, rejection_position, K)
+        # Step 5: Bonus token from rejection point or last position.
+        # logits[K-1] predicts what comes after all K drafts -> always the bonus.
+        # If rejection at position i+1: bonus = model_picks[i] (prediction at i).
+        # If all accepted: bonus = model_picks[K-1] (prediction at last position).
+        if rejection_position is not None:
+            bonus_token = model_picks[rejection_position - 1]
+        else:
+            bonus_token = model_picks[K - 1]
 
         # Step 6: Trim KV cache to remove rejected entries
         cache_trimmed = 0

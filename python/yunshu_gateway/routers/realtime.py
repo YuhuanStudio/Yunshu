@@ -659,7 +659,10 @@ class RealtimeSession:
                 },
             ))
         finally:
-            self._active_response = None
+            # Only clear if this task is still the active response.
+            # Prevents race: cancel → new response.create → old finally wipes new task ref.
+            if self._active_response is asyncio.current_task():
+                self._active_response = None
             self._cancel_event = None
 
     async def _handle_response_cancel(self, event: dict) -> None:
@@ -668,15 +671,22 @@ class RealtimeSession:
         Cancels the active response task. If audio was being streamed,
         sends response.audio.done to signal the client to truncate playback.
         """
-        if self._active_response and not self._active_response.done():
+        task = self._active_response
+        if task and not task.done():
             # Capture task attributes before cancelling (cancel triggers finally which
             # sets self._active_response = None)
-            response_id = getattr(self._active_response, '_response_id', '')
-            item_id = getattr(self._active_response, '_item_id', '')
+            response_id = getattr(task, '_response_id', '')
+            item_id = getattr(task, '_item_id', '')
             # Signal the cancel_event so the engine can stop mid-generation
             if self._cancel_event is not None:
                 self._cancel_event.set()
-            self._active_response.cancel()
+            task.cancel()
+            # Await the cancelled task to ensure its finally block runs before we
+            # return, preventing a race with a subsequent response.create.
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
             # Signal audio truncation so client stops playback immediately
             await self.send_event(_event(
                 RealtimeEvent.RESPONSE_AUDIO_DONE,

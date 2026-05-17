@@ -178,14 +178,31 @@ class TestComputeBonusToken:
 # ── SpecDraftVerifier.verify() tests ──
 
 class TestVerify:
-    """Tests for SpecDraftVerifier.verify()."""
+    """Tests for SpecDraftVerifier.verify().
+
+    The verify() method uses shifted comparison:
+      - Feed [d0, d1, ..., dK-1] to model
+      - logits[i] predicts what comes AFTER d[i]
+      - model_picks[0] compared with draft_ids[1] (verifies d1)
+      - model_picks[i] compared with draft_ids[i+1] (verifies d_{i+1})
+      - d0 is always trusted and accepted (comes from pattern match)
+      - model_picks[K-1] is the bonus token (prediction after all drafts)
+    """
 
     def setup_method(self):
         self.verifier = SpecDraftVerifier(track_stats=True)
 
     def test_perfect_match_all_accepted(self):
-        """All draft tokens match model picks — all accepted + bonus."""
-        model = MockModel([5, 10, 15])  # Model agrees with all drafts
+        """All shifted comparisons match — all accepted + bonus from last position.
+
+        model_picks = [10, 15, 20]
+        draft_ids   = [5,  10, 15]
+        Comparison: model_picks[0]=10 vs draft_ids[1]=10 -> match
+                    model_picks[1]=15 vs draft_ids[2]=15 -> match
+        d0=5 is trusted.
+        bonus = model_picks[2] = 20 (prediction after all drafts)
+        """
+        model = MockModel([10, 15, 20])
         draft_ids = [5, 10, 15]
         cache = [MockCache(10)]
 
@@ -193,7 +210,7 @@ class TestVerify:
 
         assert result.accepted_count == 3
         assert result.accepted_tokens == [5, 10, 15]
-        assert result.bonus_token == 15  # Last model pick
+        assert result.bonus_token == 20  # model_picks[K-1] = prediction after all drafts
         assert result.rejection_position is None
         assert result.all_accepted is True
         assert result.rejected_count == 0
@@ -201,8 +218,16 @@ class TestVerify:
         assert model.call_count == 1
 
     def test_partial_match_rejection_at_1(self):
-        """First token matches, second doesn't — 1 accepted + bonus."""
-        model = MockModel([5, 99, 15])  # Rejects at position 1
+        """d0 trusted, d1 rejected — 1 accepted (d0) + bonus.
+
+        model_picks = [99, 15, 20]
+        draft_ids   = [5,  10, 15]
+        Comparison: model_picks[0]=99 vs draft_ids[1]=10 -> mismatch at d1
+        d0=5 is trusted.
+        rejection_position = 1 (d1 is rejected)
+        bonus = model_picks[0] = 99 (model's prediction at position 0)
+        """
+        model = MockModel([99, 15, 20])
         draft_ids = [5, 10, 15]
         cache = [MockCache(10)]
 
@@ -210,31 +235,44 @@ class TestVerify:
 
         assert result.accepted_count == 1
         assert result.accepted_tokens == [5]
-        assert result.bonus_token == 99  # Model's pick at rejection
+        assert result.bonus_token == 99
         assert result.rejection_position == 1
         assert result.all_accepted is False
         assert result.rejected_count == 2
         assert result.cache_trimmed == 2  # Trimmed 2 rejected entries
 
     def test_total_mismatch(self):
-        """No tokens match — 0 accepted + bonus from position 0."""
+        """d0 trusted, all shifted comparisons fail — 1 accepted (d0) + bonus.
+
+        model_picks = [99, 88, 77]
+        draft_ids   = [5,  10, 15]
+        Comparison: model_picks[0]=99 vs draft_ids[1]=10 -> mismatch at d1
+        d0=5 is trusted.
+        """
         model = MockModel([99, 88, 77])
         draft_ids = [5, 10, 15]
         cache = [MockCache(10)]
 
         result = self.verifier.verify(model, draft_ids, cache)
 
-        assert result.accepted_count == 0
-        assert result.accepted_tokens == []
+        assert result.accepted_count == 1
+        assert result.accepted_tokens == [5]
         assert result.bonus_token == 99
-        assert result.rejection_position == 0
+        assert result.rejection_position == 1
         assert result.all_accepted is False
-        assert result.rejected_count == 3
-        assert result.cache_trimmed == 3
+        assert result.rejected_count == 2
+        assert result.cache_trimmed == 2
 
     def test_rejection_at_last_position(self):
-        """All but last token match — K-1 accepted + bonus."""
-        model = MockModel([5, 10, 99])
+        """d0 and d1 verified, d2 rejected at last comparison — 2 accepted + bonus.
+
+        model_picks = [10, 99, 20]
+        draft_ids   = [5,  10, 15]
+        Comparison: model_picks[0]=10 vs draft_ids[1]=10 -> match (d1 verified)
+                    model_picks[1]=99 vs draft_ids[2]=15 -> mismatch (d2 rejected)
+        d0=5 is trusted.
+        """
+        model = MockModel([10, 99, 20])
         draft_ids = [5, 10, 15]
         cache = [MockCache(10)]
 
@@ -242,13 +280,13 @@ class TestVerify:
 
         assert result.accepted_count == 2
         assert result.accepted_tokens == [5, 10]
-        assert result.bonus_token == 99
+        assert result.bonus_token == 99  # model_picks[1] at rejection_position-1=1
         assert result.rejection_position == 2
         assert result.rejected_count == 1
         assert result.cache_trimmed == 1
 
     def test_single_draft_accepted(self):
-        """Single draft token that matches — accepted + bonus."""
+        """Single draft token, K=1 — d0 trusted, no comparisons, bonus from model_picks[0]."""
         model = MockModel([42])
         draft_ids = [42]
         cache = [MockCache(10)]
@@ -257,23 +295,26 @@ class TestVerify:
 
         assert result.accepted_count == 1
         assert result.accepted_tokens == [42]
-        assert result.bonus_token == 42
+        assert result.bonus_token == 42  # model_picks[K-1] = model_picks[0]
         assert result.all_accepted is True
 
     def test_single_draft_rejected(self):
-        """Single draft token that doesn't match — rejected + bonus."""
+        """K=1, d0 trusted — always accepted since there are no shifted comparisons to fail.
+
+        With K=1, the loop runs for range(K-1) = range(0), so no comparisons.
+        d0 is always trusted. This is correct behavior for n-gram mode.
+        """
         model = MockModel([99])
         draft_ids = [42]
         cache = [MockCache(10)]
 
         result = self.verifier.verify(model, draft_ids, cache)
 
-        assert result.accepted_count == 0
-        assert result.accepted_tokens == []
-        assert result.bonus_token == 99
-        assert result.rejection_position == 0
-        assert result.rejected_count == 1
-        assert result.cache_trimmed == 1
+        assert result.accepted_count == 1
+        assert result.accepted_tokens == [42]  # d0 is trusted
+        assert result.bonus_token == 99  # model_picks[0] = bonus
+        assert result.rejection_position is None
+        assert result.all_accepted is True
 
     def test_empty_draft_ids(self):
         """Empty draft list — nothing to verify."""
@@ -290,7 +331,7 @@ class TestVerify:
 
     def test_no_cache_trimming_when_all_accepted(self):
         """Cache not trimmed when all drafts accepted."""
-        model = MockModel([1, 2, 3])
+        model = MockModel([2, 3, 4])
         cache = [MockCache(10)]
 
         result = self.verifier.verify(model, [1, 2, 3], cache)
@@ -300,18 +341,22 @@ class TestVerify:
 
     def test_cache_trimmed_correctly(self):
         """Cache trimmed by rejected_count."""
-        model = MockModel([1, 99, 3])  # Reject at pos 1
+        # model_picks = [99, 3, 4]
+        # draft_ids   = [1, 2, 3]
+        # model_picks[0]=99 vs draft_ids[1]=2 -> mismatch at d1
+        model = MockModel([99, 3, 4])
         cache = [MockCache(20)]
 
         result = self.verifier.verify(model, [1, 2, 3], cache)
 
+        assert result.accepted_count == 1
         # 2 rejected -> cache trimmed by 2
         assert result.cache_trimmed == 2
         assert cache[0].n_entries == 18
 
     def test_latency_is_positive(self):
         """Verification latency is measured and positive."""
-        model = MockModel([5, 10])
+        model = MockModel([10, 15])
         cache = [MockCache(10)]
 
         result = self.verifier.verify(model, [5, 10], cache)
@@ -320,7 +365,7 @@ class TestVerify:
 
     def test_model_called_once(self):
         """Model forward pass is called exactly once per verify."""
-        model = MockModel([5])
+        model = MockModel([10])
         cache = [MockCache(10)]
 
         self.verifier.verify(model, [5], cache)
@@ -337,10 +382,12 @@ class TestVerifierStats:
 
     def test_stats_accumulate(self):
         verifier = SpecDraftVerifier(track_stats=True)
-        model = MockModel([5, 10])
+        # model_picks = [10, 15], draft_ids = [5, 10]
+        # model_picks[0]=10 vs draft_ids[1]=10 -> match (d1 verified)
+        # All accepted: d0 trusted + d1 verified = 2 accepted
+        model = MockModel([10, 15])
         cache = [MockCache(20)]
 
-        # First verify: 2 drafts, 2 accepted
         verifier.verify(model, [5, 10], cache)
         stats = verifier.stats
         assert stats["total_proposals"] == 2
@@ -351,7 +398,10 @@ class TestVerifierStats:
 
     def test_stats_accumulate_multiple_calls(self):
         verifier = SpecDraftVerifier(track_stats=True)
-        model_match = MockModel([5, 10])
+        # First: model_picks = [10, 15], draft_ids = [5, 10] -> all accepted (2)
+        model_match = MockModel([10, 15])
+        # Second: model_picks = [99, 88], draft_ids = [5, 10]
+        # model_picks[0]=99 vs draft_ids[1]=10 -> mismatch -> d0 trusted only = 1 accepted
         model_miss = MockModel([99, 88])
         cache = [MockCache(50)]
 
@@ -360,10 +410,10 @@ class TestVerifierStats:
 
         stats = verifier.stats
         assert stats["total_proposals"] == 4
-        assert stats["total_accepted"] == 2  # 2 from first, 0 from second
+        assert stats["total_accepted"] == 3  # 2 from first, 1 from second (d0 trusted)
         assert stats["total_bonus"] == 2  # One per call
         assert stats["total_verifications"] == 2
-        assert stats["acceptance_rate"] == 0.5
+        assert stats["acceptance_rate"] == 0.75  # 3/4
 
     def test_stats_disabled(self):
         verifier = SpecDraftVerifier(track_stats=False)
@@ -540,8 +590,14 @@ class TestVerifyWithSampler:
         self.verifier = SpecDraftVerifier(track_stats=True)
 
     def test_greedy_sampler(self):
-        """Greedy sampler (argmax) gives same result as default."""
-        model = MockModel([5, 10, 15])
+        """Greedy sampler (argmax) gives same result as default.
+
+        model_picks = [10, 15, 20], draft_ids = [5, 10, 15]
+        model_picks[0]=10 vs draft_ids[1]=10 -> match
+        model_picks[1]=15 vs draft_ids[2]=15 -> match
+        All accepted + bonus from model_picks[2]=20
+        """
+        model = MockModel([10, 15, 20])
         cache = [MockCache(10)]
 
         def greedy_sampler(logprobs):
@@ -555,7 +611,12 @@ class TestVerifyWithSampler:
         assert result.all_accepted is True
 
     def test_forced_sampler(self):
-        """Sampler that always picks a specific token."""
+        """Sampler that always picks token 99.
+
+        model_picks = [99, 99, 99] (forced), draft_ids = [5, 10, 15]
+        model_picks[0]=99 vs draft_ids[1]=10 -> mismatch at d1
+        d0=5 trusted, 1 accepted, bonus = model_picks[0] = 99
+        """
         model = MockModel([5, 10, 15])
         cache = [MockCache(10)]
 
@@ -567,10 +628,10 @@ class TestVerifyWithSampler:
             model, [5, 10, 15], cache, sampler=force_token_99
         )
 
-        # None match since sampler forces 99
-        assert result.accepted_count == 0
+        # d0 trusted, d1 rejected (99 != 10)
+        assert result.accepted_count == 1
         assert result.bonus_token == 99
-        assert result.rejection_position == 0
+        assert result.rejection_position == 1
 
 
 # ── Large draft batch tests ──
@@ -582,23 +643,38 @@ class TestLargeDraftBatches:
         self.verifier = SpecDraftVerifier(track_stats=True)
 
     def test_10_drafts_all_accepted(self):
-        """K=10 drafts, all match — high acceptance count."""
-        picks = list(range(10))
-        model = MockModel(picks)
+        """K=10 drafts, all shifted comparisons match — high acceptance count.
+
+        model_picks[i] must equal draft_ids[i+1] for i=0..8.
+        draft_ids   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        model_picks = [1, 2, 3, 4, 5, 6, 7, 8, 9, 99]  (shifted match + bonus)
+        """
+        model_picks = list(range(1, 10)) + [99]  # [1, 2, ..., 9, 99]
+        drafts = list(range(10))  # [0, 1, 2, ..., 9]
+        model = MockModel(model_picks)
         cache = [MockCache(30)]
 
-        result = self.verifier.verify(model, picks, cache)
+        result = self.verifier.verify(model, drafts, cache)
 
         assert result.accepted_count == 10
         assert result.all_accepted is True
-        assert result.bonus_token == 9
+        assert result.bonus_token == 99  # model_picks[K-1] = model_picks[9]
 
     def test_10_drafts_half_accepted(self):
-        """K=10 drafts, 5 match then 5 reject."""
-        # Alternating: first 5 match, then mismatch
-        picks = list(range(5)) + [99, 99, 99, 99, 99]
+        """K=10 drafts, 5 verified then mismatch.
+
+        draft_ids   = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        model_picks = [1, 2, 3, 4, 99, ...]
+        model_picks[0]=1 vs draft_ids[1]=1 -> match (d1 verified)
+        model_picks[1]=2 vs draft_ids[2]=2 -> match (d2 verified)
+        model_picks[2]=3 vs draft_ids[3]=3 -> match (d3 verified)
+        model_picks[3]=4 vs draft_ids[4]=4 -> match (d4 verified)
+        model_picks[4]=99 vs draft_ids[5]=5 -> mismatch (d5 rejected)
+        d0 trusted + d1-d4 verified = 5 accepted
+        """
+        model_picks = [1, 2, 3, 4, 99, 99, 99, 99, 99, 99]
         drafts = list(range(10))
-        model = MockModel(picks)
+        model = MockModel(model_picks)
         cache = [MockCache(30)]
 
         result = self.verifier.verify(model, drafts, cache)
@@ -606,7 +682,7 @@ class TestLargeDraftBatches:
         assert result.accepted_count == 5
         assert result.accepted_tokens == [0, 1, 2, 3, 4]
         assert result.rejection_position == 5
-        assert result.bonus_token == 99
+        assert result.bonus_token == 99  # model_picks[4] (rejection_position - 1)
         assert result.cache_trimmed == 5
 
 
@@ -620,7 +696,10 @@ class TestMultipleCacheObjects:
 
     def test_trim_all_cache_layers(self):
         """All cache layers are trimmed."""
-        model = MockModel([5, 99])
+        # model_picks = [99, 3], draft_ids = [5, 10]
+        # model_picks[0]=99 vs draft_ids[1]=10 -> mismatch at d1
+        # d0 trusted, 1 rejected (d1)
+        model = MockModel([99, 3])
         cache = [MockCache(20), MockCache(20), MockCache(20)]
 
         result = self.verifier.verify(model, [5, 10], cache)
@@ -642,32 +721,40 @@ class TestIntegrationPattern:
 
     def test_multi_step_generation_pattern(self):
         """Simulate multi-step generation with alternating accept/reject."""
-        # Step 1: 3 drafts, all accepted
-        model1 = MockModel([10, 20, 30])
+        # Step 1: 3 drafts, all accepted (shifted match)
+        # draft_ids = [10, 20, 30], model_picks = [20, 30, 99]
+        # model_picks[0]=20 vs draft_ids[1]=20 -> match
+        # model_picks[1]=30 vs draft_ids[2]=30 -> match
+        # bonus = model_picks[2] = 99
+        model1 = MockModel([20, 30, 99])
         cache = [MockCache(50)]
         result1 = self.verifier.verify(model1, [10, 20, 30], cache)
 
         assert result1.accepted_count == 3
-        assert result1.bonus_token == 30
+        assert result1.bonus_token == 99
 
-        # Step 2: 2 drafts, 1 accepted then rejected
-        model2 = MockModel([50, 99])
+        # Step 2: 2 drafts, d0 trusted, d1 rejected
+        # draft_ids = [50, 60], model_picks = [99, 88]
+        # model_picks[0]=99 vs draft_ids[1]=60 -> mismatch
+        model2 = MockModel([99, 88])
         result2 = self.verifier.verify(model2, [50, 60], cache)
 
         assert result2.accepted_count == 1
         assert result2.bonus_token == 99
 
-        # Step 3: 4 drafts, all rejected
-        model3 = MockModel([1, 2, 3, 4])
+        # Step 3: 4 drafts, d0 trusted, d1 rejected
+        # draft_ids = [5, 6, 7, 8], model_picks = [99, ...]
+        # model_picks[0]=99 vs draft_ids[1]=6 -> mismatch
+        model3 = MockModel([99, 2, 3, 4])
         result3 = self.verifier.verify(model3, [5, 6, 7, 8], cache)
 
-        assert result3.accepted_count == 0
-        assert result3.bonus_token == 1
+        assert result3.accepted_count == 1
+        assert result3.bonus_token == 99
 
-        # Total: 4 accepted out of 9 proposals
+        # Total: 5 accepted out of 9 proposals (3 + 1 + 1)
         stats = self.verifier.stats
         assert stats["total_proposals"] == 9
-        assert stats["total_accepted"] == 4
+        assert stats["total_accepted"] == 5
         assert stats["total_verifications"] == 3
 
     def test_verify_with_last_token_multi_step(self):
@@ -702,7 +789,9 @@ class TestCacheTrimming:
 
     def test_no_trim_when_all_accepted(self):
         """Cache not trimmed when all drafts accepted."""
-        model = MockModel([5, 10])
+        # model_picks = [10, 15], draft_ids = [5, 10]
+        # model_picks[0]=10 vs draft_ids[1]=10 -> match, all accepted
+        model = MockModel([10, 15])
         cache = [MockCache(10)]
 
         result = SpecDraftVerifier().verify(model, [5, 10], cache)
@@ -711,7 +800,10 @@ class TestCacheTrimming:
 
     def test_trim_preserves_accepted(self):
         """Cache trimmed by exactly the rejected count."""
-        model = MockModel([5, 99, 99])
+        # model_picks = [99, 99, 4], draft_ids = [5, 10, 15]
+        # model_picks[0]=99 vs draft_ids[1]=10 -> mismatch at d1
+        # d0 trusted, 2 rejected (d1, d2)
+        model = MockModel([99, 99, 4])
         cache = [MockCache(30)]
 
         result = SpecDraftVerifier().verify(model, [5, 10, 15], cache)
@@ -722,17 +814,19 @@ class TestCacheTrimming:
 
     def test_trim_with_empty_cache(self):
         """Empty cache list — no crash."""
-        model = MockModel([5, 99])
+        # model_picks = [99, 2], draft_ids = [5, 10]
+        # model_picks[0]=99 vs draft_ids[1]=10 -> mismatch
+        model = MockModel([99, 2])
         cache = []
 
         result = SpecDraftVerifier().verify(model, [5, 10], cache)
 
-        assert result.accepted_count == 1
+        assert result.accepted_count == 1  # d0 trusted
         assert result.cache_trimmed == 0  # Empty cache, nothing to trim
 
     def test_trim_non_trimmable_cache(self):
         """Cache without trim method — no crash, trimmed=0."""
-        model = MockModel([5, 99])
+        model = MockModel([99, 2])
 
         class NonTrimmableCache:
             def is_trimmable(self):
@@ -742,5 +836,5 @@ class TestCacheTrimming:
 
         result = SpecDraftVerifier().verify(model, [5, 10], cache)
 
-        assert result.accepted_count == 1
+        assert result.accepted_count == 1  # d0 trusted
         assert result.cache_trimmed == 0

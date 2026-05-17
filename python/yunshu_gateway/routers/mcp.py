@@ -99,11 +99,17 @@ class MCPSession:
     def is_initialized(self) -> bool:
         return self._initialized
 
-    async def handle_message(self, message: dict) -> dict:
-        """Dispatch an incoming MCP JSON-RPC message to the correct handler."""
+    async def handle_message(self, message: dict) -> dict | None:
+        """Dispatch an incoming MCP JSON-RPC message to the correct handler.
+
+        Returns None for notifications (no 'id' field) per JSON-RPC 2.0 spec.
+        """
         method = message.get("method", "")
         params = message.get("params")
         req_id = message.get("id")
+
+        # Per JSON-RPC 2.0: notifications (no id) MUST NOT receive a response
+        is_notification = "id" not in message
 
         dispatch = {
             "initialize": self._handle_initialize,
@@ -113,6 +119,8 @@ class MCPSession:
 
         handler = dispatch.get(method)
         if handler is None:
+            if is_notification:
+                return None
             return _rpc_error(
                 JSONRPCError.METHOD_NOT_FOUND,
                 f"Method not found: {method}",
@@ -122,6 +130,9 @@ class MCPSession:
         result = handler(params, req_id)
         if asyncio.iscoroutine(result):
             result = await result
+
+        if is_notification:
+            return None
         return result
 
     def _handle_initialize(self, params: dict | None, req_id: Any) -> dict:
@@ -691,19 +702,35 @@ _METHODS["prompts/get"] = _handle_prompts_get
 
 @router.post("/mcp", response_model=None)
 async def mcp_endpoint(req: JSONRPCRequest):
-    """MCP JSON-RPC endpoint."""
+    """MCP JSON-RPC endpoint.
+
+    Per JSON-RPC 2.0 spec, notifications (requests without an 'id') MUST NOT
+    receive a response. We acknowledge them silently.
+    """
+    # Per JSON-RPC 2.0: a Notification is a Request without an "id" member.
+    # The Server MUST NOT reply to a Notification.
+    is_notification = req.id is None
+
     if req.jsonrpc != "2.0":
+        if is_notification:
+            return JSONResponse(content=None, status_code=204)
         return JSONResponse(_rpc_error(JSONRPCError.INVALID_REQUEST, "Invalid jsonrpc version", req.id))
 
     handler = _METHODS.get(req.method)
     if handler is None:
+        if is_notification:
+            return JSONResponse(content=None, status_code=204)
         return JSONResponse(_rpc_error(JSONRPCError.METHOD_NOT_FOUND, f"Method not found: {req.method}", req.id))
 
     try:
         result = await handler(req.params, req.id)
+        if is_notification:
+            return JSONResponse(content=None, status_code=204)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"MCP handler error for {req.method}: {e}", exc_info=True)
+        if is_notification:
+            return JSONResponse(content=None, status_code=204)
         return JSONResponse(_rpc_error(JSONRPCError.INTERNAL_ERROR, str(e), req.id))
 
 
@@ -722,16 +749,21 @@ async def mcp_sse_endpoint(request: Request):
     async def _event_stream():
         # Send initial connection event
         yield f"event: endpoint\ndata: /v1/mcp\n\n"
+        last_ping = asyncio.get_event_loop().time()
         while True:
-            # Poll disconnect every 5s, send keepalive ping every 15s
+            # Poll for disconnect every 5s
+            await asyncio.sleep(5)
             try:
                 if await request.is_disconnected():
                     break
             except Exception:
                 logger.debug("SSE disconnect check failed", exc_info=True)
                 break
-            await asyncio.sleep(15)
-            yield f"event: ping\ndata: {{}}\n\n"
+            # Send keepalive ping every 15s
+            now = asyncio.get_event_loop().time()
+            if now - last_ping >= 15:
+                last_ping = now
+                yield f"event: ping\ndata: {{}}\n\n"
 
     return StreamingResponse(
         _event_stream(),

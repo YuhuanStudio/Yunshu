@@ -1014,17 +1014,18 @@ class EngineCore:
             self._finished_events[req_id].set()
             return req_id
 
-        # Apply per-request LoRA adapter (load before generation, unload after)
+        # Apply per-request LoRA adapter (acquire ref before generation, release after)
         loaded_lora = None
         if lora_adapter:
             try:
                 from .lora_manager import get_lora_manager
                 lora_mgr = get_lora_manager()
                 if lora_mgr is not None:
-                    loaded_lora = lora_mgr.load_adapter(lora_adapter)
-                    logger.debug(f"LoRA adapter '{lora_adapter}' loaded for request {req_id}")
+                    loaded_lora = lora_mgr.acquire_adapter(lora_adapter)
+                    if loaded_lora:
+                        logger.debug(f"LoRA adapter '{lora_adapter}' acquired for request {req_id}")
             except Exception:
-                logger.debug(f"LoRA adapter load failed: {lora_adapter}", exc_info=True)
+                logger.debug(f"LoRA adapter acquire failed: {lora_adapter}", exc_info=True)
 
         # Model preprocessor: detect and preprocess for model-specific input
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
@@ -2006,14 +2007,14 @@ class EngineCore:
             get_inflight_tracker().unregister(request_id)
         except Exception:
             logger.debug("inflight prefix unregister failed", exc_info=True)
-        # Release LoRA adapter
+        # Release LoRA adapter (decrement ref count, doesn't unload unless LRU evicts)
         lora_id = self._request_lora_adapters.pop(request_id, None)
         if lora_id:
             try:
                 from .lora_manager import get_lora_manager
                 lora_mgr = get_lora_manager()
                 if lora_mgr is not None:
-                    lora_mgr.unload_adapter(lora_id)
+                    lora_mgr.release_adapter(lora_id)
             except Exception:
                 logger.debug("LoRA cleanup failed", exc_info=True)
         # Lifecycle + budget + memory + KV lifecycle
