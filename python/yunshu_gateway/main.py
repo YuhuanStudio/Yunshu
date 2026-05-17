@@ -3,6 +3,7 @@
 import os
 import asyncio
 import logging
+import time
 
 from starlette.requests import Request
 from collections.abc import AsyncIterator
@@ -28,6 +29,12 @@ MODELS_DIR = os.environ.get(
 # ProcessMemoryEnforcer instance (multi-model mode only)
 _memory_enforcer = None
 
+# Background tasks tracked for clean shutdown
+_background_tasks: list[asyncio.Task] = []
+
+# Startup timestamp for uptime tracking
+_startup_time: float = 0.0
+
 # Shutdown state machine (vLLM pattern: RUNNING → REQUESTED → SHUTTING_DOWN)
 class ServerState:
     RUNNING = "running"
@@ -37,6 +44,49 @@ class ServerState:
 _server_state = ServerState.RUNNING
 _active_requests = 0
 _drain_event: asyncio.Event | None = None
+
+
+def _validate_env_vars() -> list[str]:
+    """Validate production env vars and return warnings."""
+    warnings = []
+
+    # Numeric env vars that must parse correctly
+    numeric_vars = {
+        "YUNSHU_MAX_MEMORY_GB": (float, False),
+        "YUNSHU_DRAIN_TIMEOUT": (float, False),
+        "YUNSHU_MEMORY_POLL_INTERVAL": (float, False),
+        "YUNSHU_MODEL_TTL_SECONDS": (float, False),
+        "YUNSHU_MAX_CONCURRENT": (int, False),
+        "YUNSHU_RATE_LIMIT_RPM": (float, False),
+    }
+    for var, (type_fn, required) in numeric_vars.items():
+        val = os.environ.get(var)
+        if val is not None:
+            try:
+                type_fn(val)
+            except (ValueError, TypeError):
+                warnings.append(f"Invalid value for {var}: '{val}' (expected {type_fn.__name__})")
+        elif required:
+            warnings.append(f"Required env var {var} is not set")
+
+    # Boolean-ish env vars
+    bool_vars = [
+        "YUNSHU_MULTI_MODEL", "YUNSHU_DATA_PARALLEL", "YUNSHU_DISTRIBUTED",
+        "YUNSHU_AUTH_DISABLED", "YUNSHU_RESPONSE_CACHE", "YUNSHU_PROCESS_ISOLATION",
+    ]
+    for var in bool_vars:
+        val = os.environ.get(var)
+        if val is not None and val.lower() not in ("0", "1", "true", "false", "yes", "no"):
+            warnings.append(f"Invalid boolean value for {var}: '{val}'")
+
+    # Conflicting config: both YUNSHU_MODEL and YUNSHU_MULTI_MODEL set
+    if DEFAULT_MODEL and os.environ.get("YUNSHU_MULTI_MODEL"):
+        warnings.append(
+            "Both YUNSHU_MODEL and YUNSHU_MULTI_MODEL are set — "
+            "YUNSHU_MODEL takes precedence (single-model mode)"
+        )
+
+    return warnings
 
 
 def _get_memory_limit_bytes() -> int:
@@ -63,11 +113,36 @@ def _get_memory_limit_bytes() -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Startup/shutdown lifecycle."""
-    global _memory_enforcer, _drain_event, _server_state
+    """Startup/shutdown lifecycle with production hardening.
 
+    Production features:
+    - Startup validation of env vars with warning log
+    - Startup timeout for model loading (configurable via YUNSHU_STARTUP_TIMEOUT)
+    - Graceful shutdown: reject new -> drain -> cleanup -> model manager shutdown
+    - Background task tracking for clean cancellation
+    """
+    global _memory_enforcer, _drain_event, _server_state, _startup_time
+    global _background_tasks
+
+    # Always reset state on lifespan entry — handles test isolation
+    # where module-level globals persist between TestClient instances
     _drain_event = asyncio.Event()
     _server_state = ServerState.RUNNING
+    _background_tasks = []
+
+    # Store state on app for middleware to read (avoids stale module-level
+    # state when TestClient doesn't trigger lifespan in Starlette 1.0+)
+    app.state.server_state = ServerState.RUNNING
+
+    # ── Startup validation ──
+    env_warnings = _validate_env_vars()
+    for w in env_warnings:
+        logger.warning("CONFIG: %s", w)
+
+    # ── Startup timeout ──
+    startup_timeout = float(os.environ.get("YUNSHU_STARTUP_TIMEOUT", "300"))
+
+    _startup_time = time.time()
 
     if DEFAULT_MODEL:
         # Single-model mode: use BatchedEngine directly
@@ -76,7 +151,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         engine = BatchedEngine(model_name=DEFAULT_MODEL)
         set_engine(engine)
-        await engine.start()
+        try:
+            await asyncio.wait_for(engine.start(), timeout=startup_timeout)
+            logger.info(
+                "Startup complete: model '%s' loaded (%.1fs)",
+                DEFAULT_MODEL, time.time() - _startup_time,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "FATAL: model '%s' load timed out after %.0fs — server not ready",
+                DEFAULT_MODEL, startup_timeout,
+            )
+            await engine.stop()
+            # Server starts but /health/ready will report not-ready
+        except Exception as e:
+            logger.error(
+                "FATAL: model '%s' load failed: %s — server not ready",
+                DEFAULT_MODEL, e,
+            )
+            await engine.stop()
+
     elif os.environ.get("YUNSHU_MULTI_MODEL"):
         # Multi-model mode: auto-discover and register models from models_dir
         max_bytes = _get_memory_limit_bytes()
@@ -102,14 +196,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     except Exception:
                         logger.debug(f"failed to register model {mid}", exc_info=True)
                 if discovered:
-                    import logging as _logging
-                    _logging.getLogger(__name__).info(
+                    logger.info(
                         "Auto-discovered %d models from %s",
                         len(discovered), models_path,
                     )
             except Exception as e:
-                import logging as _logging
-                _logging.getLogger(__name__).warning("Model discovery failed: %s", e, exc_info=True)
+                logger.warning("Model discovery failed: %s", e, exc_info=True)
 
         # Start ProcessMemoryEnforcer (oMLX pattern)
         if max_bytes > 0:
@@ -123,6 +215,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 ttl_seconds=float(ttl_seconds) if ttl_seconds else None,
             )
             _memory_enforcer.start()
+            logger.info(
+                "ProcessMemoryEnforcer started (limit=%.1fGB, poll=%.1fs)",
+                max_bytes / 1024**3,
+                float(os.environ.get("YUNSHU_MEMORY_POLL_INTERVAL", "2.0")),
+            )
+
+        logger.info(
+            "Startup complete: multi-model mode, %d models registered (%.1fs)",
+            len(manager.list_entries()), time.time() - _startup_time,
+        )
 
     # Initialize MCP client manager (LLM → external MCP tool servers)
     mcp_config_path = os.environ.get("YUNSHU_MCP_CONFIG")
@@ -143,16 +245,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
-    # Graceful shutdown with request draining (state machine)
+    # ═══ Graceful shutdown ═══
+    logger.info(
+        "Shutdown initiated: %d active requests, draining...",
+        _active_requests,
+    )
     _server_state = ServerState.REQUESTED
+    app.state.server_state = ServerState.REQUESTED
 
     # Wait for active requests to drain
     drain_timeout = float(os.environ.get("YUNSHU_DRAIN_TIMEOUT", "30"))
-    if _active_requests > 0 and _drain_event is not None and _server_state == ServerState.REQUESTED:
+    if _active_requests > 0 and _drain_event is not None:
         try:
             await asyncio.wait_for(_drain_event.wait(), timeout=drain_timeout)
         except asyncio.TimeoutError:
-            pass
+            logger.warning(
+                "Shutdown drain timed out after %.0fs: %d requests still active",
+                drain_timeout, _active_requests,
+            )
 
     # Disconnect MCP client manager
     try:
@@ -163,20 +273,48 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.debug("MCP client shutdown failed", exc_info=True)
 
+    # Stop ProcessMemoryEnforcer
     if _memory_enforcer is not None:
-        await _memory_enforcer.stop()
+        try:
+            await _memory_enforcer.stop()
+        except Exception:
+            logger.debug("Memory enforcer stop failed", exc_info=True)
+        _memory_enforcer = None
+
+    # Cancel any remaining background tasks
+    for task in _background_tasks:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+    _background_tasks.clear()
 
     _server_state = ServerState.SHUTTING_DOWN
+    app.state.server_state = ServerState.SHUTTING_DOWN
 
+    # Stop single-engine mode
     engine = get_engine()
-    if engine and engine.is_loaded:
-        await engine.stop()
+    if engine and getattr(engine, 'is_loaded', False):
+        try:
+            await engine.stop()
+        except Exception:
+            logger.warning("Engine stop failed", exc_info=True)
 
+    # Stop model manager — use proper shutdown() for ordered unload
     manager = get_model_manager()
     if manager:
-        for entry in manager.list_entries():
-            if entry.is_loaded and entry.engine:
-                await entry.engine.stop()
+        try:
+            await manager.shutdown()
+        except Exception:
+            logger.warning("Model manager shutdown failed", exc_info=True)
+
+    logger.info(
+        "Shutdown complete (%.1fs uptime)",
+        time.time() - _startup_time,
+    )
+    _startup_time = 0.0
 
 
 def create_app() -> FastAPI:
@@ -299,6 +437,29 @@ def create_app() -> FastAPI:
         app.add_middleware(DPRouterMiddleware)
         logger.info("DataParallel middleware registered (YUNSHU_DATA_PARALLEL=1)")
 
+    # Shutdown rejection middleware: reject new inference requests during shutdown.
+    # Reads state from app.state (set by lifespan) instead of module globals,
+    # because Starlette 1.0+ TestClient may not trigger lifespan for non-context usage.
+    @app.middleware("http")
+    async def shutdown_guard(request: Request, call_next):
+        state = getattr(request.app.state, 'server_state', ServerState.RUNNING)
+        if state != ServerState.RUNNING:
+            path = request.url.path
+            # Allow health/monitoring/admin even during shutdown
+            if not path.startswith(("/health", "/metrics", "/api/v1/admin", "/api/v1/monitoring")):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": {
+                            "message": "Server is shutting down",
+                            "type": "server_error",
+                            "code": "shutdown_in_progress",
+                        }
+                    },
+                    headers={"Retry-After": "5"},
+                )
+        return await call_next(request)
+
     # Sleep middleware: reject inference requests while sleeping
     @app.middleware("http")
     async def sleep_guard(request: Request, call_next):
@@ -415,6 +576,9 @@ def create_app() -> FastAPI:
             "status": "ok",
             "engine": engine_info,
             "model_manager": manager.memory_usage if manager else None,
+            "server_state": _server_state,
+            "active_requests": _active_requests,
+            "uptime_seconds": round(time.time() - _startup_time, 1) if _startup_time > 0 else 0,
         }
         if _memory_enforcer is not None:
             result["memory_enforcer"] = _memory_enforcer.get_status()

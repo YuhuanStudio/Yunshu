@@ -98,6 +98,24 @@ def serve(
         help="Base directory for Yunshu data (default: ~/.yunshu).",
     ),
     log_level: str = typer.Option("info", "--log-level", help="Log level (trace|debug|info|warning|error)."),
+    startup_timeout: float = typer.Option(
+        300.0,
+        "--startup-timeout",
+        help="Max seconds to wait for model loading before giving up.",
+        envvar="YUNSHU_STARTUP_TIMEOUT",
+    ),
+    slow_request_threshold: float = typer.Option(
+        30.0,
+        "--slow-request-threshold",
+        help="Log a warning for requests exceeding this duration (seconds).",
+        envvar="YUNSHU_SLOW_REQUEST_THRESHOLD",
+    ),
+    drain_timeout: float = typer.Option(
+        30.0,
+        "--drain-timeout",
+        help="Max seconds to wait for request draining on shutdown.",
+        envvar="YUNSHU_DRAIN_TIMEOUT",
+    ),
     reload: bool = typer.Option(
         False,
         "--reload",
@@ -135,6 +153,9 @@ def serve(
         env["YUNSHU_BASE_PATH"] = base_path
     if max_concurrent:
         env["YUNSHU_MAX_CONCURRENT"] = str(max_concurrent)
+    env["YUNSHU_STARTUP_TIMEOUT"] = str(startup_timeout)
+    env["YUNSHU_SLOW_REQUEST_THRESHOLD"] = str(slow_request_threshold)
+    env["YUNSHU_DRAIN_TIMEOUT"] = str(drain_timeout)
 
     # Determine effective model source
     effective_model = model or os.environ.get("YUNSHU_MODEL")

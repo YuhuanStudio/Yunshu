@@ -1,5 +1,6 @@
-"""Tests for LoRA adapter manager."""
+"""Tests for LoRA adapter manager — concurrent safety, ref counting, LRU eviction."""
 import json
+import threading
 import pytest
 from pathlib import Path
 
@@ -12,6 +13,7 @@ class TestLoRAAdapterEntry:
         assert entry.is_loaded is False
         assert entry.is_merged is False
         assert entry.rank == 8
+        assert entry.ref_count == 0
 
 
 class TestLoRAAdapterManager:
@@ -89,6 +91,290 @@ class TestLoRAAdapterManager:
         # The enforcement happens inside load_adapter which needs a real model
         # Test the LRU eviction directly
         assert len(mgr._loaded_adapters) == 1
+
+
+class TestLoRARefCounting:
+    """Test reference counting for concurrent request safety."""
+
+    def _make_manager(self, max_loras=4):
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr = LoRAAdapterManager(max_loras=max_loras)
+        # Simulate loaded adapters (no real model needed)
+        for i in range(3):
+            aid = f"adapter-{i}"
+            mgr._adapters[aid] = LoRAAdapterEntry(
+                adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=True
+            )
+            mgr._lru_order.append(aid)
+        mgr._active_adapter_id = "adapter-0"
+        return mgr
+
+    def test_acquire_increments_ref_count(self):
+        mgr = self._make_manager()
+        # Simulate load_adapter succeeding by manually setting state
+        assert mgr._adapters["adapter-0"].ref_count == 0
+        result = mgr.acquire_adapter("adapter-0")
+        assert result is True
+        assert mgr._adapters["adapter-0"].ref_count == 1
+
+    def test_release_decrements_ref_count(self):
+        mgr = self._make_manager()
+        mgr.acquire_adapter("adapter-0")
+        assert mgr._adapters["adapter-0"].ref_count == 1
+        mgr.release_adapter("adapter-0")
+        assert mgr._adapters["adapter-0"].ref_count == 0
+
+    def test_multiple_acquire_release(self):
+        """Multiple requests can hold refs to the same adapter."""
+        mgr = self._make_manager()
+        mgr.acquire_adapter("adapter-0")
+        mgr.acquire_adapter("adapter-0")
+        mgr.acquire_adapter("adapter-0")
+        assert mgr._adapters["adapter-0"].ref_count == 3
+        mgr.release_adapter("adapter-0")
+        mgr.release_adapter("adapter-0")
+        assert mgr._adapters["adapter-0"].ref_count == 1
+        mgr.release_adapter("adapter-0")
+        assert mgr._adapters["adapter-0"].ref_count == 0
+
+    def test_release_unknown_adapter_is_safe(self):
+        mgr = self._make_manager()
+        # Should not raise
+        mgr.release_adapter("nonexistent")
+
+    def test_release_with_zero_refs_logs_warning(self):
+        mgr = self._make_manager()
+        # ref_count starts at 0, release should warn but not crash
+        mgr.release_adapter("adapter-0")
+        assert mgr._adapters["adapter-0"].ref_count == 0
+
+    def test_in_use_adapter_not_evicted_by_lru(self):
+        """An adapter with ref_count > 0 cannot be LRU evicted."""
+        mgr = self._make_manager(max_loras=3)
+        # Give ALL adapters refs so none can be evicted
+        for aid in ["adapter-0", "adapter-1", "adapter-2"]:
+            mgr.acquire_adapter(aid)
+        assert mgr._adapters["adapter-0"].ref_count == 1
+
+        evicted = mgr._unload_lru()
+        assert evicted is False  # Cannot evict — all have refs
+        assert mgr._adapters["adapter-0"].is_loaded is True
+        assert mgr._adapters["adapter-1"].is_loaded is True
+        assert mgr._adapters["adapter-2"].is_loaded is True
+
+    def test_zero_ref_adapter_can_be_evicted(self):
+        """An adapter with ref_count == 0 can be LRU evicted."""
+        mgr = self._make_manager(max_loras=3)
+        # adapter-0 is first in LRU order, has zero refs
+        assert mgr._adapters["adapter-0"].ref_count == 0
+        evicted = mgr._unload_lru()
+        assert evicted is True
+        assert mgr._adapters["adapter-0"].is_loaded is False
+
+    def test_lru_skips_in_use_evicts_next(self):
+        """LRU eviction skips in-use adapters and evicts the next zero-ref one."""
+        mgr = self._make_manager(max_loras=3)
+        # adapter-0 is LRU, give it a ref to make it un-evictable
+        mgr.acquire_adapter("adapter-0")
+        # adapter-1 and adapter-2 have zero refs
+        evicted = mgr._unload_lru()
+        assert evicted is True
+        # adapter-0 should NOT be evicted (has refs)
+        assert mgr._adapters["adapter-0"].is_loaded is True
+        assert mgr._adapters["adapter-0"].ref_count == 1
+        # adapter-1 should be evicted (next in LRU order)
+        assert mgr._adapters["adapter-1"].is_loaded is False
+
+    def test_unload_in_use_adapter_fails(self):
+        """Cannot unload an adapter that has active requests."""
+        mgr = self._make_manager()
+        mgr.acquire_adapter("adapter-0")
+        assert mgr.unload_adapter("adapter-0") is False
+        assert mgr._adapters["adapter-0"].is_loaded is True
+
+    def test_unload_zero_ref_adapter_succeeds(self):
+        """Can unload an adapter that has zero active requests."""
+        mgr = self._make_manager()
+        # Need a base model for unload to work
+        mgr._base_model = None  # No real model, but the logic checks ref_count first
+        result = mgr.unload_adapter("adapter-0")
+        # unload checks ref_count == 0 first, then tries to restore base
+        # With no base model, restore_base is a no-op but the unload proceeds
+        assert mgr._adapters["adapter-0"].is_loaded is False
+
+    def test_acquire_touches_lru(self):
+        """Acquiring an adapter updates its LRU position."""
+        mgr = self._make_manager()
+        assert mgr._lru_order[0] == "adapter-0"
+        mgr.acquire_adapter("adapter-0")
+        # adapter-0 should now be at end of LRU
+        assert mgr._lru_order[-1] == "adapter-0"
+
+    def test_acquire_unregistered_adapter_fails(self):
+        mgr = self._make_manager()
+        assert mgr.acquire_adapter("nonexistent") is False
+
+    def test_shutdown_resets_ref_counts(self):
+        mgr = self._make_manager()
+        mgr.acquire_adapter("adapter-0")
+        mgr.acquire_adapter("adapter-1")
+        mgr.shutdown()
+        # All entries cleared
+        assert len(mgr._adapters) == 0
+        assert mgr._active_adapter_id is None
+
+
+class TestLoRALRUConcurrency:
+    """Test concurrent LRU eviction scenarios."""
+
+    def test_concurrent_acquire_release(self):
+        """Multiple threads acquiring/releasing the same adapter."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr = LoRAAdapterManager(max_loras=4)
+        aid = "shared-adapter"
+        mgr._adapters[aid] = LoRAAdapterEntry(
+            adapter_id=aid, adapter_path="/tmp/shared", is_loaded=True
+        )
+        mgr._lru_order = [aid]
+        mgr._active_adapter_id = aid
+
+        errors = []
+        barrier = threading.Barrier(8)
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(100):
+                    mgr.acquire_adapter(aid)
+                    mgr.release_adapter(aid)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert len(errors) == 0
+        assert mgr._adapters[aid].ref_count == 0
+
+    def test_concurrent_acquire_eviction(self):
+        """Eviction should never remove an adapter with refs > 0."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr = LoRAAdapterManager(max_loras=2)
+        for i in range(3):
+            aid = f"a{i}"
+            mgr._adapters[aid] = LoRAAdapterEntry(
+                adapter_id=aid, adapter_path=f"/tmp/{aid}", is_loaded=(i < 2)
+            )
+            if i < 2:
+                mgr._lru_order.append(aid)
+        mgr._active_adapter_id = "a0"
+
+        errors = []
+        barrier = threading.Barrier(4)
+
+        def acquirer():
+            try:
+                barrier.wait(timeout=5)
+                mgr.acquire_adapter("a0")
+                import time
+                time.sleep(0.01)
+                mgr.release_adapter("a0")
+            except Exception as e:
+                errors.append(e)
+
+        def evictor():
+            try:
+                barrier.wait(timeout=5)
+                for _ in range(20):
+                    mgr._unload_lru()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=acquirer) for _ in range(3)
+        ] + [threading.Thread(target=evictor)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert len(errors) == 0
+        # If a0 has refs, it must still be loaded
+        if mgr._adapters["a0"].ref_count > 0:
+            assert mgr._adapters["a0"].is_loaded is True
+
+
+class TestLoRACrossModel:
+    """Verify that adapters on different model instances don't interfere."""
+
+    def test_separate_managers_independent(self):
+        """Two LoRAAdapterManager instances are fully independent."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr_a = LoRAAdapterManager(max_loras=2)
+        mgr_b = LoRAAdapterManager(max_loras=2)
+
+        # Register different adapters
+        for i in range(3):
+            mgr_a._adapters[f"a-{i}"] = LoRAAdapterEntry(
+                adapter_id=f"a-{i}", adapter_path=f"/tmp/a-{i}", is_loaded=True
+            )
+            mgr_a._lru_order.append(f"a-{i}")
+
+        for i in range(2):
+            mgr_b._adapters[f"b-{i}"] = LoRAAdapterEntry(
+                adapter_id=f"b-{i}", adapter_path=f"/tmp/b-{i}", is_loaded=True
+            )
+            mgr_b._lru_order.append(f"b-{i}")
+
+        mgr_a._active_adapter_id = "a-0"
+        mgr_b._active_adapter_id = "b-0"
+
+        # Acquire on mgr_a does not affect mgr_b
+        mgr_a.acquire_adapter("a-0")
+        assert mgr_a._adapters["a-0"].ref_count == 1
+        assert mgr_b._adapters["b-0"].ref_count == 0
+
+        # Evict on mgr_a does not affect mgr_b
+        mgr_a._unload_lru()
+        assert len([e for e in mgr_a._adapters.values() if e.is_loaded]) < 3
+        assert len([e for e in mgr_b._adapters.values() if e.is_loaded]) == 2
+
+    def test_adapter_namespaces_isolated(self):
+        """Same adapter_id in different managers are independent."""
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr_x = LoRAAdapterManager(max_loras=2)
+        mgr_y = LoRAAdapterManager(max_loras=2)
+
+        # Same adapter_id in both
+        for mgr in (mgr_x, mgr_y):
+            mgr._adapters["shared-id"] = LoRAAdapterEntry(
+                adapter_id="shared-id", adapter_path="/tmp/shared", is_loaded=True
+            )
+            mgr._lru_order = ["shared-id"]
+            mgr._active_adapter_id = "shared-id"
+
+        mgr_x.acquire_adapter("shared-id")
+        assert mgr_x._adapters["shared-id"].ref_count == 1
+        assert mgr_y._adapters["shared-id"].ref_count == 0
+
+        # Unload in one doesn't affect the other
+        mgr_y.unload_adapter("shared-id")
+        assert mgr_y._adapters["shared-id"].is_loaded is False
+        assert mgr_x._adapters["shared-id"].is_loaded is True
+
+
+class TestLoRAListAdaptersRefCount:
+    """Verify list_adapters includes ref_count."""
+
+    def test_list_includes_ref_count(self):
+        from yunshu_engine.lora_manager import LoRAAdapterManager, LoRAAdapterEntry
+        mgr = LoRAAdapterManager()
+        mgr._adapters["a1"] = LoRAAdapterEntry("a1", "/tmp/a1", is_loaded=True, ref_count=3)
+        adapters = mgr.list_adapters()
+        assert adapters[0]["ref_count"] == 3
 
 
 class TestGrammarParameter:

@@ -42,6 +42,8 @@ class RolePermissions:
     can_manage_tokens: bool = False
     can_view_admin: bool = False
     can_benchmark: bool = False
+    can_manage_models: bool = False  # LoRA adapter management, model settings
+    can_view_system: bool = False  # System internals: queue stats, hardware profile
     max_models: int = 1
     allowed_model_patterns: list[str] = field(default_factory=lambda: ["*"])
 
@@ -54,6 +56,8 @@ ROLE_PERMISSIONS = {
         can_manage_tokens=True,
         can_view_admin=True,
         can_benchmark=True,
+        can_manage_models=True,
+        can_view_system=True,
         max_models=100,
         allowed_model_patterns=["*"],
     ),
@@ -64,6 +68,8 @@ ROLE_PERMISSIONS = {
         can_manage_tokens=False,
         can_view_admin=True,
         can_benchmark=True,
+        can_manage_models=True,
+        can_view_system=True,
         max_models=10,
         allowed_model_patterns=["*"],
     ),
@@ -74,6 +80,8 @@ ROLE_PERMISSIONS = {
         can_manage_tokens=False,
         can_view_admin=False,
         can_benchmark=False,
+        can_manage_models=False,
+        can_view_system=False,
         max_models=1,
         allowed_model_patterns=["*"],
     ),

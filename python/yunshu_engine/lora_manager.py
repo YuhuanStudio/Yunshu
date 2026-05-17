@@ -6,13 +6,14 @@ Provides runtime LoRA adapter management:
 - Merge adapters into base weights for zero-overhead inference
 - Track active adapters per model
 - Enforce max_loras memory constraints (vLLM pattern)
+- Reference counting for concurrent request safety
 
 Uses mlx-lm's tuner utilities (linear_to_lora_layers, load_adapters)
 for the actual LoRA weight application.
 
 Architecture:
   LoRAAdapterManager — singleton managing adapters across engines
-  LoRAAdapterEntry — per-adapter metadata + merge state
+  LoRAAdapterEntry — per-adapter metadata + merge state + ref count
 """
 
 import json
@@ -34,6 +35,7 @@ class LoRAAdapterEntry:
     is_loaded: bool = False
     is_merged: bool = False
     estimated_bytes: int = 0
+    ref_count: int = 0  # Number of active requests using this adapter
 
 
 class LoRAAdapterManager:
@@ -43,10 +45,11 @@ class LoRAAdapterManager:
     - max_loras: maximum number of simultaneously loaded adapters
     - When limit exceeded, unload least-recently-used adapters
     - Merge option: permanently merge adapter weights into base model
+    - Reference counting: in-use adapters cannot be evicted
 
     Integration with BatchedEngine:
-    - Engine calls load_adapter() before generation if adapter requested
-    - Engine calls unload_adapter() after generation if adapter no longer needed
+    - Engine calls acquire_adapter() before generation (increments ref count)
+    - Engine calls release_adapter() after generation (decrements ref count)
     - Or engine calls merge_adapter() for zero-overhead serving
     """
 
@@ -58,6 +61,7 @@ class LoRAAdapterManager:
         self._base_model_copy = None  # saved before any merge
         self._lock = threading.RLock()  # RLock to avoid deadlock with _loaded_adapters property
         self._gpu_lock = threading.Lock()  # serializes GPU work (apply/restore)
+        self._active_adapter_id: str | None = None  # Currently applied adapter
 
     def set_base_model(self, model) -> None:
         self._base_model = model
@@ -68,10 +72,12 @@ class LoRAAdapterManager:
             for entry in self._adapters.values():
                 entry.is_loaded = False
                 entry.is_merged = False
+                entry.ref_count = 0
             self._adapters.clear()
             self._lru_order.clear()
             self._base_model_copy = None
             self._base_model = None
+            self._active_adapter_id = None
         logger.info("LoRA manager shut down, all adapters and base model released")
 
     def save_base_weights(self) -> None:
@@ -101,10 +107,11 @@ class LoRAAdapterManager:
         """Load and apply a LoRA adapter to the base model.
 
         Returns True if adapter was loaded successfully.
-        If max_loras exceeded, unloads LRU adapter first.
+        If max_loras exceeded, unloads least-recently-used adapters
+        that have zero references (not actively serving requests).
         Only one non-merged adapter can be active at a time (base model
         weights are shared). If a different adapter is loaded, it is
-        unloaded first.
+        unloaded first (only if it has zero references).
 
         Thread safety: _lock is held throughout to prevent TOCTOU races
         with concurrent unload_adapter calls. _gpu_lock serializes GPU
@@ -116,7 +123,8 @@ class LoRAAdapterManager:
                 return False
 
             entry = self._adapters[adapter_id]
-            if entry.is_loaded:
+            if entry.is_loaded and not entry.is_merged:
+                # Adapter already loaded — just update LRU
                 self._touch(adapter_id)
                 return True
 
@@ -124,9 +132,29 @@ class LoRAAdapterManager:
                 logger.error("No base model set for LoRA adapter loading")
                 return False
 
-            # Enforce max_loras limit — unload LRU adapters
+            # If a different adapter is currently active, must switch.
+            # Only allow switching if the active adapter has no in-flight refs.
+            if (self._active_adapter_id is not None
+                    and self._active_adapter_id != adapter_id
+                    and not entry.is_merged):
+                active_entry = self._adapters.get(self._active_adapter_id)
+                if active_entry and active_entry.ref_count > 0:
+                    logger.error(
+                        f"Cannot load adapter {adapter_id}: adapter "
+                        f"{self._active_adapter_id} has {active_entry.ref_count} "
+                        f"active requests"
+                    )
+                    return False
+
+            # Enforce max_loras limit — unload LRU adapters with zero refs
             while len(self._loaded_adapters) >= self.max_loras:
-                self._unload_lru_unlocked()
+                if not self._unload_lru_unlocked():
+                    # Could not evict any adapter (all in use)
+                    logger.error(
+                        f"Cannot load adapter {adapter_id}: max_loras={self.max_loras} "
+                        f"reached and all adapters are in use"
+                    )
+                    return False
 
             # Mark as loading to prevent concurrent load of same adapter
             entry.is_loaded = True  # tentative — will be reverted on failure
@@ -139,25 +167,39 @@ class LoRAAdapterManager:
                 try:
                     self._apply_adapter(entry)
                     self._touch(adapter_id)
+                    self._active_adapter_id = adapter_id
                     logger.info(f"Loaded LoRA adapter: {adapter_id}")
                     return True
                 except Exception as e:
                     entry.is_loaded = False
+                    self._active_adapter_id = None
                     logger.error(f"Failed to load LoRA adapter {adapter_id}: {e}", exc_info=True)
                     return False
 
     def unload_adapter(self, adapter_id: str) -> bool:
-        """Unload a LoRA adapter, restoring base model weights."""
+        """Unload a LoRA adapter, restoring base model weights.
+
+        Raises RuntimeError if the adapter has active references.
+        """
         with self._lock:
             if adapter_id not in self._adapters:
                 return False
             entry = self._adapters[adapter_id]
             if not entry.is_loaded or entry.is_merged:
                 return False
+            if entry.ref_count > 0:
+                logger.error(
+                    f"Cannot unload adapter {adapter_id}: "
+                    f"{entry.ref_count} active requests still using it"
+                )
+                return False
+
             # Mark as unloading to prevent concurrent use
             entry.is_loaded = False
             if adapter_id in self._lru_order:
                 self._lru_order.remove(adapter_id)
+            if self._active_adapter_id == adapter_id:
+                self._active_adapter_id = None
 
             # Restore under gpu_lock while still holding _lock.
             # This prevents load_adapter from seeing is_loaded=False and
@@ -171,8 +213,54 @@ class LoRAAdapterManager:
                     # Revert state on failure
                     entry.is_loaded = True
                     self._touch(adapter_id)
+                    self._active_adapter_id = adapter_id
                     logger.error(f"Failed to unload LoRA adapter {adapter_id}: {e}", exc_info=True)
                     return False
+
+    def acquire_adapter(self, adapter_id: str) -> bool:
+        """Acquire a reference to a loaded adapter.
+
+        Call before starting a request that uses the adapter.
+        Increments ref_count to prevent eviction during generation.
+        Returns True if the adapter was successfully acquired.
+        """
+        with self._lock:
+            if adapter_id not in self._adapters:
+                logger.error(f"LoRA adapter not registered: {adapter_id}")
+                return False
+
+            entry = self._adapters[adapter_id]
+            if not entry.is_loaded:
+                # Try to load it first
+                if not self.load_adapter(adapter_id):
+                    return False
+                # Re-fetch entry after load
+                entry = self._adapters[adapter_id]
+
+            entry.ref_count += 1
+            self._touch(adapter_id)
+            logger.debug(f"Acquired adapter {adapter_id} (refs={entry.ref_count})")
+            return True
+
+    def release_adapter(self, adapter_id: str) -> None:
+        """Release a reference to a loaded adapter.
+
+        Call after finishing a request that used the adapter.
+        Decrements ref_count. Does NOT unload the adapter —
+        that happens via LRU eviction or explicit unload_adapter().
+        """
+        with self._lock:
+            if adapter_id not in self._adapters:
+                logger.warning(f"Release called for unknown adapter: {adapter_id}")
+                return
+            entry = self._adapters[adapter_id]
+            if entry.ref_count <= 0:
+                logger.warning(
+                    f"Release called for adapter {adapter_id} with ref_count={entry.ref_count}"
+                )
+                return
+            entry.ref_count -= 1
+            logger.debug(f"Released adapter {adapter_id} (refs={entry.ref_count})")
 
     def merge_adapter(self, adapter_id: str) -> bool:
         """Merge LoRA weights permanently into base model.
@@ -233,6 +321,7 @@ class LoRAAdapterManager:
                     "is_loaded": entry.is_loaded,
                     "is_merged": entry.is_merged,
                     "estimated_bytes": entry.estimated_bytes,
+                    "ref_count": entry.ref_count,
                 })
             return result
 
@@ -278,17 +367,23 @@ class LoRAAdapterManager:
             self._lru_order.remove(adapter_id)
         self._lru_order.append(adapter_id)
 
-    def _unload_lru(self) -> None:
-        """Unload least-recently-used adapter. Caller must hold self._lock."""
-        if not self._lru_order:
-            return
-        lru_id = self._lru_order[0]
-        # Perform inline unload (we already hold the lock)
-        entry = self._adapters.get(lru_id)
-        if entry and entry.is_loaded and not entry.is_merged:
-            entry.is_loaded = False
-            self._lru_order.remove(lru_id)
-            logger.info(f"Unloaded LoRA adapter (LRU): {lru_id}")
+    def _unload_lru(self) -> bool:
+        """Unload least-recently-used adapter with zero references.
+
+        Returns True if an adapter was evicted, False if all are in use.
+        Caller must hold self._lock.
+        """
+        for candidate_id in list(self._lru_order):
+            entry = self._adapters.get(candidate_id)
+            if entry and entry.is_loaded and not entry.is_merged and entry.ref_count == 0:
+                entry.is_loaded = False
+                self._lru_order.remove(candidate_id)
+                if self._active_adapter_id == candidate_id:
+                    self._active_adapter_id = None
+                logger.info(f"Unloaded LoRA adapter (LRU eviction): {candidate_id}")
+                return True
+        # All loaded adapters have active requests
+        return False
 
     # Alias for clarity in contexts where lock is already held
     _unload_lru_unlocked = _unload_lru

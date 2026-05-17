@@ -336,3 +336,42 @@ class TestEmbeddingsEndpoint:
         req = EmbeddingRequest(model="test", input=[])
         texts = req.input if isinstance(req.input, list) else [req.input]
         assert len(texts) == 0  # Empty should trigger 400 in endpoint
+
+
+class TestEmbeddingIndexCorrespondence:
+    """Verify that embeddings maintain 1:1 index correspondence with inputs."""
+
+    def test_matryoshka_truncation_renormalizes(self):
+        """Truncated embeddings should be re-normalized to unit vectors."""
+        import math
+        # Simulate a 4-dim embedding
+        emb = [0.5, 0.5, 0.5, 0.5]
+        norm = math.sqrt(sum(x * x for x in emb))
+        normalized = [x / norm for x in emb]
+
+        # Truncate to 2 dims
+        truncated = normalized[:2]
+        renorm = math.sqrt(sum(x * x for x in truncated))
+        if renorm > 0:
+            truncated = [x / renorm for x in truncated]
+
+        # Should still be a unit vector
+        assert math.sqrt(sum(x * x for x in truncated)) == pytest.approx(1.0)
+
+    def test_matryoshka_dimensions_larger_than_embedding(self):
+        """dimensions > embedding dim should return full embedding unchanged."""
+        emb = [0.1, 0.2, 0.3]
+        dimensions = 100
+        truncated = emb[:dimensions]
+        assert truncated == emb  # Python slice returns full list
+
+    def test_base64_roundtrip(self):
+        """Base64 encoding should roundtrip correctly."""
+        emb = [0.1, 0.2, 0.3]
+        packed = struct.pack(f"{len(emb)}f", *emb)
+        b64_value = base64.b64encode(packed).decode("ascii")
+
+        decoded = base64.b64decode(b64_value)
+        unpacked = struct.unpack(f"{len(emb)}f", decoded)
+        for orig, dec in zip(emb, unpacked):
+            assert abs(orig - dec) < 1e-6

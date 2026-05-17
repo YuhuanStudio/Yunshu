@@ -122,6 +122,11 @@ async def create_pooling(req: PoolingRequest):
     tok = getattr(engine, '_tokenizer', None)
     for i, vec in enumerate(raw):
         if not vec:
+            logger.warning(
+                "Empty pooled vector at index %d — engine returned no vector. "
+                "Skipping entry (index gap in response).",
+                i,
+            )
             continue
         if req.encoding_format == "base64":
             import base64, struct
@@ -187,11 +192,15 @@ async def create_score(req: ScoreRequest):
     data = []
     total_tokens = 0
     tok = getattr(engine, '_tokenizer', None)
-    for i, (a, b) in enumerate(zip(emb_a, emb_b)):
-        score = _compute_similarity(a, b, req.scoring_type)
-        data.append({"object": "score", "index": i, "score": score})
-        total_tokens += (len(tok.encode(texts_a[i])) if tok else max(1, len(texts_a[i]) // 4))
-        total_tokens += (len(tok.encode(texts_b[i])) if tok else max(1, len(texts_b[i]) // 4))
+    try:
+        for i, (a, b) in enumerate(zip(emb_a, emb_b)):
+            score = _compute_similarity(a, b, req.scoring_type)
+            data.append({"object": "score", "index": i, "score": score})
+            total_tokens += (len(tok.encode(texts_a[i])) if tok else max(1, len(texts_a[i]) // 4))
+            total_tokens += (len(tok.encode(texts_b[i])) if tok else max(1, len(texts_b[i]) // 4))
+    except ValueError as e:
+        logger.error(f"Score computation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
     return JSONResponse({
         "object": "list",
@@ -245,14 +254,18 @@ async def create_rerank(req: RerankRequest):
     # Score each document against the query using cosine similarity
     # Since embeddings are L2-normalized, cosine similarity = dot product
     scored = []
-    for i, doc_emb in enumerate(doc_embs):
-        if not doc_emb:
-            scored.append((i, 0.0))
-            continue
-        cos_sim = _compute_similarity(query_emb, doc_emb, "cosine")
-        # Scale cosine [-1, 1] to relevance [0, 1]
-        relevance = (cos_sim + 1.0) / 2.0
-        scored.append((i, relevance))
+    try:
+        for i, doc_emb in enumerate(doc_embs):
+            if not doc_emb:
+                scored.append((i, 0.0))
+                continue
+            cos_sim = _compute_similarity(query_emb, doc_emb, "cosine")
+            # Scale cosine [-1, 1] to relevance [0, 1]
+            relevance = (cos_sim + 1.0) / 2.0
+            scored.append((i, relevance))
+    except ValueError as e:
+        logger.error(f"Rerank scoring error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
     # Sort by relevance descending
     scored.sort(key=lambda x: x[1], reverse=True)
@@ -322,15 +335,24 @@ async def classify_input(req: ClassifyRequest):
     # gets a meaningful probability rather than a near-uniform spread.
     temperature = 0.07
     scores = []
-    for label_emb in label_embs:
-        sim = _compute_similarity(input_emb, label_emb, "cosine")
-        scores.append(sim / temperature)
+    try:
+        for label_emb in label_embs:
+            sim = _compute_similarity(input_emb, label_emb, "cosine")
+            scores.append(sim / temperature)
+    except ValueError as e:
+        logger.error(f"Classify scoring error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
     # Stable softmax
     max_score = max(scores) if scores else 0
     exp_scores = [math.exp(s - max_score) for s in scores]
     total = sum(exp_scores)
-    probs = [e / total for e in exp_scores]
+    if total == 0:
+        # All exponentials underflowed to zero — fall back to uniform distribution
+        n = len(exp_scores)
+        probs = [1.0 / n] * n if n > 0 else []
+    else:
+        probs = [e / total for e in exp_scores]
 
     results = []
     for i, (label, prob) in enumerate(zip(req.labels, probs)):
@@ -468,9 +490,20 @@ async def _fallback_embeddings(
 
 
 def _compute_similarity(a: list[float], b: list[float], method: str) -> float:
-    """Compute similarity between two vectors."""
+    """Compute similarity between two vectors.
+
+    Raises ValueError if vectors have different dimensions — a dimension
+    mismatch indicates a bug upstream (e.g. different models or broken
+    truncation) and must not be silently ignored.
+    """
     if not a or not b:
         return 0.0
+
+    if len(a) != len(b):
+        raise ValueError(
+            f"Vector dimension mismatch: {len(a)} != {len(b)}. "
+            "Both vectors must come from the same model."
+        )
 
     if method == "cosine":
         dot = sum(x * y for x, y in zip(a, b))

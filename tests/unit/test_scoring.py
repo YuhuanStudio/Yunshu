@@ -187,3 +187,84 @@ class TestValidationConstants:
     def test_valid_scoring_types(self):
         from yunshu_gateway.routers.scoring import _VALID_SCORING_TYPES
         assert _VALID_SCORING_TYPES == {"cosine", "dot", "euclidean"}
+
+
+class TestDimensionMismatch:
+    """Verify that dimension mismatches are caught, not silently truncated."""
+
+    def test_cosine_dimension_mismatch_raises(self):
+        from yunshu_gateway.routers.scoring import _compute_similarity
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _compute_similarity([1.0, 2.0], [1.0, 2.0, 3.0], "cosine")
+
+    def test_dot_dimension_mismatch_raises(self):
+        from yunshu_gateway.routers.scoring import _compute_similarity
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _compute_similarity([1.0, 2.0], [1.0, 2.0, 3.0], "dot")
+
+    def test_euclidean_dimension_mismatch_raises(self):
+        from yunshu_gateway.routers.scoring import _compute_similarity
+        with pytest.raises(ValueError, match="dimension mismatch"):
+            _compute_similarity([1.0, 2.0], [1.0, 2.0, 3.0], "euclidean")
+
+    def test_same_dimensions_works(self):
+        from yunshu_gateway.routers.scoring import _compute_similarity
+        # Should not raise
+        result = _compute_similarity([1.0, 2.0], [3.0, 4.0], "cosine")
+        assert isinstance(result, float)
+
+
+class TestClassifySoftmaxOverflow:
+    """Verify classify endpoint handles softmax edge cases."""
+
+    def test_softmax_underflow_uniform_fallback(self):
+        """When all exp scores underflow to 0, uniform distribution is returned."""
+        import math
+        # Extreme negative scores that cause exp to underflow
+        scores = [-1e308, -1e308, -1e308]
+        max_score = max(scores)
+        exp_scores = [math.exp(s - max_score) for s in scores]
+        total = sum(exp_scores)
+        if total == 0:
+            n = len(exp_scores)
+            probs = [1.0 / n] * n
+        else:
+            probs = [e / total for e in exp_scores]
+        assert len(probs) == 3
+        assert sum(probs) == pytest.approx(1.0)
+        assert probs[0] == pytest.approx(1.0 / 3)
+
+    def test_softmax_normal_case(self):
+        """Normal softmax should not trigger the underflow fallback."""
+        import math
+        scores = [0.8 / 0.07, 0.3 / 0.07, -0.1 / 0.07]
+        max_score = max(scores)
+        exp_scores = [math.exp(s - max_score) for s in scores]
+        total = sum(exp_scores)
+        assert total > 0
+        probs = [e / total for e in exp_scores]
+        assert sum(probs) == pytest.approx(1.0)
+        assert probs[0] > 0.99
+
+
+class TestScoreRequestEmptyStrings:
+    """Verify score endpoint handles edge cases with inputs."""
+
+    def test_score_request_list_of_one(self):
+        from yunshu_gateway.routers.scoring import ScoreRequest
+        req = ScoreRequest(
+            model="test",
+            text_1=["hello"],
+            text_2=["world", "foo", "bar"],
+        )
+        assert len(req.text_1) == 1
+        assert len(req.text_2) == 3
+
+    def test_score_request_mismatched_non_broadcastable(self):
+        """Two lists of different lengths > 1 should not broadcast."""
+        texts_a = ["a", "b"]
+        texts_b = ["x", "y", "z"]
+        # This would trigger the 400 error in the endpoint
+        assert len(texts_a) != len(texts_b)
+        assert len(texts_a) != 1
+        assert len(texts_b) != 1

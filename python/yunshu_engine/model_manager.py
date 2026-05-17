@@ -210,6 +210,7 @@ class ModelManager:
     - Uses asyncio.Lock instead of oMLX's threading (our engine is async-native)
     - Memory settle barrier with tighter polling (learned from oMLX's 10-round approach)
     - Per-model engine isolation (oMLX shares a single ThreadPoolExecutor)
+    - Per-model loading events so concurrent requests wait instead of failing
     """
 
     def __init__(
@@ -229,6 +230,9 @@ class ModelManager:
         self._entries: dict[str, ModelEntry] = {}
         self._current_memory_bytes: int = 0
         self._lock = asyncio.Lock()
+        # Per-model loading events: concurrent requests for the same model
+        # wait on this event instead of raising RuntimeError
+        self._loading_events: dict[str, asyncio.Event] = {}
 
     @staticmethod
     def _get_mlx_executor():
@@ -246,6 +250,8 @@ class ModelManager:
         """Register a model (does not load it).
 
         Auto-detects model type from config files if not specified.
+        Logs a warning if the model's estimated size exceeds the memory budget,
+        but still registers it (it may be loadable after evicting others).
         """
         if model_type is None:
             model_type = _detect_model_type(model_path)
@@ -253,6 +259,15 @@ class ModelManager:
         # Load per-model settings from model_settings.json + env vars
         from .model_settings import load_model_settings
         settings = load_model_settings(model_path, model_id)
+
+        # Memory budget warning: if this single model exceeds the budget,
+        # log early so operators know it will never fit
+        if self.max_memory_bytes and estimated_bytes > self.max_memory_bytes:
+            logger.warning(
+                "Model '%s' estimated size (%.1fGB) exceeds memory budget (%.1fGB) "
+                "— loading will fail unless budget is increased or other models evicted",
+                model_id, estimated_bytes / 1e9, self.max_memory_bytes / 1e9,
+            )
 
         self._entries[model_id] = ModelEntry(
             model_id=model_id,
@@ -273,7 +288,8 @@ class ModelManager:
 
         Handles:
         - LRU eviction of other models if memory is tight
-        - Concurrent load protection (is_loading flag)
+        - Concurrent load protection via per-model Event (waiters block
+          until the first loader completes, instead of raising RuntimeError)
         - Memory settle barrier after unload
         - Different engine types (LLM, VLM, TTS, ASR, ImageGen)
         """
@@ -286,6 +302,20 @@ class ModelManager:
             entry.last_access = time.monotonic()
             return entry.engine
 
+        # Check if another coroutine is already loading this model.
+        # Wait on the per-model event instead of raising RuntimeError.
+        if entry.is_loading and model_id in self._loading_events:
+            load_event = self._loading_events[model_id]
+            logger.info("Waiting for model '%s' load to complete (concurrent request)", model_id)
+            await load_event.wait()
+            # Re-check: the load may have succeeded or failed
+            if entry.is_loaded and entry.engine is not None:
+                entry.last_access = time.monotonic()
+                return entry.engine
+            if entry.load_error:
+                raise RuntimeError(f"Model {model_id} load failed: {entry.load_error}")
+            raise KeyError(f"Model {model_id} not available after load attempt")
+
         async with self._lock:
             # Double-check after acquiring lock
             if entry.is_loaded and entry.engine is not None:
@@ -293,6 +323,8 @@ class ModelManager:
                 return entry.engine
 
             if entry.is_loading:
+                # Another holder of the lock is loading — should not happen
+                # because we check is_loading above, but be defensive
                 raise RuntimeError(f"Model {model_id} is already being loaded")
 
             # Check memory budget
@@ -304,6 +336,10 @@ class ModelManager:
 
             # Check max_models limit
             await self._ensure_model_slot_available()
+
+            # Create per-model loading event so waiters can block on us
+            load_event = asyncio.Event()
+            self._loading_events[model_id] = load_event
 
             # Load using the appropriate engine type
             entry.is_loading = True
@@ -352,6 +388,11 @@ class ModelManager:
                 entry.load_error = str(e)
                 logger.error(f"Failed to load model {model_id}: {e}")
                 raise
+
+            finally:
+                # Signal any waiters that loading is done (success or failure)
+                load_event.set()
+                self._loading_events.pop(model_id, None)
 
     async def _create_and_load_engine(
         self,
@@ -416,10 +457,16 @@ class ModelManager:
         - Poll mx.get_active_memory() until Metal buffers released
 
         Idempotent: safe to call on already-unloaded or non-existent models.
+        Thread-safe: acquires self._lock to prevent concurrent load/unload races.
         """
         entry = self._entries.get(model_id)
         if entry is None or not entry.is_loaded:
             return
+
+        # Clean up any pending loading event
+        load_event = self._loading_events.pop(model_id, None)
+        if load_event is not None:
+            load_event.set()
 
         # Mark as not loaded early to prevent concurrent get_engine() from
         # seeing an inconsistent state (loading=False, is_loaded=True, engine=None)
@@ -687,7 +734,15 @@ class ModelManager:
         return None
 
     async def shutdown(self) -> None:
-        """Gracefully unload all loaded models."""
+        """Gracefully unload all loaded models.
+
+        Also signals any in-progress loading events so waiters don't hang.
+        """
+        # Signal all loading events so any waiters unblock
+        for model_id, event in list(self._loading_events.items()):
+            event.set()
+        self._loading_events.clear()
+
         for model_id in list(self._entries.keys()):
             entry = self._entries.get(model_id)
             if entry and entry.is_loaded:
@@ -695,6 +750,12 @@ class ModelManager:
                     await self.unload_model(model_id)
                 except Exception as e:
                     logger.error(f"Error unloading {model_id} during shutdown: {e}", exc_info=True)
+
+        logger.info(
+            "ModelManager shutdown complete: %d models registered, %d loaded",
+            len(self._entries),
+            sum(1 for e in self._entries.values() if e.is_loaded),
+        )
 
     def get_status(self) -> dict:
         """Return detailed pool status (oMLX EnginePool.get_status pattern)."""

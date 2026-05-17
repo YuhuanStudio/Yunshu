@@ -21,6 +21,8 @@ class TestRolePermissions:
         assert perms.can_manage_tokens
         assert perms.can_view_admin
         assert perms.can_benchmark
+        assert perms.can_manage_models
+        assert perms.can_view_system
 
     def test_developer_permissions(self):
         perms = ROLE_PERMISSIONS[Role.DEVELOPER]
@@ -29,6 +31,8 @@ class TestRolePermissions:
         assert not perms.can_register_models
         assert not perms.can_manage_tokens
         assert perms.can_view_admin
+        assert perms.can_manage_models
+        assert perms.can_view_system
 
     def test_user_permissions(self):
         perms = ROLE_PERMISSIONS[Role.USER]
@@ -37,6 +41,8 @@ class TestRolePermissions:
         assert not perms.can_register_models
         assert not perms.can_manage_tokens
         assert not perms.can_view_admin
+        assert not perms.can_manage_models
+        assert not perms.can_view_system
 
 
 class TestSLOClass:
@@ -70,9 +76,13 @@ class TestAPIKey:
         admin_key = APIKey(key_hash="test", name="admin", role=Role.ADMIN)
         assert admin_key.has_permission("can_load_models")
         assert admin_key.has_permission("can_view_admin")
+        assert admin_key.has_permission("can_manage_models")
+        assert admin_key.has_permission("can_view_system")
 
         user_key = APIKey(key_hash="test", name="user", role=Role.USER)
         assert not user_key.has_permission("can_load_models")
+        assert not user_key.has_permission("can_manage_models")
+        assert not user_key.has_permission("can_view_system")
 
     def test_can_access_model_wildcard(self):
         from yunshu_control.role_manager import APIKey
@@ -224,3 +234,65 @@ class TestRBACPersistence:
         result = mgr2.authenticate(raw_key)
         assert result.requests_per_minute == 10
         assert result.tokens_per_minute == 1000
+
+
+class TestRBACPermissionConsistency:
+    """Verify all permissions used in admin.py are defined in RolePermissions."""
+
+    def test_all_admin_permissions_exist(self):
+        """Every permission string used in require_permission() must exist in RolePermissions."""
+        import inspect
+        import ast
+        from yunshu_control.role_manager import RolePermissions
+
+        # Get all permission fields from RolePermissions (can_* attributes)
+        perms_fields = {
+            f.name for f in RolePermissions.__dataclass_fields__.values()
+            if f.name.startswith("can_")
+        }
+
+        # Parse admin.py to extract permission strings
+        admin_path = inspect.getfile(inspect.getmodule(
+            __import__("yunshu_api.routers.admin", fromlist=["admin"])
+        ))
+        with open(admin_path) as f:
+            source = f.read()
+
+        tree = ast.parse(source)
+        used_permissions = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value.startswith("can_"):
+                    used_permissions.add(node.value)
+
+        # Every permission used in admin.py must be a field on RolePermissions
+        missing = used_permissions - perms_fields
+        assert not missing, (
+            f"Permissions used in admin.py but missing from RolePermissions: {missing}"
+        )
+
+    def test_developer_can_manage_lora(self):
+        """Developer role should be able to manage LoRA adapters."""
+        perms = ROLE_PERMISSIONS[Role.DEVELOPER]
+        assert perms.can_manage_models is True
+
+    def test_user_cannot_manage_lora(self):
+        """User role should NOT be able to manage LoRA adapters."""
+        perms = ROLE_PERMISSIONS[Role.USER]
+        assert perms.can_manage_models is False
+
+    def test_developer_can_view_system(self):
+        """Developer role should be able to view system internals."""
+        perms = ROLE_PERMISSIONS[Role.DEVELOPER]
+        assert perms.can_view_system is True
+
+    def test_user_cannot_view_system(self):
+        """User role should NOT be able to view system internals."""
+        perms = ROLE_PERMISSIONS[Role.USER]
+        assert perms.can_view_system is False
+
+    def test_unknown_permission_returns_false(self):
+        """has_permission returns False for undefined permissions."""
+        from yunshu_control.role_manager import APIKey
+        key = APIKey(key_hash="test", name="test", role=Role.ADMIN)
+        assert key.has_permission("can_nonexistent_permission") is False

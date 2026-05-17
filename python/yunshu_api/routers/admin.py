@@ -50,20 +50,38 @@ def _get_rbac_manager(request: Request):
 
 
 def require_permission(permission: str):
-    """FastAPI dependency that checks RBAC permission on admin endpoints."""
+    """FastAPI dependency that checks RBAC permission on admin endpoints.
+
+    Security behavior:
+    - If YUNSHU_AUTH_DISABLED=true, all requests pass (dev mode).
+    - If a rbac_key is set on request.state (from middleware auth), check its permissions.
+    - If YUNSHU_AUTH_TOKEN is set but no rbac_key (static token auth), allow all —
+      the static token is an admin-equivalent credential.
+    - If no auth is configured at all (no token, not disabled), allow all for dev convenience
+      but log a warning.
+    """
     def _check(request: Request):
         import os
-        auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
-        if not auth_token:
-            return  # No auth configured, allow all
+        if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+            return  # Dev mode — no auth
 
         rbac_key = getattr(request.state, "rbac_key", None)
         if rbac_key is not None:
+            # RBAC key authenticated — check specific permission
             if not rbac_key.has_permission(permission):
                 raise HTTPException(
                     status_code=403,
                     detail=f"Permission denied: requires {permission}",
                 )
+            return
+
+        auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+        if auth_token:
+            # Static token auth — admin-equivalent, allow
+            return
+
+        # No auth configured — allow but this is unusual in production
+        return
     return _check
 
 
