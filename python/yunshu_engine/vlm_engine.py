@@ -754,7 +754,13 @@ class VLMEngine:
         has_images = bool(image_paths) and self._has_vision and self._is_vlm
         has_audio = bool(audio_paths) and self._is_vlm
 
+        # Eagerly resolve detokenizer availability so the error handler can
+        # safely reference it even if the try-block fails before the point
+        # where it was previously assigned inside _stream_sync.
+        _has_detokenizer = hasattr(self._tokenizer, 'detokenizer') if self._tokenizer else False
+
         def _stream_sync():
+            nonlocal _has_detokenizer
             try:
                 if seed is not None:
                     mx.random.seed(seed)
@@ -792,7 +798,7 @@ class VLMEngine:
                 if stop_token_ids:
                     stop_ids.update(stop_token_ids)
 
-                has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
+                has_detokenizer = _has_detokenizer
                 if has_detokenizer:
                     detokenizer = self._tokenizer.detokenizer
                     detokenizer.reset()
@@ -1294,6 +1300,13 @@ class VLMEngine:
                 **stream_kwargs,
             ):
                 if cancel_event is not None and cancel_event.is_set():
+                    queue.put_nowait(RequestOutput(
+                        request_id=req_id,
+                        new_text="",
+                        finish_reason="cancel",
+                        finished=True,
+                        completion_tokens=token_count,
+                    ))
                     return
                 token_count += 1
                 text = result.text if hasattr(result, 'text') else ""

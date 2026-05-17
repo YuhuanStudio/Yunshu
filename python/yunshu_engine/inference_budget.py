@@ -72,7 +72,7 @@ class InferenceBudget:
 
     @property
     def is_thinking_exhausted(self) -> bool:
-        if self.thinking_budget is None:
+        if self.thinking_budget is None or self.thinking_budget <= 0:
             return False
         return self.thinking_tokens_used >= self.thinking_budget
 

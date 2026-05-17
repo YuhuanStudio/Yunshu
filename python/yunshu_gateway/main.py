@@ -398,6 +398,43 @@ def create_app() -> FastAPI:
             content={"error": {"message": str(exc.detail), "type": "server_error"}},
         )
 
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        """Catch-all for unhandled exceptions — prevents stack trace leakage.
+
+        Logs full traceback server-side, returns generic 500 to client.
+        Handles MemoryError, RuntimeError, and any other unexpected exception.
+        """
+        import traceback
+        logger.error(
+            "Unhandled exception on %s %s: %s\n%s",
+            request.method, request.url.path, exc,
+            traceback.format_exc(),
+        )
+        path = request.url.path
+        # Anthropic endpoints: return Anthropic error format
+        if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Internal server error",
+                    },
+                },
+            )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": "Internal server error",
+                    "type": "server_error",
+                    "code": "internal_error",
+                }
+            },
+        )
+
     # CORS: configurable via YUNSHU_CORS_ORIGINS (comma-separated).
     # Defaults to ["*"] in dev, should be restricted in production.
     cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "*")

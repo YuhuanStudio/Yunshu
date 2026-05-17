@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -146,6 +147,7 @@ class RBACManager:
 
     def __init__(self, persist_path: str | Path | None = None) -> None:
         self._keys: dict[str, APIKey] = {}  # key_hash → APIKey
+        self._lock = threading.Lock()
         self._persist_path = Path(persist_path) if persist_path else None
         if self._persist_path:
             self._load()
@@ -239,58 +241,63 @@ class RBACManager:
             requests_per_minute=requests_per_minute,
             tokens_per_minute=tokens_per_minute,
         )
-        self._keys[key_hash] = api_key
-        self._save()
+        with self._lock:
+            self._keys[key_hash] = api_key
+            self._save()
         return raw_key, api_key
 
     def authenticate(self, raw_key: str) -> Optional[APIKey]:
         """Authenticate an API key. Returns APIKey or None."""
         key_hash = self.hash_key(raw_key)
-        api_key = self._keys.get(key_hash)
-        if api_key is None:
-            return None
-        if not api_key.is_active:
-            return None
-        if api_key.is_expired():
-            return None
-        return api_key
+        with self._lock:
+            api_key = self._keys.get(key_hash)
+            if api_key is None:
+                return None
+            if not api_key.is_active:
+                return None
+            if api_key.is_expired():
+                return None
+            return api_key
 
     def revoke_key(self, key_prefix: str) -> int:
         """Revoke keys matching a name or key prefix. Returns count revoked."""
-        revoked = 0
-        for key_hash, api_key in list(self._keys.items()):
-            if api_key.name == key_prefix or api_key.key_prefix.startswith(key_prefix):
-                api_key.is_active = False
-                revoked += 1
-        if revoked:
-            self._save()
+        with self._lock:
+            revoked = 0
+            for key_hash, api_key in list(self._keys.items()):
+                if api_key.name == key_prefix or api_key.key_prefix.startswith(key_prefix):
+                    api_key.is_active = False
+                    revoked += 1
+            if revoked:
+                self._save()
         return revoked
 
     def delete_key(self, key_prefix: str) -> int:
         """Delete keys matching a name or key prefix. Returns count deleted."""
-        to_delete = [
-            h for h, k in self._keys.items()
-            if k.name == key_prefix or k.key_prefix.startswith(key_prefix)
-        ]
-        for h in to_delete:
-            del self._keys[h]
-        if to_delete:
-            self._save()
+        with self._lock:
+            to_delete = [
+                h for h, k in self._keys.items()
+                if k.name == key_prefix or k.key_prefix.startswith(key_prefix)
+            ]
+            for h in to_delete:
+                del self._keys[h]
+            if to_delete:
+                self._save()
         return len(to_delete)
 
     def list_keys(self) -> list[dict]:
         """List all API keys (masked)."""
-        return [
-            {
-                "name": k.name,
-                "role": k.role.name,
-                "slo_class": k.slo_class.name,
-                "is_active": k.is_active,
-                "expires_at": k.expires_at,
-                "created_by": k.created_by,
-            }
-            for k in self._keys.values()
-        ]
+        with self._lock:
+            return [
+                {
+                    "name": k.name,
+                    "role": k.role.name,
+                    "slo_class": k.slo_class.name,
+                    "is_active": k.is_active,
+                    "expires_at": k.expires_at,
+                    "created_by": k.created_by,
+                }
+                for k in self._keys.values()
+            ]
 
     def get_permissions(self, role: Role) -> RolePermissions:
         return ROLE_PERMISSIONS.get(role, RolePermissions())

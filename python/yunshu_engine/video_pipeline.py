@@ -702,8 +702,9 @@ class WanVideoPipeline(VideoPipeline):
         seed = request.seed if request.seed >= 0 else int(time.time_ns()) % (2**31)
         t_lat = request.num_frames // self._latent_temporal_scale + 1
         scheduler = self._get_scheduler(request)
-        latents = mx.random.normal(
+        latents = scheduler.init_noise(
             shape=(1, self._latent_channels, t_lat, h_lat, w_lat),
+            seed=seed,
             dtype=mx.float16,
         )
 

@@ -1130,7 +1130,7 @@ class EngineCore:
             request_id=req_id,
             max_tokens=max_tokens,
             prompt_tokens=num_prompt_tokens,
-            thinking_budget=thinking_budget or 0,
+            thinking_budget=thinking_budget,
         )
         if budget.is_exhausted:
             budget_reason = budget.exhaustion_reason or "budget_exceeded"
@@ -1251,7 +1251,9 @@ class EngineCore:
                 self._memory_aware_scheduler.release_memory(req_id)
                 self._budget_manager.remove(req_id)
                 try:
-                    self._lifecycle_orchestrator.on_request_finished(req_id)
+                    self._lifecycle_orchestrator.on_request_failed(
+                        req_id, error=f"Memory guard rejected: {reason}", retryable=False,
+                    )
                 except Exception:
                     logger.debug(f"lifecycle cleanup failed in memguard rejection for {req_id}", exc_info=True)
                 try:
@@ -1449,7 +1451,9 @@ class EngineCore:
             # Wait for completion with timeout protection
             event = self._finished_events.get(req_id)
             if event:
-                timeout_s = kwargs.get('timeout_seconds') or self.config.request_timeout_seconds
+                timeout_s = kwargs.get('timeout_seconds')
+                if timeout_s is None:
+                    timeout_s = self.config.request_timeout_seconds
                 try:
                     await asyncio.wait_for(event.wait(), timeout=timeout_s)
                 except asyncio.TimeoutError:
@@ -1596,12 +1600,8 @@ class EngineCore:
                         _sched_requests, _budget,
                     )
                     self._token_scheduler._stats["steps_with_allocations"] += 1
-                    # Record allocations in fairness tracker for Jain's index computation
-                    for alloc in allocations:
-                        self._fairness_tracker.record_allocation(
-                            alloc.request_id,
-                            alloc.prefill_tokens + alloc.decode_tokens,
-                        )
+                    # Note: fairness tracker records are based on actual output tokens
+                    # (recorded below in profiler section), not budget allocations.
                 except Exception:
                     logger.debug("token-level scheduling failed", exc_info=True)
 
@@ -1892,6 +1892,10 @@ class EngineCore:
                     if timeout_s > 0:
                         now = time.monotonic()
                         for rid in list(self._request_timestamps.keys()):
+                            # Skip requests already finalized in this step
+                            # (normal completion or earlier timeout processing)
+                            if rid not in self.scheduler.running:
+                                continue
                             start = self._request_timestamps[rid]
                             if (now - start) > timeout_s:
                                 logger.warning(f"Request {rid} timed out ({now - start:.0f}s > {timeout_s}s)")

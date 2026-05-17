@@ -290,6 +290,12 @@ async def update_engine_config(
     with _config_lock:
         for field, value in updates.items():
             if hasattr(cfg, field):
+                # Validate numeric config fields are positive
+                if isinstance(value, (int, float)) and value <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Config field '{field}' must be positive, got {value}",
+                    )
                 old_val = getattr(cfg, field)
                 if old_val != value:
                     setattr(cfg, field, value)

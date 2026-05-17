@@ -118,8 +118,11 @@ class Gemma4MessageAdapter(MessageAdapter):
                 continue
 
             new_msg = {"role": role, "content": content}
-            if role == "assistant" and msg.get("tool_calls"):
-                new_msg["tool_calls"] = msg["tool_calls"]
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
             if role == "tool":
                 new_msg["tool_call_id"] = msg.get("tool_call_id", "")
                 if msg.get("name"):

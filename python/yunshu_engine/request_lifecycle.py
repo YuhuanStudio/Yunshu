@@ -330,10 +330,15 @@ class RequestLifecycleOrchestrator:
         if state is None:
             return None
 
+        # Only decrement if the request was in an active phase.
+        # Requests in REJECTED/RETRYING/QUEUED had their count already
+        # adjusted (or never incremented).
+        was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
         state.completion_tokens = completion_tokens
         state.transition(RequestPhase.FINISHED)
         self._total_completed += 1
-        self._active_count = max(0, self._active_count - 1)
+        if was_active:
+            self._active_count = max(0, self._active_count - 1)
         self._model_counts[state.model]["completed"] += 1
 
         # Report to concurrency controller
@@ -366,27 +371,36 @@ class RequestLifecycleOrchestrator:
 
         if retryable and state.retry_count < state.max_retries:
             # Go to REJECTED first (valid from any active phase)
+            was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
             if state.phase not in (RequestPhase.FINISHED, RequestPhase.ABORTED, RequestPhase.REJECTED):
                 state.transition(RequestPhase.REJECTED)
             state.transition(RequestPhase.RETRYING)
             state.transition(RequestPhase.QUEUED)
             # Reset timeout baseline so retried requests get a fresh timeout window
             state.last_active_at = time.monotonic()
-            self._active_count = max(0, self._active_count - 1)
+            if was_active:
+                self._active_count = max(0, self._active_count - 1)
             self._total_retried += 1
             # Re-queue the request so it can be promoted when a slot opens
             self._pending_queue.append(request_id)
             return state
 
         # Terminal failure — go to REJECTED then FINISHED
+        was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
         if state.phase not in (RequestPhase.FINISHED, RequestPhase.ABORTED, RequestPhase.REJECTED):
             state.transition(RequestPhase.REJECTED)
         if state.phase != RequestPhase.FINISHED:
             state.transition(RequestPhase.FINISHED)
         self._total_rejected += 1
-        self._active_count = max(0, self._active_count - 1)
+        if was_active:
+            self._active_count = max(0, self._active_count - 1)
         self._model_counts[state.model]["rejected"] += 1
         self._concurrency.report_failure(error)
+        # Remove from pending queue if present
+        try:
+            self._pending_queue.remove(request_id)
+        except ValueError:
+            pass
         del self._states[request_id]
         return state
 
@@ -395,8 +409,18 @@ class RequestLifecycleOrchestrator:
         state = self._states.get(request_id)
         if state is None:
             return
+        # Only decrement active_count if the request was in an active phase
+        # (PREFILLING or DECODING). Requests still in QUEUED/REJECTED/RETRYING
+        # were never counted as active.
+        was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
         state.transition(RequestPhase.ABORTED)
-        self._active_count = max(0, self._active_count - 1)
+        if was_active:
+            self._active_count = max(0, self._active_count - 1)
+        # Remove from pending queue if present (request was queued but never promoted)
+        try:
+            self._pending_queue.remove(request_id)
+        except ValueError:
+            pass
         del self._states[request_id]
 
     def check_timeouts(self) -> list[str]:

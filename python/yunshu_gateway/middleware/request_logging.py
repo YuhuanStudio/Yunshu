@@ -84,6 +84,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 f"[{request_id}] {request.method} {request.url.path} "
                 f"ERROR {elapsed*1000:.1f}ms — {e}"
             )
+            # Decrement counter that was incremented above — the response
+            # path below won't run since we're re-raising.
+            _main._active_requests -= 1
+            if _main._active_requests <= 0 and _main._drain_event is not None:
+                _main._drain_event.set()
             raise
 
         elapsed = time.monotonic() - t0

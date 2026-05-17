@@ -333,10 +333,19 @@ class TTSEngine:
                             })
                         except asyncio.QueueFull:
                             logger.warning("TTS stream queue full, dropping chunk")
+                # Send is_final sentinel — drain one item if full so the client
+                # always receives the completion marker and doesn't hang.
                 try:
                     queue.put_nowait({"audio": b"", "text": "", "is_final": True})
                 except asyncio.QueueFull:
-                    pass
+                    try:
+                        queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                    except asyncio.QueueFull:
+                        pass
             except Exception as e:
                 logger.error(f"TTS stream error: {e}", exc_info=True)
                 try:

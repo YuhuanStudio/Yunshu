@@ -6,6 +6,8 @@ Skips auth for health/live/ready/version endpoints.
 """
 
 
+import hmac
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -39,7 +41,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             provided = auth[7:]
-            if provided == self.token:
+            if hmac.compare_digest(provided, self.token):
                 return await call_next(request)
 
         return JSONResponse(

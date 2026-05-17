@@ -1908,6 +1908,7 @@ class Scheduler:
             else:
                 # Force-feed: dump all remaining tokens in one shot
                 remaining = state.get('remaining_tokens', [])
+                force_fed = False
                 if remaining and self._batch_gen is not None:
                     req = self.running.get(req_id)
                     if req is not None and req_id not in self._pending_abort_ids:
@@ -1929,6 +1930,7 @@ class Scheduler:
                             self._uid_to_req[uids[0]] = req_id
                             self._chunked_prefill_chunks_processed += 1
                             chunks_fed += 1
+                            force_fed = True
                         except Exception as e:
                             logger.error(
                                 f"Failed to force-feed timed-out chunked prefill for {req_id}: {e}",
@@ -1939,7 +1941,13 @@ class Scheduler:
                                 req.status = RequestStatus.FINISHED_ERROR
                                 req.finish_reason = "prefill_error"
                             errored_ids.append(req_id)
-                completed_ids.append(req_id)
+                # Only mark as completed if force-feed succeeded or there are no remaining tokens.
+                # If force-feed failed (but not errored — e.g., req was None or batch_gen missing),
+                # mark as errored to prevent the request from being silently dropped.
+                if force_fed or not remaining:
+                    completed_ids.append(req_id)
+                else:
+                    errored_ids.append(req_id)
 
         # ── Fairness: sort pending requests by chunks served (ascending) ──
         # Requests that have received fewer chunks are processed first,

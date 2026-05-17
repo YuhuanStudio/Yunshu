@@ -825,6 +825,7 @@ class FairnessTracker:
         # Stats
         self._total_tokens_allocated: int = 0
         self._total_allocations: int = 0
+        self._total_unique_requests: int = 0  # Unique request IDs ever tracked
 
     def record_allocation(
         self, request_id: str, tokens_allocated: int
@@ -835,6 +836,9 @@ class FairnessTracker:
             request_id: The request identifier.
             tokens_allocated: Number of tokens allocated in this event.
         """
+        # Track unique requests (first allocation for this request_id)
+        if request_id not in self._allocations:
+            self._total_unique_requests += 1
         self._allocations[request_id] = (
             self._allocations.get(request_id, 0) + tokens_allocated
         )
@@ -876,6 +880,10 @@ class FairnessTracker:
                 total_tokens=total_tokens,
             )
         )
+        # Clean up per-request allocation tracking to prevent unbounded memory growth.
+        # The completion record preserves the total_tokens snapshot for variance calculations.
+        self._allocations.pop(request_id, None)
+        self._allocation_count.pop(request_id, None)
         # Keep completion records bounded
         if len(self._completions) > self.max_history:
             self._completions = self._completions[-self.max_history // 2 :]
@@ -1026,6 +1034,7 @@ class FairnessTracker:
         self._completions.clear()
         self._total_tokens_allocated = 0
         self._total_allocations = 0
+        self._total_unique_requests = 0
 
     def get_stats(self) -> dict:
         """Return fairness tracking statistics."""
@@ -1036,7 +1045,7 @@ class FairnessTracker:
             "wait_time_variance": round(self.get_wait_time_variance(), 4),
             "completion_time_variance": round(self.get_completion_time_variance(), 4),
             "unfair_requests": len(self.get_unfair_requests()),
-            "total_requests_tracked": len(self._allocations),
+            "total_requests_tracked": self._total_unique_requests,
             "total_tokens_allocated": self._total_tokens_allocated,
             "total_allocations": self._total_allocations,
             "total_completions": len(self._completions),

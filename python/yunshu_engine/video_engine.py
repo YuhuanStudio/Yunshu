@@ -558,38 +558,40 @@ class VideoEngine:
                 self._teacache.reset()
                 self._native_pipeline._teacache_hook = self._teacache
 
-            if image is not None:
-                import tempfile
-                fd, img_path = tempfile.mkstemp(suffix=".png")
-                os.close(fd)
-                try:
-                    with open(img_path, "wb") as f:
-                        f.write(image)
-                    # Load the saved image as an MLX array for the native pipeline.
-                    # The native pipeline expects (H, W, C) float tensor in [0, 1].
-                    import numpy as np
-                    import mlx.core as mx
-                    from PIL import Image as PILImage
-                    pil_img = PILImage.open(img_path).convert("RGB")
-                    img_np = np.array(pil_img, dtype=np.float32) / 255.0
-                    img_mx = mx.array(img_np)
-                    result = self._native_pipeline.generate_from_image(
-                        request=request,
-                        image=img_mx,
-                    )
-                finally:
-                    if os.path.exists(img_path):
-                        os.unlink(img_path)
-            else:
-                result = self._native_pipeline.generate_frames(request)
+            try:
+                if image is not None:
+                    import tempfile
+                    fd, img_path = tempfile.mkstemp(suffix=".png")
+                    os.close(fd)
+                    try:
+                        with open(img_path, "wb") as f:
+                            f.write(image)
+                        # Load the saved image as an MLX array for the native pipeline.
+                        # The native pipeline expects (H, W, C) float tensor in [0, 1].
+                        import numpy as np
+                        import mlx.core as mx
+                        from PIL import Image as PILImage
+                        pil_img = PILImage.open(img_path).convert("RGB")
+                        img_np = np.array(pil_img, dtype=np.float32) / 255.0
+                        img_mx = mx.array(img_np)
+                        result = self._native_pipeline.generate_from_image(
+                            request=request,
+                            image=img_mx,
+                        )
+                    finally:
+                        if os.path.exists(img_path):
+                            os.unlink(img_path)
+                else:
+                    result = self._native_pipeline.generate_frames(request)
 
-            # Detach teacache hook after generation
-            if hasattr(self._native_pipeline, '_teacache_hook'):
-                self._native_pipeline._teacache_hook = None
-
-            if result and result.frames:
-                return result
-            return None
+                if result and result.frames:
+                    return result
+                return None
+            finally:
+                # Always detach teacache hook, even on exception,
+                # to prevent stale state in subsequent generations.
+                if hasattr(self._native_pipeline, '_teacache_hook'):
+                    self._native_pipeline._teacache_hook = None
         except Exception as e:
             logger.error(f"Native pipeline generation failed: {e}", exc_info=True)
             return None
