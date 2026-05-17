@@ -542,6 +542,16 @@ def create_app() -> FastAPI:
             path = request.url.path
             # Allow health/monitoring/admin even during shutdown
             if not path.startswith(("/health", "/metrics", "/api/v1/admin", "/api/v1/monitoring")):
+                # Anthropic endpoints: return Anthropic error format
+                if path.endswith(("/messages", "/messages/count_tokens")):
+                    return JSONResponse(
+                        status_code=503,
+                        content={
+                            "type": "error",
+                            "error": {"type": "overloaded_error", "message": "Server is shutting down"},
+                        },
+                        headers={"Retry-After": "5"},
+                    )
                 return JSONResponse(
                     status_code=503,
                     content={
@@ -561,8 +571,25 @@ def create_app() -> FastAPI:
         from .routers.sleep import is_sleeping
         path = request.url.path
         if is_sleeping() and not path.startswith(("/sleep", "/wake-up", "/health", "/api/v1/admin", "/api/v1/monitoring")):
-            from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=503, content={"detail": "Server is sleeping. POST /wake-up to resume."})
+            # Anthropic endpoints: return Anthropic error format
+            if path.endswith(("/messages", "/messages/count_tokens")):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "type": "error",
+                        "error": {"type": "overloaded_error", "message": "Server is sleeping. POST /wake-up to resume."},
+                    },
+                )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "message": "Server is sleeping. POST /wake-up to resume.",
+                        "type": "server_error",
+                        "code": "server_sleeping",
+                    }
+                },
+            )
         return await call_next(request)
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)

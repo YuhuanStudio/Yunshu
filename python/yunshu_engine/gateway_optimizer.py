@@ -294,9 +294,25 @@ class StreamingResponseBuffer:
 
         # Split into SSE events (each ends with \n\n)
         events = []
-        for part in raw.split(b"\n\n"):
-            if part:
+        # raw may contain a trailing incomplete event (no \n\n terminator).
+        # We split on \n\n to get complete events, but the last part may be
+        # an incomplete event that we preserve without modification.
+        parts = raw.split(b"\n\n")
+        for i, part in enumerate(parts):
+            if not part:
+                continue
+            if i < len(parts) - 1:
+                # Complete event: re-add the \n\n terminator
                 events.append(part + b"\n\n")
+            else:
+                # Last part: could be a complete event (if raw ended with \n\n,
+                # split produces a trailing empty string which we skip above) or
+                # an incomplete event. Append \n\n only if it looks complete
+                # (i.e., raw ended with \n\n, meaning this is a full event).
+                # Since split removes the delimiter, if raw ends with \n\n the
+                # last element is b"" (already handled by the `if not part` check).
+                # So this last non-empty part is an incomplete event.
+                events.append(part)
         return events
 
     def _read_all(self) -> bytes:

@@ -547,16 +547,18 @@ class PrefetchSampler:
         sampling_params: dict[str, Any] | None = None,
         vocab_size: int = 0,
         *,
-        temperature: float = 1.0,
-        top_p: float = 1.0,
-        top_k: int = 0,
-        min_p: float = 0.0,
-        seed: int | None = None,
+        temperature: float = _UNSET,  # type: ignore[assignment]
+        top_p: float = _UNSET,  # type: ignore[assignment]
+        top_k: int = _UNSET,  # type: ignore[assignment]
+        min_p: float = _UNSET,  # type: ignore[assignment]
+        seed: int | None = _UNSET,  # type: ignore[assignment]
     ) -> SamplingPlan:
         """Pre-compute sampling plan.
 
         Can accept either a sampling_params dict or explicit keyword args.
         Called while GPU is computing logits (overlapped work).
+
+        Precedence: explicit kwargs > sampling_params dict > built-in defaults.
 
         Args:
             sampling_params: Dict with temperature, top_p, top_k, etc.
@@ -568,29 +570,49 @@ class PrefetchSampler:
         """
         t0 = time.perf_counter()
 
-        # Precedence: explicit kwargs > dict > defaults (1.0, 1.0, 0, 0.0, None)
-        # If a keyword differs from its default, it was explicitly set and wins.
-        # Dict values fill in only when the keyword is at its default.
-        _kw_temp, _kw_top_p, _kw_top_k, _kw_min_p, _kw_seed = (
-            temperature, top_p, top_k, min_p, seed
-        )
+        # Defaults when neither dict nor kwargs provide a value
+        _DEFAULT_TEMP = 1.0
+        _DEFAULT_TOP_P = 1.0
+        _DEFAULT_TOP_K = 0
+        _DEFAULT_MIN_P = 0.0
+        _DEFAULT_SEED = None
+
+        # Step 0: save whether each kwarg was explicitly provided
+        _kw_temp = temperature
+        _kw_top_p = top_p
+        _kw_top_k = top_k
+        _kw_min_p = min_p
+        _kw_seed = seed
+
+        # Step 1: resolve from dict (if provided)
         if sampling_params is not None:
-            temperature = sampling_params.get("temperature", temperature)
-            top_p = sampling_params.get("top_p", top_p)
-            top_k = sampling_params.get("top_k", top_k)
-            min_p = sampling_params.get("min_p", min_p)
-            seed = sampling_params.get("seed", seed)
-        # If keyword was explicitly set (differs from default), it overrides dict
-        if _kw_temp != 1.0:
+            temperature = sampling_params.get("temperature", _DEFAULT_TEMP)
+            top_p = sampling_params.get("top_p", _DEFAULT_TOP_P)
+            top_k = sampling_params.get("top_k", _DEFAULT_TOP_K)
+            min_p = sampling_params.get("min_p", _DEFAULT_MIN_P)
+            seed = sampling_params.get("seed", _DEFAULT_SEED)
+
+        # Step 2: if an explicit kwarg was passed (not _UNSET), it overrides dict
+        if _kw_temp is not self._UNSET:
             temperature = _kw_temp
-        if _kw_top_p != 1.0:
+        elif sampling_params is None:
+            temperature = _DEFAULT_TEMP
+        if _kw_top_p is not self._UNSET:
             top_p = _kw_top_p
-        if _kw_top_k != 0:
+        elif sampling_params is None:
+            top_p = _DEFAULT_TOP_P
+        if _kw_top_k is not self._UNSET:
             top_k = _kw_top_k
-        if _kw_min_p != 0.0:
+        elif sampling_params is None:
+            top_k = _DEFAULT_TOP_K
+        if _kw_min_p is not self._UNSET:
             min_p = _kw_min_p
-        if _kw_seed is not None:
+        elif sampling_params is None:
+            min_p = _DEFAULT_MIN_P
+        if _kw_seed is not self._UNSET:
             seed = _kw_seed
+        elif sampling_params is None:
+            seed = _DEFAULT_SEED
         deterministic = temperature == 0 or top_k == 1
 
         plan = SamplingPlan(

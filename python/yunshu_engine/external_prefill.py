@@ -395,8 +395,8 @@ class ExternalPrefiller:
         Returns:
             Model output (logits).
         """
-        if not _HAS_MLX or mx is None:
-            # MLX not available — no-op (for testing without GPU)
+        if not _HAS_MLX or mx is None or self._model is None:
+            # MLX not available or no model loaded — no-op (for testing without GPU)
             return None
 
         input_ids = mx.array(token_ids).reshape(1, -1)
@@ -413,7 +413,7 @@ class ExternalPrefiller:
 
         Uses the model's cache structure if available, otherwise returns None.
         """
-        if not _HAS_MLX or mx is None:
+        if not _HAS_MLX or mx is None or self._model is None:
             return None
 
         if hasattr(self._model, 'make_cache'):

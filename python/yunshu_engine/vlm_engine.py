@@ -766,6 +766,7 @@ class VLMEngine:
             # even if the exception fires before the point where it was
             # previously assigned inside the try block.
             has_detokenizer = _has_detokenizer
+            detokenizer = None  # Initialize before try so error handler can safely check
             try:
                 if seed is not None:
                     mx.random.seed(seed)
@@ -831,6 +832,7 @@ class VLMEngine:
                 accumulated = ""
                 token_count = 0
                 _num_prompt_tokens = len(input_ids)
+                _cur_state = "normal"  # Initialize before loop; referenced after loop if 0 iterations
                 for token_id, _ in generate_step(
                     input_ids, self._model,
                     max_tokens=max_tokens,
@@ -977,7 +979,7 @@ class VLMEngine:
             except Exception as e:
                 logger.error(f"VLM stream error: {e}", exc_info=True)
                 # Flush remaining detokenizer bytes on error
-                if has_detokenizer:
+                if detokenizer is not None:
                     try:
                         remaining = detokenizer.finalize()
                         if remaining:

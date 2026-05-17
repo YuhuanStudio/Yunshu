@@ -1502,6 +1502,11 @@ class Scheduler:
                         state_machines=[sm],
                     )
 
+                if not uids:
+                    logger.error(f"BatchGenerator.insert returned empty UIDs for {req.request_id}")
+                    req.status = RequestStatus.FINISHED_ERROR
+                    req.finish_reason = "insert_failed"
+                    continue
                 req.batch_uid = uids[0]
                 req.status = RequestStatus.RUNNING
                 req.prefill_start = time.monotonic()
@@ -2005,7 +2010,8 @@ class Scheduler:
             # - SCHED-2 standard: use the per-request chunk_size from state
             # - Sarathi hybrid: use hybrid_chunk_size from config
             # - Legacy fallback: hybrid_chunk_size
-            chunk_size = state.get('chunk_size') or self.config.hybrid_chunk_size
+            _cs = state.get('chunk_size')
+            chunk_size = _cs if _cs is not None else self.config.hybrid_chunk_size
 
             # Use semantic chunk boundaries when optimizer is available
             if self._chunked_prefill_optimizer is not None and len(remaining) > chunk_size:

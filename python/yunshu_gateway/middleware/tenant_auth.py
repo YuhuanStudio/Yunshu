@@ -22,6 +22,48 @@ from starlette.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 
+# Paths served by the Anthropic router — must use Anthropic error format
+_ANTHROPIC_PATHS = ("/v1/messages", "/messages")
+
+
+class _ErrorFormatter:
+    """Format errors consistently per API family (OpenAI vs Anthropic)."""
+
+    @staticmethod
+    def auth_error(request: Request, message: str, status_code: int = 401) -> JSONResponse:
+        path = request.url.path
+        # WWW-Authenticate header only valid on 401, NOT on 429
+        headers = {"WWW-Authenticate": "Bearer"} if status_code == 401 else {}
+        # Anthropic 429: include Retry-After header
+        if status_code == 429:
+            headers["Retry-After"] = "1"
+        if path.endswith(_ANTHROPIC_PATHS):
+            error_type = "authentication_error" if status_code == 401 else "invalid_request_error"
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": error_type,
+                        "message": message,
+                    },
+                },
+                headers=headers,
+            )
+        code = "invalid_api_key" if status_code == 401 else "rate_limit_exceeded"
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "message": message,
+                    "type": "authentication_error" if status_code == 401 else "rate_limit_error",
+                    "code": code,
+                }
+            },
+            headers=headers,
+        )
+
+
 class TenantAuthMiddleware(BaseHTTPMiddleware):
     """Authenticate requests via RBAC API keys.
 
@@ -62,11 +104,7 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
 
         if not auth.startswith("Bearer "):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing or invalid Authorization header"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+            return _ErrorFormatter.auth_error(request, "Missing or invalid Authorization header")
 
         token = auth[7:]
 
@@ -76,10 +114,7 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
             if rbac is not None:
                 api_key = rbac.authenticate(token)
                 if api_key is None:
-                    return JSONResponse(
-                        status_code=401,
-                        content={"detail": "Invalid or expired API key"},
-                    )
+                    return _ErrorFormatter.auth_error(request, "Invalid or expired API key")
                 request.state.rbac_key = api_key
                 request.state.role = api_key.role
                 request.state.slo_class = api_key.slo_class
@@ -95,14 +130,10 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
             if manager is not None:
                 tenant = manager.authenticate(token)
                 if tenant is None:
-                    return JSONResponse(
-                        status_code=401,
-                        content={"detail": "Invalid API key"},
-                    )
+                    return _ErrorFormatter.auth_error(request, "Invalid API key")
                 if not tenant.check_rate_limit():
-                    return JSONResponse(
-                        status_code=429,
-                        content={"detail": "Rate limit exceeded"},
+                    return _ErrorFormatter.auth_error(
+                        request, "Rate limit exceeded", status_code=429,
                     )
                 tenant.record_request()
                 request.state.tenant = tenant
@@ -110,8 +141,4 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
         except ImportError:
             pass
 
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Invalid or missing API key"},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return _ErrorFormatter.auth_error(request, "Invalid or missing API key")

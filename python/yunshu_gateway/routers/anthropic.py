@@ -531,7 +531,7 @@ async def _non_stream_batched(engine, messages, req, stop):
         logger.error(f"Anthropic batched generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"type": "error", "error": {"type": "api_error", "message": str(e)}},
+            content={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
         )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     _record_metrics(result.prompt_tokens, result.completion_tokens)
@@ -662,7 +662,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
         logger.error(f"Anthropic legacy generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"type": "error", "error": {"type": "api_error", "message": str(e)}},
+            content={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
         )
     # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
     prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
@@ -1048,10 +1048,12 @@ async def _stream_anthropic(
     except MemoryError:
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
+        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Anthropic streaming error", exc_info=True)
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
+        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         _anth_tracker.unregister(message_id)

@@ -19,6 +19,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 
+# Paths served by the Anthropic router — must use Anthropic error format
+_ANTHROPIC_PATHS = ("/v1/messages", "/messages")
+
+
 class _TokenBucket:
     """Simple token bucket rate limiter with TTL tracking."""
 
@@ -178,16 +182,34 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if rbac_key is not None and rbac_key.requests_per_minute is not None:
             bucket = self._get_key_bucket(rbac_key.name, rbac_key.requests_per_minute)
             if not bucket.consume():
+                retry_after = int(60 / rbac_key.requests_per_minute) + 1
                 if is_websocket:
                     # WebSocket upgrades can't return JSON bodies; return HTTP 429
                     return Response(status_code=429, content="Rate limit exceeded")
+                # Anthropic endpoints: return Anthropic error format
+                if request.url.path.endswith(_ANTHROPIC_PATHS):
+                    return JSONResponse(
+                        status_code=429,
+                        content={
+                            "type": "error",
+                            "error": {
+                                "type": "rate_limit_error",
+                                "message": "API key rate limit exceeded",
+                            },
+                        },
+                        headers={"Retry-After": str(retry_after)},
+                    )
+                # Default: OpenAI error format
                 return JSONResponse(
                     status_code=429,
                     content={
-                        "detail": "API key rate limit exceeded",
-                        "retry_after": int(60 / rbac_key.requests_per_minute) + 1,
+                        "error": {
+                            "message": "API key rate limit exceeded",
+                            "type": "rate_limit_error",
+                            "code": "rate_limit_exceeded",
+                        }
                     },
-                    headers={"Retry-After": str(int(60 / rbac_key.requests_per_minute) + 1)},
+                    headers={"Retry-After": str(retry_after)},
                 )
             # Key-level rate limit passed — still apply IP-level rate limit
             # for defense-in-depth (prevents single key from unlimited IPs).
@@ -204,15 +226,33 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         bucket = self._bucket_cache.get_or_create(client_ip)
 
         if not bucket.consume():
+            retry_after = int(60 / self._rpm) + 1
             if is_websocket:
                 return Response(status_code=429, content="Rate limit exceeded")
+            # Anthropic endpoints: return Anthropic error format
+            if request.url.path.endswith(_ANTHROPIC_PATHS):
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "type": "error",
+                        "error": {
+                            "type": "rate_limit_error",
+                            "message": "Rate limit exceeded",
+                        },
+                    },
+                    headers={"Retry-After": str(retry_after)},
+                )
+            # Default: OpenAI error format
             return JSONResponse(
                 status_code=429,
                 content={
-                    "detail": "Rate limit exceeded",
-                    "retry_after": int(60 / self._rpm) + 1,
+                    "error": {
+                        "message": "Rate limit exceeded",
+                        "type": "rate_limit_error",
+                        "code": "rate_limit_exceeded",
+                    }
                 },
-                headers={"Retry-After": str(int(60 / self._rpm) + 1)},
+                headers={"Retry-After": str(retry_after)},
             )
 
         return await call_next(request)
