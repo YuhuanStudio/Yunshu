@@ -1110,6 +1110,9 @@ class KVBlockCompactor:
         for block in blocks.values():
             if not block.is_active or not block.is_partial:
                 continue
+            # Skip blocks already above the utilization threshold
+            if block.utilization > self._min_utilization:
+                continue
             if block.request_id not in request_blocks:
                 request_blocks[block.request_id] = []
             request_blocks[block.request_id].append(block)
@@ -1131,7 +1134,8 @@ class KVBlockCompactor:
             i = 0
             while i < len(partial_blocks):
                 current = partial_blocks[i]
-                available = bs - current.num_valid
+                effective_bs = current.block_size if current.block_size > 0 else bs
+                available = effective_bs - current.num_valid
 
                 # Try to fill current block from subsequent blocks
                 j = i + 1

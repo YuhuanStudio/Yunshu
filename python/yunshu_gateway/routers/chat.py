@@ -1450,12 +1450,23 @@ async def _stream_response_multi(
                     if fr is not None:
                         choice_finish_reason = fr
                     _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
-                    yield _format_choice_chunk(
-                        completion_id, req.model, choice_idx,
-                        token_text, None,  # intermediate: always None
-                        include_role=first_chunk_for_choice,
-                        logprobs=_chunk_lp,
-                    )
+                    # Route thinking content based on SequenceStateMachine state
+                    _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                    if _is_reasoning:
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx,
+                            "", None,
+                            include_role=first_chunk_for_choice,
+                            logprobs=_chunk_lp,
+                            thinking_content=token_text,
+                        )
+                    else:
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx,
+                            token_text, None,  # intermediate: always None
+                            include_role=first_chunk_for_choice,
+                            logprobs=_chunk_lp,
+                        )
                     first_chunk_for_choice = False
             else:
                 stream = engine.generate_stream(
@@ -1505,12 +1516,23 @@ async def _stream_response_multi(
                     if fr is not None:
                         choice_finish_reason = fr
                     _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
-                    yield _format_choice_chunk(
-                        completion_id, req.model, choice_idx,
-                        token_text, None,  # intermediate: always None
-                        include_role=first_chunk_for_choice,
-                        logprobs=_chunk_lp,
-                    )
+                    # Route thinking content based on SequenceStateMachine state
+                    _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                    if _is_reasoning:
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx,
+                            "", None,
+                            include_role=first_chunk_for_choice,
+                            logprobs=_chunk_lp,
+                            thinking_content=token_text,
+                        )
+                    else:
+                        yield _format_choice_chunk(
+                            completion_id, req.model, choice_idx,
+                            token_text, None,  # intermediate: always None
+                            include_role=first_chunk_for_choice,
+                            logprobs=_chunk_lp,
+                        )
                     first_chunk_for_choice = False
 
             total_completion_tok += choice_completion_tok
@@ -1564,12 +1586,15 @@ def _format_choice_chunk(
     finish_reason: Optional[str],
     include_role: bool = False,
     logprobs: Optional[dict] = None,
+    thinking_content: Optional[str] = None,
 ) -> str:
     """Format an SSE chunk for a specific choice index."""
     delta: dict[str, Any] = {}
     if include_role:
         delta["role"] = "assistant"
     delta["content"] = delta_content
+    if thinking_content:
+        delta["reasoning_content"] = thinking_content
     choice: dict[str, Any] = {
         "index": index,
         "delta": delta,

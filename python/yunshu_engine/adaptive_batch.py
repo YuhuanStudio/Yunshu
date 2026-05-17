@@ -16,6 +16,7 @@ Integration points:
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -158,6 +159,15 @@ class AdaptiveBatchScheduler:
 
         # --- Clamp to config bounds ---
         batch = max(cfg.min_batch, min(batch, cfg.max_batch))
+
+        # --- Hysteresis: prevent rapid oscillation ---
+        if batch != self._state.current_batch_size:
+            now = time.monotonic()
+            if now - self._state.last_scale_time < self._min_scale_interval_s:
+                # Too soon: suppress scale change
+                batch = self._state.current_batch_size
+            else:
+                self._state.last_scale_time = now
 
         self._state.current_batch_size = batch
         return batch

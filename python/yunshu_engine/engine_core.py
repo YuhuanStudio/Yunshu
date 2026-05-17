@@ -692,10 +692,30 @@ class EngineCore:
                     head_dim = getattr(model_cfg, 'hidden_size', 1) // max(
                         getattr(model_cfg, 'num_attention_heads', 1), 1
                     )
-                    self._hybrid_kv.register_layer(
-                        idx, CacheBlockType.ATTENTION,
-                        cache_shape=(num_heads, head_dim, self.config.kv_block_size),
+                    # Detect sliding window attention
+                    sw = getattr(model_cfg, 'sliding_window', None)
+                    # Detect MLA (DeepSeek) by kv_lora_rank or q_lora_rank
+                    has_mla = (
+                        hasattr(layer, 'kv_lora_rank')
+                        or 'mla' in layer_cls
+                        or getattr(model_cfg, 'kv_lora_rank', None) is not None
                     )
+                    if has_mla:
+                        latent_dim = getattr(model_cfg, 'kv_lora_rank', head_dim)
+                        self._hybrid_kv.register_layer(
+                            idx, CacheBlockType.MLA,
+                            cache_shape=(latent_dim, self.config.kv_block_size),
+                        )
+                    elif sw is not None and sw > 0:
+                        self._hybrid_kv.register_layer(
+                            idx, CacheBlockType.SLIDING_WINDOW,
+                            cache_shape=(num_heads, head_dim, self.config.kv_block_size),
+                        )
+                    else:
+                        self._hybrid_kv.register_layer(
+                            idx, CacheBlockType.ATTENTION,
+                            cache_shape=(num_heads, head_dim, self.config.kv_block_size),
+                        )
                 registered += 1
             except Exception:
                 logger.debug("hybrid KV layer registration failed", exc_info=True)

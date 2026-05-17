@@ -830,39 +830,52 @@ async def _stream_anthropic(
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
 
                     output_tokens += 1
+                    _prev_len = len(accumulated_text)
                     accumulated_text += parsed["visible"]
 
-                    # Check for stop sequences
-                    if stop:
-                        for seq in stop:
-                            if seq in accumulated_text:
-                                idx = accumulated_text.find(seq)
-                                safe_text = accumulated_text[:idx]
-                                matched_stop = seq
-                                accumulated_text = safe_text
-                                break
+                    # Once a stop sequence was already matched, suppress all further text
+                    if matched_stop:
+                        pass
+                    else:
+                        # Check for stop sequences in the newly accumulated text
+                        _stop_matched_this_token = False
+                        if stop:
+                            for seq in stop:
+                                if seq in accumulated_text:
+                                    idx = accumulated_text.find(seq)
+                                    accumulated_text = accumulated_text[:idx]
+                                    matched_stop = seq
+                                    _stop_matched_this_token = True
+                                    break
 
-                    # If tools are defined, try to detect and emit tool-use deltas
-                    if has_tools and not matched_stop:
-                        tool_calls = _try_parse_tool_call_delta(accumulated_text)
-                        if tool_calls:
-                            if not tool_use_block_started:
-                                # Close the text block, open a tool_use block
-                                if text_block_started:
-                                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
-                                    block_index += 1
-                                tool_use_block_started = True
-                                for tc in tool_calls:
-                                    tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
-                                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tc['name'], 'input': {}}})}\n\n"
-                                    # Emit input_json_delta for streaming the arguments
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
-                                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
-                                    block_index += 1
-                            return  # tool calls emitted; stop normal text streaming
+                        if _stop_matched_this_token:
+                            # Emit only the safe portion of the current token
+                            _safe_len = len(accumulated_text) - _prev_len
+                            if _safe_len > 0:
+                                _safe_delta = parsed["visible"][:_safe_len]
+                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"
+                        else:
+                            # If tools are defined, try to detect and emit tool-use deltas
+                            if has_tools:
+                                tool_calls = _try_parse_tool_call_delta(accumulated_text)
+                                if tool_calls:
+                                    if not tool_use_block_started:
+                                        # Close the text block, open a tool_use block
+                                        if text_block_started:
+                                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
+                                            block_index += 1
+                                        tool_use_block_started = True
+                                        for tc in tool_calls:
+                                            tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
+                                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tc['name'], 'input': {}}})}\n\n"
+                                            # Emit input_json_delta for streaming the arguments
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
+                                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
+                                            block_index += 1
+                                    return  # tool calls emitted; stop normal text streaming
 
-                    # Normal text delta
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': parsed['visible']}})}\n\n"
+                            # Normal text delta
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': parsed['visible']}})}\n\n"
 
                 if output.prompt_tokens and not input_tokens:
                     input_tokens = output.prompt_tokens
@@ -920,35 +933,49 @@ async def _stream_anthropic(
                         text_block_started = True
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                     output_tokens += 1
+                    _prev_len = len(accumulated_text)
                     accumulated_text += parsed["visible"]
 
-                    # Check for stop sequences
-                    if stop:
-                        for seq in stop:
-                            if seq in accumulated_text:
-                                idx = accumulated_text.find(seq)
-                                safe_text = accumulated_text[:idx]
-                                matched_stop = seq
-                                accumulated_text = safe_text
-                                break
+                    # Once a stop sequence was already matched, suppress all further text
+                    if matched_stop:
+                        pass
+                    else:
+                        # Check for stop sequences in the newly accumulated text
+                        _stop_matched_this_token = False
+                        if stop:
+                            for seq in stop:
+                                if seq in accumulated_text:
+                                    idx = accumulated_text.find(seq)
+                                    accumulated_text = accumulated_text[:idx]
+                                    matched_stop = seq
+                                    _stop_matched_this_token = True
+                                    break
 
-                    # Tool-use delta detection for legacy engine
-                    if has_tools and not matched_stop:
-                        tool_calls = _try_parse_tool_call_delta(accumulated_text)
-                        if tool_calls:
-                            if text_block_started:
-                                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
-                                block_index += 1
-                            tool_use_block_started = True
-                            for tc in tool_calls:
-                                tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
-                                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tc['name'], 'input': {}}})}\n\n"
-                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
-                                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
-                                block_index += 1
-                            return
+                        if _stop_matched_this_token:
+                            # Emit only the safe portion of the current token
+                            _safe_len = len(accumulated_text) - _prev_len
+                            if _safe_len > 0:
+                                _safe_delta = parsed["visible"][:_safe_len]
+                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"
+                        else:
+                            # Tool-use delta detection for legacy engine
+                            if has_tools:
+                                tool_calls = _try_parse_tool_call_delta(accumulated_text)
+                                if tool_calls:
+                                    if text_block_started:
+                                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
+                                        block_index += 1
+                                    tool_use_block_started = True
+                                    for tc in tool_calls:
+                                        tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
+                                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tc['name'], 'input': {}}})}\n\n"
+                                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
+                                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
+                                        block_index += 1
+                                    return
 
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': parsed['visible']}})}\n\n"
+                            # Normal text delta
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': parsed['visible']}})}\n\n"
 
         # Flush final
         final = parser.finalize()
@@ -971,9 +998,8 @@ async def _stream_anthropic(
         # message_delta (stop + usage)
         # Per Anthropic streaming spec, message_delta usage ONLY contains output_tokens.
         # cache_creation_input_tokens / cache_read_input_tokens belong in message_start usage
-        # but are sent there as 0 since we don't have them until streaming begins.
+        # but are sent there as 0 since we don't know them until after streaming begins.
         stop_reason = _map_stop_reason(None, matched_stop, has_tool_calls=tool_use_block_started)
-        cache_creation = max(0, input_tokens - cached_tokens)
         delta_data = {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": matched_stop},

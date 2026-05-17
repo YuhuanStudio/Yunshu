@@ -42,7 +42,6 @@ import logging
 import os
 import struct
 import time
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -619,7 +618,7 @@ class ExternalPrefillServer:
         self._server: asyncio.Server | None = None
         self._running = False
         self._active_connections: int = 0
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
         # Stats
         self._requests_served: int = 0
@@ -658,7 +657,7 @@ class ExternalPrefillServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         """Handle a single client connection."""
-        with self._lock:
+        async with self._lock:
             if self._active_connections >= self._config.max_connections:
                 writer.close()
                 await writer.wait_closed()
@@ -686,7 +685,7 @@ class ExternalPrefillServer:
                 except (ConnectionError, OSError):
                     break
         finally:
-            with self._lock:
+            async with self._lock:
                 self._active_connections -= 1
             try:
                 writer.close()
@@ -846,7 +845,6 @@ class ExternalPrefillClient:
         if model_config:
             request_header["model_config"] = model_config
 
-        request_data = _encode_message(request_header, payload)
         request_header["payload_len"] = len(payload)
         request_data = _encode_message(request_header, payload)
 
@@ -875,40 +873,37 @@ class ExternalPrefillClient:
 
     async def _send_request(self, data: bytes) -> PrefillResult:
         """Send a request to the server and return the response."""
-        async with asyncio.timeout(self._config.timeout_seconds):
-            reader, writer = await asyncio.open_connection(
-                self._config.server_host,
-                self._config.server_port,
-            )
+        reader, writer = await asyncio.open_connection(
+            self._config.server_host,
+            self._config.server_port,
+        )
 
         try:
-            writer.write(data)
-            await writer.drain()
+            async with asyncio.timeout(self._config.timeout_seconds):
+                writer.write(data)
+                await writer.drain()
 
-            # Read response
-            response_data = b""
-            magic = await reader.readexactly(4)
-            if magic != _WIRE_MAGIC:
-                raise ValueError(f"Invalid response magic: {magic!r}")
-            header_len_bytes = await reader.readexactly(4)
-            header_len = struct.unpack(">I", header_len_bytes)[0]
-            header_bytes = await reader.readexactly(header_len)
-            header = json.loads(header_bytes.decode("utf-8"))
-            payload_len = header.get("payload_len", 0)
-            payload = b""
-            if payload_len > 0:
-                payload = await reader.readexactly(payload_len)
+                # Read response
+                magic = await reader.readexactly(4)
+                if magic != _WIRE_MAGIC:
+                    raise ValueError(f"Invalid response magic: {magic!r}")
+                header_len_bytes = await reader.readexactly(4)
+                header_len = struct.unpack(">I", header_len_bytes)[0]
+                header_bytes = await reader.readexactly(header_len)
+                header = json.loads(header_bytes.decode("utf-8"))
+                payload_len = header.get("payload_len", 0)
+                payload = b""
+                if payload_len > 0:
+                    payload = await reader.readexactly(payload_len)
 
-            elapsed = 0.0  # Latency tracked by caller
+                # Check for error response
+                if header.get("type") == "error":
+                    msg = header.get("message", "Unknown server error")
+                    raise RuntimeError(f"Remote prefill error: {msg}")
 
-            # Check for error response
-            if header.get("type") == "error":
-                msg = header.get("message", "Unknown server error")
-                raise RuntimeError(f"Remote prefill error: {msg}")
-
-            # Deserialize PrefillResult
-            full_data = magic + header_len_bytes + header_bytes + payload
-            return _deserialize_prefill_result(full_data)
+                # Deserialize PrefillResult
+                full_data = magic + header_len_bytes + header_bytes + payload
+                return _deserialize_prefill_result(full_data)
 
         finally:
             try:
@@ -923,10 +918,11 @@ class ExternalPrefillClient:
         Returns True if the server is reachable, False otherwise.
         """
         try:
-            reader, writer = await asyncio.open_connection(
-                self._config.server_host,
-                self._config.server_port,
-            )
+            async with asyncio.timeout(self._config.timeout_seconds):
+                reader, writer = await asyncio.open_connection(
+                    self._config.server_host,
+                    self._config.server_port,
+                )
             writer.close()
             await writer.wait_closed()
             return True
