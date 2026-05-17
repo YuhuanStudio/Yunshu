@@ -250,7 +250,7 @@ class SuffixProposer:
         if active_id is None:
             return []
 
-        gen = self._generated[active_id]
+        gen = self._generated.get(active_id)
         if not gen:
             return []
 
@@ -335,7 +335,10 @@ class SuffixProposer:
             return
 
         accepted = draft_tokens[:verified_up_to]
-        self._generated[active_id].extend(accepted)
+        gen_list = self._generated.get(active_id)
+        if gen_list is None:
+            return
+        gen_list.extend(accepted)
 
         # Rebuild trie with updated generated tokens
         gen = self._generated[active_id]

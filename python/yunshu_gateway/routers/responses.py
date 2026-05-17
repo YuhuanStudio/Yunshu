@@ -25,7 +25,18 @@ from pydantic import BaseModel, Field, model_validator
 from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
-from ..streaming import format_openai_chunk
+from ..streaming import (
+    format_openai_chunk,
+    format_responses_created,
+    format_responses_in_progress,
+    format_responses_output_item_added,
+    format_responses_content_part_added,
+    format_responses_text_delta,
+    format_responses_text_done,
+    format_responses_content_part_done,
+    format_responses_output_item_done,
+    format_responses_completed,
+)
 from .chat import _format_chat_logprobs, _normalize_finish_reason, _record_metrics
 
 router = APIRouter(tags=["responses"])
@@ -461,37 +472,28 @@ async def create_response(req: ResponsesRequest, request: Request):
 
 
 async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None, request=None):
-    """SSE streaming for Responses API.
+    """SSE streaming for Responses API using proper event types.
 
-    ARCHITECTURAL GAP — Streaming uses chat.completion.chunk format:
-      The OpenAI Responses API defines its own SSE event types:
-        - response.created, response.in_progress
-        - response.output_item.added, response.content_part.added
-        - response.output_text.delta, response.output_text.done
-        - response.completed
-      However, the current implementation emits chat.completion.chunk
-      objects (reusing the chat completions streaming path). This is a
-      known gap that requires significant refactoring:
-        1. New formatters in streaming.py for each Responses API event type
-        2. Different delta structure (output_text.delta vs choices[].delta)
-        3. Lifecycle events (response.created/in_progress/completed)
-        4. Usage reporting via response.completed event, not a separate chunk
-      Until the proper formatters are built, chat.completion.chunk format
-      is used as a compatible fallback that most clients can parse.
+    Emits the correct Responses API SSE events:
+      response.created → response.in_progress → response.output_item.added
+      → response.content_part.added → response.output_text.delta (per token)
+      → response.output_text.done → response.content_part.done
+      → response.output_item.done → response.completed
+
+    Usage is reported via the response.completed event (not a separate chunk),
+    regardless of include_usage — the flag is kept for backward compatibility
+    but usage is always included in response.completed.
 
     n>1 is rejected at the router level (see create_response) before
     reaching this function.
     """
-    from ..streaming import with_sse_keepalive, format_openai_done, format_openai_usage_chunk
+    from ..streaming import with_sse_keepalive
     from yunshu_engine.batched_engine import BatchedEngine
     from .chat import _release_lora_adapter
     is_batched = isinstance(engine, BatchedEngine)
     _logit_bias = req.logit_bias
     if _logit_bias:
         _logit_bias = {int(k): v for k, v in _logit_bias.items()}
-    include_usage = (
-        req.stream_options is not None and req.stream_options.include_usage
-    )
     prompt_tok = 0
     completion_tok = 0
     reasoning_tok = 0
@@ -511,11 +513,37 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
     _cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
 
+    # IDs for the output message and sequence numbering
+    msg_id = f"msg-{uuid.uuid4().hex[:24]}"
+    _seq = 0
+
+    def _next_seq():
+        nonlocal _seq
+        _seq += 1
+        return _seq
+
     try:
       async def _token_source():
         nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok
-        first_chunk = True
+        accumulated_text = ""
         last_finish_reason = None
+
+        # ── Lifecycle: response.created ──
+        yield format_responses_created(response_id, req.model, seq=_next_seq())
+
+        # ── Lifecycle: response.in_progress ──
+        yield format_responses_in_progress(response_id, req.model, seq=_next_seq())
+
+        # ── Lifecycle: response.output_item.added ──
+        yield format_responses_output_item_added(
+            response_id, req.model, item_id=msg_id, output_index=0, seq=_next_seq(),
+        )
+
+        # ── Lifecycle: response.content_part.added ──
+        yield format_responses_content_part_added(
+            item_id=msg_id, output_index=0, content_index=0, seq=_next_seq(),
+        )
+
         if is_batched:
             async for output in engine.stream_chat(
                 messages=messages,
@@ -552,18 +580,19 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.new_text:
                     completion_tok += 1
+                    accumulated_text += output.new_text
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
-                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
-                yield format_openai_chunk(
-                    completion_id=response_id,
-                    model=req.model,
-                    delta_content=output.new_text,
-                    finish_reason=None,  # intermediate: always None
-                    include_role=first_chunk,
-                    logprobs=_chunk_lp,
-                )
-                first_chunk = False
+
+                # ── Per-token: response.output_text.delta ──
+                if output.new_text:
+                    yield format_responses_text_delta(
+                        delta=output.new_text,
+                        item_id=msg_id,
+                        output_index=0,
+                        content_index=0,
+                        seq=_next_seq(),
+                    )
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
@@ -601,40 +630,75 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 token_text = getattr(output, 'token_text', '')
                 if token_text:
                     completion_tok += 1
+                    accumulated_text += token_text
                 if getattr(output, 'finish_reason', None) is not None:
                     last_finish_reason = output.finish_reason
-                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
-                yield format_openai_chunk(
-                    completion_id=response_id,
-                    model=req.model,
-                    delta_content=token_text,
-                    finish_reason=None,  # intermediate: always None
-                    include_role=first_chunk,
-                    logprobs=_chunk_lp,
-                )
-                first_chunk = False
 
-        # Final chunk with finish_reason
-        # If no tokens were emitted (first_chunk is still True), this is also
-        # the first chunk and must include role=assistant per OpenAI spec.
-        yield format_openai_chunk(
-            completion_id=response_id,
-            model=req.model,
-            delta_content="",
-            finish_reason=_normalize_finish_reason(last_finish_reason),
-            include_role=first_chunk,
+                # ── Per-token: response.output_text.delta ──
+                if token_text:
+                    yield format_responses_text_delta(
+                        delta=token_text,
+                        item_id=msg_id,
+                        output_index=0,
+                        content_index=0,
+                        seq=_next_seq(),
+                    )
+
+        # ── Lifecycle: response.output_text.done ──
+        yield format_responses_text_done(
+            text=accumulated_text,
+            item_id=msg_id,
+            output_index=0,
+            content_index=0,
+            seq=_next_seq(),
         )
 
-        if include_usage:
-            yield format_openai_usage_chunk(
-                completion_id=response_id,
-                model=req.model,
-                prompt_tokens=prompt_tok,
-                completion_tokens=completion_tok,
-                reasoning_tokens=reasoning_tok,
-                cached_tokens=cached_tok,
-            )
-        yield format_openai_done()
+        # ── Lifecycle: response.content_part.done ──
+        yield format_responses_content_part_done(
+            item_id=msg_id,
+            text=accumulated_text,
+            output_index=0,
+            content_index=0,
+            seq=_next_seq(),
+        )
+
+        # ── Lifecycle: response.output_item.done ──
+        yield format_responses_output_item_done(
+            item_id=msg_id,
+            text=accumulated_text,
+            output_index=0,
+            seq=_next_seq(),
+        )
+
+        # ── Build final output for response.completed ──
+        final_output = [
+            {
+                "type": "message",
+                "id": msg_id,
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": accumulated_text,
+                        "annotations": [],
+                    }
+                ],
+                "status": "completed",
+            }
+        ]
+
+        # ── Lifecycle: response.completed (includes usage) ──
+        yield format_responses_completed(
+            response_id=response_id,
+            model=req.model,
+            output=final_output,
+            input_tokens=prompt_tok,
+            output_tokens=completion_tok,
+            total_tokens=prompt_tok + completion_tok,
+            reasoning_tokens=reasoning_tok,
+            cached_tokens=cached_tok,
+            seq=_next_seq(),
+        )
 
         _record_metrics(prompt_tok, completion_tok)
 

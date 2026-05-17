@@ -823,6 +823,246 @@ def format_openai_non_stream(
     }
 
 
+# ── OpenAI Responses API SSE Formatters ──
+
+# The Responses API uses its own SSE event types (response.created,
+# response.output_text.delta, response.completed, etc.) distinct from
+# Chat Completions.  Each SSE line uses the form:
+#   event: <event_type>\ndata: <json>\n\n
+# The JSON payload carries a `type` field matching the event type plus
+# event-specific fields defined in the openai.types.responses package.
+
+
+def _responses_base_response(
+    response_id: str,
+    model: str,
+    status: str = "in_progress",
+    created_at: float | None = None,
+    output: list | None = None,
+    usage: dict | None = None,
+) -> dict:
+    """Build a minimal Response object for Responses API events."""
+    resp: dict[str, Any] = {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at if created_at is not None else int(time.time()),
+        "model": model,
+        "status": status,
+        "output": output or [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    }
+    if usage is not None:
+        resp["usage"] = usage
+    return resp
+
+
+def format_responses_created(
+    response_id: str,
+    model: str,
+    seq: int = 0,
+) -> str:
+    """response.created — initial event with empty response object."""
+    data = {
+        "type": "response.created",
+        "response": _responses_base_response(response_id, model, status="in_progress"),
+        "sequence_number": seq,
+    }
+    return f"event: response.created\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_in_progress(
+    response_id: str,
+    model: str,
+    seq: int = 1,
+) -> str:
+    """response.in_progress — response processing started."""
+    data = {
+        "type": "response.in_progress",
+        "response": _responses_base_response(response_id, model, status="in_progress"),
+        "sequence_number": seq,
+    }
+    return f"event: response.in_progress\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_output_item_added(
+    response_id: str,
+    model: str,
+    item_id: str,
+    output_index: int = 0,
+    seq: int = 2,
+) -> str:
+    """response.output_item.added — new output item (message) added."""
+    item = {
+        "type": "message",
+        "id": item_id,
+        "role": "assistant",
+        "content": [],
+        "status": "in_progress",
+    }
+    data = {
+        "type": "response.output_item.added",
+        "output_index": output_index,
+        "item": item,
+        "sequence_number": seq,
+    }
+    return f"event: response.output_item.added\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_content_part_added(
+    item_id: str,
+    output_index: int = 0,
+    content_index: int = 0,
+    seq: int = 3,
+) -> str:
+    """response.content_part.added — content part added to output item."""
+    part = {
+        "type": "output_text",
+        "text": "",
+        "annotations": [],
+    }
+    data = {
+        "type": "response.content_part.added",
+        "output_index": output_index,
+        "content_index": content_index,
+        "item_id": item_id,
+        "part": part,
+        "sequence_number": seq,
+    }
+    return f"event: response.content_part.added\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_text_delta(
+    delta: str,
+    item_id: str,
+    output_index: int = 0,
+    content_index: int = 0,
+    logprobs: list | None = None,
+    seq: int = 4,
+) -> str:
+    """response.output_text.delta — text content delta."""
+    data: dict[str, Any] = {
+        "type": "response.output_text.delta",
+        "output_index": output_index,
+        "content_index": content_index,
+        "item_id": item_id,
+        "delta": delta,
+        "logprobs": logprobs or [],
+        "sequence_number": seq,
+    }
+    return f"event: response.output_text.delta\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_text_done(
+    text: str,
+    item_id: str,
+    output_index: int = 0,
+    content_index: int = 0,
+    logprobs: list | None = None,
+    seq: int = 0,
+) -> str:
+    """response.output_text.done — text content completed."""
+    data: dict[str, Any] = {
+        "type": "response.output_text.done",
+        "output_index": output_index,
+        "content_index": content_index,
+        "item_id": item_id,
+        "text": text,
+        "logprobs": logprobs or [],
+        "sequence_number": seq,
+    }
+    return f"event: response.output_text.done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_content_part_done(
+    item_id: str,
+    text: str = "",
+    output_index: int = 0,
+    content_index: int = 0,
+    seq: int = 0,
+) -> str:
+    """response.content_part.done — content part completed."""
+    part = {
+        "type": "output_text",
+        "text": text,
+        "annotations": [],
+    }
+    data = {
+        "type": "response.content_part.done",
+        "output_index": output_index,
+        "content_index": content_index,
+        "item_id": item_id,
+        "part": part,
+        "sequence_number": seq,
+    }
+    return f"event: response.content_part.done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_output_item_done(
+    item_id: str,
+    text: str = "",
+    output_index: int = 0,
+    seq: int = 0,
+) -> str:
+    """response.output_item.done — output item completed."""
+    item: dict[str, Any] = {
+        "type": "message",
+        "id": item_id,
+        "role": "assistant",
+        "content": [
+            {
+                "type": "output_text",
+                "text": text,
+                "annotations": [],
+            }
+        ],
+        "status": "completed",
+    }
+    data = {
+        "type": "response.output_item.done",
+        "output_index": output_index,
+        "item": item,
+        "sequence_number": seq,
+    }
+    return f"event: response.output_item.done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_completed(
+    response_id: str,
+    model: str,
+    output: list,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    total_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    cached_tokens: int = 0,
+    seq: int = 0,
+) -> str:
+    """response.completed — final event with full response and usage."""
+    usage: dict[str, Any] = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
+        "input_tokens_details": {"cached_tokens": cached_tokens},
+    }
+    completed_at = int(time.time())
+    resp = _responses_base_response(
+        response_id, model,
+        status="completed",
+        output=output,
+        usage=usage,
+    )
+    resp["completed_at"] = completed_at
+    data = {
+        "type": "response.completed",
+        "response": resp,
+        "sequence_number": seq,
+    }
+    return f"event: response.completed\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 # ── Anthropic SSE Formatter ──
 
 

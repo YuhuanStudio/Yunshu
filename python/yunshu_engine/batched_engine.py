@@ -3598,6 +3598,7 @@ class BatchedEngine:
                 input_ids=input_array,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                cancel_event=cancel_event,
             )
             # Apply stop token truncation (exclude stop token from output)
             for i, tid in enumerate(token_ids):
@@ -3967,6 +3968,15 @@ class BatchedEngine:
             current_ids = await loop.run_in_executor(executor, _update_caches)
         except GeneratorExit:
             logger.debug("Client disconnected during spec decode streaming")
+            # Clean up KV caches on disconnect to prevent memory leaks
+            try:
+                del target_cache
+            except Exception:
+                pass
+            try:
+                del draft_cache
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Spec decode streaming error: {e}", exc_info=True)
             raise
@@ -4580,6 +4590,18 @@ class BatchedEngine:
                                 stopped = True
                             if stopped:
                                 break
+
+                        # Trim KV cache to remove entries for rejected draft tokens.
+                        # The batch forward populated the cache with n_draft entries,
+                        # but only `accepted` were verified. Trim the rejected ones.
+                        if accepted < n_draft:
+                            try:
+                                from mlx_lm.models.cache import trim_prompt_cache
+                                trim_prompt_cache(cache, n_draft - accepted)
+                            except Exception:
+                                for c in cache:
+                                    if hasattr(c, "trim"):
+                                        c.trim(n_draft - accepted)
                     else:
                         # CPU sequential fallback
                         for i in range(n_draft):

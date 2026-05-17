@@ -197,6 +197,19 @@ class GPURejectionSampler:
             result.latency_us = elapsed
             return result
 
+        # Validate draft_logprobs length matches draft_token_ids
+        if draft_logprobs is None or len(draft_logprobs) != K:
+            logger.warning(
+                "draft_logprobs length mismatch (%s vs %d draft tokens), "
+                "falling back to greedy verification",
+                "None" if draft_logprobs is None else len(draft_logprobs),
+                K,
+            )
+            result = self.verify_greedy(logits, draft_token_ids)
+            elapsed = (time.perf_counter() - t0) * 1e6
+            result.latency_us = elapsed
+            return result
+
         logit_2d = self._normalize_logits(logits, K)
 
         # Step 1: Compute target log probabilities (vectorized)

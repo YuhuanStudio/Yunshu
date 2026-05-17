@@ -11,6 +11,15 @@ from yunshu_gateway.streaming import (
     format_openai_chunk,
     format_openai_done,
     format_openai_non_stream,
+    format_responses_created,
+    format_responses_in_progress,
+    format_responses_output_item_added,
+    format_responses_content_part_added,
+    format_responses_text_delta,
+    format_responses_text_done,
+    format_responses_content_part_done,
+    format_responses_output_item_done,
+    format_responses_completed,
     _KEEPALIVE_SENTINEL,
 )
 
@@ -436,3 +445,192 @@ class TestExtractToolCallsV2:
         from yunshu_gateway.streaming import extract_tool_calls_v2
         calls = extract_tool_calls_v2("just regular text with no tool calls")
         assert calls == []
+
+
+def _parse_sse_event(raw: str) -> tuple[str, dict]:
+    """Parse an SSE event string into (event_type, data_dict)."""
+    lines = raw.strip().split("\n")
+    event_type = ""
+    data_json = ""
+    for line in lines:
+        if line.startswith("event: "):
+            event_type = line[len("event: "):]
+        elif line.startswith("data: "):
+            data_json = line[len("data: "):]
+    return event_type, json.loads(data_json)
+
+
+class TestResponsesAPIStreaming:
+    """Tests for OpenAI Responses API SSE event formatters."""
+
+    def test_response_created(self):
+        raw = format_responses_created("resp-abc123", "gpt-4o", seq=0)
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.created"
+        assert data["type"] == "response.created"
+        assert data["sequence_number"] == 0
+        assert data["response"]["id"] == "resp-abc123"
+        assert data["response"]["object"] == "response"
+        assert data["response"]["model"] == "gpt-4o"
+        assert data["response"]["status"] == "in_progress"
+        assert data["response"]["output"] == []
+
+    def test_response_in_progress(self):
+        raw = format_responses_in_progress("resp-abc123", "gpt-4o", seq=1)
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.in_progress"
+        assert data["type"] == "response.in_progress"
+        assert data["sequence_number"] == 1
+        assert data["response"]["status"] == "in_progress"
+
+    def test_output_item_added(self):
+        raw = format_responses_output_item_added(
+            "resp-abc123", "gpt-4o", item_id="msg-xyz", output_index=0, seq=2,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.output_item.added"
+        assert data["type"] == "response.output_item.added"
+        assert data["output_index"] == 0
+        assert data["item"]["type"] == "message"
+        assert data["item"]["id"] == "msg-xyz"
+        assert data["item"]["role"] == "assistant"
+        assert data["item"]["status"] == "in_progress"
+        assert data["item"]["content"] == []
+
+    def test_content_part_added(self):
+        raw = format_responses_content_part_added(
+            item_id="msg-xyz", output_index=0, content_index=0, seq=3,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.content_part.added"
+        assert data["type"] == "response.content_part.added"
+        assert data["item_id"] == "msg-xyz"
+        assert data["output_index"] == 0
+        assert data["content_index"] == 0
+        assert data["part"]["type"] == "output_text"
+        assert data["part"]["text"] == ""
+        assert data["part"]["annotations"] == []
+
+    def test_text_delta(self):
+        raw = format_responses_text_delta(
+            delta="Hello", item_id="msg-xyz", output_index=0, content_index=0, seq=4,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.output_text.delta"
+        assert data["type"] == "response.output_text.delta"
+        assert data["delta"] == "Hello"
+        assert data["item_id"] == "msg-xyz"
+        assert data["output_index"] == 0
+        assert data["content_index"] == 0
+        assert data["logprobs"] == []
+
+    def test_text_delta_unicode(self):
+        raw = format_responses_text_delta(
+            delta="你好世界", item_id="msg-xyz", seq=5,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.output_text.delta"
+        assert data["delta"] == "你好世界"
+
+    def test_text_done(self):
+        raw = format_responses_text_done(
+            text="Hello world", item_id="msg-xyz", output_index=0, content_index=0, seq=10,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.output_text.done"
+        assert data["type"] == "response.output_text.done"
+        assert data["text"] == "Hello world"
+        assert data["item_id"] == "msg-xyz"
+
+    def test_content_part_done(self):
+        raw = format_responses_content_part_done(
+            item_id="msg-xyz", text="Hello", output_index=0, content_index=0, seq=11,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.content_part.done"
+        assert data["type"] == "response.content_part.done"
+        assert data["part"]["type"] == "output_text"
+        assert data["part"]["text"] == "Hello"
+
+    def test_output_item_done(self):
+        raw = format_responses_output_item_done(
+            item_id="msg-xyz", text="Hello world", output_index=0, seq=12,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.output_item.done"
+        assert data["type"] == "response.output_item.done"
+        assert data["item"]["id"] == "msg-xyz"
+        assert data["item"]["type"] == "message"
+        assert data["item"]["status"] == "completed"
+        assert data["item"]["content"][0]["type"] == "output_text"
+        assert data["item"]["content"][0]["text"] == "Hello world"
+
+    def test_response_completed(self):
+        output = [
+            {
+                "type": "message",
+                "id": "msg-xyz",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hi", "annotations": []}],
+                "status": "completed",
+            }
+        ]
+        raw = format_responses_completed(
+            response_id="resp-abc123",
+            model="gpt-4o",
+            output=output,
+            input_tokens=10,
+            output_tokens=2,
+            total_tokens=12,
+            reasoning_tokens=0,
+            cached_tokens=5,
+            seq=13,
+        )
+        event_type, data = _parse_sse_event(raw)
+        assert event_type == "response.completed"
+        assert data["type"] == "response.completed"
+        assert data["sequence_number"] == 13
+        resp = data["response"]
+        assert resp["id"] == "resp-abc123"
+        assert resp["status"] == "completed"
+        assert resp["output"] == output
+        assert resp["usage"]["input_tokens"] == 10
+        assert resp["usage"]["output_tokens"] == 2
+        assert resp["usage"]["total_tokens"] == 12
+        assert resp["usage"]["output_tokens_details"]["reasoning_tokens"] == 0
+        assert resp["usage"]["input_tokens_details"]["cached_tokens"] == 5
+        assert "completed_at" in resp
+
+    def test_full_streaming_lifecycle_order(self):
+        """Verify the complete lifecycle produces correctly ordered events."""
+        events = []
+        events.append(format_responses_created("resp-1", "gpt-4o", seq=1))
+        events.append(format_responses_in_progress("resp-1", "gpt-4o", seq=2))
+        events.append(format_responses_output_item_added("resp-1", "gpt-4o", item_id="msg-1", seq=3))
+        events.append(format_responses_content_part_added(item_id="msg-1", seq=4))
+        events.append(format_responses_text_delta(delta="Hello ", item_id="msg-1", seq=5))
+        events.append(format_responses_text_delta(delta="world", item_id="msg-1", seq=6))
+        events.append(format_responses_text_done(text="Hello world", item_id="msg-1", seq=7))
+        events.append(format_responses_content_part_done(item_id="msg-1", text="Hello world", seq=8))
+        events.append(format_responses_output_item_done(item_id="msg-1", text="Hello world", seq=9))
+        events.append(format_responses_completed(
+            response_id="resp-1", model="gpt-4o", output=[], input_tokens=5, output_tokens=2, total_tokens=7, seq=10,
+        ))
+
+        types = []
+        for raw in events:
+            et, _ = _parse_sse_event(raw)
+            types.append(et)
+
+        assert types == [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ]

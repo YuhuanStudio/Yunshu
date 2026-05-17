@@ -168,6 +168,8 @@ class DeltaNetInverter:
 
     def invert_all(self) -> list[mx.array]:
         self._capturing = False
+        if not self._entries:
+            return []
         results = []
         for entry in self._entries:
             results.append(self.invert_state(entry))

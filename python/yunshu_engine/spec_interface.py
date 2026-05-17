@@ -191,10 +191,12 @@ class NgramStrategy(SpecStrategy):
         self._total_draft_tokens = 0
         self._total_accepted = 0
         self._total_accepted_tokens = 0
-        if self._proposer._hashpool is not None:
-            self._proposer._hashpool.clear()
-        if self._proposer._lcg_pool is not None:
-            self._proposer._lcg_pool.clear()
+        _hashpool = getattr(self._proposer, '_hashpool', None)
+        if _hashpool is not None:
+            _hashpool.clear()
+        _lcg_pool = getattr(self._proposer, '_lcg_pool', None)
+        if _lcg_pool is not None:
+            _lcg_pool.clear()
 
 
 class CrossModelStrategy(SpecStrategy):
@@ -586,7 +588,9 @@ class GPUNgramStrategy(SpecStrategy):
         self._total_draft_tokens = 0
         self._total_accepted = 0
         self._total_accepted_tokens = 0
-        self._proposer.table.clear()
+        table = getattr(self._proposer, 'table', None)
+        if table is not None:
+            table.clear()
 
 
 class SuffixStrategy(SpecStrategy):
@@ -863,7 +867,10 @@ class DeltaNetInversionStrategy(SpecStrategy):
     def begin(self, request_id: str) -> None:
         self._request_id = request_id
         if self._inverter is not None:
-            self._inverter.start_capture()
+            try:
+                self._inverter.start_capture()
+            except Exception as e:
+                logger.debug("DeltaNet start_capture failed in begin(): %s", e)
 
     def draft(self, tokens: list[int], n: int) -> DraftProposal:
         if self._inverter is None:

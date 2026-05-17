@@ -568,6 +568,7 @@ class SpeculativeDecoder:
         input_ids: mx.array,
         max_tokens: int = 512,
         temperature: float = 0.7,
+        cancel_event: "asyncio.Event | None" = None,
     ) -> list[int]:
         """Generate tokens using speculative decoding.
 
@@ -584,6 +585,8 @@ class SpeculativeDecoder:
             input_ids: Prompt token IDs [1, seq_len]
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
+            cancel_event: Optional asyncio.Event for cooperative cancellation.
+                          is_set() is checked each iteration; thread-safe in CPython.
 
         Returns:
             List of generated token IDs
@@ -621,6 +624,10 @@ class SpeculativeDecoder:
         draft_sampler = make_sampler(temp=self.config.draft_temperature)
 
         while len(generated_tokens) < max_tokens:
+            # Cooperative cancellation check
+            if cancel_event is not None and cancel_event.is_set():
+                break
+
             # Snapshot draft cache before drafting (reference-based, no copy)
             draft_snap = self._snapshot_cache(draft_cache)
 
@@ -629,13 +636,19 @@ class SpeculativeDecoder:
             draft_tokens = []
             d_input = mx.array([[last_tok]])
             for _ in range(K):
+                # Check cancellation inside draft loop too
+                if cancel_event is not None and cancel_event.is_set():
+                    break
                 d_out = self.draft(d_input, cache=draft_cache)
                 d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
                 next_tok = draft_sampler(d_logits)
                 draft_tokens.append(int(next_tok.item()))
                 d_input = next_tok.reshape(1, 1)
 
-            self._stats["total_draft_tokens"] += K
+            if not draft_tokens:
+                break
+
+            self._stats["total_draft_tokens"] += len(draft_tokens)
 
             # Step 2: Target verifies one-by-one
             last_tok = generated_tokens[-1]
@@ -645,7 +658,7 @@ class SpeculativeDecoder:
 
             accepted = 0
             all_accepted = True
-            for j in range(K):
+            for j in range(len(draft_tokens)):
                 target_choice = int(target_sampler(t_logits).item()) if target_sampler else int(t_logits.argmax(axis=-1).item())
 
                 if target_choice == draft_tokens[j]:
@@ -678,7 +691,7 @@ class SpeculativeDecoder:
             # On rejection: restore draft cache from snapshot, then re-feed
             # only the accepted + correction tokens (NOT the full sequence).
             # This is O(accepted+1) instead of O(total_length) for full rebuild.
-            if accepted < K:
+            if accepted < len(draft_tokens):
                 self._restore_cache(draft_cache, draft_snap)
                 # Re-feed the tokens that target accepted / corrected.
                 # After restore, the draft cache is at the pre-draft state,
