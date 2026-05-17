@@ -111,8 +111,18 @@ class Gemma4MessageAdapter(MessageAdapter):
                 content = f"{system_prefix}\n\n{content}" if content else system_prefix
                 system_prefix = ""
 
-            # Merge consecutive same-role messages
-            if role == prev_role and adapted and role in ("user", "assistant"):
+            # Merge consecutive same-role messages (but only plain text;
+            # if the current or previous message carries structured fields
+            # like tool_calls or reasoning_content, keep them separate).
+            if (
+                role == prev_role
+                and adapted
+                and role in ("user", "assistant")
+                and not msg.get("tool_calls")
+                and not msg.get("reasoning_content")
+                and not adapted[-1].get("tool_calls")
+                and not adapted[-1].get("reasoning_content")
+            ):
                 last = adapted[-1]
                 last["content"] = last.get("content", "") + "\n" + content
                 continue
@@ -134,6 +144,14 @@ class Gemma4MessageAdapter(MessageAdapter):
         # Ensure starts with user
         if adapted and adapted[0]["role"] != "user":
             adapted.insert(0, {"role": "user", "content": ""})
+
+        # If system_prefix was never consumed (no user messages), prepend it
+        if system_prefix and adapted:
+            adapted[0]["content"] = (
+                f"{system_prefix}\n\n{adapted[0]['content']}"
+                if adapted[0]["content"]
+                else system_prefix
+            )
 
         return adapted
 

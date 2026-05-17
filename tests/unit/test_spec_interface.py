@@ -208,7 +208,9 @@ class TestCrossModelStrategy:
         proposal = s.draft([1, 2, 3], n=5)
         assert proposal.metadata["draft_length"] == 3
         assert s.stats()["total_drafts"] == 1
-        assert s.stats()["total_draft_tokens"] == 3
+        # CrossModelStrategy returns empty tokens (actual tokens filled by
+        # decoder's generate_draft), so draft_tokens is NOT inflated here.
+        assert s.stats()["total_draft_tokens"] == 0
 
     def test_accept_all_rejected(self):
         """verified_up_to=0 means all draft tokens were rejected."""
@@ -283,7 +285,9 @@ class TestMTPStrategy:
         """MTP always proposes exactly 1 draft token."""
         s = MTPStrategy(decoder=FakeMTPDecoder())
         proposal = s.draft([1, 2, 3], n=5)
-        assert s.stats()["total_draft_tokens"] == 1
+        # MTPStrategy returns empty tokens (actual token filled by decoder's
+        # _mtp_draft), so draft_tokens is NOT inflated here.
+        assert s.stats()["total_draft_tokens"] == 0
         assert proposal.metadata["draft_length"] == 1
 
     def test_accept_updates_stats(self):

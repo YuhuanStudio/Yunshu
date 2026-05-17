@@ -229,12 +229,11 @@ async def requests_stats(
 
     # ITL stats from ServerMetrics (batch-path ITL tracking)
     try:
-        from ..middleware.metrics import get_metrics
-        metrics = get_metrics()
-        if hasattr(metrics, '_server_metrics') and metrics._server_metrics is not None:
-            data["itl"] = metrics._server_metrics.get_itl_stats()
+        from yunshu_engine.server_metrics import get_server_metrics
+        sm = get_server_metrics()
+        data["itl"] = sm.get_itl_stats()
     except Exception:
-        logger.debug("failed", exc_info=True)
+        logger.debug("ITL stats unavailable", exc_info=True)
 
     return data
 
@@ -262,20 +261,13 @@ async def prometheus_export() -> str:
 
                 # ITL stats from ServerMetrics
                 try:
-                    core = getattr(entry.engine, '_engine_core', None)
-                    if core and hasattr(core, '_memory_guard') and core._memory_guard:
-                        sm = core._memory_guard._monitor if hasattr(core._memory_guard, '_monitor') else None
+                    from yunshu_engine.server_metrics import get_server_metrics
+                    sm = get_server_metrics()
+                    itl = sm.get_itl_stats()
+                    pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0))
+                    pm.set_gauge("itl_p99_ms", itl.get("itl_p99_ms", 0))
                 except Exception:
-                    logger.debug("failed", exc_info=True)
-                try:
-                    from ..middleware.metrics import get_metrics
-                    metrics = get_metrics()
-                    if hasattr(metrics, '_server_metrics') and metrics._server_metrics:
-                        itl = metrics._server_metrics.get_itl_stats()
-                        pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0))
-                        pm.set_gauge("itl_p99_ms", itl.get("itl_p99_ms", 0))
-                except Exception:
-                    logger.debug("failed", exc_info=True)
+                    logger.debug("ITL gauge population failed", exc_info=True)
 
                 # KV cache block gauges (paged KV from engine_core)
                 try:
@@ -506,7 +498,7 @@ async def per_model_stats() -> dict[str, Any]:
     try:
         from yunshu_engine.server_metrics import get_server_metrics
         metrics = get_server_metrics()
-        model_ids = list(getattr(metrics, '_per_model', {}).keys())
+        model_ids = metrics.get_model_ids()
         result = {}
         for mid in model_ids:
             result[mid] = metrics.get_snapshot(model_id=mid)
@@ -809,11 +801,9 @@ async def batch_size_stats() -> dict[str, Any]:
     Shows batch size percentiles (p50, p99) for scheduler steps.
     """
     try:
-        from ..middleware.metrics import get_metrics
-        metrics = get_metrics()
-        if hasattr(metrics, '_server_metrics') and metrics._server_metrics is not None:
-            return metrics._server_metrics.get_batch_size_stats()
-        return {"enabled": False, "reason": "server_metrics not active"}
+        from yunshu_engine.server_metrics import get_server_metrics
+        sm = get_server_metrics()
+        return sm.get_batch_size_stats()
     except Exception:
         logger.debug("batch size stats failed", exc_info=True)
         return {"enabled": False}

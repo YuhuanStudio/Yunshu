@@ -213,8 +213,10 @@ class PerformanceProfiler:
                 and m.wall_time_ms > 0
                 and m.tokens_generated > 0):
             return BottleneckType.COMPUTE
-        # IO-bound: non-trivial memory usage but very low throughput
-        if m.gpu_memory_util > 0 and m.throughput_tok_s > 0 and m.throughput_tok_s < 10:
+        # IO-bound: meaningful memory usage (>10%) but very low throughput.
+        # Using a threshold > 0 to avoid misclassifying idle servers where
+        # gpu_memory_util is near zero (e.g. 0.001) as IO-bound.
+        if m.gpu_memory_util > 0.1 and m.throughput_tok_s > 0 and m.throughput_tok_s < 10:
             return BottleneckType.IO
         return BottleneckType.NONE
 
@@ -644,7 +646,8 @@ class AutoTuner:
         self._proposer = profiler or PerformanceProfiler()
         self._slo_monitor = slo_monitor or SLOMonitor()
         self._regression_threshold = regression_threshold
-        self._history: list[TuningDecision] = []
+        # Bounded history — prevents unbounded memory growth on long-running servers.
+        self._history: deque[TuningDecision] = deque(maxlen=1000)
         self._total_tunings: int = 0
         self._improvements: int = 0
         self._regressions: int = 0
@@ -766,18 +769,19 @@ class AutoTuner:
         decision.after_metrics = after_metrics
         decision.improvement = improvement
 
-        if improvement < self._regression_threshold:
-            decision.is_regression = True
-            self._regressions += 1
-            logger.warning(
-                "AutoTuner regression detected: %s %s->%s, improvement=%.2f%%",
-                decision.param_name,
-                decision.old_value,
-                decision.new_value,
-                improvement * 100,
-            )
-        elif improvement > 0:
-            self._improvements += 1
+        with self._lock:
+            if improvement < self._regression_threshold:
+                decision.is_regression = True
+                self._regressions += 1
+                logger.warning(
+                    "AutoTuner regression detected: %s %s->%s, improvement=%.2f%%",
+                    decision.param_name,
+                    decision.old_value,
+                    decision.new_value,
+                    improvement * 100,
+                )
+            elif improvement > 0:
+                self._improvements += 1
 
         return improvement
 

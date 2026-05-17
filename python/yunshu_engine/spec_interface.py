@@ -234,8 +234,9 @@ class CrossModelStrategy(SpecStrategy):
         if self._decoder is None:
             return DraftProposal(tokens=[], strategy_name=self.name)
         K = min(n, self._decoder.config.draft_length)
+        # NOTE: Do not inflate _total_draft_tokens here — actual tokens are
+        # filled by the decoder's generate_draft.  Only count real drafts.
         self._total_drafts += 1
-        self._total_draft_tokens += K
         return DraftProposal(
             tokens=[],  # Actual tokens filled by decoder's generate_draft
             strategy_name=self.name,
@@ -308,9 +309,10 @@ class MTPStrategy(SpecStrategy):
     def draft(self, tokens: list[int], n: int) -> DraftProposal:
         if self._decoder is None:
             return DraftProposal(tokens=[], strategy_name=self.name)
-        # MTP always proposes exactly 1 draft token per step
+        # MTP always proposes exactly 1 draft token per step.
+        # NOTE: Do not inflate _total_draft_tokens here — actual token is
+        # filled by the decoder's _mtp_draft.  Only count real drafts.
         self._total_drafts += 1
-        self._total_draft_tokens += 1
         return DraftProposal(
             tokens=[],  # Actual token filled by decoder's _mtp_draft
             strategy_name=self.name,
@@ -392,11 +394,12 @@ class MedusaStrategy(SpecStrategy):
         if self._proposer is None or not self._proposer.is_attached:
             return DraftProposal(tokens=[], strategy_name=self.name)
         # Medusa proposes via tree — actual tokens come from propose()
-        # which requires hidden_states (provided by the engine)
+        # which requires hidden_states (provided by the engine).
+        # NOTE: Do not inflate _total_draft_tokens here — actual tokens are
+        # filled by proposer.propose(hidden_states).  Only count real drafts.
         self._total_drafts += 1
         num_heads = self._proposer.config.num_heads
         draft_len = min(n, num_heads)
-        self._total_draft_tokens += draft_len
         return DraftProposal(
             tokens=[],  # Actual tokens filled by proposer.propose(hidden_states)
             strategy_name=self.name,
@@ -773,10 +776,11 @@ class Gemma4Strategy(SpecStrategy):
         if self._proposer is None or not self._proposer.is_detected:
             return DraftProposal(tokens=[], strategy_name=self.name)
         # Gemma4 proposes via hidden_states — actual tokens come from propose()
-        # which requires hidden_states (provided by the engine)
+        # which requires hidden_states (provided by the engine).
+        # NOTE: Do not inflate _total_draft_tokens here — actual tokens are
+        # filled by proposer.propose(hidden_states).  Only count real drafts.
         self._total_drafts += 1
         draft_len = min(n, self._proposer.config.draft_length)
-        self._total_draft_tokens += draft_len
         return DraftProposal(
             tokens=[],  # Actual tokens filled by proposer.propose(hidden_states)
             strategy_name=self.name,

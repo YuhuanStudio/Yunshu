@@ -400,10 +400,20 @@ async def decode(req: DecodeRequest, request: Request):
     prompt_tokens = handle_data["prompt_tokens"]
     kv_cache = handle_data.get("cache")
 
-    # Build generate kwargs — pass KV cache if available so decode can
-    # reuse the prefilled cache instead of recomputing from scratch.
+    # Decode token_ids back to text — engine.generate() expects a string
+    # prompt, not a raw list of token IDs.
+    tokenizer = getattr(engine, '_tokenizer', None)
+    token_ids = handle_data["token_ids"]
+    if tokenizer and isinstance(token_ids, list):
+        try:
+            prompt_text = tokenizer.decode(token_ids)
+        except Exception:
+            prompt_text = str(token_ids)
+    else:
+        prompt_text = str(token_ids)
+
     gen_kwargs: dict[str, Any] = dict(
-        prompt=handle_data["token_ids"],
+        prompt=prompt_text,
         max_tokens=req.max_tokens,
         temperature=req.temperature,
         top_p=req.top_p,
@@ -411,10 +421,13 @@ async def decode(req: DecodeRequest, request: Request):
         stop=req.stop,
         seed=req.seed,
     )
+
+    # Pass KV cache if the engine supports it (prefill reuse).
+    # Otherwise fall back to standard generate (will re-prefill).
     if kv_cache is not None and hasattr(engine, "generate_with_kv"):
         gen_output = await engine.generate_with_kv(
             kv_cache=kv_cache,
-            token_ids=handle_data["token_ids"],
+            token_ids=token_ids,
             **gen_kwargs,
         )
     else:

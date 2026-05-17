@@ -33,6 +33,7 @@ class RequestTracker:
 
     def __init__(self):
         self._active: dict[str, ActiveGeneration] = {}
+        self._lock = threading.Lock()
 
     def register(self, request_id: str, model: str = "") -> ActiveGeneration:
         """Register a new generation request. Returns ActiveGeneration with cancel_event."""
@@ -42,16 +43,19 @@ class RequestTracker:
             created_at=time.time(),
             cancel_event=asyncio.Event(),
         )
-        self._active[request_id] = gen
+        with self._lock:
+            self._active[request_id] = gen
         return gen
 
     def unregister(self, request_id: str) -> None:
         """Remove a completed generation from the registry."""
-        self._active.pop(request_id, None)
+        with self._lock:
+            self._active.pop(request_id, None)
 
     def cancel(self, request_id: str) -> bool:
         """Signal cancellation for a specific request. Returns True if found."""
-        gen = self._active.get(request_id)
+        with self._lock:
+            gen = self._active.get(request_id)
         if gen is None:
             return False
         gen.cancel_event.set()
@@ -60,8 +64,10 @@ class RequestTracker:
 
     def cancel_all(self) -> int:
         """Cancel all active generations. Returns count of cancelled requests."""
+        with self._lock:
+            gens = list(self._active.values())
         count = 0
-        for gen in self._active.values():
+        for gen in gens:
             gen.cancel_event.set()
             count += 1
         logger.info(f"Cancelled all generations: {count}")
@@ -69,25 +75,29 @@ class RequestTracker:
 
     def is_cancelled(self, request_id: str) -> bool:
         """Check if a request has been signalled for cancellation."""
-        gen = self._active.get(request_id)
+        with self._lock:
+            gen = self._active.get(request_id)
         if gen is None:
             return False
         return gen.cancel_event.is_set()
 
     def list_active(self) -> list[dict]:
         """List all active generations with metadata."""
+        with self._lock:
+            gens = list(self._active.values())
         return [
             {
                 "request_id": gen.request_id,
                 "model": gen.model,
                 "elapsed_s": round(gen.elapsed_s, 2),
             }
-            for gen in self._active.values()
+            for gen in gens
         ]
 
     @property
     def active_count(self) -> int:
-        return len(self._active)
+        with self._lock:
+            return len(self._active)
 
 
 _tracker: Optional[RequestTracker] = None

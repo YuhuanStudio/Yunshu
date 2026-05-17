@@ -13,6 +13,7 @@ by answering questions like "what was the p99 latency in the last 60 seconds?"
 
 
 import math
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -258,17 +259,21 @@ class MetricsAggregator:
 # ---------------------------------------------------------------------------
 
 _instance: MetricsAggregator | None = None
+_instance_lock = threading.Lock()
 
 
 def get_metrics_aggregator() -> MetricsAggregator:
-    """Return the global MetricsAggregator singleton."""
+    """Return the global MetricsAggregator singleton (thread-safe)."""
     global _instance
     if _instance is None:
-        _instance = MetricsAggregator()
+        with _instance_lock:
+            if _instance is None:
+                _instance = MetricsAggregator()
     return _instance
 
 
 def reset_metrics_aggregator() -> None:
     """Reset the singleton (for tests only)."""
     global _instance
-    _instance = None
+    with _instance_lock:
+        _instance = None

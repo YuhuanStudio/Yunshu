@@ -61,8 +61,20 @@ class _Metrics:
 
     def to_prometheus(self) -> str:
         """Format metrics in Prometheus exposition format."""
-        lines = []
-        uptime = time.time() - self.start_time
+        lines: list[str] = []
+
+        # Snapshot ALL mutable state under a single lock acquisition to
+        # guarantee a consistent view (no torn reads between sections).
+        with self._lock:
+            uptime = time.time() - self.start_time
+            req_counts = dict(self.request_count)
+            latency_snapshot = {
+                ep: list(lats) for ep, lats in self.request_latency.items()
+            }
+            prompt_tok = self.prompt_tokens
+            completion_tok = self.completion_tokens
+            inf_count = self.inference_count
+            err_count = self.error_count
 
         lines.append("# HELP yunshu_uptime_seconds Server uptime in seconds")
         lines.append("# TYPE yunshu_uptime_seconds gauge")
@@ -71,43 +83,34 @@ class _Metrics:
         lines.append("")
         lines.append("# HELP yunshu_request_count Total requests")
         lines.append("# TYPE yunshu_request_count counter")
-        with self._lock:
-            for key, count in sorted(self.request_count.items()):
-                parts = key.split(":")
-                if len(parts) == 3:
-                    lines.append(
-                        f'yunshu_request_count{{method="{parts[0]}",endpoint="{parts[1]}",status="{parts[2]}"}} {count}'
-                    )
+        for key, count in sorted(req_counts.items()):
+            parts = key.split(":")
+            if len(parts) == 3:
+                lines.append(
+                    f'yunshu_request_count{{method="{parts[0]}",endpoint="{parts[1]}",status="{parts[2]}"}} {count}'
+                )
 
         lines.append("")
         lines.append("# HELP yunshu_request_latency_seconds Request latency")
         lines.append("# TYPE yunshu_request_latency_seconds summary")
-        with self._lock:
-            for endpoint, latencies in sorted(self.request_latency.items()):
-                if latencies:
-                    sorted_lat = sorted(latencies)
-                    avg = sum(latencies) / len(latencies)
-                    p50 = sorted_lat[len(sorted_lat) // 2]
-                    p99 = sorted_lat[int(len(sorted_lat) * 0.99)]
-                    lines.append(
-                        f'yunshu_request_latency_seconds{{endpoint="{endpoint}",quantile="0.5"}} {p50:.4f}'
-                    )
-                    lines.append(
-                        f'yunshu_request_latency_seconds{{endpoint="{endpoint}",quantile="0.99"}} {p99:.4f}'
-                    )
-                    lines.append(
-                        f'yunshu_request_latency_seconds_avg{{endpoint="{endpoint}"}} {avg:.4f}'
-                    )
-                    lines.append(
-                        f'yunshu_request_latency_seconds_count{{endpoint="{endpoint}"}} {len(latencies)}'
-                    )
-
-        # Snapshot counters under lock to avoid torn reads during concurrent updates
-        with self._lock:
-            prompt_tok = self.prompt_tokens
-            completion_tok = self.completion_tokens
-            inf_count = self.inference_count
-            err_count = self.error_count
+        for endpoint, latencies in sorted(latency_snapshot.items()):
+            if latencies:
+                sorted_lat = sorted(latencies)
+                avg = sum(latencies) / len(latencies)
+                p50 = sorted_lat[len(sorted_lat) // 2]
+                p99 = sorted_lat[min(int(len(sorted_lat) * 0.99), len(sorted_lat) - 1)]
+                lines.append(
+                    f'yunshu_request_latency_seconds{{endpoint="{endpoint}",quantile="0.5"}} {p50:.4f}'
+                )
+                lines.append(
+                    f'yunshu_request_latency_seconds{{endpoint="{endpoint}",quantile="0.99"}} {p99:.4f}'
+                )
+                lines.append(
+                    f'yunshu_request_latency_seconds_avg{{endpoint="{endpoint}"}} {avg:.4f}'
+                )
+                lines.append(
+                    f'yunshu_request_latency_seconds_count{{endpoint="{endpoint}"}} {len(latencies)}'
+                )
 
         lines.append("")
         lines.append("# HELP yunshu_tokens_total Token counts")

@@ -113,6 +113,12 @@ async def create_embedding(req: EmbeddingRequest):
                 "Skipping entry (index gap in response).",
                 i,
             )
+            # Still count tokens for accurate usage reporting even when
+            # the embedding vector is empty/skipped.
+            if tokenizer:
+                total_tokens += len(tokenizer.encode(text))
+            else:
+                total_tokens += max(1, len(text) // 4)
             continue
 
         # Truncate to requested dimensions (Matryoshka embedding support)

@@ -190,14 +190,23 @@ class ServerMetrics:
         self._itl_samples = samples[-100:]  # Keep last 100 for rolling stats
 
     def get_itl_stats(self) -> dict[str, Any]:
-        """Return ITL statistics."""
+        """Return ITL statistics (read-only — does not mutate sample buffer)."""
         with self._lock:
             if self._itl_samples:
-                self._compute_itl_percentiles_unlocked()
+                # Compute percentiles from a snapshot without discarding samples.
+                samples = sorted(self._itl_samples)
+                n = len(samples)
+                p50 = samples[n // 2]
+                p99 = samples[min(int(n * 0.99), n - 1)]
+                return {
+                    "itl_p50_ms": round(p50 * 1000, 2),
+                    "itl_p99_ms": round(p99 * 1000, 2),
+                    "itl_samples_buffered": n,
+                }
             return {
                 "itl_p50_ms": round(self._itl_p50 * 1000, 2),
                 "itl_p99_ms": round(self._itl_p99 * 1000, 2),
-                "itl_samples_buffered": len(self._itl_samples),
+                "itl_samples_buffered": 0,
             }
 
     def record_batch_size(self, batch_size: int) -> None:
@@ -223,14 +232,22 @@ class ServerMetrics:
         self._batch_size_samples = samples[-100:]  # Keep last 100 for rolling stats
 
     def get_batch_size_stats(self) -> dict[str, Any]:
-        """Return batch size distribution statistics."""
+        """Return batch size distribution statistics (read-only — does not mutate sample buffer)."""
         with self._lock:
             if self._batch_size_samples:
-                self._compute_batch_size_percentiles_unlocked()
+                samples = sorted(self._batch_size_samples)
+                n = len(samples)
+                p50 = samples[n // 2]
+                p99 = samples[min(int(n * 0.99), n - 1)]
+                return {
+                    "batch_size_p50": p50,
+                    "batch_size_p99": p99,
+                    "batch_size_samples_buffered": n,
+                }
             return {
                 "batch_size_p50": self._batch_size_p50,
                 "batch_size_p99": self._batch_size_p99,
-                "batch_size_samples_buffered": len(self._batch_size_samples),
+                "batch_size_samples_buffered": 0,
             }
 
     def _build_snapshot(
@@ -267,31 +284,33 @@ class ServerMetrics:
             uptime = time.time() - self._start_time
 
             if scope == "alltime":
-                src = self._alltime_per_model.get(model_id, {}) if model_id else {
-                    "prompt_tokens": self._alltime_prompt_tokens,
-                    "completion_tokens": self._alltime_completion_tokens,
-                    "cached_tokens": self._alltime_cached_tokens,
-                    "requests": self._alltime_requests,
-                    "prefill_duration": self._alltime_prefill_duration,
-                    "generation_duration": self._alltime_generation_duration,
-                }
-                if model_id and model_id in self._alltime_per_model:
+                if model_id:
+                    if model_id not in self._alltime_per_model:
+                        return self._build_snapshot(0, 0, 0, 0, 0, 0, uptime)
                     src = self._alltime_per_model[model_id]
-                elif model_id:
-                    return self._build_snapshot(0, 0, 0, 0, 0, 0, uptime)
+                else:
+                    src = {
+                        "prompt_tokens": self._alltime_prompt_tokens,
+                        "completion_tokens": self._alltime_completion_tokens,
+                        "cached_tokens": self._alltime_cached_tokens,
+                        "requests": self._alltime_requests,
+                        "prefill_duration": self._alltime_prefill_duration,
+                        "generation_duration": self._alltime_generation_duration,
+                    }
             else:
-                src = self._per_model.get(model_id, {}) if model_id else {
-                    "prompt_tokens": self.total_prompt_tokens,
-                    "completion_tokens": self.total_completion_tokens,
-                    "cached_tokens": self.total_cached_tokens,
-                    "requests": self.total_requests,
-                    "prefill_duration": self.total_prefill_duration,
-                    "generation_duration": self.total_generation_duration,
-                }
-                if model_id and model_id in self._per_model:
+                if model_id:
+                    if model_id not in self._per_model:
+                        return self._build_snapshot(0, 0, 0, 0, 0, 0, uptime)
                     src = self._per_model[model_id]
-                elif model_id:
-                    return self._build_snapshot(0, 0, 0, 0, 0, 0, uptime)
+                else:
+                    src = {
+                        "prompt_tokens": self.total_prompt_tokens,
+                        "completion_tokens": self.total_completion_tokens,
+                        "cached_tokens": self.total_cached_tokens,
+                        "requests": self.total_requests,
+                        "prefill_duration": self.total_prefill_duration,
+                        "generation_duration": self.total_generation_duration,
+                    }
 
             return self._build_snapshot(
                 src.get("prompt_tokens", 0),
@@ -312,6 +331,11 @@ class ServerMetrics:
             self.total_prefill_duration = 0.0
             self.total_generation_duration = 0.0
             self._per_model.clear()
+
+    def get_model_ids(self) -> list[str]:
+        """Return list of model IDs that have session metrics (thread-safe)."""
+        with self._lock:
+            return list(self._per_model.keys())
 
 
 # Global singleton (thread-safe)

@@ -67,6 +67,8 @@ async def sleep_server(req: SleepRequest, request: Request):
                 # Release model weights from GPU
                 if hasattr(engine, '_model'):
                     engine._model = None
+                if hasattr(engine, '_loaded'):
+                    engine._loaded = False
                 if hasattr(engine, '_running'):
                     engine._running = False
                 logger.info("L1 sleep: model weights unloaded, KV cache retained")

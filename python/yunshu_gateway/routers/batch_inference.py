@@ -253,17 +253,18 @@ async def download_batch_csv(batch_id: str):
                 row.append(msg.get("content", ""))
             else:
                 row.extend(["", ""])
+            # Header order: ..., content, error, prompt_tokens, completion_tokens, total_tokens
+            row.append("")  # no error
             usage = resp.get("usage", {})
             row.extend([
                 usage.get("prompt_tokens", ""),
                 usage.get("completion_tokens", ""),
                 usage.get("total_tokens", ""),
             ])
-            row.append("")  # no error
         else:
             row.extend(["", ""])  # finish_reason, content
-            row.extend(["", "", ""])  # prompt_tokens, completion_tokens, total_tokens
             row.append(r.get("error", ""))
+            row.extend(["", "", ""])  # prompt_tokens, completion_tokens, total_tokens
         writer.writerow(row)
 
     output.seek(0)

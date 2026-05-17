@@ -447,17 +447,21 @@ _BORN = time.time()
 # ---------------------------------------------------------------------------
 
 _instance: PrometheusMetrics | None = None
+_instance_lock = Lock()
 
 
 def get_prometheus_metrics() -> PrometheusMetrics:
-    """Return the global PrometheusMetrics singleton."""
+    """Return the global PrometheusMetrics singleton (thread-safe)."""
     global _instance
     if _instance is None:
-        _instance = PrometheusMetrics()
+        with _instance_lock:
+            if _instance is None:
+                _instance = PrometheusMetrics()
     return _instance
 
 
 def reset_prometheus_metrics() -> None:
     """Reset the singleton (for tests only)."""
     global _instance
-    _instance = None
+    with _instance_lock:
+        _instance = None
