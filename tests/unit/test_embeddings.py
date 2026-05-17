@@ -267,19 +267,22 @@ class TestEmbeddingsEndpoint:
         """Should return 422 when required fields are missing."""
         client = _client()
         resp = client.post("/v1/embeddings", json={})
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
+        # Verify OpenAI error format
+        body = resp.json()
+        assert "error" in body
 
     def test_embeddings_validates_model_required(self, _setup_engine):
-        """Should return 422 when model is missing."""
+        """Should return 400 or 422 when model is missing."""
         client = _client()
         resp = client.post("/v1/embeddings", json={"input": "hello"})
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
     def test_embeddings_validates_input_required(self, _setup_engine):
-        """Should return 422 when input is missing."""
+        """Should return 400 or 422 when input is missing."""
         client = _client()
         resp = client.post("/v1/embeddings", json={"model": "test"})
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
     def test_embeddings_no_model_loaded(self, _setup_engine):
         """Should fail with 404 when embedding model is not found."""

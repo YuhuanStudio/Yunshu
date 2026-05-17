@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..engine import get_engine
 from .chat import _apply_lora_adapter, _release_lora_adapter
@@ -140,6 +140,18 @@ class AnthropicMessagesRequest(BaseModel):
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: Optional[dict] = None
     chat_template_kwargs: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        if not self.messages:
+            raise ValueError("messages: field is required and cannot be empty")
+        if self.max_tokens <= 0:
+            raise ValueError("max_tokens: must be a positive integer")
+        if self.stop_sequences and len(self.stop_sequences) > 16:
+            raise ValueError("stop_sequences: maximum 16 stop sequences")
+        return self
 
 
 # ── Content block helpers ──
@@ -972,7 +984,6 @@ async def _stream_anthropic(
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
-    error_occurred = False
     try:
         async for event in with_sse_keepalive(
             _token_source(),
@@ -984,11 +995,9 @@ async def _stream_anthropic(
         # Only emit message_stop on normal completion, NOT after errors
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except MemoryError:
-        error_occurred = True
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
     except Exception as e:
-        error_occurred = True
         logger.error("Anthropic streaming error", exc_info=True)
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")

@@ -18,7 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_model_manager
 
@@ -109,7 +109,7 @@ class TTSRequest(BaseModel):
     model: str
     input: str
     voice: str = "alloy"
-    speed: float = 1.0
+    speed: float = Field(default=1.0, ge=0.25, le=4.0)
     response_format: str = "wav"  # Only "wav" currently supported
     temperature: Optional[float] = None
     instruct: Optional[str] = None  # Voice description for VoiceDesign models
@@ -126,6 +126,16 @@ class TTSRequest(BaseModel):
     seed: Optional[int] = None  # Random seed for reproducibility
     # Segmented streaming (oMLX pattern: 300-char chunks)
     segment_size: int = Field(default=300, ge=50, le=2000)
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        if not self.input or not self.input.strip():
+            raise ValueError("input: field is required and cannot be empty")
+        if self.response_format not in ("wav", "mp3", "opus", "aac", "flac"):
+            raise ValueError(f"response_format: unsupported format '{self.response_format}'")
+        return self
 
 
 @router.post("/audio/speech", response_class=Response)
@@ -543,17 +553,35 @@ class STSEnhanceRequest(BaseModel):
     method: Optional[str] = None  # spectral_gating, deep_filter, minimal
     noise_floor_db: Optional[float] = None
 
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.audio or not self.audio.strip():
+            raise ValueError("audio: field is required and cannot be empty")
+        return self
+
 
 class STSSeparateRequest(BaseModel):
     audio: str = Field(description="Base64-encoded audio data (WAV format)")
     source_text: Optional[str] = None  # Text description of source to isolate
     method: Optional[str] = None
 
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.audio or not self.audio.strip():
+            raise ValueError("audio: field is required and cannot be empty")
+        return self
+
 
 class STSTransformRequest(BaseModel):
     audio: str = Field(description="Base64-encoded audio data (WAV format)")
     pitch_shift: Optional[float] = None  # Semitones
     formant_ratio: Optional[float] = None  # Formant frequency ratio
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.audio or not self.audio.strip():
+            raise ValueError("audio: field is required and cannot be empty")
+        return self
 
 
 @router.post("/audio/speech-to-speech/enhance")

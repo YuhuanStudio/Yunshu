@@ -278,12 +278,12 @@ class TestImagesEndpoint:
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_images_validates_prompt_required(self, _setup_engine):
-        """Should return 422 when prompt is missing."""
+        """Should return 400 or 422 when prompt is missing."""
         client = _client()
         resp = client.post("/v1/images/generations", json={
             "model": "test",
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
     def test_images_accepts_all_params(self, _setup_engine):
         """Should accept all valid parameters without 422."""

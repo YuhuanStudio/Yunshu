@@ -1365,6 +1365,19 @@ class Scheduler:
                         continue  # request was aborted or errored
 
                 sp = req.sampling_params
+
+                # Validate max_tokens: 0 or negative means no generation needed.
+                # Immediately finish the request to avoid inserting into BatchGenerator.
+                if sp.max_tokens is not None and sp.max_tokens <= 0:
+                    req.status = RequestStatus.FINISHED_STOPPED
+                    req.finish_reason = "length"
+                    self.finished_ids.add(req.request_id)
+                    self._failed_insert_ids.append(req.request_id)
+                    logger.debug(
+                        f"Request {req.request_id} skipped: max_tokens={sp.max_tokens}"
+                    )
+                    continue
+
                 sampler = self._make_sampler(sp)
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
@@ -2490,14 +2503,14 @@ class Scheduler:
             usage = active_mem / total_mem
             threshold = self.config.memory_guard_soft_limit
             if usage >= threshold and hasattr(self, '_prefix_cache') and self._prefix_cache is not None:
-                mgr = getattr(self._prefix_cache, '_manager', None)
-                if mgr is not None and hasattr(mgr, 'memory_pressure_evict'):
-                    evicted = mgr.memory_pressure_evict(pressure_threshold=threshold)
-                    if evicted > 0:
-                        logger.info(
-                            f"Memory pressure eviction: {evicted} KV blocks freed "
-                            f"(usage {usage:.1%})"
-                        )
+                evicted = self._prefix_cache.evict_under_pressure(
+                    threshold_pct=threshold * 100
+                )
+                if evicted > 0:
+                    logger.info(
+                        f"Memory pressure eviction: {evicted} KV blocks freed "
+                        f"(usage {usage:.1%})"
+                    )
         except Exception:
             logger.debug("failed", exc_info=True)
 
@@ -2681,8 +2694,11 @@ class Scheduler:
         eos_ids = list(self.tokenizer.eos_token_ids) if hasattr(self.tokenizer, 'eos_token_ids') else []
         common_stops = [((t,), None) for t in eos_ids]
         for w in (stop or []):
+            if not w:
+                continue  # Skip empty stop strings — they cause immediate stop
             t = tuple(self.tokenizer.encode(w, add_special_tokens=False))
-            common_stops.append((t, None))
+            if t:  # Only add non-empty tuples
+                common_stops.append((t, None))
         # Add raw stop token IDs (e.g., from stop_token_ids parameter)
         for tid in (stop_token_ids or []):
             if ((tid,), None) not in common_stops:

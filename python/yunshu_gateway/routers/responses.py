@@ -20,7 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine, get_engine_for_model
 
@@ -78,6 +78,27 @@ class ResponsesRequest(BaseModel):
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: Optional[list] = None  # User-provided custom logits processors
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        # Validate input: string must be non-empty, list must have elements
+        if isinstance(self.input, str) and not self.input.strip():
+            raise ValueError("input: cannot be empty or whitespace-only")
+        if isinstance(self.input, list) and not self.input:
+            raise ValueError("input: cannot be an empty list")
+        # Validate response_format type if provided
+        if self.response_format is not None:
+            rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
+            if rf_type not in ("json_object", "json_schema", "text", None):
+                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
+        # Validate grammar type if provided
+        if self.grammar is not None:
+            gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
+            if gtype not in ("json", "regex", "choice", "cfg", None):
+                raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
+        return self
 
 
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:

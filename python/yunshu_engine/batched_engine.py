@@ -5087,7 +5087,7 @@ class BatchedEngine:
         return SpecStrategyFactory.from_env()
 
     def _check_memory_guard(
-        self, prompt: str, max_tokens: int,
+        self, prompt: str | list, max_tokens: int,
     ) -> GenerationOutput | None:
         """Run memory guard preflight check. Returns None if OK.
 
@@ -5101,12 +5101,17 @@ class BatchedEngine:
         # Estimate prompt tokens
         if self._tokenizer is not None:
             try:
-                num_prompt_tokens = len(self._tokenizer.encode(prompt))
+                if isinstance(prompt, list):
+                    # Chat messages: estimate from stringified messages
+                    text = str(prompt)
+                    num_prompt_tokens = len(self._tokenizer.encode(text))
+                else:
+                    num_prompt_tokens = len(self._tokenizer.encode(prompt))
             except Exception:
                 logger.debug("prompt token estimation failed", exc_info=True)
-                num_prompt_tokens = len(prompt.split()) * 2  # rough estimate
+                num_prompt_tokens = len(str(prompt).split()) * 2  # rough estimate
         else:
-            num_prompt_tokens = len(prompt.split()) * 2
+            num_prompt_tokens = len(str(prompt).split()) * 2
 
         ok, reason = guard.preflight_check(
             num_prompt_tokens=num_prompt_tokens,

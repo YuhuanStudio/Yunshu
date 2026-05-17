@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .engine import get_engine, get_model_manager, init_model_manager
 
@@ -183,6 +186,79 @@ def create_app() -> FastAPI:
         description="Production-grade MLX inference platform for Apple Silicon",
         lifespan=lifespan,
     )
+
+    # ── Custom exception handlers for consistent error formats ──
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        """Return OpenAI-format errors for validation failures.
+
+        Anthropic endpoints (/v1/messages, /messages) get Anthropic format instead.
+        """
+        errors = exc.errors()
+        messages = []
+        for err in errors:
+            loc = ".".join(str(x) for x in err.get("loc", []))
+            msg = err.get("msg", "Invalid request")
+            messages.append(f"{loc}: {msg}" if loc else msg)
+        detail = "; ".join(messages)
+
+        # Anthropic endpoints: return Anthropic error format
+        path = request.url.path
+        if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": detail,
+                    },
+                },
+            )
+
+        # Default: OpenAI error format
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": detail,
+                    "type": "invalid_request_error",
+                    "code": "validation_error",
+                }
+            },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(request: Request, exc: StarletteHTTPException):
+        """Ensure all HTTP errors follow the correct format for the endpoint."""
+        path = request.url.path
+
+        # Anthropic endpoints: return Anthropic error format
+        if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+            error_type = "invalid_request_error"
+            if exc.status_code == 404:
+                error_type = "not_found_error"
+            elif exc.status_code == 503:
+                error_type = "overloaded_error"
+            elif exc.status_code == 500:
+                error_type = "api_error"
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": error_type,
+                        "message": str(exc.detail),
+                    },
+                },
+            )
+
+        # Default: OpenAI error format
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"message": str(exc.detail), "type": "server_error"}},
+        )
 
     # CORS: configurable via YUNSHU_CORS_ORIGINS (comma-separated).
     # Defaults to ["*"] in dev, should be restricted in production.

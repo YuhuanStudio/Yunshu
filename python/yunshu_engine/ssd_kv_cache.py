@@ -305,8 +305,12 @@ class SSDKVCache:
                 op = item[0]
                 if op == "save":
                     _, block_hash_hex, tensors_raw, meta_dict, file_path = item
-                    _write_safetensors(file_path, tensors_raw, meta_dict)
-                    self._writes_completed += 1
+                    file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
+                    with self._lock:
+                        if block_hash_hex in self._index:
+                            self._index[block_hash_hex].file_size = file_size
+                            self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
+                        self._writes_completed += 1
                 elif op == "delete":
                     try:
                         os.unlink(item[1])
@@ -370,9 +374,20 @@ class SSDKVCache:
         """Recover block metadata from SSDSQLiteStore."""
         entries = self._sqlite_store.list_all()
         count = 0
+        stale = []
         for entry in entries:
             bh_hex = entry["block_hash"]
             fpath = entry["block_path"]
+            # Verify the file actually exists on disk — if the process
+            # crashed after SQLite insert but before the safetensors
+            # write completed, the entry is stale and must be pruned.
+            if not os.path.isfile(fpath):
+                stale.append(bh_hex)
+                logger.debug(
+                    "SSD recovery: pruning stale entry %s (file missing)",
+                    bh_hex[:16],
+                )
+                continue
             self._index[bh_hex] = _BlockMeta(
                 block_hash=bytes.fromhex(bh_hex),
                 file_path=fpath,
@@ -383,6 +398,14 @@ class SSDKVCache:
                 last_accessed=entry["last_accessed"],
             )
             count += 1
+        # Prune stale entries from SQLite store
+        for bh_hex in stale:
+            try:
+                self._sqlite_store.delete(bh_hex)
+            except Exception:
+                logger.debug("stale entry deletion failed for %s", bh_hex[:16], exc_info=True)
+        if stale:
+            logger.info("SSD recovery: pruned %d stale entries (files missing)", len(stale))
         return count
 
     def _sqlite_upsert(self, hex_hash: str, meta: _BlockMeta) -> None:
@@ -449,7 +472,12 @@ class SSDKVCache:
         hex_hash = block_hash.hex()
         file_path = self._block_path(block_hash)
 
-        # Add to hot cache and index
+        # Add to hot cache and in-memory index.
+        # NOTE: SQLite upsert is deferred until the file is written to disk
+        # (in _writer_loop / _process_pending_writes). This prevents the
+        # SQLite store from claiming a block exists on disk if the write
+        # fails (e.g., disk full). The in-memory index is safe because it
+        # only means "data is available via hot cache".
         with self._lock:
             self._hot_cache[hex_hash] = (cache_data, token_count)
             self._hot_cache.move_to_end(hex_hash)
@@ -460,8 +488,8 @@ class SSDKVCache:
                 token_count=token_count,
                 model_name=model_name,
                 created_at=time.time(),
+                file_size=0,  # Updated after successful write
             )
-            self._sqlite_upsert(hex_hash, self._index[hex_hash])
 
         # Enqueue for background writing (no lock held here).
         # NOTE: We never silently drop queued saves — dropping would leave
@@ -563,6 +591,17 @@ class SSDKVCache:
 
         except Exception:
             logger.debug(f"SSD KV load failed for {hex_hash[:16]}", exc_info=True)
+            # Prune corrupted block from index and disk to prevent
+            # repeated failed lookups on subsequent requests.
+            with self._lock:
+                self._index.pop(hex_hash, None)
+                self._hot_cache.pop(hex_hash, None)
+                self._sqlite_delete(hex_hash)
+            try:
+                if meta is not None and meta.file_path:
+                    os.unlink(meta.file_path)
+            except OSError:
+                pass
             return None
 
     def has_block(self, block_hash: bytes) -> bool:

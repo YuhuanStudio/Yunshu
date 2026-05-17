@@ -16,7 +16,7 @@ import time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -36,12 +36,28 @@ class PoolingRequest(BaseModel):
     pooling_type: str = "CLS"  # CLS, MEAN, LAST
     encoding_format: str = "float"
 
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        if self.encoding_format not in ("float", "base64"):
+            raise ValueError(f"encoding_format: must be 'float' or 'base64', got '{self.encoding_format}'")
+        return self
+
 
 class ScoreRequest(BaseModel):
     model: str
     text_1: str | list[str]
     text_2: str | list[str]
     scoring_type: str = "cosine"  # cosine, dot, euclidean
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        if self.scoring_type not in _VALID_SCORING_TYPES:
+            raise ValueError(f"scoring_type: must be one of {', '.join(sorted(_VALID_SCORING_TYPES))}, got '{self.scoring_type}'")
+        return self
 
 
 class RerankRequest(BaseModel):
@@ -51,11 +67,25 @@ class RerankRequest(BaseModel):
     top_n: Optional[int] = None
     return_documents: bool = True
 
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        if self.top_n is not None and self.top_n <= 0:
+            raise ValueError("top_n: must be a positive integer")
+        return self
+
 
 class ClassifyRequest(BaseModel):
     model: str
     input: str
     labels: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        return self
 
 
 # ── /v1/pooling ──────────────────────────────────────────────────────────────

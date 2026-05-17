@@ -575,26 +575,30 @@ class TestAnthropicEndpoint:
         assert resp.status_code in (404, 503)
 
     def test_messages_endpoint_validates_required_fields(self, _setup_engine):
-        """Should return 422 when required fields are missing."""
+        """Should return 400 or 422 when required fields are missing."""
         client = _client()
         resp = client.post("/v1/messages", json={})
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
+        # Verify Anthropic error format
+        body = resp.json()
+        assert body.get("type") == "error"
+        assert "error" in body
 
     def test_messages_endpoint_validates_model_required(self, _setup_engine):
-        """Should return 422 when model field is missing."""
+        """Should return 400 or 422 when model field is missing."""
         client = _client()
         resp = client.post("/v1/messages", json={
             "messages": [{"role": "user", "content": "Hi"}],
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
     def test_messages_endpoint_validates_messages_required(self, _setup_engine):
-        """Should return 422 when messages field is missing."""
+        """Should return 400 or 422 when messages field is missing."""
         client = _client()
         resp = client.post("/v1/messages", json={
             "model": "claude-3",
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
     def test_messages_endpoint_accepts_all_params(self, _setup_engine):
         """Should accept all valid Anthropic parameters without 422."""

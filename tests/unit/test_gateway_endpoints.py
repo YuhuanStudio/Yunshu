@@ -84,8 +84,8 @@ class TestAudioEndpoint:
         resp = client.post("/v1/audio/transcriptions", json={
             "model": "test",
         })
-        # Might fail with missing file or no engine
-        assert resp.status_code in (200, 404, 422, 500, 503)
+        # Might fail with missing file or no engine (400 for validation error from custom handler)
+        assert resp.status_code in (200, 400, 404, 422, 500, 503)
 
 
 class TestBatchEndpoint:
@@ -147,7 +147,7 @@ class TestChatLogprobs:
             "messages": [{"role": "user", "content": "hi"}],
             "logprobs": "not_a_bool",
         })
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
 
 class TestChatLoRAAdapter:

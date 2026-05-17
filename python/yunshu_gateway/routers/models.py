@@ -99,6 +99,9 @@ async def get_model(model_id: str) -> dict:
 @router.post("/models/load")
 async def load_model(req: LoadModelRequest) -> dict:
     """Load a model (supports both single-engine and multi-model modes)."""
+    if not req.model or not req.model.strip():
+        raise HTTPException(status_code=400, detail="model field cannot be empty")
+
     # Guard against concurrent load/unload of the same model
     with _model_ops_lock:
         if req.model in _model_ops_inflight:

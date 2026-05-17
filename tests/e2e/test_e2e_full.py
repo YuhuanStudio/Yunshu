@@ -163,23 +163,23 @@ class TestChatCompletion:
             assert resp.status_code in (404, 503)
 
     def test_chat_missing_messages_422(self):
-        """Request without messages returns validation error."""
+        """Request without messages returns validation error (400 or 422)."""
         client = _client_with_engine()
         resp = client.post(
             "/v1/chat/completions",
             json={"model": "test-model"},
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
     def test_invalid_json_body_422(self):
-        """Invalid JSON body returns 422."""
+        """Invalid JSON body returns 400 or 422."""
         client = _client_with_engine()
         resp = client.post(
             "/v1/chat/completions",
             content="not json",
             headers={"Content-Type": "application/json"},
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (400, 422)
 
 
 # ═══════════════════════════════════════════════════════════════

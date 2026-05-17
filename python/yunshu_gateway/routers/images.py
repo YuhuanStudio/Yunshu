@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_model_manager
 
@@ -21,15 +21,23 @@ router = APIRouter(tags=["images"])
 class ImageGenerateRequest(BaseModel):
     prompt: str
     model: str = "Z-Image-Turbo-MLX-4bit"
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
-    num_inference_steps: int = 4
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
     preview_interval: int = 0  # Decode & emit intermediate preview every N steps (0=off)
     # Note: guidance_scale and negative_prompt removed — Turbo models
     # don't support classifier-free guidance. These params were accepted
     # but silently ignored by the engine.
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.prompt or not self.prompt.strip():
+            raise ValueError("prompt: field is required and cannot be empty")
+        if self.response_format not in ("b64_json", "url"):
+            raise ValueError(f"response_format: must be 'b64_json' or 'url', got '{self.response_format}'")
+        return self
 
 
 @router.post("/images/generations")
@@ -139,6 +147,22 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     if img_engine is None:
         raise HTTPException(status_code=404, detail="No image generation engine available")
 
+    # Parse and validate size
+    try:
+        width, height = map(int, req.size.split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
+
     # Register with request tracker for cancellation support
     import uuid as _uuid
     _img_id = f"img-{_uuid.uuid4().hex[:24]}"
@@ -149,8 +173,8 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     async def _progress_stream():
         async for chunk in img_engine.generate_image_stream(
             prompt=req.prompt,
-            width=int(req.size.split("x")[0]) if "x" in req.size else 1024,
-            height=int(req.size.split("x")[1]) if "x" in req.size else 1024,
+            width=width,
+            height=height,
             num_inference_steps=req.num_inference_steps,
             seed=req.seed,
             preview_interval=req.preview_interval,
@@ -195,11 +219,17 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
 class ImageVariationsRequest(BaseModel):
     image: str  # base64 encoded image
     model: str = "Z-Image-Turbo-MLX-4bit"
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
-    num_inference_steps: int = 4
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.image or not self.image.strip():
+            raise ValueError("image: field is required and cannot be empty")
+        return self
 
 
 @router.post("/images/variations")
@@ -275,11 +305,19 @@ class ImageEditsRequest(BaseModel):
     image: str  # base64 encoded source image
     prompt: str  # edit instruction
     model: str = "Z-Image-Turbo-MLX-4bit"
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
-    num_inference_steps: int = 4
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.image or not self.image.strip():
+            raise ValueError("image: field is required and cannot be empty")
+        if not self.prompt or not self.prompt.strip():
+            raise ValueError("prompt: field is required and cannot be empty")
+        return self
 
 
 @router.post("/images/edits")
@@ -354,12 +392,20 @@ class ImageInpaintRequest(BaseModel):
     prompt: str = Field(description="Text description of what to fill in the masked region")
     mask: Optional[str] = Field(default=None, description="Base64-encoded mask image (white=fill, black=keep)")
     model: str = "Z-Image-Turbo-MLX-4bit"
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
-    num_inference_steps: int = 4
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
     denoise_strength: float = Field(default=1.0, ge=0.0, le=1.0, description="How much to re-denoise (1.0=full)")
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.image or not self.image.strip():
+            raise ValueError("image: field is required and cannot be empty")
+        if not self.prompt or not self.prompt.strip():
+            raise ValueError("prompt: field is required and cannot be empty")
+        return self
 
 
 @router.post("/images/inpaint")
@@ -432,14 +478,24 @@ class ImageControlNetRequest(BaseModel):
     image: str = Field(description="Base64-encoded conditioning image (edges, depth map, etc.)")
     condition_type: str = Field(default="canny", description="Conditioning type: canny, depth, raw")
     model: str = "Z-Image-Turbo-MLX-4bit"
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
-    num_inference_steps: int = 4
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
     controlnet_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Conditioning strength")
     canny_low: int = Field(default=100, ge=0, le=255, description="Canny lower threshold")
     canny_high: int = Field(default=200, ge=0, le=255, description="Canny upper threshold")
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.prompt or not self.prompt.strip():
+            raise ValueError("prompt: field is required and cannot be empty")
+        if not self.image or not self.image.strip():
+            raise ValueError("image: field is required and cannot be empty")
+        if self.condition_type not in ("canny", "depth", "raw"):
+            raise ValueError(f"condition_type: must be 'canny', 'depth', or 'raw', got '{self.condition_type}'")
+        return self
 
 
 @router.post("/images/controlnet")
@@ -512,12 +568,20 @@ class ImageDepthGuidedRequest(BaseModel):
     prompt: str = Field(description="Text prompt for generation")
     depth_image: str = Field(description="Base64-encoded depth visualization image")
     model: str = "Z-Image-Turbo-MLX-4bit"
-    n: int = 1
+    n: int = Field(default=1, ge=1, le=10)
     size: str = "1024x1024"
     response_format: str = "b64_json"
-    num_inference_steps: int = 4
+    num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
     depth_strength: float = Field(default=1.0, ge=0.0, le=2.0, description="Depth conditioning strength")
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.prompt or not self.prompt.strip():
+            raise ValueError("prompt: field is required and cannot be empty")
+        if not self.depth_image or not self.depth_image.strip():
+            raise ValueError("depth_image: field is required and cannot be empty")
+        return self
 
 
 @router.post("/images/depth-guided")

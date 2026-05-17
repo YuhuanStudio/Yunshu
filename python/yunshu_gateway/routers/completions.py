@@ -94,10 +94,27 @@ class CompletionRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        # Validate prompt: string must be non-empty, list must have elements
+        if isinstance(self.prompt, str) and not self.prompt.strip():
+            raise ValueError("prompt: cannot be empty or whitespace-only")
+        if isinstance(self.prompt, list) and not self.prompt:
+            raise ValueError("prompt: cannot be an empty list")
         if self.stop and len(self.stop) > 16:
             raise ValueError("stop: maximum 16 stop sequences")
         if self.stop_token_ids and len(self.stop_token_ids) > 16:
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
+        # Validate response_format type if provided
+        if self.response_format is not None:
+            rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
+            if rf_type not in ("json_object", "json_schema", "text", None):
+                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
+        # Validate grammar type if provided
+        if self.grammar is not None:
+            gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
+            if gtype not in ("json", "regex", "choice", "cfg", None):
+                raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
         return self
 
 

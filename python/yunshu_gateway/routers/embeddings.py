@@ -19,7 +19,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..engine import get_engine, get_model_manager
 
@@ -35,6 +35,12 @@ class EmbeddingRequest(BaseModel):
     input: str | list[str]
     encoding_format: str = "float"  # float, base64
     dimensions: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if not self.model or not self.model.strip():
+            raise ValueError("model: field is required and cannot be empty")
+        return self
 
 
 @router.post("/embeddings", response_model=None)

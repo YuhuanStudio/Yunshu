@@ -622,7 +622,7 @@ class KVPrefixCache:
         try:
             info = mx.device_info()
             max_ws = info.get("max_recommended_working_set_size") if isinstance(info, dict) else None
-            if max_ws is None:
+            if max_ws is None or max_ws <= 0:
                 return 0
             active = mx.get_active_memory()
             util_pct = (active / max_ws) * 100

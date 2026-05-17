@@ -213,8 +213,8 @@ class PerformanceProfiler:
                 and m.wall_time_ms > 0
                 and m.tokens_generated > 0):
             return BottleneckType.COMPUTE
-        # IO-bound: high memory but very low throughput
-        if m.throughput_tok_s > 0 and m.throughput_tok_s < 10:
+        # IO-bound: non-trivial memory usage but very low throughput
+        if m.gpu_memory_util > 0 and m.throughput_tok_s > 0 and m.throughput_tok_s < 10:
             return BottleneckType.IO
         return BottleneckType.NONE
 
