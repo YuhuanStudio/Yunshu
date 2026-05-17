@@ -2679,11 +2679,11 @@ class BatchedEngine:
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
-                            _put((new_text, n_tok, True, len(_thinking_tokens), _lp_entry))
+                            _put((new_text, n_tok, "stop", len(_thinking_tokens), _lp_entry))
                             detokenizer.finalize()
                             _remaining = detokenizer.last_segment
                             if _remaining:
-                                _put((_remaining, n_tok, False, len(_thinking_tokens), None))
+                                _put((_remaining, n_tok, None, len(_thinking_tokens), None))
                             if _pipeline is not None:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
@@ -2703,7 +2703,7 @@ class BatchedEngine:
                             if token == think_end_token:
                                 _in_thinking = False
                                 self._lookahead_reasoning.check_thinking_state_text("</think")
-                    _put((new_text, n_tok, stop_hit or suffix_hit, len(_thinking_tokens), _lp_entry))
+                    _put((new_text, n_tok, "stop" if (stop_hit or suffix_hit) else None, len(_thinking_tokens), _lp_entry))
                     if stop_hit or suffix_hit:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
@@ -2711,7 +2711,7 @@ class BatchedEngine:
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _remaining:
-                            _put((_remaining, n_tok, False, len(_thinking_tokens), None))
+                            _put((_remaining, n_tok, None, len(_thinking_tokens), None))
                         if _pipeline is not None:
                             _pipeline.finish()
                         prefix_cache.add(ids, cache)
@@ -2725,8 +2725,8 @@ class BatchedEngine:
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment
                 if remaining:
-                    _put((remaining, n_tok, False, len(_thinking_tokens), None))
-                _put(("", n_tok, True, len(_thinking_tokens), None))
+                    _put((remaining, n_tok, None, len(_thinking_tokens), None))
+                _put(("", n_tok, "length", len(_thinking_tokens), None))
                 mx.synchronize()
                 # Finish pipeline tracking at end of generation
                 if _pipeline is not None:
@@ -2767,13 +2767,21 @@ class BatchedEngine:
                         )
                     break
                 if len(item) == 5:
-                    new_text, tok_count, done, _reasoning_tokens, _lp_entry = item
+                    new_text, tok_count, _fr_val, _reasoning_tokens, _lp_entry = item
                 elif len(item) == 4:
-                    new_text, tok_count, done, _reasoning_tokens = item
+                    new_text, tok_count, _fr_val, _reasoning_tokens = item
                     _lp_entry = None
                 else:
-                    new_text, tok_count, done = item
+                    new_text, tok_count, _fr_val = item
                     _lp_entry = None
+                # Backward compat: _fr_val may be bool (from old-style tuples)
+                # or str ("stop"/"length") or None (intermediate token)
+                if isinstance(_fr_val, bool):
+                    finish_reason = "stop" if _fr_val else None
+                    done = _fr_val
+                else:
+                    finish_reason = _fr_val  # str or None
+                    done = _fr_val is not None
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -2802,8 +2810,6 @@ class BatchedEngine:
                     except Exception:
                         logger.debug("streaming TTFT prometheus recording failed", exc_info=True)
                     _stream_ttft_recorded[0] = False  # only observe once
-
-                finish_reason = "stop" if done else None
                 # Attach logprobs to output if computed for this token
                 _lp_list = None
                 if _lp_entry is not None:
@@ -3865,7 +3871,7 @@ class BatchedEngine:
                     all_token_ids.append(first_token)
                     detokenizer.add_token(first_token)
                     n_tok += 1
-                    _put((detokenizer.last_segment, n_tok, False, first_token))
+                    _put((detokenizer.last_segment, n_tok, None, first_token))
 
                 # Decode with N-gram lookahead
                 remaining = max_tokens - 1
@@ -3896,12 +3902,12 @@ class BatchedEngine:
                             suffix_hit = False
                             if not stop_hit and stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit, token_id))
+                            _put((detokenizer.last_segment, n_tok, "stop" if (stop_hit or suffix_hit) else None, token_id))
                             if stop_hit or suffix_hit:
                                 detokenizer.finalize()
                                 _remaining = detokenizer.last_segment
                                 if _remaining:
-                                    _put((_remaining, n_tok, False, token_id))
+                                    _put((_remaining, n_tok, None, token_id))
                                 prefix_cache.add(ids, cache)
                                 mx.synchronize()
                                 _put(_sentinel)
@@ -3945,7 +3951,7 @@ class BatchedEngine:
                             suffix_hit = False
                             if not stop_hit and stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit, accepted_id))
+                            _put((detokenizer.last_segment, n_tok, "stop" if (stop_hit or suffix_hit) else None, accepted_id))
                             if stop_hit or suffix_hit:
                                 stopped = True
                             if i >= accepted:
@@ -3970,7 +3976,7 @@ class BatchedEngine:
                             suffix_hit = False
                             if not stop_hit and stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, stop_hit or suffix_hit, accepted_id))
+                            _put((detokenizer.last_segment, n_tok, "stop" if (stop_hit or suffix_hit) else None, accepted_id))
                             if stop_hit or suffix_hit:
                                 stopped = True
                             if not is_accept:
@@ -3985,7 +3991,7 @@ class BatchedEngine:
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _remaining:
-                            _put((_remaining, n_tok, False, 0))
+                            _put((_remaining, n_tok, None, 0))
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
                         _put(_sentinel)
@@ -3995,8 +4001,8 @@ class BatchedEngine:
             detokenizer.finalize()
             remaining = detokenizer.last_segment
             if remaining:
-                _put((remaining, n_tok, False, 0))
-            _put(("", n_tok, True, 0))
+                _put((remaining, n_tok, None, 0))
+            _put(("", n_tok, "length", 0))
             mx.synchronize()
             _put(_sentinel)
 
@@ -4019,7 +4025,14 @@ class BatchedEngine:
                 if isinstance(item, BaseException):
                     logger.warning(f"N-gram streaming error: {item}")
                     break
-                new_text, tok_count, done, token_id = item
+                new_text, tok_count, _fr_val, token_id = item
+                # Backward compat: _fr_val may be bool or str or None
+                if isinstance(_fr_val, bool):
+                    finish_reason = "stop" if _fr_val else None
+                    done = _fr_val
+                else:
+                    finish_reason = _fr_val
+                    done = _fr_val is not None
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -4039,8 +4052,6 @@ class BatchedEngine:
                         pm.observe_histogram("ttft_seconds", _ng_ttft_s)
                     except Exception:
                         logger.debug("N-gram streaming TTFT prometheus recording failed", exc_info=True)
-
-                finish_reason = "stop" if done else None
 
                 # Build logprobs for this token
                 _chunk_logprobs = None
@@ -4309,7 +4320,7 @@ class BatchedEngine:
                 # Yield first token via incremental detokenizer
                 detokenizer.add_token(first)
                 chunk = _clean_special_tokens(detokenizer.last_segment)
-                _put((chunk, 1, first in eos_ids, first))
+                _put((chunk, 1, "stop" if first in eos_ids else None, first))
 
                 if first in eos_ids:
                     detokenizer.finalize()
@@ -4341,7 +4352,7 @@ class BatchedEngine:
                         generated.append(draft)
                         detokenizer.add_token(draft)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), draft in eos_ids, draft))
+                        _put((chunk, len(generated), "stop" if draft in eos_ids else None, draft))
                         if draft in eos_ids:
                             break
 
@@ -4349,7 +4360,7 @@ class BatchedEngine:
                         generated.append(v1)
                         detokenizer.add_token(v1)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), v1 in eos_ids, v1))
+                        _put((chunk, len(generated), "stop" if v1 in eos_ids else None, v1))
                         if v1 in eos_ids:
                             break
                         primary = v1
@@ -4360,7 +4371,7 @@ class BatchedEngine:
                         generated.append(v0)
                         detokenizer.add_token(v0)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), v0 in eos_ids, v0))
+                        _put((chunk, len(generated), "stop" if v0 in eos_ids else None, v0))
                         if v0 in eos_ids:
                             break
                         primary = v0
@@ -4395,7 +4406,14 @@ class BatchedEngine:
                 if isinstance(item, BaseException):
                     logger.warning(f"MTP streaming error: {item}")
                     break
-                new_text, tok_count, done, token_id = item
+                new_text, tok_count, _fr_val, token_id = item
+                # Backward compat: _fr_val may be bool or str or None
+                if isinstance(_fr_val, bool):
+                    finish_reason = "stop" if _fr_val else None
+                    done = _fr_val
+                else:
+                    finish_reason = _fr_val
+                    done = _fr_val is not None
                 accumulated += new_text
                 n_tok = tok_count
 
@@ -4415,8 +4433,6 @@ class BatchedEngine:
                         pm.observe_histogram("ttft_seconds", _mtp_ttft_s)
                     except Exception:
                         logger.debug("MTP streaming TTFT prometheus recording failed", exc_info=True)
-
-                finish_reason = "stop" if done else None
 
                 # Build logprobs for this token
                 _chunk_logprobs = None

@@ -792,6 +792,7 @@ async def _stream_anthropic(
                 logprobs=getattr(req, 'logprobs', False),
                 top_logprobs=getattr(req, 'top_logprobs', None),
                 logits_processors=getattr(req, 'logits_processors', None),
+                cancel_event=_anth_gen.cancel_event,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:
                     input_tokens = output.prompt_token_count

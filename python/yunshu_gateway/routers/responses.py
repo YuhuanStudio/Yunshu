@@ -259,6 +259,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -291,6 +292,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -422,6 +424,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
+                cancel_event=_cancel_evt,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -444,8 +448,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 )
                 first_chunk = False
         else:
-            async for output in engine.stream_chat(
-                messages=messages,
+            async for output in engine.generate_stream(
+                prompt=messages,
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,
@@ -459,6 +463,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 min_p=req.min_p,
+                json_schema=json_schema,
                 stop=req.stop,
                 stop_token_ids=req.stop_token_ids,
                 spec_decode=req.spec_decode,
@@ -467,6 +472,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 priority=req.priority,
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
+                logits_processors=req.logits_processors,
+                cancel_event=_cancel_evt,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count

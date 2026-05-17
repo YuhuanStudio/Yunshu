@@ -343,6 +343,7 @@ async def _stream_completion(
                 top_logprobs=req.top_logprobs,
                 priority=req.priority,
                 logits_processors=req.logits_processors,
+                cancel_event=_tracker_gen.cancel_event,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -393,6 +394,7 @@ async def _stream_completion(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                cancel_event=_tracker_gen.cancel_event,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count

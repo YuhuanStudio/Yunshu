@@ -623,8 +623,9 @@ async def _build_multi_choice(
             ]
 
         _record_metrics(pt, ct)
-        _rt = getattr(result, 'reasoning_tokens', 0) if is_batched else 0
-        _ct_cached = getattr(result, 'cached_tokens', 0) if is_batched else 0
+        _gen_result = result if is_batched else state
+        _rt = getattr(_gen_result, 'reasoning_tokens', 0)
+        _ct_cached = getattr(_gen_result, 'cached_tokens', 0)
         choice = {"index": idx, "message": message, "finish_reason": fr}
         if lp:
             choice["logprobs"] = lp
@@ -1064,6 +1065,7 @@ async def _handle_vlm_chat(
         top_logprobs=req.top_logprobs,
         spec_decode=req.spec_decode,
         priority=req.priority,
+        logits_processors=req.logits_processors,
     )
     if json_schema:
         gen_kwargs["json_schema"] = json_schema
@@ -1213,6 +1215,7 @@ async def _stream_vlm_response(
             top_logprobs=req.top_logprobs,
             spec_decode=req.spec_decode,
             priority=req.priority,
+            logits_processors=req.logits_processors,
             cancel_event=_vlm_gen.cancel_event,
         )
         if json_schema:
@@ -1403,6 +1406,7 @@ async def _stream_response_multi(
                     logprobs=req.logprobs,
                     top_logprobs=req.top_logprobs,
                     logits_processors=req.logits_processors,
+                    cancel_event=gen.cancel_event,
                 )
                 async for output in stream:
                     if gen.cancel_event.is_set():
@@ -1719,6 +1723,7 @@ async def _stream_response(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                cancel_event=_tracker_gen.cancel_event,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
