@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "python")
 from yunshu_engine.spec_interface import (
     CompositeStrategy,
     CrossModelStrategy,
+    DeltaNetInversionStrategy,
     DraftProposal,
     MTPStrategy,
     NgramStrategy,
@@ -552,3 +553,168 @@ class TestBatchedEngineWiring:
         strategy = SpecStrategyFactory.create({"type": "ngram", "mode": "lps"})
         assert isinstance(strategy, SpecStrategy)
         assert strategy.name == "ngram"
+
+
+# ── DeltaNetInversionStrategy Tests ──
+
+
+class TestDeltaNetInversionStrategy:
+    """Verify DeltaNetInversionStrategy lifecycle and factory integration."""
+
+    def test_strategy_name(self):
+        s = DeltaNetInversionStrategy()
+        assert s.name == "deltanet_inversion"
+
+    def test_strategy_without_inverter_returns_empty_draft(self):
+        s = DeltaNetInversionStrategy()
+        s.begin("req-1")
+        proposal = s.draft([1, 2, 3], n=5)
+        assert proposal.tokens == []
+        assert proposal.strategy_name == "deltanet_inversion"
+        s.end("req-1")
+
+    def test_strategy_with_inverter_returns_empty_tokens(self):
+        """DeltaNet inversion does not propose tokens — it recovers state."""
+        from unittest.mock import MagicMock
+        mock_inverter = MagicMock()
+        s = DeltaNetInversionStrategy(inverter=mock_inverter)
+        s.begin("req-1")
+        proposal = s.draft([1, 2, 3], n=5)
+        assert proposal.tokens == []
+        assert proposal.metadata.get("inversion_available") is True
+        mock_inverter.start_capture.assert_called_once()
+        s.end("req-1")
+
+    def test_accept_triggers_inversion_on_partial_reject(self):
+        from unittest.mock import MagicMock
+        mock_inverter = MagicMock()
+        mock_inverter.invert_all.return_value = [MagicMock(), MagicMock()]
+        s = DeltaNetInversionStrategy(inverter=mock_inverter)
+        s.begin("req-1")
+        s.draft([1, 2, 3], n=5)
+        # Accept with verified_up_to=1 < len(draft_tokens)=3 triggers inversion
+        s.accept([10, 20, 30], verified_up_to=1)
+        mock_inverter.invert_all.assert_called_once()
+        stats = s.stats()
+        assert stats["total_inversions"] == 2
+        s.end("req-1")
+
+    def test_accept_no_inversion_on_full_accept(self):
+        from unittest.mock import MagicMock
+        mock_inverter = MagicMock()
+        s = DeltaNetInversionStrategy(inverter=mock_inverter)
+        s.begin("req-1")
+        s.draft([1, 2, 3], n=5)
+        # Accept with verified_up_to=3 == len(draft_tokens)=3, no inversion
+        s.accept([10, 20, 30], verified_up_to=3)
+        mock_inverter.invert_all.assert_not_called()
+        s.end("req-1")
+
+    def test_accept_handles_inversion_failure(self):
+        from unittest.mock import MagicMock
+        mock_inverter = MagicMock()
+        mock_inverter.invert_all.side_effect = RuntimeError("inversion failed")
+        s = DeltaNetInversionStrategy(inverter=mock_inverter)
+        s.begin("req-1")
+        s.draft([1, 2, 3], n=5)
+        # Should not raise
+        s.accept([10, 20, 30], verified_up_to=1)
+        stats = s.stats()
+        assert stats["total_inversion_failures"] == 1
+        s.end("req-1")
+
+    def test_stats_tracking(self):
+        s = DeltaNetInversionStrategy()
+        s.begin("req-1")
+        # Without inverter, draft() returns early but still counts as a draft
+        # We need to manually increment to verify stats accumulate correctly
+        s._total_drafts = 1
+        s._total_draft_tokens = 0  # DeltaNet returns 0 draft tokens
+        s.accept([10], verified_up_to=0)
+        stats = s.stats()
+        assert stats["name"] == "deltanet_inversion"
+        assert stats["total_drafts"] == 1
+        assert stats["total_accepted"] == 1
+        assert stats["total_accepted_tokens"] == 0
+        s.end("req-1")
+
+    def test_stats_tracking_with_inverter(self):
+        from unittest.mock import MagicMock
+        mock_inverter = MagicMock()
+        s = DeltaNetInversionStrategy(inverter=mock_inverter)
+        s.begin("req-1")
+        s.draft([1, 2, 3], n=5)
+        s.accept([10, 20], verified_up_to=1)
+        stats = s.stats()
+        assert stats["name"] == "deltanet_inversion"
+        assert stats["total_drafts"] == 1
+        assert stats["total_accepted"] == 1
+        assert stats["total_accepted_tokens"] == 1
+        s.end("req-1")
+
+    def test_reset_clears_stats(self):
+        s = DeltaNetInversionStrategy()
+        s.begin("req-1")
+        s.draft([1, 2, 3], n=5)
+        s.reset()
+        stats = s.stats()
+        assert stats["total_drafts"] == 0
+        assert stats["total_inversions"] == 0
+
+    def test_inverter_property(self):
+        from unittest.mock import MagicMock
+        mock_inv = MagicMock()
+        s = DeltaNetInversionStrategy(inverter=mock_inv)
+        assert s.inverter is mock_inv
+
+    def test_inverter_property_none(self):
+        s = DeltaNetInversionStrategy()
+        assert s.inverter is None
+
+
+class TestSpecStrategyFactoryDeltaNet:
+    """Verify SpecStrategyFactory supports deltanet type."""
+
+    def test_factory_creates_deltanet(self):
+        s = SpecStrategyFactory.create({"type": "deltanet"})
+        assert isinstance(s, DeltaNetInversionStrategy)
+        assert s.name == "deltanet_inversion"
+
+    def test_factory_deltanet_with_inverter(self):
+        from unittest.mock import MagicMock
+        mock_inv = MagicMock()
+        s = SpecStrategyFactory.create({"type": "deltanet", "inverter": mock_inv})
+        assert isinstance(s, DeltaNetInversionStrategy)
+        assert s.inverter is mock_inv
+
+    def test_factory_deltanet_creates_inverter(self):
+        """Without explicit inverter, factory should create a DeltaNetInverter."""
+        s = SpecStrategyFactory.create({"type": "deltanet"})
+        assert s._inverter is not None
+
+    def test_factory_composite_with_deltanet(self):
+        strategy = SpecStrategyFactory.create({
+            "type": "composite",
+            "strategies": [
+                {"type": "ngram"},
+                {"type": "deltanet"},
+            ],
+        })
+        assert isinstance(strategy, CompositeStrategy)
+        assert "deltanet_inversion" in strategy.name
+
+    def test_factory_unknown_type_mentions_deltanet(self):
+        with pytest.raises(ValueError, match="deltanet"):
+            SpecStrategyFactory.create({"type": "unknown_strategy"})
+
+    def test_from_env_deltanet(self):
+        old = os.environ.get("YUNSHU_SPEC_STRATEGY")
+        try:
+            os.environ["YUNSHU_SPEC_STRATEGY"] = "deltanet"
+            s = SpecStrategyFactory.from_env()
+            assert isinstance(s, DeltaNetInversionStrategy)
+        finally:
+            if old is not None:
+                os.environ["YUNSHU_SPEC_STRATEGY"] = old
+            else:
+                os.environ.pop("YUNSHU_SPEC_STRATEGY", None)

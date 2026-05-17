@@ -23,10 +23,13 @@ Architecture:
 import asyncio
 import base64
 import gc
+import hashlib
 import importlib
+import json
 import logging
 import os
 import tempfile
+import threading
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -82,6 +85,100 @@ SINGLE_IMAGE_ONLY_MODELS = frozenset({
     "llava_llama3",
     "paligemma",
 })
+
+
+class _VLMTextPromptCache:
+    """Thread-safe LRU cache for VLM text prompt tokenization results.
+
+    Caches the output of _format_prompt() + tokenizer.encode() keyed by a
+    content hash of the input messages.  On cache hit, the expensive
+    tokenization step is skipped entirely.
+
+    Also caches the output of _processor.apply_chat_template() for the VLM
+    vision path (VLM models with images/audio), keyed by messages + template
+    kwargs hash.
+
+    Memory-bounded with LRU eviction. Thread-safe via internal lock.
+    """
+
+    def __init__(self, max_entries: int = 256) -> None:
+        from collections import OrderedDict
+        self._cache: OrderedDict[str, list[int]] = OrderedDict()
+        self._template_cache: OrderedDict[str, str] = OrderedDict()
+        self._lock = threading.Lock()
+        self._max_entries = max_entries
+        self._stats = {"hits": 0, "misses": 0, "evictions": 0}
+
+    @staticmethod
+    def _compute_messages_hash(messages: list[dict], enable_thinking: bool | None = None) -> str:
+        """Stable hash of message content for cache keying."""
+        import hashlib
+        import json
+        h = hashlib.blake2b(digest_size=16)
+        h.update(json.dumps(messages, sort_keys=True, ensure_ascii=False).encode())
+        if enable_thinking is not None:
+            h.update(str(enable_thinking).encode())
+        return h.hexdigest()
+
+    def get_token_ids(self, cache_key: str) -> list[int] | None:
+        """Look up cached token IDs for a prompt."""
+        with self._lock:
+            entry = self._cache.get(cache_key)
+            if entry is not None:
+                self._cache.move_to_end(cache_key)
+                self._stats["hits"] += 1
+                return entry
+            self._stats["misses"] += 1
+            return None
+
+    def put_token_ids(self, cache_key: str, token_ids: list[int]) -> None:
+        """Store token IDs for a prompt."""
+        with self._lock:
+            if cache_key in self._cache:
+                self._cache.move_to_end(cache_key)
+                self._cache[cache_key] = token_ids
+                return
+            while len(self._cache) >= self._max_entries:
+                self._cache.popitem(last=False)
+                self._stats["evictions"] += 1
+            self._cache[cache_key] = token_ids
+
+    def get_template_text(self, cache_key: str) -> str | None:
+        """Look up cached chat template text for VLM vision path."""
+        with self._lock:
+            entry = self._template_cache.get(cache_key)
+            if entry is not None:
+                self._template_cache.move_to_end(cache_key)
+                self._stats["hits"] += 1
+                return entry
+            self._stats["misses"] += 1
+            return None
+
+    def put_template_text(self, cache_key: str, template_text: str) -> None:
+        """Store chat template text for VLM vision path."""
+        with self._lock:
+            if cache_key in self._template_cache:
+                self._template_cache.move_to_end(cache_key)
+                self._template_cache[cache_key] = template_text
+                return
+            while len(self._template_cache) >= self._max_entries:
+                self._template_cache.popitem(last=False)
+                self._stats["evictions"] += 1
+            self._template_cache[cache_key] = template_text
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+            self._template_cache.clear()
+
+    @property
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            s = dict(self._stats)
+            s["tokenization_entries"] = len(self._cache)
+            s["template_entries"] = len(self._template_cache)
+            s["max_entries"] = self._max_entries
+            return s
 
 
 class _MlxVlmVisionCacheAdapter:
@@ -195,6 +292,14 @@ class VLMEngine:
         self._encoder_cache = EncoderCacheManager(
             max_entries=int(os.environ.get("YUNSHU_ENCODER_CACHE_MAX", "64")),
             ttl_seconds=float(os.environ.get("YUNSHU_ENCODER_CACHE_TTL", "300")),
+        )
+
+        # Text prompt tokenization cache — caches _format_prompt() output and
+        # tokenizer.encode() results keyed by message content hash.  Avoids
+        # re-tokenizing identical prompts across requests.  Also caches
+        # _processor.apply_chat_template() output for the VLM vision path.
+        self._text_prompt_cache = _VLMTextPromptCache(
+            max_entries=int(os.environ.get("YUNSHU_VLM_TEXT_CACHE_MAX", "256")),
         )
 
         # Per-image KV prefix cache state — maps image_hash to PromptCacheState.
@@ -404,6 +509,7 @@ class VLMEngine:
         self._kv_prefix_states.clear()
         self._multimodal_prefix_cache.clear()
         self._encoder_cache.clear()
+        self._text_prompt_cache.clear()
 
         # Reset stats counters
         self._vlm_vision_hits = 0
@@ -499,8 +605,7 @@ class VLMEngine:
                 if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
                     return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking)
 
-                prompt_text = self._format_prompt(messages, enable_thinking=_enable_thinking)
-                input_ids = mx.array(self._tokenizer.encode(prompt_text))
+                input_ids = self._tokenize_with_cache(messages, enable_thinking=_enable_thinking)
 
                 if self._is_vlm:
                     freq_p = kwargs.get('frequency_penalty', 0.0)
@@ -658,8 +763,7 @@ class VLMEngine:
                     self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
                     return
 
-                prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
-                input_ids = mx.array(self._tokenizer.encode(prompt_text))
+                input_ids = self._tokenize_with_cache(messages, enable_thinking=enable_thinking)
 
                 if self._is_vlm:
                     freq_p = kwargs.get('frequency_penalty', 0.0)
@@ -831,17 +935,10 @@ class VLMEngine:
         """
         from mlx_vlm.generate import generate as vlm_generate
 
-        vlm_messages = self._build_vlm_messages(messages)
-        tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
-        if enable_thinking is not None:
-            tpl_kwargs["enable_thinking"] = enable_thinking
-
-        # Include audio count in template kwargs for Omni models
-        if audio_paths:
-            tpl_kwargs["num_audios"] = len(audio_paths)
-
-        prompt = self._processor.apply_chat_template(
-            vlm_messages, **tpl_kwargs,
+        # Apply chat template with caching to skip re-processing for repeated messages
+        num_audios = len(audio_paths) if audio_paths else 0
+        prompt = self._apply_vlm_template_with_cache(
+            messages, enable_thinking=enable_thinking, num_audios=num_audios,
         )
 
         # Compute image hash for KV prefix cache lookup
@@ -1136,16 +1233,10 @@ class VLMEngine:
         from mlx_vlm.generate import stream_generate as vlm_stream_generate
         from mlx_lm.sample_utils import make_sampler
 
-        vlm_messages = self._build_vlm_messages(messages)
-        tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
-        if enable_thinking is not None:
-            tpl_kwargs["enable_thinking"] = enable_thinking
-
-        if audio_paths:
-            tpl_kwargs["num_audios"] = len(audio_paths)
-
-        prompt = self._processor.apply_chat_template(
-            vlm_messages, **tpl_kwargs,
+        # Apply chat template with caching to skip re-processing for repeated messages
+        num_audios = len(audio_paths) if audio_paths else 0
+        prompt = self._apply_vlm_template_with_cache(
+            messages, enable_thinking=enable_thinking, num_audios=num_audios,
         )
 
         # Compute image hash for KV prefix cache lookup
@@ -1595,6 +1686,71 @@ class VLMEngine:
         parts.append("Assistant:")
         return "\n".join(parts)
 
+    def _tokenize_with_cache(
+        self, messages: list[dict], enable_thinking: bool | None = None,
+    ) -> mx.array:
+        """Format prompt and tokenize, using the text prompt cache to skip work.
+
+        Caches the tokenizer.encode() result keyed by a stable hash of the
+        message content. On cache hit, skips _format_prompt() + encode().
+        """
+        cache_key = _VLMTextPromptCache._compute_messages_hash(
+            messages, enable_thinking,
+        )
+
+        cached_ids = self._text_prompt_cache.get_token_ids(cache_key)
+        if cached_ids is not None:
+            logger.debug("VLM text prompt cache hit: %d tokens", len(cached_ids))
+            return mx.array(cached_ids)
+
+        prompt_text = self._format_prompt(messages, enable_thinking=enable_thinking)
+        token_ids = self._tokenizer.encode(prompt_text)
+
+        self._text_prompt_cache.put_token_ids(cache_key, token_ids)
+        logger.debug("VLM text prompt cache miss: tokenized %d tokens", len(token_ids))
+        return mx.array(token_ids)
+
+    def _apply_vlm_template_with_cache(
+        self,
+        messages: list[dict],
+        enable_thinking: bool | None = None,
+        num_audios: int = 0,
+    ) -> str:
+        """Apply VLM processor chat template with caching.
+
+        Caches the _processor.apply_chat_template() result for the VLM vision
+        path. On cache hit, skips the template application entirely.
+        """
+        # Build cache key from messages + template kwargs
+        key_parts = [json.dumps(messages, sort_keys=True, ensure_ascii=False)]
+        if enable_thinking is not None:
+            key_parts.append(f"thinking={enable_thinking}")
+        if num_audios > 0:
+            key_parts.append(f"audios={num_audios}")
+        cache_key = hashlib.blake2b(
+            "|".join(key_parts).encode(), digest_size=16,
+        ).hexdigest()
+
+        cached = self._text_prompt_cache.get_template_text(cache_key)
+        if cached is not None:
+            logger.debug("VLM template cache hit: %d chars", len(cached))
+            return cached
+
+        vlm_messages = self._build_vlm_messages(messages)
+        tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+        if enable_thinking is not None:
+            tpl_kwargs["enable_thinking"] = enable_thinking
+        if num_audios > 0:
+            tpl_kwargs["num_audios"] = num_audios
+
+        template_text = self._processor.apply_chat_template(
+            vlm_messages, **tpl_kwargs,
+        )
+
+        self._text_prompt_cache.put_template_text(cache_key, template_text)
+        logger.debug("VLM template cache miss: applied template (%d chars)", len(template_text))
+        return template_text
+
     @staticmethod
     def _extract_text(content) -> str:
         if isinstance(content, str):
@@ -1974,6 +2130,9 @@ class VLMEngine:
 
         # Merge encoder cache stats (encoder hidden-state cache)
         stats["encoder_cache"] = self._encoder_cache.get_stats()
+
+        # Merge text prompt tokenization cache stats
+        stats["text_prompt_cache"] = self._text_prompt_cache.stats
 
         # Merge MultimodalPipelineCoordinator stats
         try:

@@ -21,10 +21,12 @@ never reaches on small models.
 Also supports:
   - Cooldown on rejection (from llama.cpp PR #20700)
   - FastMTP vocabulary trimming (from llama.cpp PR #20700)
+  - Cancel event for graceful mid-generation abort (production-ready)
 """
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 import mlx.core as mx
 
@@ -119,16 +121,19 @@ class MTPDecoder:
         self,
         prompt: str | list[int],
         max_tokens: int | None = None,
+        cancel_event: Optional["asyncio.Event"] = None,
     ) -> list[int]:
         """Generate tokens using MTP always-advance with n_confirmed.
 
         Args:
             prompt: Text string or pre-tokenized ID list.
             max_tokens: Override config max_tokens.
+            cancel_event: Optional asyncio.Event — checked each cycle for early abort.
 
         Returns:
             List of generated token IDs.
         """
+        import asyncio
         max_tokens = max_tokens or self.config.max_tokens
         if isinstance(prompt, str):
             ids = self.tokenizer.encode(prompt)
@@ -159,6 +164,10 @@ class MTPDecoder:
             from yunshu_engine.n_confirmed_patch import clear_rollback, restore_rollback
 
         while len(generated) < max_tokens:
+            # Check cancel_event for graceful mid-generation abort
+            if cancel_event is not None and cancel_event.is_set():
+                break
+
             # Cooldown: skip draft after rejection to get fresh logits
             if in_cooldown and self.config.cooldown_on_reject:
                 in_cooldown = False

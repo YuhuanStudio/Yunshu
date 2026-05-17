@@ -35,7 +35,17 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6174 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6302 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-18 Wave 141 — Architecture Gap Completion: Compute Utilization + WebUI Exposure)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Gap 1: Compute utilization 已驗證 | `yunshu_compute_utilization_pct` Prometheus gauge 已從 engine_core `_total_step_time_ms / (_total_step_time_ms + _total_idle_time_ms)` 正確計算，通過 monitoring.py `prometheus_export` 端點設置 gauge | 推理利用率實時可見 |
+| Gap 2: RadixTree WebUI 已驗證 | monitoring page 已有 RadixTree 區塊（total nodes, blocks, tokens, refs, depth, eviction strategy, evicted blocks），從 `/api/v1/admin/radix-tree` 端點取得 | RadixTree 前端監控完整 |
+| Gap 3: Auto-Tuner WebUI | monitoring page 新增 Auto-Tuner & Profiling 區塊，從 `/v1/profile/engine` 取得 auto_tuner/slo/profiler/scheduler_profiling 數據 | 調優決策前端可見 |
+| Gap 3: Engine Optimizations WebUI | monitoring page 新增 Engine Optimizations 區塊，從 `/v1/models` stats 取得 TurboQuant/SpecPrefill/Checkpoint/Warmup/KV Compression/HybridKV 狀態 | 引擎優化狀態前端可見 |
+| Gap 3: Per-model settings 已驗證 | admin page ModelSettings 組件已從 `/api/v1/admin/models/{id}/settings` 讀寫 max_tokens/temperature/top_p/top_k/pinned/default | 每模型設定前端完整 |
 
 ### 已完成修復 (2026-05-16 Wave 100-103 — Spec Decode Parameters + Resource Leak Consolidation + Responses API + Multimodal)
 

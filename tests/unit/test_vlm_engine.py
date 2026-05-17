@@ -8,7 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yunshu_engine.vlm_engine import VLMEngine, _is_mlx_vlm_model, _MlxVlmVisionCacheAdapter
+from yunshu_engine.vlm_engine import (
+    VLMEngine, _is_mlx_vlm_model, _MlxVlmVisionCacheAdapter, _VLMTextPromptCache,
+)
 
 
 class TestVLMEngineInit:
@@ -408,3 +410,271 @@ class TestVLMCacheStats:
         # Vision cache is now enabled by default (unless explicitly disabled)
         stats = engine.get_stats()
         assert isinstance(stats["vision_cache_enabled"], bool)
+
+    def test_text_prompt_cache_in_stats(self):
+        engine = VLMEngine("/models/test")
+        stats = engine.get_stats()
+        assert "text_prompt_cache" in stats
+        tpc = stats["text_prompt_cache"]
+        assert tpc["hits"] == 0
+        assert tpc["misses"] == 0
+        assert tpc["evictions"] == 0
+        assert tpc["tokenization_entries"] == 0
+        assert tpc["template_entries"] == 0
+
+
+class TestVLMTextPromptCache:
+    """Tests for _VLMTextPromptCache — LRU tokenization result cache."""
+
+    def test_get_returns_none_on_miss(self):
+        cache = _VLMTextPromptCache(max_entries=10)
+        assert cache.get_token_ids("nonexistent_key") is None
+        assert cache.stats["misses"] == 1
+
+    def test_put_and_get_roundtrip(self):
+        cache = _VLMTextPromptCache(max_entries=10)
+        token_ids = [1, 2, 3, 4, 5]
+        cache.put_token_ids("key1", token_ids)
+        result = cache.get_token_ids("key1")
+        assert result == token_ids
+        assert cache.stats["hits"] == 1
+        assert cache.stats["misses"] == 0
+
+    def test_overwrite_existing_key(self):
+        cache = _VLMTextPromptCache(max_entries=10)
+        cache.put_token_ids("key1", [1, 2, 3])
+        cache.put_token_ids("key1", [4, 5, 6])
+        result = cache.get_token_ids("key1")
+        assert result == [4, 5, 6]
+        assert cache.stats["tokenization_entries"] == 1
+
+    def test_lru_eviction(self):
+        cache = _VLMTextPromptCache(max_entries=3)
+        cache.put_token_ids("a", [1])
+        cache.put_token_ids("b", [2])
+        cache.put_token_ids("c", [3])
+        # Cache is full (3 entries). Adding a 4th should evict "a" (LRU).
+        cache.put_token_ids("d", [4])
+        assert cache.get_token_ids("a") is None  # evicted
+        assert cache.get_token_ids("b") == [2]   # still present
+        assert cache.get_token_ids("c") == [3]
+        assert cache.get_token_ids("d") == [4]
+        assert cache.stats["evictions"] == 1
+
+    def test_lru_access_promotes(self):
+        """Accessing an entry should move it to the end, preventing eviction."""
+        cache = _VLMTextPromptCache(max_entries=3)
+        cache.put_token_ids("a", [1])
+        cache.put_token_ids("b", [2])
+        cache.put_token_ids("c", [3])
+        # Access "a" to promote it — now "b" is LRU
+        cache.get_token_ids("a")
+        cache.put_token_ids("d", [4])
+        # "b" should have been evicted (was LRU), "a" survives
+        assert cache.get_token_ids("a") == [1]
+        assert cache.get_token_ids("b") is None  # evicted
+        assert cache.stats["evictions"] == 1
+
+    def test_template_text_cache(self):
+        cache = _VLMTextPromptCache(max_entries=10)
+        template = "<|im_start|>user\nHi<|im_end|>"
+        assert cache.get_template_text("tpl1") is None
+        assert cache.stats["misses"] == 1
+        cache.put_template_text("tpl1", template)
+        assert cache.get_template_text("tpl1") == template
+        assert cache.stats["hits"] == 1
+
+    def test_template_cache_eviction(self):
+        cache = _VLMTextPromptCache(max_entries=2)
+        cache.put_template_text("t1", "text1")
+        cache.put_template_text("t2", "text2")
+        cache.put_template_text("t3", "text3")
+        assert cache.get_template_text("t1") is None  # evicted
+        assert cache.stats["evictions"] == 1
+
+    def test_clear(self):
+        cache = _VLMTextPromptCache(max_entries=10)
+        cache.put_token_ids("k1", [1])
+        cache.put_template_text("t1", "hello")
+        cache.clear()
+        assert cache.get_token_ids("k1") is None
+        assert cache.get_template_text("t1") is None
+        assert cache.stats["tokenization_entries"] == 0
+        assert cache.stats["template_entries"] == 0
+
+    def test_compute_messages_hash_stable(self):
+        """Same messages should produce same hash."""
+        msgs = [{"role": "user", "content": "hello"}]
+        h1 = _VLMTextPromptCache._compute_messages_hash(msgs)
+        h2 = _VLMTextPromptCache._compute_messages_hash(msgs)
+        assert h1 == h2
+
+    def test_compute_messages_hash_different_messages(self):
+        """Different messages should produce different hashes."""
+        h1 = _VLMTextPromptCache._compute_messages_hash(
+            [{"role": "user", "content": "hello"}],
+        )
+        h2 = _VLMTextPromptCache._compute_messages_hash(
+            [{"role": "user", "content": "world"}],
+        )
+        assert h1 != h2
+
+    def test_compute_messages_hash_thinking_variation(self):
+        """enable_thinking changes the hash."""
+        msgs = [{"role": "user", "content": "hello"}]
+        h1 = _VLMTextPromptCache._compute_messages_hash(msgs, enable_thinking=True)
+        h2 = _VLMTextPromptCache._compute_messages_hash(msgs, enable_thinking=False)
+        assert h1 != h2
+
+    def test_thread_safety(self):
+        """Concurrent put/get should not crash or corrupt state."""
+        import threading
+
+        cache = _VLMTextPromptCache(max_entries=100)
+        errors = []
+
+        def writer(start):
+            try:
+                for i in range(start, start + 50):
+                    cache.put_token_ids(f"key-{i}", list(range(i)))
+            except Exception as e:
+                errors.append(e)
+
+        def reader(start):
+            try:
+                for i in range(start, start + 50):
+                    cache.get_token_ids(f"key-{i}")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=writer, args=(0,)),
+            threading.Thread(target=writer, args=(50,)),
+            threading.Thread(target=reader, args=(0,)),
+            threading.Thread(target=reader, args=(25,)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Thread-safety errors: {errors}"
+
+
+class TestTokenizeWithCache:
+    """Tests for VLMEngine._tokenize_with_cache integration."""
+
+    def test_tokenize_with_cache_miss_then_hit(self):
+        engine = VLMEngine("/models/test")
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.apply_chat_template.return_value = "<|user|>Hi"
+        mock_tokenizer.encode.return_value = [1, 2, 3]
+        engine._tokenizer = mock_tokenizer
+
+        messages = [{"role": "user", "content": "Hi"}]
+
+        # First call: cache miss, should call _format_prompt + encode
+        ids1 = engine._tokenize_with_cache(messages)
+        assert ids1.tolist() == [1, 2, 3]
+        assert mock_tokenizer.encode.call_count == 1
+
+        # Second call with same messages: cache hit, should NOT call encode again
+        ids2 = engine._tokenize_with_cache(messages)
+        assert ids2.tolist() == [1, 2, 3]
+        # encode should still only have been called once (cache hit on second)
+        assert mock_tokenizer.encode.call_count == 1
+
+        # Verify stats
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["hits"] == 1
+        assert stats["misses"] == 1
+        assert stats["tokenization_entries"] == 1
+
+    def test_tokenize_with_cache_different_messages(self):
+        engine = VLMEngine("/models/test")
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.apply_chat_template.return_value = "prompt"
+        mock_tokenizer.encode.return_value = [1, 2]
+        engine._tokenizer = mock_tokenizer
+
+        msgs_a = [{"role": "user", "content": "Hello A"}]
+        msgs_b = [{"role": "user", "content": "Hello B"}]
+
+        engine._tokenize_with_cache(msgs_a)
+        engine._tokenize_with_cache(msgs_b)
+
+        # Both should be misses (different message content)
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["misses"] == 2
+        assert stats["hits"] == 0
+        assert stats["tokenization_entries"] == 2
+
+    def test_tokenize_with_cache_enable_thinking_variation(self):
+        engine = VLMEngine("/models/test")
+        mock_tokenizer = MagicMock()
+        mock_tokenizer.apply_chat_template.return_value = "prompt"
+        mock_tokenizer.encode.return_value = [1, 2]
+        engine._tokenizer = mock_tokenizer
+
+        messages = [{"role": "user", "content": "Hi"}]
+
+        # Same messages but different enable_thinking should be different cache keys
+        engine._tokenize_with_cache(messages, enable_thinking=True)
+        engine._tokenize_with_cache(messages, enable_thinking=False)
+
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["misses"] == 2
+        assert stats["tokenization_entries"] == 2
+
+        # Same enable_thinking as first call should be a hit
+        engine._tokenize_with_cache(messages, enable_thinking=True)
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["hits"] == 1
+
+
+class TestApplyVLMTemplateWithCache:
+    """Tests for VLMEngine._apply_vlm_template_with_cache integration."""
+
+    def test_template_cache_miss_then_hit(self):
+        engine = VLMEngine("/models/test")
+        mock_processor = MagicMock()
+        mock_processor.apply_chat_template.return_value = "<|user|>Hi"
+        engine._processor = mock_processor
+
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
+
+        # First call: cache miss
+        text1 = engine._apply_vlm_template_with_cache(messages)
+        assert text1 == "<|user|>Hi"
+        assert mock_processor.apply_chat_template.call_count == 1
+
+        # Second call: cache hit — processor not called again
+        text2 = engine._apply_vlm_template_with_cache(messages)
+        assert text2 == "<|user|>Hi"
+        assert mock_processor.apply_chat_template.call_count == 1
+
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["hits"] == 1
+        assert stats["misses"] == 1
+        assert stats["template_entries"] == 1
+
+    def test_template_cache_different_num_audios(self):
+        engine = VLMEngine("/models/test")
+        mock_processor = MagicMock()
+        mock_processor.apply_chat_template.return_value = "template"
+        engine._processor = mock_processor
+
+        messages = [{"role": "user", "content": "Hi"}]
+
+        # Different num_audios should produce different cache keys
+        engine._apply_vlm_template_with_cache(messages, num_audios=0)
+        engine._apply_vlm_template_with_cache(messages, num_audios=2)
+
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["misses"] == 2
+        assert stats["template_entries"] == 2
+
+        # Same num_audios should be a hit
+        engine._apply_vlm_template_with_cache(messages, num_audios=0)
+        stats = engine.get_stats()["text_prompt_cache"]
+        assert stats["hits"] == 1

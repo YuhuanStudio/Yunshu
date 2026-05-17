@@ -11,6 +11,8 @@ import {
   MemoryStick,
   CircleDot,
   AlertTriangle,
+  Zap,
+  Thermometer,
 } from "lucide-react";
 
 interface SystemStats {
@@ -61,6 +63,8 @@ export default function MonitoringPage() {
   const [radixTree, setRadixTree] = useState<Record<string, unknown> | null>(null);
   const [hwProfile, setHwProfile] = useState<Record<string, unknown> | null>(null);
   const [meshStatus, setMeshStatus] = useState<Record<string, unknown> | null>(null);
+  const [engineTuning, setEngineTuning] = useState<Record<string, unknown> | null>(null);
+  const [modelStats, setModelStats] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -78,7 +82,7 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes] = await Promise.all([
+        const [sysRes, engRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes, tuningRes, modelsRes] = await Promise.all([
           fetch("/api/v1/monitoring/system"),
           fetch("/api/v1/monitoring/engine"),
           fetch("/api/v1/gw/monitoring/spec-decode").catch(() => null),
@@ -90,6 +94,8 @@ export default function MonitoringPage() {
           fetch("/api/v1/admin/radix-tree").catch(() => null),
           fetch("/api/v1/admin/hardware-profile").catch(() => null),
           fetch("/api/v1/mesh/status").catch(() => null),
+          fetch("/v1/profile/engine").catch(() => null),
+          fetch("/v1/models").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
@@ -139,6 +145,14 @@ export default function MonitoringPage() {
         if (meshRes && meshRes.ok) {
           const meshData = await meshRes.json();
           if (mounted.current) setMeshStatus(meshData);
+        }
+        if (tuningRes && tuningRes.ok) {
+          const tuningData = await tuningRes.json();
+          if (mounted.current) setEngineTuning(tuningData);
+        }
+        if (modelsRes && modelsRes.ok) {
+          const modelsData = await modelsRes.json();
+          if (mounted.current) setModelStats(modelsData);
         }
         if (mounted.current) {
           setLastUpdate(new Date());
@@ -684,6 +698,117 @@ export default function MonitoringPage() {
               </div>
             </div>
           )}
+
+          {/* Engine Tuning — Auto-Tuner + SLO + Profiler */}
+          {engineTuning && (engineTuning.engines as Record<string, unknown>[])?.length > 0 && (
+            <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-4">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <Zap className="w-4 h-4 text-[var(--color-accent)]" />
+                Auto-Tuner & Profiling
+              </h3>
+              {(engineTuning.engines as Record<string, unknown>[]).map((eng: Record<string, unknown>, idx: number) => {
+                const tuner = eng.auto_tuner as Record<string, unknown> | undefined;
+                const slo = eng.slo as Record<string, unknown> | undefined;
+                const profiler = eng.profiler as Record<string, unknown> | undefined;
+                const schedulerProfiling = eng.scheduler_profiling as Record<string, unknown> | undefined;
+                return (
+                  <div key={idx} className="space-y-3">
+                    <div className="text-xs text-[var(--color-text-secondary)]">{String(eng.model_id || "default")}</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                      {tuner && Object.entries(tuner).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</div>
+                          <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                        </div>
+                      ))}
+                      {slo && Object.entries(slo).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">SLO: {k.replace(/_/g, " ")}</div>
+                          <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                        </div>
+                      ))}
+                      {schedulerProfiling && Object.entries(schedulerProfiling).slice(0, 6).map(([k, v]) => (
+                        <div key={k}>
+                          <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                          <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Engine Stats — TurboQuant / SpecPrefill / Checkpoint / Warmup */}
+          {modelStats && (modelStats.data as Record<string, unknown>[])?.length > 0 && (() => {
+            const models = (modelStats.data as Record<string, unknown>[]).filter(
+              (m) => m.stats && typeof m.stats === "object"
+            );
+            if (models.length === 0) return null;
+            return (
+              <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4 space-y-4">
+                <h3 className="font-semibold text-sm flex items-center gap-2">
+                  <Thermometer className="w-4 h-4 text-[var(--color-accent)]" />
+                  Engine Optimizations
+                </h3>
+                {models.map((model: Record<string, unknown>, idx: number) => {
+                  const stats = model.stats as Record<string, unknown>;
+                  const turboQuant = stats.turbo_quant as Record<string, unknown> | undefined;
+                  const specPrefill = stats.spec_prefill_engine as Record<string, unknown> | undefined;
+                  const checkpoint = stats.checkpoint as Record<string, unknown> | undefined;
+                  const warmup = (stats.model_optimizations as Record<string, unknown>)?.warmup as Record<string, unknown> | undefined;
+                  const kvQuant = stats.kv_prefix_compression as Record<string, unknown> | undefined;
+                  const hybridKV = stats.hybrid_kv as Record<string, unknown> | undefined;
+                  const hasAny = turboQuant || specPrefill || checkpoint || warmup || kvQuant || hybridKV;
+                  if (!hasAny) return null;
+                  return (
+                    <div key={idx} className="space-y-3">
+                      <div className="text-xs text-[var(--color-text-secondary)] font-medium">{String(model.id || "default")}</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                        {turboQuant && Object.entries(turboQuant).slice(0, 6).map(([k, v]) => (
+                          <div key={`tq-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">TurboQuant: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? (v > 1024 ? fmtBytes(v) : v.toLocaleString()) : String(v)}</div>
+                          </div>
+                        ))}
+                        {specPrefill && Object.entries(specPrefill).slice(0, 6).map(([k, v]) => (
+                          <div key={`sp-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">SpecPrefill: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                        {checkpoint && Object.entries(checkpoint).slice(0, 6).map(([k, v]) => (
+                          <div key={`cp-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">Checkpoint: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                        {warmup && Object.entries(warmup).slice(0, 6).map(([k, v]) => (
+                          <div key={`wu-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">Warmup: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                        {kvQuant && Object.entries(kvQuant).slice(0, 6).map(([k, v]) => (
+                          <div key={`kvq-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">KV Compress: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                        {hybridKV && Object.entries(hybridKV).slice(0, 4).map(([k, v]) => (
+                          <div key={`hkv-${k}`}>
+                            <div className="text-xs text-[var(--color-text-secondary)]">HybridKV: {k.replace(/_/g, " ")}</div>
+                            <div className="font-medium tabular-nums">{typeof v === "number" ? v.toLocaleString() : String(v)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </>
       )}
     </div>

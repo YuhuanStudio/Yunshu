@@ -3255,8 +3255,10 @@ class BatchedEngine:
                         model_name_or_path = model_config.get("_name_or_path", self.model_name)
                         self._model = load_model_with_mtp(model_name_or_path)
                         logger.info("MTP head weights loaded from model directory")
-                    except (FileNotFoundError, Exception) as e:
-                        logger.info(f"MTP weights not available ({e}), using backbone-only MTP")
+                    except FileNotFoundError as e:
+                        logger.info(f"MTP weights not found ({e}), using backbone-only MTP")
+                    except Exception as e:
+                        logger.warning(f"MTP weights load failed ({e}), using backbone-only MTP")
 
                 from .mtp_decoder import MTPDecoder, MTPConfig
                 mtp_config = MTPConfig(
@@ -4499,7 +4501,7 @@ class BatchedEngine:
         detokenizer.reset()
 
         def _run():
-            return mtp_decoder.generate(input_ids, max_tokens=max_tokens)
+            return mtp_decoder.generate(input_ids, max_tokens=max_tokens, cancel_event=cancel_event)
 
         _mtp_gen_t0 = time.perf_counter()
         try:
