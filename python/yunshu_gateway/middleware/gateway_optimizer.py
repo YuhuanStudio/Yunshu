@@ -90,8 +90,13 @@ class ResponseCacheMiddleware:
                     try:
                         full_body = b"".join(body_parts)
                         result = json.loads(full_body)
-                        # cache.put() is async (uses asyncio.Lock internally)
-                        asyncio.ensure_future(cache.put(cache_key, result))
+                        # cache.put() is async (uses asyncio.Lock internally).
+                        # Add done callback for error logging so failures aren't
+                        # silently swallowed by the fire-and-forget task.
+                        _cache_task = asyncio.ensure_future(cache.put(cache_key, result))
+                        _cache_task.add_done_callback(
+                            lambda t: t.exception() if not t.cancelled() and t.exception() else None
+                        )
                     except Exception:
                         logger.debug("cache store failed", exc_info=True)
 

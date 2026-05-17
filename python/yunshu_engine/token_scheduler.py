@@ -516,8 +516,9 @@ class PriorityInversionGuard:
         # Active boosts: request_id → (boosted_priority, original_priority, boost_time)
         self._active_boosts: dict[str, tuple[int, int, float]] = {}
 
-        # Event log for analysis
+        # Event log for analysis (bounded to prevent unbounded memory growth)
         self._events: list[InversionEvent] = []
+        self._max_events = 1000
 
         # Accumulated stats
         self._stats = InversionStats()
@@ -701,6 +702,8 @@ class PriorityInversionGuard:
                 self.apply_preemption(low_req)
 
             self._events.append(event)
+            if len(self._events) > self._max_events:
+                self._events = self._events[-self._max_events // 2:]
 
         return inversions
 

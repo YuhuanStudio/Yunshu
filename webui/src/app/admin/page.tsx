@@ -83,7 +83,7 @@ function ModelSettings() {
     models.forEach((m) => {
       fetch(`/api/v1/admin/models/${encodeURIComponent(m.id)}/settings`)
         .then((r) => r.json())
-        .then((d) => setSettings((prev) => ({ ...prev, [m.id]: d })))
+        .then((d) => setSettings((prev) => ({ ...prev, [m.id]: d.settings || d })))
         .catch(() => {});
     });
   }, [models]);
@@ -99,7 +99,7 @@ function ModelSettings() {
     setSaving(modelId);
     try {
       await fetch(`/api/v1/admin/models/${encodeURIComponent(modelId)}/settings`, {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings[modelId] || {}),
       });
@@ -184,7 +184,7 @@ function SettingToggle({ label, value, onChange }: { label: string; value: boole
 // ── API Key Manager ──
 
 function ApiKeyManager() {
-  const [keys, setKeys] = useState<{ key: string; name: string; created: string }[]>([]);
+  const [keys, setKeys] = useState<{ name: string; role: string; is_active: boolean; expires_at: number | null }[]>([]);
   const [newKeyName, setNewKeyName] = useState("");
   const [created, setCreated] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -207,20 +207,20 @@ function ApiKeyManager() {
       if (resp.ok) {
         const data = await resp.json();
         setCreated(data.key);
-        setKeys((prev) => [...prev, { key: data.key, name: newKeyName, created: new Date().toISOString() }]);
+        setKeys((prev) => [...prev, { name: newKeyName, role: data.role || "user", is_active: true, expires_at: data.expires_at || null }]);
         setNewKeyName("");
       }
     } catch {}
   };
 
-  const deleteKey = async (key: string) => {
+  const deleteKey = async (keyName: string) => {
     try {
-      await fetch("/api/v1/admin/keys", {
+      const resp = await fetch(`/api/v1/admin/keys/${encodeURIComponent(keyName)}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
       });
-      setKeys((prev) => prev.filter((k) => k.key !== key));
+      if (resp.ok) {
+        setKeys((prev) => prev.filter((k) => k.name !== keyName));
+      }
     } catch {}
   };
 
@@ -268,13 +268,16 @@ function ApiKeyManager() {
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {keys.map((k) => (
-              <div key={k.key} className="flex items-center gap-3 px-4 py-3">
+              <div key={k.name} className="flex items-center gap-3 px-4 py-3">
                 <Key className="w-4 h-4 text-[var(--color-accent)]" />
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm">{k.name}</div>
-                  <div className="text-xs text-[var(--color-text-secondary)] font-mono">{k.key.slice(0, 8)}...{k.key.slice(-4)}</div>
+                  <div className="text-xs text-[var(--color-text-secondary)]">
+                    <span className="inline-block px-1.5 py-0.5 rounded bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-mono">{k.role}</span>
+                    {!k.is_active && <span className="ml-2 text-[var(--color-danger)]">inactive</span>}
+                  </div>
                 </div>
-                <button onClick={() => deleteKey(k.key)} className="p-1.5 rounded text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors">
+                <button onClick={() => deleteKey(k.name)} className="p-1.5 rounded text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors">
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
@@ -306,7 +309,7 @@ function LogViewer() {
       const resp = await fetch(`/api/v1/admin/logs?level=${level}&lines=100`);
       if (resp.ok) {
         const data = await resp.json();
-        if (mountedRef.current) setLogs(data.lines || []);
+        if (mountedRef.current) setLogs(data.logs || []);
       }
     } catch {}
     if (mountedRef.current) setLoading(false);
@@ -439,12 +442,14 @@ function CacheManager() {
 
 function GpuMemoryBars() {
   const [gpu, setGpu] = useState<{ total: number; active: number; peak: number; cache: number; available: number } | null>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
     fetch("/api/v1/monitoring/system")
       .then((r) => r.json())
       .then((d) => {
-        if (d.gpu) {
+        if (mountedRef.current && d.gpu) {
           setGpu({
             total: d.gpu.total_bytes,
             active: d.gpu.active_bytes,
@@ -455,6 +460,7 @@ function GpuMemoryBars() {
         }
       })
       .catch(() => {});
+    return () => { mountedRef.current = false; };
   }, []);
 
   if (!gpu) return <div className="text-sm text-[var(--color-text-secondary)]">GPU info not available.</div>;

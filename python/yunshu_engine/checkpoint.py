@@ -433,6 +433,8 @@ class FaultRecoveryManager:
         with self._lock:
             retries = self._retry_counts.get(request_id, 0)
             if retries >= self._max_retries:
+                # Clean up retry count when max exceeded to prevent unbounded growth
+                self._retry_counts.pop(request_id, None)
                 return RecoveryResult(
                     strategy=RecoveryStrategy.RETRY,
                     success=False,

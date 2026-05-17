@@ -777,10 +777,16 @@ class BatchedEngine:
                 )
 
             # Wire pre-eviction callback into KV prefix cache
+            # Use a weak reference to avoid a reference cycle:
+            # engine -> _kv_prefix_cache -> _pre_evict_callback -> engine
             if self._kv_prefix_cache is not None:
-                self._kv_prefix_cache._pre_evict_callback = (
-                    self._on_prefix_cache_eviction
-                )
+                import weakref
+                _weak_self = weakref.ref(self)
+                def _on_evict(prompt_tokens, cache):
+                    strong = _weak_self()
+                    if strong is not None:
+                        strong._on_prefix_cache_eviction(prompt_tokens, cache)
+                self._kv_prefix_cache._pre_evict_callback = _on_evict
                 logger.info("DeltaNet eviction callback wired into KV prefix cache")
 
         except Exception as e:

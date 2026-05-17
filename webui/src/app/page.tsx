@@ -121,14 +121,15 @@ export default function DashboardPage() {
     };
   }, [fetchData]);
 
-  const handleLoad = async () => {
-    if (!loadInput.trim()) return;
-    setActionModelId(loadInput);
+  const handleLoad = async (overrideId?: string) => {
+    const modelId = overrideId || loadInput;
+    if (!modelId.trim()) return;
+    setActionModelId(modelId);
     try {
       await fetch("/v1/models/load", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: loadInput }),
+        body: JSON.stringify({ model: modelId }),
       });
       setLoadInput("");
       await fetchData();
@@ -455,7 +456,7 @@ export default function DashboardPage() {
                       {m.loaded ? "Loaded" : "Available"}
                     </span>
                     <button
-                      onClick={() => m.loaded ? handleUnload(m.id) : (setLoadInput(m.id), handleLoad())}
+                      onClick={() => m.loaded ? handleUnload(m.id) : handleLoad(m.id)}
                       disabled={isLoading}
                       className={`p-1.5 rounded-lg transition-colors disabled:opacity-50 ${
                         m.loaded

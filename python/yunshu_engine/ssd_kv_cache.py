@@ -513,6 +513,9 @@ class SSDKVCache:
         # never written (data loss).  Instead we block the caller until
         # the queue drains below capacity.
         with self._writer_lock:
+            # Drain queue synchronously if at capacity to prevent unbounded growth
+            if self._writer_queue_size > 0 and len(self._write_queue) >= self._writer_queue_size:
+                self._process_pending_writes()
             self._write_queue.append(("save", hex_hash, tensors_raw, meta, file_path))
 
         # For small caches, write synchronously to avoid thread management overhead

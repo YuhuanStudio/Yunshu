@@ -50,6 +50,17 @@ export default function RealtimePage() {
     }
   }, [messages, autoScroll]);
 
+  const addMsg = useCallback((direction: WsMessage["direction"], type: string, data: unknown) => {
+    const msg: WsMessage = {
+      id: `ws-${++msgIdRef.current}`,
+      direction,
+      type,
+      data,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, msg]);
+  }, []);
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
@@ -112,17 +123,6 @@ export default function RealtimePage() {
   const clearMessages = useCallback(() => {
     setMessages([]);
     msgIdRef.current = 0;
-  }, []);
-
-  const addMsg = useCallback((direction: WsMessage["direction"], type: string, data: unknown) => {
-    const msg: WsMessage = {
-      id: `ws-${++msgIdRef.current}`,
-      direction,
-      type,
-      data,
-      timestamp: Date.now(),
-    };
-    setMessages((prev) => [...prev, msg]);
   }, []);
 
   return (

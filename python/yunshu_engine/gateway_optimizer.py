@@ -63,6 +63,8 @@ class RequestCoalescer:
         self._pending: dict[str, _PendingBatch] = {}
         # Flush timers per model
         self._timers: dict[str, asyncio.TimerHandle] = {}
+        # Tracked flush tasks (for proper cancellation on shutdown)
+        self._flush_tasks: set[asyncio.Task] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # Stats
@@ -145,7 +147,9 @@ class RequestCoalescer:
         """Called by the timer — schedules async flush on the event loop."""
         loop = self._get_loop()
         try:
-            asyncio.ensure_future(self.flush(model))
+            task = asyncio.ensure_future(self.flush(model))
+            self._flush_tasks.add(task)
+            task.add_done_callback(self._flush_tasks.discard)
         except RuntimeError:
             # Loop closed during shutdown
             pass

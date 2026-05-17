@@ -116,6 +116,7 @@ class VLMAsyncEngineCore:
 
         self._semaphore: asyncio.Semaphore | None = None
         self._requests: dict[str, _VLMRequestState] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
         self._running = False
         self._stats = {
             "total_requests": 0,
@@ -146,6 +147,16 @@ class VLMAsyncEngineCore:
     async def stop(self) -> None:
         """Stop the engine and cancel all pending requests."""
         self._running = False
+
+        # Cancel all tracked tasks
+        for req_id, task in list(self._tasks.items()):
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._tasks.clear()
 
         # Signal all active requests
         for state in self._requests.values():
@@ -224,8 +235,10 @@ class VLMAsyncEngineCore:
         self._stats["total_requests"] += 1
         self._stats["active_requests"] += 1
 
-        # Launch the request as a background task
-        asyncio.create_task(self._process_request(state))
+        # Launch the request as a background task (stored for cancellation on shutdown)
+        task = asyncio.create_task(self._process_request(state))
+        self._tasks[req_id] = task
+        task.add_done_callback(lambda t, rid=req_id: self._tasks.pop(rid, None))
 
         return req_id
 

@@ -138,7 +138,7 @@ class AnthropicMessagesRequest(BaseModel):
     logits_processors: Optional[list] = None
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: Optional[dict] = None
-    chat_template_kwargs: Optional[dict] = None
+    timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -520,6 +520,7 @@ async def _non_stream_batched(engine, messages, req, stop):
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             logits_processors=req.logits_processors,
+            timeout_seconds=req.timeout,
         )
     except MemoryError:
         return JSONResponse(
@@ -650,6 +651,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             logits_processors=req.logits_processors,
+            timeout_seconds=req.timeout,
         )
     except MemoryError:
         return JSONResponse(
@@ -828,6 +830,7 @@ async def _stream_anthropic(
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event,
+                timeout_seconds=req.timeout,
             ):
                 # Use engine's current_state (token-level tracking) for
                 # thinking routing — more accurate than text-level ThinkingParser
@@ -934,6 +937,7 @@ async def _stream_anthropic(
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event,
+                timeout_seconds=req.timeout,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:
                     input_tokens = output.prompt_token_count

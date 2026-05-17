@@ -91,6 +91,7 @@ class CompletionRequest(BaseModel):
     priority: int = Field(default=0, ge=0, le=100)
     n: int = Field(default=1, ge=1, le=128)
     logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
+    timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -233,6 +234,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     priority=req.priority,
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
+                    timeout_seconds=req.timeout,
                 )
                 text = result.text
                 pt = result.prompt_tokens
@@ -271,6 +273,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     priority=req.priority,
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
+                    timeout_seconds=req.timeout,
                 )
                 text = state.generated_text
                 pt = state.prompt_token_count
@@ -412,6 +415,7 @@ async def _stream_completion(
                 priority=req.priority,
                 logits_processors=req.logits_processors,
                 cancel_event=_comp_cancel_evt,
+                timeout_seconds=req.timeout,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -463,6 +467,7 @@ async def _stream_completion(
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
                 cancel_event=_comp_cancel_evt,
+                timeout_seconds=req.timeout,
             ):
                 if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
                     prompt_tok = output.prompt_token_count
