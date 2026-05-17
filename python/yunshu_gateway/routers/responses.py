@@ -26,7 +26,7 @@ from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_chunk
-from .chat import _format_chat_logprobs, _record_metrics
+from .chat import _format_chat_logprobs, _normalize_finish_reason, _record_metrics
 
 router = APIRouter(tags=["responses"])
 
@@ -305,7 +305,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             text = result.text
             pt = result.prompt_tokens
             ct = result.completion_tokens
-            finish_reason = result.finish_reason or "stop"
+            finish_reason = _normalize_finish_reason(result.finish_reason)
             _reasoning_tokens = getattr(result, 'reasoning_tokens', 0)
             _cached_tokens = getattr(result, 'cached_tokens', 0)
         else:
@@ -339,7 +339,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             text = state.generated_text
             pt = state.prompt_token_count
             ct = state.completion_token_count
-            finish_reason = state.finish_reason or "stop"
+            finish_reason = _normalize_finish_reason(state.finish_reason)
             _reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
             _cached_tokens = getattr(state, 'cached_tokens', 0)
 
@@ -567,7 +567,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             completion_id=response_id,
             model=req.model,
             delta_content="",
-            finish_reason=last_finish_reason or "stop",
+            finish_reason=_normalize_finish_reason(last_finish_reason),
             include_role=first_chunk,
         )
 

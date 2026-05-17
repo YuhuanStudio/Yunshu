@@ -1349,7 +1349,7 @@ async def _stream_vlm_response(
             completion_id=completion_id,
             model=req.model,
             delta_content="",
-            finish_reason=vlm_last_finish_reason or "stop",
+            finish_reason=_normalize_finish_reason(vlm_last_finish_reason),
             include_role=first_chunk,
         )
 
@@ -1467,7 +1467,7 @@ async def _stream_response_multi(
         for choice_idx in range(req.n):
             if gen.cancel_event.is_set():
                 yield _format_choice_chunk(
-                    completion_id, req.model, choice_idx, "", "cancelled",
+                    completion_id, req.model, choice_idx, "", "stop",
                 )
                 break
             first_chunk_for_choice = True
@@ -1510,7 +1510,7 @@ async def _stream_response_multi(
                 async for output in stream:
                     if gen.cancel_event.is_set():
                         yield _format_choice_chunk(
-                            completion_id, req.model, choice_idx, "", "cancelled",
+                            completion_id, req.model, choice_idx, "", "stop",
                         )
                         return
                     if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
@@ -1597,7 +1597,7 @@ async def _stream_response_multi(
                 async for output in stream:
                     if gen.cancel_event.is_set():
                         yield _format_choice_chunk(
-                            completion_id, req.model, choice_idx, "", "cancelled",
+                            completion_id, req.model, choice_idx, "", "stop",
                         )
                         return
                     if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
@@ -1680,7 +1680,7 @@ async def _stream_response_multi(
             if choice_has_tool_call:
                 final_reason = "tool_calls"
             else:
-                final_reason = choice_finish_reason or "stop"
+                final_reason = _normalize_finish_reason(choice_finish_reason)
             # If no tokens were emitted for this choice, this is also the first
             # chunk for this choice and must include role=assistant per OpenAI spec.
             yield _format_choice_chunk(
@@ -2048,7 +2048,7 @@ async def _stream_response(
         if has_emitted_tool_call:
             final_reason = "tool_calls"
         else:
-            final_reason = last_finish_reason or "stop"
+            final_reason = _normalize_finish_reason(last_finish_reason)
         yield format_openai_chunk(
             completion_id=completion_id,
             model=req.model,

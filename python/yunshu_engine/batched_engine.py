@@ -2869,8 +2869,14 @@ class BatchedEngine:
                     ids_to_prefill, model, max_tokens=max_tokens, sampler=sampler,
                     prompt_cache=cache, logits_processors=_lprocs,
                 ):
-                    detokenizer.add_token(token)
                     n_tok += 1
+                    # Check stop_ids BEFORE adding to detokenizer to avoid emitting stop text
+                    stop_hit = token in stop_ids
+                    suffix_hit = False
+                    if not stop_hit:
+                        detokenizer.add_token(token)
+                        if stop_suffixes:
+                            suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
                     # Compute per-token logprobs (same pattern as _generate_fast)
                     _lp_entry = None
                     if logprobs and logits is not None:
@@ -2927,13 +2933,9 @@ class BatchedEngine:
                         _last_stream_tok_time = _tok_now
                         if _itl > 0 and _itl < 10:
                             _stream_itl_samples.append(_itl)
-                    new_text = detokenizer.last_segment
-                    stop_hit = token in stop_ids
-                    suffix_hit = False
-                    if not stop_hit and stop_suffixes:
-                        if any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                            suffix_hit = True
-                            new_text = ""  # Don't emit suffix text
+                    new_text = "" if stop_hit else detokenizer.last_segment
+                    if suffix_hit:
+                        new_text = ""  # Don't emit suffix text
                     # Thinking budget enforcement in streaming
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
@@ -3567,11 +3569,16 @@ class BatchedEngine:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            # Apply stop token truncation
+            # Apply stop token truncation (exclude stop token from output)
             for i, tid in enumerate(token_ids):
-                detokenizer.add_token(tid)
                 if tid in eos_ids:
-                    return token_ids[:i + 1], True
+                    # Add tokens before the stop token to detokenizer
+                    for j in range(i):
+                        detokenizer.add_token(token_ids[j])
+                    return token_ids[:i], True
+            # No stop token found — add all tokens to detokenizer
+            for tid in token_ids:
+                detokenizer.add_token(tid)
             return token_ids, False
 
         _spec_gen_t0 = time.perf_counter()
@@ -3579,6 +3586,11 @@ class BatchedEngine:
             token_ids, hit_stop = await loop.run_in_executor(executor, _run_spec)
         except MemoryError:
             logger.warning("OOM during speculative generation — returning memory_limit finish reason")
+            try:
+                import mlx.core as _mx
+                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+            except Exception:
+                pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -3588,6 +3600,11 @@ class BatchedEngine:
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
                 logger.warning(f"MLX OOM during speculative generation: {e}")
+                try:
+                    import mlx.core as _mx
+                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+                except Exception:
+                    pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -3704,6 +3721,7 @@ class BatchedEngine:
 
         # Get EOS IDs + stop tokens
         eos_ids = set()
+        stop_suffixes = []
         if hasattr(self._tokenizer, 'eos_token_id'):
             eid = self._tokenizer.eos_token_id
             if isinstance(eid, (list, tuple)):
@@ -3720,6 +3738,8 @@ class BatchedEngine:
                         eos_ids.add(ids[0])
                 except Exception:
                     logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
+                if len(s) > 1:
+                    stop_suffixes.append(s)
 
         # Run speculative steps on executor thread, yielding after each step
         from mlx_lm.models.cache import make_prompt_cache
@@ -3805,11 +3825,15 @@ class BatchedEngine:
             self._spec_decoder._stats["total_steps"] += 1
 
             hit_eos = False
+            _hit_suffix = False
             for token_id in new_tokens:
                 generated_tokens.append(token_id)
-                detokenizer.add_token(token_id)
                 if token_id in eos_ids:
                     hit_eos = True
+                    break
+                detokenizer.add_token(token_id)
+                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                    _hit_suffix = True
                     break
 
             # Compute TTFT before first yield
@@ -3827,10 +3851,17 @@ class BatchedEngine:
             # Yield accepted text via incremental detokenizer
             chunk_text = _clean_special_tokens(detokenizer.last_segment)
             finish_reason = None
-            if hit_eos:
+            if hit_eos or _hit_suffix:
                 finish_reason = "stop"
             elif len(generated_tokens) >= max_tokens:
                 finish_reason = "length"
+
+            # Trim stop suffix from chunk text when matched
+            if _hit_suffix and stop_suffixes:
+                for s in stop_suffixes:
+                    if chunk_text.endswith(s):
+                        chunk_text = chunk_text[:-len(s)]
+                        break
 
             # Build logprobs from target model verification
             _chunk_logprobs = None
@@ -4204,6 +4235,11 @@ class BatchedEngine:
             tokens, output_text, _, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
         except MemoryError:
             logger.warning("OOM during N-gram spec generation — returning memory_limit finish reason")
+            try:
+                import mlx.core as _mx
+                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+            except Exception:
+                pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -4213,6 +4249,11 @@ class BatchedEngine:
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
                 logger.warning(f"MLX OOM during N-gram spec generation: {e}")
+                try:
+                    import mlx.core as _mx
+                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+                except Exception:
+                    pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -4350,6 +4391,11 @@ class BatchedEngine:
                 _run_inner()
             except Exception as e:
                 logger.error(f"N-gram streaming generation failed: {e}", exc_info=True)
+                try:
+                    mx.synchronize()
+                    mx.clear_cache()
+                except Exception:
+                    pass
                 _put(e)
             finally:
                 _unregister_inflight()
@@ -4393,8 +4439,16 @@ class BatchedEngine:
                     first_token = int(token)
                     tokens.append(first_token)
                     all_token_ids.append(first_token)
-                    detokenizer.add_token(first_token)
                     n_tok += 1
+                    if first_token in stop_ids:
+                        # First token is stop — don't add to detokenizer, signal stop
+                        _put(("", n_tok, "stop", first_token))
+                        prefix_cache.add(ids, cache)
+                        mx.synchronize()
+                        _unregister_inflight()
+                        _put(_sentinel)
+                        return
+                    detokenizer.add_token(first_token)
                     _put((detokenizer.last_segment, n_tok, None, first_token))
 
                 # Decode with N-gram lookahead
@@ -4421,19 +4475,28 @@ class BatchedEngine:
                             all_token_ids.append(token_id)
                             remaining -= 1
                             n_tok += 1
-                            detokenizer.add_token(token_id)
                             stop_hit = token_id in stop_ids
+                            if stop_hit:
+                                # Stop token — don't add to detokenizer
+                                _put(("", n_tok, "stop", token_id))
+                                prefix_cache.add(ids, cache)
+                                mx.synchronize()
+                                _unregister_inflight()
+                                _put(_sentinel)
+                                return
+                            detokenizer.add_token(token_id)
                             suffix_hit = False
-                            if not stop_hit and stop_suffixes:
+                            if stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, "stop" if (stop_hit or suffix_hit) else None, token_id))
-                            if stop_hit or suffix_hit:
+                            _put((detokenizer.last_segment, n_tok, "stop" if suffix_hit else None, token_id))
+                            if suffix_hit:
                                 detokenizer.finalize()
                                 _remaining = detokenizer.last_segment
                                 if _remaining:
                                     _put((_remaining, n_tok, None, token_id))
                                 prefix_cache.add(ids, cache)
                                 mx.synchronize()
+                                _unregister_inflight()
                                 _put(_sentinel)
                                 return
                         continue
@@ -4470,14 +4533,18 @@ class BatchedEngine:
                             all_token_ids.append(accepted_id)
                             remaining -= 1
                             n_tok += 1
-                            detokenizer.add_token(accepted_id)
                             stop_hit = accepted_id in stop_ids
-                            suffix_hit = False
-                            if not stop_hit and stop_suffixes:
-                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, "stop" if (stop_hit or suffix_hit) else None, accepted_id))
-                            if stop_hit or suffix_hit:
+                            if stop_hit:
+                                _put(("", n_tok, "stop", accepted_id))
                                 stopped = True
+                            else:
+                                detokenizer.add_token(accepted_id)
+                                suffix_hit = False
+                                if stop_suffixes:
+                                    suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                                _put((detokenizer.last_segment, n_tok, "stop" if suffix_hit else None, accepted_id))
+                                if suffix_hit:
+                                    stopped = True
                             if i >= accepted:
                                 stopped = True
                             if stopped:
@@ -4495,14 +4562,18 @@ class BatchedEngine:
                                 accepted += 1
                             remaining -= 1
                             n_tok += 1
-                            detokenizer.add_token(accepted_id)
                             stop_hit = accepted_id in stop_ids
-                            suffix_hit = False
-                            if not stop_hit and stop_suffixes:
-                                suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, "stop" if (stop_hit or suffix_hit) else None, accepted_id))
-                            if stop_hit or suffix_hit:
+                            if stop_hit:
+                                _put(("", n_tok, "stop", accepted_id))
                                 stopped = True
+                            else:
+                                detokenizer.add_token(accepted_id)
+                                suffix_hit = False
+                                if stop_suffixes:
+                                    suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
+                                _put((detokenizer.last_segment, n_tok, "stop" if suffix_hit else None, accepted_id))
+                                if suffix_hit:
+                                    stopped = True
                             if not is_accept:
                                 stopped = True
                             if stopped:
@@ -4663,12 +4734,15 @@ class BatchedEngine:
                 eos_ids.add(eid)
         if stop_token_ids:
             eos_ids.update(stop_token_ids)
+        stop_suffixes = []
         if stop:
             for s in stop:
                 try:
                     ids = tokenizer.encode(s)
                     if len(ids) == 1:
                         eos_ids.add(ids[0])
+                    elif len(ids) > 1:
+                        stop_suffixes.append(s)
                 except Exception:
                     logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
 
@@ -4687,6 +4761,11 @@ class BatchedEngine:
             token_ids = await loop.run_in_executor(executor, _run)
         except MemoryError:
             logger.warning("OOM during MTP generation — returning memory_limit finish reason")
+            try:
+                import mlx.core as _mx
+                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+            except Exception:
+                pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -4696,6 +4775,11 @@ class BatchedEngine:
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
                 logger.warning(f"MLX OOM during MTP generation: {e}")
+                try:
+                    import mlx.core as _mx
+                    await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+                except Exception:
+                    pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -4708,18 +4792,29 @@ class BatchedEngine:
             raise
         _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
 
-        # Truncate at stop tokens
+        # Truncate at stop tokens (exclude stop token from output)
         hit_stop = False
+        hit_suffix = False
         for i, tid in enumerate(token_ids):
-            detokenizer.add_token(tid)
             if tid in eos_ids:
-                token_ids = token_ids[:i + 1]
+                token_ids = token_ids[:i]
                 hit_stop = True
+                break
+            detokenizer.add_token(tid)
+            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                hit_suffix = True
                 break
         detokenizer.finalize()
         output_text = _clean_special_tokens(detokenizer.text)
 
-        finish_reason = "stop" if hit_stop else "length"
+        # Trim stop suffix from output text when matched
+        if hit_suffix and stop_suffixes:
+            for s in stop_suffixes:
+                if output_text.endswith(s):
+                    output_text = output_text[:-len(s)]
+                    break
+
+        finish_reason = "stop" if hit_stop or hit_suffix else "length"
 
         # Record MTP stats + TTFT in Prometheus
         try:
@@ -4866,15 +4961,17 @@ class BatchedEngine:
                 primary = first
                 primary_h = hidden[:, -1:, :]
 
+                if first in eos_ids:
+                    # First token is stop — don't add to detokenizer, just signal stop
+                    detokenizer.finalize()
+                    _put(("", 0, "stop", first))
+                    _put(_sentinel)
+                    return
+
                 # Yield first token via incremental detokenizer
                 detokenizer.add_token(first)
                 chunk = _clean_special_tokens(detokenizer.last_segment)
-                _put((chunk, 1, "stop" if first in eos_ids else None, first))
-
-                if first in eos_ids:
-                    detokenizer.finalize()
-                    _put(_sentinel)
-                    return
+                _put((chunk, 1, None, first))
 
                 from .n_confirmed_patch import clear_rollback, restore_rollback
 
@@ -4899,36 +4996,50 @@ class BatchedEngine:
                         # Accept
                         clear_rollback(cache)
                         generated.append(draft)
+                        if draft in eos_ids:
+                            # Stop token — don't add to detokenizer
+                            _put(("", len(generated), "stop", draft))
+                            break
+
                         detokenizer.add_token(draft)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), "stop" if draft in eos_ids else None, draft))
-                        if draft in eos_ids:
-                            break
+                        _put((chunk, len(generated), None, draft))
 
                         # Bonus token
                         generated.append(v1)
+                        if v1 in eos_ids:
+                            # Stop token — don't add to detokenizer
+                            _put(("", len(generated), "stop", v1))
+                            break
+
                         detokenizer.add_token(v1)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), "stop" if v1 in eos_ids else None, v1))
-                        if v1 in eos_ids:
-                            break
+                        _put((chunk, len(generated), None, v1))
                         primary = v1
                         primary_h = verify_h[:, -1:, :]
                     else:
                         # Reject: restore rollback (zero-cost)
                         restore_rollback(cache)
                         generated.append(v0)
+                        if v0 in eos_ids:
+                            # Stop token — don't add to detokenizer
+                            _put(("", len(generated), "stop", v0))
+                            break
+
                         detokenizer.add_token(v0)
                         chunk = _clean_special_tokens(detokenizer.last_segment)
-                        _put((chunk, len(generated), "stop" if v0 in eos_ids else None, v0))
-                        if v0 in eos_ids:
-                            break
+                        _put((chunk, len(generated), None, v0))
                         primary = v0
                         primary_h = verify_h[:, 0:1, :]
 
                 detokenizer.finalize()
             except Exception as e:
                 logger.error(f"MTP streaming generation failed: {e}", exc_info=True)
+                try:
+                    mx.synchronize()
+                    mx.clear_cache()
+                except Exception:
+                    pass
                 _put(e)
             finally:
                 _put(_sentinel)

@@ -268,8 +268,8 @@ async def test_generate_mtp_with_stop_tokens():
             )
 
     assert result.finish_reason == "stop"
-    # Should only include tokens up to and including the stop token
-    assert result.completion_tokens == 3  # [10, 20, 42]
+    # Should only include tokens before the stop token (stop token excluded)
+    assert result.completion_tokens == 2  # [10, 20] — 42 is stop, excluded
 
 
 # ---------------------------------------------------------------------------

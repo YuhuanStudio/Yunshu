@@ -284,7 +284,8 @@ class BatchSampler:
                 continue
 
             row = result[i : i + 1]  # shape [1, vocab]
-            probs = mx.exp(row)
+            # Use softmax for proper probabilities (not raw exp which can overflow)
+            probs = mx.softmax(row, axis=-1)
             sorted_indices = mx.argsort(row, axis=-1)
             sorted_probs = mx.take_along_axis(probs, sorted_indices, axis=-1)
             cumulative_probs = mx.cumsum(sorted_probs, axis=-1)
