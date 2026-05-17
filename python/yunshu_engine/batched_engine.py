@@ -2737,6 +2737,10 @@ class BatchedEngine:
         _stream_ttft_box = [0.0]  # mutable box for TTFT value
         _stream_itl_samples = []  # ITL samples for streaming fast path
 
+        # Create detokenizer at _run scope so the error handler can finalize
+        # it even if _run_inner() crashes before its own cleanup paths run.
+        _detokenizer_ref = [None]  # mutable box shared with _run_inner
+
         def _run_inner():
             import mlx.core as mx
             from mlx_lm.models.cache import make_prompt_cache
@@ -2745,6 +2749,7 @@ class BatchedEngine:
             ids = mx.array(input_ids)
             detokenizer = tokenizer.detokenizer
             detokenizer.reset()
+            _detokenizer_ref[0] = detokenizer
             n_tok = 0
             thinking_tokens_used = 0
             think_end_token = None
@@ -2951,11 +2956,21 @@ class BatchedEngine:
                     _prefill_tracker.remove(_prefill_req_id)
                 _unregister_inflight()
 
+        def _finalize_detokenizer():
+            """Finalize the detokenizer if it was created, to flush internal byte buffers."""
+            _dtk = _detokenizer_ref[0]
+            if _dtk is not None:
+                try:
+                    _dtk.finalize()
+                except Exception:
+                    logger.debug("detokenizer finalize in error handler failed", exc_info=True)
+
         def _run():
             try:
                 _run_inner()
             except (MemoryError, RuntimeError) as e:
                 _unregister_inflight()
+                _finalize_detokenizer()
                 try:
                     mx.synchronize()
                     mx.clear_cache()
@@ -2968,6 +2983,7 @@ class BatchedEngine:
                     _put(e)
             except Exception as e:
                 _unregister_inflight()
+                _finalize_detokenizer()
                 try:
                     mx.synchronize()
                     mx.clear_cache()

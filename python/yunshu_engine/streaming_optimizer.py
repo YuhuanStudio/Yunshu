@@ -91,11 +91,24 @@ class PipelineToken:
         return (self.timestamp_stage3_done - self.timestamp_enter) * 1000
 
     @property
-    def overlap_savings_ms(self) -> float:
-        """Estimated ms saved by overlapping stage 3 with next stage 1."""
+    def stage3_duration_ms(self) -> float:
+        """Duration of stage 3 (CPU post-processing) in milliseconds.
+
+        When overlap is working correctly, this work runs concurrently with
+        the next token's stage 1 (GPU forward), so the effective wall-clock
+        contribution to ITL is hidden.  The accumulated value is the total
+        CPU post-processing time across all yielded tokens, *not* the
+        savings from overlap.
+        """
         if self.timestamp_stage2_done <= 0 or self.timestamp_stage3_done <= 0:
             return 0.0
         return (self.timestamp_stage3_done - self.timestamp_stage2_done) * 1000
+
+    # Backward-compatible alias (previously mislabeled as "savings")
+    @property
+    def overlap_savings_ms(self) -> float:
+        """Deprecated: use stage3_duration_ms instead."""
+        return self.stage3_duration_ms
 
 
 @dataclass
@@ -166,6 +179,12 @@ class TokenPipeline:
 
     @property
     def avg_overlap_ms(self) -> float:
+        """Average stage3 duration per yielded token (ms).
+
+        This is the mean CPU post-processing time per token.  When overlap
+        is effective, this time is hidden behind GPU work and does not add
+        to the observed ITL.
+        """
         if self._tokens_yielded == 0:
             return 0.0
         return self._total_overlap_ms / self._tokens_yielded
@@ -273,7 +292,7 @@ class TokenPipeline:
                 _ = grammar_fn(token.text)
 
         token.mark_stage3_done()
-        # Note: overlap_savings_ms is accumulated in next_token()/drain_last_token()
+        # Note: stage3_duration_ms is accumulated in next_token()/drain_last_token()
         # when the completed token is yielded, NOT here, to avoid double-counting.
         return token
 

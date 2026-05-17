@@ -110,6 +110,9 @@ class InflightPrefixTracker:
             # only cleaned up at checkpoints.
             self._index_checkpoints(entry, start_offset=old_len)
 
+    # Checkpoint lengths used for prefix indexing (must match _index_checkpoints)
+    _CHECKPOINTS = sorted({1, 4, 16, 64, 256, 1024, 4096})
+
     def find_prefix(self, token_ids: list[int], model_name: str = "") -> InflightEntry | None:
         """Find the longest matching in-flight prefix.
 
@@ -125,9 +128,16 @@ class InflightPrefixTracker:
             best_entry = None
             best_len = 0
 
-            # Binary search for longest prefix using index
-            # Check progressively shorter prefixes
-            for check_len in range(min(len(token_ids), 8192), 0, -1):
+            # Only check at checkpoint boundaries and the full token length,
+            # since those are the only lengths indexed by _index_checkpoints.
+            max_len = min(len(token_ids), 8192)
+            check_lengths = [cl for cl in self._CHECKPOINTS if cl <= max_len]
+            if max_len not in check_lengths:
+                check_lengths.append(max_len)
+            # Search from longest to shortest for early exit
+            check_lengths.sort(reverse=True)
+
+            for check_len in check_lengths:
                 prefix = tuple(token_ids[:check_len])
                 candidates = self._prefix_index.get(prefix)
                 if candidates:

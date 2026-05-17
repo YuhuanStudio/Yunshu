@@ -160,11 +160,16 @@ class AdaptiveBatchScheduler:
         # --- Clamp to config bounds ---
         batch = max(cfg.min_batch, min(batch, cfg.max_batch))
 
-        # --- Hysteresis: prevent rapid oscillation ---
+        # --- Hysteresis: prevent rapid oscillation on scale-UP only ---
+        # Scale-down under memory pressure must always be honoured to avoid OOM.
         if batch != self._state.current_batch_size:
+            is_scale_down = batch < self._state.current_batch_size
             now = time.monotonic()
-            if now - self._state.last_scale_time < self._min_scale_interval_s:
-                # Too soon: suppress scale change
+            if (
+                not is_scale_down
+                and now - self._state.last_scale_time < self._min_scale_interval_s
+            ):
+                # Too soon for scale-UP: suppress
                 batch = self._state.current_batch_size
             else:
                 self._state.last_scale_time = now

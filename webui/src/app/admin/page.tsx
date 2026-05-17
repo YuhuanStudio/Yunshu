@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Settings2,
   Key,
@@ -293,6 +293,12 @@ function LogViewer() {
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [level, setLevel] = useState("all");
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -300,10 +306,10 @@ function LogViewer() {
       const resp = await fetch(`/api/v1/admin/logs?level=${level}&lines=100`);
       if (resp.ok) {
         const data = await resp.json();
-        setLogs(data.lines || []);
+        if (mountedRef.current) setLogs(data.lines || []);
       }
     } catch {}
-    setLoading(false);
+    if (mountedRef.current) setLoading(false);
   }, [level]);
 
   useEffect(() => {

@@ -137,12 +137,16 @@ class KVWarmTier:
             # Dequantization failed — re-insert the raw data so it can be
             # retried later, since the compressed data itself may be fine
             # (the error might be transient, e.g. MLX device issue).
+            # Guard against exceeding max_blocks on re-insert by evicting
+            # if we've gone over capacity.
             logger.warning(
                 "Failed to promote block 0x%x from warm tier — re-inserting for retry",
                 block_hash, exc_info=True,
             )
             self._store[block_hash] = (packed, scales)
             self._store.move_to_end(block_hash)
+            while len(self._store) > self.config.max_blocks:
+                self.evict(1)
             # Re-add memory accounting since we re-inserted
             try:
                 packed_nbytes = (

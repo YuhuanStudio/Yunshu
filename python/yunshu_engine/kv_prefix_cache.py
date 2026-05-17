@@ -440,6 +440,7 @@ class KVPrefixCache:
         for qi, qhash in enumerate(query_blocks):
             if qhash not in self._prefix_index:
                 break  # Chain broken — no further blocks can match
+            found_at_position = False
             for entry_idx, block_idx in self._prefix_index[qhash]:
                 if block_idx != qi:
                     continue  # Not at the right position in the chain
@@ -450,6 +451,7 @@ class KVPrefixCache:
                     if matched > best_blocks:
                         best_entry = entry_idx
                         best_blocks = matched
+                    found_at_position = True
                 else:
                     # Check if all previous blocks also match
                     entry_hashes = self._block_hashes[entry_idx]
@@ -463,6 +465,11 @@ class KVPrefixCache:
                             if matched > best_blocks:
                                 best_entry = entry_idx
                                 best_blocks = matched
+                            found_at_position = True
+            if not found_at_position and qi > 0:
+                # No entry has this hash at the correct chain position,
+                # so no longer prefix can match.
+                break
 
         return best_entry, best_blocks
 

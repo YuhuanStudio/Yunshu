@@ -294,7 +294,7 @@ class ChatMLToolCallParser(ToolCallParser):
             if ch == '\\' and in_string:
                 escape_next = True
                 continue
-            if ch == '"' and not escape_next:
+            if ch == '"':
                 in_string = not in_string
                 continue
             if in_string:
@@ -335,16 +335,10 @@ class DeepSeekToolCallParser(ToolCallParser):
             brace_start = text.find('{', start + len(self._PREFIX))
             if brace_start == -1:
                 break
-            depth = 0
-            end = brace_start
-            for end in range(brace_start, len(text)):
-                if text[end] == '{':
-                    depth += 1
-                elif text[end] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        break
-            candidate = text[brace_start:end + 1]
+            candidate = _extract_brace_block(text, brace_start)
+            if candidate is None:
+                idx = brace_start + 1
+                continue
             try:
                 data = json.loads(candidate)
                 name = data.get("name", "")
@@ -355,7 +349,7 @@ class DeepSeekToolCallParser(ToolCallParser):
                     calls.append(ToolCall(name=name, arguments=_sanitize_arguments(args)))
             except (json.JSONDecodeError, KeyError):
                 pass
-            idx = end + 1
+            idx = brace_start + len(candidate)
         return calls
 
     def format_name(self) -> str:

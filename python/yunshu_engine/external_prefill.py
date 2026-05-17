@@ -737,18 +737,28 @@ class ExternalPrefillServer:
             return _serialize_prefill_result(result)
 
         try:
-            result = await asyncio.get_running_loop().run_in_executor(
+            prefill_coro = asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: self._prefiller.prefill_chunked(
                     token_ids=token_ids,
                     chunk_size=chunk_size,
                 ),
             )
+            result = await asyncio.wait_for(
+                prefill_coro,
+                timeout=self._config.timeout_seconds,
+            )
             self._requests_served += 1
             self._total_prefill_time_s += result.duration_s
             self._total_bytes_transferred += len(payload)
             return _serialize_prefill_result(result)
 
+        except asyncio.TimeoutError:
+            self._errors += 1
+            return _encode_message({
+                "type": "error",
+                "message": f"Prefill timed out after {self._config.timeout_seconds}s",
+            })
         except PrefillAbortedError as e:
             self._errors += 1
             return _encode_message({

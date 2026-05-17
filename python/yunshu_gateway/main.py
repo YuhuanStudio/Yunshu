@@ -96,13 +96,18 @@ def _get_memory_limit_bytes() -> int:
     """
     env_val = os.environ.get("YUNSHU_MAX_MEMORY_GB")
     if env_val:
-        return int(float(env_val) * 1024**3)
+        # Strip optional "GB"/"gb" suffix for CLI ergonomics
+        cleaned = env_val.strip().upper().removesuffix("GB").strip()
+        if cleaned.lower() == "disabled":
+            return 0  # unlimited
+        return int(float(cleaned) * 1024**3)
 
     # Default: 80% of UMA (reserve for system + KV cache)
     try:
         import subprocess
         result = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True
+            ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+            timeout=5,
         )
         uma = int(result.stdout.strip())
         return int(uma * 0.8)
@@ -138,6 +143,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     env_warnings = _validate_env_vars()
     for w in env_warnings:
         logger.warning("CONFIG: %s", w)
+
+    # Validate model path exists in single-model mode
+    if DEFAULT_MODEL:
+        from pathlib import Path as _P
+        model_path = _P(DEFAULT_MODEL)
+        if not model_path.exists() and not DEFAULT_MODEL.startswith(("hf://", "mlx-community/", "Qwen")):
+            logger.warning(
+                "CONFIG: Model path '%s' does not exist locally and doesn't look like a HuggingFace ID — "
+                "model loading may fail",
+                DEFAULT_MODEL,
+            )
 
     # ── Startup timeout ──
     startup_timeout = float(os.environ.get("YUNSHU_STARTUP_TIMEOUT", "300"))
@@ -437,17 +453,20 @@ def create_app() -> FastAPI:
 
     # CORS: configurable via YUNSHU_CORS_ORIGINS (comma-separated).
     # Defaults to ["*"] in dev, should be restricted in production.
+    # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
+    # browsers will reject the response. Use specific origins in production.
     cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "*")
     cors_origins = (
         cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
     )
+    allow_credentials = cors_origins != ["*"]
     if cors_origins == ["*"]:
         logger.warning("CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production")
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
     )
@@ -612,13 +631,16 @@ def create_app() -> FastAPI:
         result = {
             "status": "ok",
             "engine": engine_info,
-            "model_manager": manager.memory_usage if manager else None,
+            "model_manager": getattr(manager, 'memory_usage', None) if manager else None,
             "server_state": _server_state,
             "active_requests": _active_requests,
             "uptime_seconds": round(time.time() - _startup_time, 1) if _startup_time > 0 else 0,
         }
         if _memory_enforcer is not None:
-            result["memory_enforcer"] = _memory_enforcer.get_status()
+            try:
+                result["memory_enforcer"] = _memory_enforcer.get_status()
+            except Exception:
+                logger.debug("memory_enforcer status failed", exc_info=True)
 
         # Add server metrics summary
         try:
@@ -656,13 +678,17 @@ def create_app() -> FastAPI:
 
         # Check if at least one model is loaded
         has_loaded_model = False
-        if manager is not None:
-            for entry in manager.list_entries():
-                if entry.is_loaded:
-                    has_loaded_model = True
-                    break
-        elif engine and getattr(engine, 'is_loaded', False):
-            has_loaded_model = True
+        try:
+            if manager is not None:
+                for entry in manager.list_entries():
+                    if getattr(entry, 'is_loaded', False):
+                        has_loaded_model = True
+                        break
+            elif engine and getattr(engine, 'is_loaded', False):
+                has_loaded_model = True
+        except Exception:
+            logger.debug("model_loaded check failed", exc_info=True)
+            has_loaded_model = False
 
         checks["model_loaded"] = has_loaded_model
         if not has_loaded_model:

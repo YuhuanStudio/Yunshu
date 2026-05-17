@@ -340,9 +340,25 @@ class SSDKVCache:
             if not bucket.is_dir() or len(bucket.name) != 1:
                 continue
             for f in bucket.iterdir():
+                # Clean up leftover .tmp files from interrupted writes
+                if f.name.endswith(".safetensors.tmp"):
+                    try:
+                        os.unlink(f)
+                        logger.debug("Cleaned up leftover .tmp file: %s", f.name)
+                    except OSError:
+                        pass
+                    continue
                 if not f.name.endswith(".safetensors"):
                     continue
                 block_hash_hex = f.stem
+                # Skip zero-byte files (incomplete writes from a crash)
+                try:
+                    if f.stat().st_size == 0:
+                        logger.debug("Skipping zero-byte safetensors file: %s", f.name)
+                        os.unlink(f)
+                        continue
+                except OSError:
+                    continue
                 try:
                     header = _read_safetensors_metadata(str(f))
                     meta = header.get("__metadata__", {})
@@ -591,17 +607,21 @@ class SSDKVCache:
 
         except Exception:
             logger.debug(f"SSD KV load failed for {hex_hash[:16]}", exc_info=True)
-            # Prune corrupted block from index and disk to prevent
-            # repeated failed lookups on subsequent requests.
+            # Only prune if the file was fully written (file_size > 0).
+            # If file_size == 0, the background writer hasn't finished yet —
+            # deleting the entry would cause data loss.
             with self._lock:
-                self._index.pop(hex_hash, None)
-                self._hot_cache.pop(hex_hash, None)
-                self._sqlite_delete(hex_hash)
-            try:
-                if meta is not None and meta.file_path:
-                    os.unlink(meta.file_path)
-            except OSError:
-                pass
+                meta_now = self._index.get(hex_hash)
+                if meta_now is not None and meta_now.file_size > 0:
+                    # File was written but is corrupted — safe to prune
+                    self._index.pop(hex_hash, None)
+                    self._hot_cache.pop(hex_hash, None)
+                    self._sqlite_delete(hex_hash)
+                    try:
+                        if meta_now.file_path:
+                            os.unlink(meta_now.file_path)
+                    except OSError:
+                        pass
             return None
 
     def has_block(self, block_hash: bytes) -> bool:
@@ -650,6 +670,7 @@ class SSDKVCache:
     def enforce_size_limit(self) -> int:
         """Evict LRU disk blocks until under budget. Returns count evicted."""
         evicted = 0
+        to_delete: list[tuple[str, str]] = []  # (hex_hash, file_path)
         with self._lock:
             total_size = sum(m.file_size for m in self._index.values())
             # Sort by last accessed (oldest first)
@@ -663,11 +684,15 @@ class SSDKVCache:
                 self._index.pop(hex_hash, None)
                 self._hot_cache.pop(hex_hash, None)
                 self._sqlite_delete(hex_hash)
-                try:
-                    os.unlink(meta.file_path)
-                except OSError:
-                    pass
+                to_delete.append((hex_hash, meta.file_path))
                 evicted += 1
+
+        # Disk I/O outside the lock to avoid blocking other operations
+        for _hex_hash, file_path in to_delete:
+            try:
+                os.unlink(file_path)
+            except OSError:
+                pass
 
         self._evictions += evicted
         return evicted

@@ -21,9 +21,17 @@ interface WsMessage {
 }
 
 export default function RealtimePage() {
-  const defaultWsUrl = typeof window !== "undefined"
-    ? `ws://${window.location.host}/realtime`
-    : "ws://localhost:8000/realtime";
+  // WebSocket must connect to the backend directly (Next.js rewrites don't proxy WS).
+  // Use NEXT_PUBLIC_BACKEND_URL if set, otherwise derive from current location
+  // (works when WebUI is served by the backend itself, not Next.js dev server).
+  const backendHost = typeof window !== "undefined"
+    ? (process.env.NEXT_PUBLIC_BACKEND_URL
+        ? new URL(process.env.NEXT_PUBLIC_BACKEND_URL).host
+        : window.location.port === "3000"
+          ? `${window.location.hostname}:8000`  // Next.js dev server → backend
+          : window.location.host)               // Production (WebUI served by backend)
+    : "localhost:8000";
+  const defaultWsUrl = `ws://${backendHost}/realtime`;
   const [url, setUrl] = useState(defaultWsUrl);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);

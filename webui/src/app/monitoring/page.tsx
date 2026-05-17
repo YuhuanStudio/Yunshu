@@ -82,9 +82,10 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes, tuningRes, modelsRes] = await Promise.all([
-          fetch("/api/v1/monitoring/system"),
-          fetch("/api/v1/monitoring/engine"),
+        const [sysRes, engRes, gwSysRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes, tuningRes, modelsRes] = await Promise.all([
+          fetch("/api/v1/monitoring/system").catch(() => null),
+          fetch("/api/v1/monitoring/engine").catch(() => null),
+          fetch("/api/v1/gw/monitoring/system").catch(() => null),
           fetch("/api/v1/gw/monitoring/spec-decode").catch(() => null),
           fetch("/api/v1/gw/monitoring/kv-cache").catch(() => null),
           fetch("/api/v1/gw/monitoring/requests").catch(() => null),
@@ -99,14 +100,35 @@ export default function MonitoringPage() {
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
-        if (sysRes.ok) {
+        // Try control-plane system endpoint first (returns SystemStats shape)
+        if (sysRes && sysRes.ok) {
           sysData = await sysRes.json();
-          if (mounted.current) {
-            setSystem(sysData);
-            setGpuHistory((prev) => [...prev.slice(-(MAX_HISTORY - 1)), sysData!.gpu?.utilization_pct ?? 0]);
-          }
         }
-        if (engRes.ok) {
+        // Fallback to gateway system endpoint (different response shape — normalize)
+        if (!sysData && gwSysRes && gwSysRes.ok) {
+          const gw = await gwSysRes.json();
+          sysData = {
+            cpu_percent: gw?.cpu?.percent ?? 0,
+            memory_total_bytes: gw?.memory?.total_bytes ?? 0,
+            memory_used_bytes: gw?.memory?.used_bytes ?? 0,
+            memory_available_bytes: gw?.memory?.available_bytes ?? 0,
+            gpu: {
+              total_bytes: gw?.gpu?.total_uma_bytes ?? gw?.gpu?.total_bytes ?? 0,
+              active_bytes: gw?.gpu?.active_bytes ?? 0,
+              peak_bytes: gw?.gpu?.peak_bytes ?? 0,
+              cache_bytes: gw?.gpu?.cache_bytes ?? 0,
+              available_bytes: gw?.gpu?.available_bytes ?? 0,
+              utilization_pct: gw?.gpu?.utilization_pct ?? 0,
+            },
+            python_version: gw?.python_version ?? "",
+            mlx_version: gw?.gpu?.mlx_version ?? "",
+          };
+        }
+        if (sysData && mounted.current) {
+          setSystem(sysData);
+          setGpuHistory((prev) => [...prev.slice(-(MAX_HISTORY - 1)), sysData!.gpu?.utilization_pct ?? 0]);
+        }
+        if (engRes && engRes.ok) {
           engData = await engRes.json();
           if (mounted.current) setEngine(engData);
         }

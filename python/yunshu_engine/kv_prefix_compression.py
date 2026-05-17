@@ -48,6 +48,7 @@ class CompressionResult:
     strategy: str
     ratio: float  # original_bytes / compressed_bytes
     block_ids: list[int]  # Which block indices were compressed
+    original_block_count: int = 0  # Total number of blocks before compression
 
 
 @dataclass
@@ -198,6 +199,7 @@ class KVPrefixCompressor:
             strategy=strategy,
             ratio=ratio,
             block_ids=block_ids,
+            original_block_count=n_blocks,
         )
 
     def decompress_blocks(self, compressed_result: CompressionResult) -> list[np.ndarray]:
@@ -309,16 +311,22 @@ class KVPrefixCompressor:
         self, compressed: np.ndarray, result: CompressionResult
     ) -> list[np.ndarray]:
         """Decompress mean-pooled blocks by tiling each compressed block K times."""
+        if compressed.size == 0:
+            return []
         K = self._compression_factor
-        original_count = len(result.block_ids) * K
-        # Each compressed block represents K original blocks
+        # Use stored original_block_count for accurate decompression.
+        # The last group may have fewer than K blocks.
+        original_count = result.original_block_count
+        # Each compressed block represents up to K original blocks
         decompressed = []
         for i in range(compressed.shape[0]):
             block = compressed[i]
-            for _ in range(K):
+            # Last group may have fewer than K blocks
+            remaining = original_count - len(decompressed)
+            tiles = min(K, remaining) if remaining > 0 else K
+            for _ in range(tiles):
                 decompressed.append(block.copy())
-        # Trim to original count if last group was smaller
-        return decompressed[:max(1, len(result.block_ids) * K)]
+        return decompressed[:original_count] if original_count > 0 else decompressed
 
     # ── Private: Top-K Strategy ────────────────────────────────────────────
 

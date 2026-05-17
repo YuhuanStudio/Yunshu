@@ -811,7 +811,27 @@ class VLMEngine:
                     sampler=sampler,
                 ):
                     if cancel_event is not None and cancel_event.is_set():
-                        break
+                        # Flush remaining detokenizer bytes before cancelling
+                        if has_detokenizer:
+                            try:
+                                remaining = detokenizer.finalize()
+                                if remaining:
+                                    queue.put_nowait(RequestOutput(
+                                        request_id=req_id,
+                                        new_text=remaining,
+                                        finish_reason=None,
+                                        finished=False,
+                                    ))
+                            except Exception:
+                                logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text="",
+                            finish_reason="cancel",
+                            finished=True,
+                            completion_tokens=token_count,
+                        ))
+                        return
                     token_count += 1
                     is_eos = token_id in stop_ids
 
