@@ -1225,7 +1225,7 @@ class BatchedEngine:
                         thinking_budget=thinking_budget,
                         json_schema=str(json_schema),
                     )
-                    _rc_hit = _rc.get(_rc_hash)
+                    _rc_hit = await _rc.get(_rc_hash)
                     if _rc_hit is not None:
                         self._response_cache_hits += 1
                         return _rc_hit
@@ -1368,7 +1368,7 @@ class BatchedEngine:
             if _rc_hash is not None and result.finish_reason != "error":
                 try:
                     from .gateway_optimizer import get_response_cache
-                    get_response_cache().put(_rc_hash, result)
+                    await get_response_cache().put(_rc_hash, result)
                 except Exception:
                     logger.debug("response cache store failed", exc_info=True)
             return result
@@ -1463,7 +1463,7 @@ class BatchedEngine:
         if _rc_hash is not None and engine_loop_result.finish_reason != "error":
             try:
                 from .gateway_optimizer import get_response_cache
-                get_response_cache().put(_rc_hash, engine_loop_result)
+                await get_response_cache().put(_rc_hash, engine_loop_result)
             except Exception:
                 logger.debug("response cache store failed", exc_info=True)
         return engine_loop_result

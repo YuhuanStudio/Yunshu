@@ -146,6 +146,27 @@ class TestRequestCoalescer:
 
         asyncio.get_event_loop().run_until_complete(_run())
 
+    def test_reject_batch_propagates_error(self):
+        """reject_batch sets exception on all futures — shadows don't hang."""
+        c = RequestCoalescer()
+
+        async def _run():
+            f1 = await c.add_request(MagicMock(model="m"))
+            f2 = await c.add_request(MagicMock(model="m"))
+            await c.flush("m")
+            batch_info = await c.get_flushed_batch()
+            _, batch = batch_info
+
+            await c.reject_batch(batch, RuntimeError("engine failure"))
+
+            with pytest.raises(RuntimeError, match="engine failure"):
+                f1.result()
+
+            with pytest.raises(RuntimeError, match="engine failure"):
+                f2.result()
+
+        asyncio.get_event_loop().run_until_complete(_run())
+
     def test_stats_avg_batch_size(self):
         """Track average batch size across multiple flushes."""
         c = RequestCoalescer()
@@ -335,13 +356,25 @@ class TestGatewayConnectionPool:
     @pytest.mark.asyncio
     async def test_max_per_host_respected(self):
         pool = GatewayConnectionPool(max_per_host=2)
-        conns = [await pool.get_connection("http://w1:8000") for _ in range(5)]
-        assert len(conns) == 5  # All returned, but pool grew
-        # Only 2 can be idle at most for reuse
-        for c in conns:
-            await pool.return_connection(c)
-        stats = pool.get_stats()
-        assert stats["pool_size"] == 5  # All created
+        conns = [await pool.get_connection("http://w1:8000") for _ in range(2)]
+        # Third get should raise ConnectionError (pool exhausted)
+        with pytest.raises(ConnectionError, match="pool exhausted"):
+            await pool.get_connection("http://w1:8000")
+        # Return one and try again
+        await pool.return_connection(conns[0])
+        c3 = await pool.get_connection("http://w1:8000")
+        assert c3 is conns[0]  # reused the returned connection
+        await pool.close_all()
+
+    @pytest.mark.asyncio
+    async def test_max_per_host_different_endpoints_independent(self):
+        """Each endpoint has its own max_per_host limit."""
+        pool = GatewayConnectionPool(max_per_host=2)
+        c1 = await pool.get_connection("http://w1:8000")
+        c2 = await pool.get_connection("http://w1:8000")
+        # w2 endpoint should still work
+        c3 = await pool.get_connection("http://w2:8000")
+        assert c3 is not c1
         await pool.close_all()
 
     @pytest.mark.asyncio
@@ -402,6 +435,17 @@ class TestGatewayConnectionPool:
         assert stats["idle_connections"] == 0
         assert stats["reuse_rate"] == 0.0
 
+    @pytest.mark.asyncio
+    async def test_rejection_count_tracked(self):
+        """Pool exhaustion increments rejection_count stat."""
+        pool = GatewayConnectionPool(max_per_host=1)
+        await pool.get_connection("http://w1:8000")
+        with pytest.raises(ConnectionError):
+            await pool.get_connection("http://w1:8000")
+        stats = pool.get_stats()
+        assert stats["rejection_count"] == 1
+        await pool.close_all()
+
 
 # ── ResponseCache Tests ─────────────────────────────────────────────────
 
@@ -457,17 +501,20 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_get_returns_none_when_disabled(self):
+    @pytest.mark.asyncio
+    async def test_get_returns_none_when_disabled(self):
         cache = ResponseCache()
         h = cache.hash_request("m", [])
-        assert cache.get(h) is None
+        assert await cache.get(h) is None
 
-    def test_put_returns_false_when_disabled(self):
+    @pytest.mark.asyncio
+    async def test_put_returns_false_when_disabled(self):
         cache = ResponseCache()
         h = cache.hash_request("m", [])
-        assert cache.put(h, {"text": "hi"}) is False
+        assert await cache.put(h, {"text": "hi"}) is False
 
-    def test_cache_hit_and_miss(self):
+    @pytest.mark.asyncio
+    async def test_cache_hit_and_miss(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
@@ -475,18 +522,18 @@ class TestResponseCache:
             h = cache.hash_request("gpt-4", [{"role": "user", "content": "hi"}])
 
             # Miss
-            result = cache.get(h)
+            result = await cache.get(h)
             assert result is None
             stats = cache.get_stats()
             assert stats["misses"] == 1
 
             # Store
-            cache.put(h, {"choices": [{"text": "hello"}]})
+            await cache.put(h, {"choices": [{"text": "hello"}]})
             stats = cache.get_stats()
             assert stats["stores"] == 1
 
             # Hit
-            result = cache.get(h)
+            result = await cache.get(h)
             assert result == {"choices": [{"text": "hello"}]}
             stats = cache.get_stats()
             assert stats["hits"] == 1
@@ -497,18 +544,19 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_cache_ttl_expiry(self):
+    @pytest.mark.asyncio
+    async def test_cache_ttl_expiry(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
             cache = ResponseCache(ttl=0.05)  # 50ms TTL
             h = cache.hash_request("m", [])
 
-            cache.put(h, "cached_data")
-            assert cache.get(h) == "cached_data"
+            await cache.put(h, "cached_data")
+            assert await cache.get(h) == "cached_data"
 
             time.sleep(0.1)  # Wait for TTL to expire
-            assert cache.get(h) is None
+            assert await cache.get(h) is None
             stats = cache.get_stats()
             assert stats["misses"] == 1  # The second get was a miss
         finally:
@@ -517,17 +565,18 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_invalidate_all(self):
+    @pytest.mark.asyncio
+    async def test_invalidate_all(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
             cache = ResponseCache()
             for i in range(10):
                 h = cache.hash_request("m", [{"i": i}])
-                cache.put(h, f"result-{i}")
+                await cache.put(h, f"result-{i}")
 
             assert cache.get_stats()["entries"] == 10
-            removed = cache.invalidate()
+            removed = await cache.invalidate()
             assert removed == 10
             assert cache.get_stats()["entries"] == 0
         finally:
@@ -536,19 +585,20 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_invalidate_by_prefix(self):
+    @pytest.mark.asyncio
+    async def test_invalidate_by_prefix(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
             cache = ResponseCache()
             h1 = cache.hash_request("m", [{"i": 1}])
             h2 = cache.hash_request("m", [{"i": 2}])
-            cache.put(h1, "r1")
-            cache.put(h2, "r2")
+            await cache.put(h1, "r1")
+            await cache.put(h2, "r2")
 
             # Invalidate by first 4 chars of h1
             prefix = h1[:4]
-            removed = cache.invalidate(prefix)
+            removed = await cache.invalidate(prefix)
             assert removed >= 1  # At least h1 matches
         finally:
             if old is None:
@@ -556,7 +606,8 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_lru_eviction_on_max_entries(self):
+    @pytest.mark.asyncio
+    async def test_lru_eviction_on_max_entries(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
@@ -565,7 +616,7 @@ class TestResponseCache:
             for i in range(5):
                 h = cache.hash_request("m", [{"i": i}])
                 hashes.append(h)
-                cache.put(h, f"result-{i}")
+                await cache.put(h, f"result-{i}")
 
             # Only 3 entries should remain
             stats = cache.get_stats()
@@ -577,17 +628,50 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_stats_reflect_operations(self):
+    @pytest.mark.asyncio
+    async def test_lru_evicts_oldest_first(self):
+        """Verify that LRU evicts the least recently accessed entry."""
+        old = os.environ.get("YUNSHU_RESPONSE_CACHE")
+        try:
+            os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
+            cache = ResponseCache(max_entries=3)
+            h1 = cache.hash_request("m", [{"i": 1}])
+            h2 = cache.hash_request("m", [{"i": 2}])
+            h3 = cache.hash_request("m", [{"i": 3}])
+            h4 = cache.hash_request("m", [{"i": 4}])
+
+            await cache.put(h1, "r1")
+            await cache.put(h2, "r2")
+            await cache.put(h3, "r3")
+
+            # Access h1 to promote it (make h2 the LRU)
+            await cache.get(h1)
+
+            # Insert h4 — should evict h2 (oldest untouched)
+            await cache.put(h4, "r4")
+
+            assert await cache.get(h1) == "r1"  # Still present (was accessed)
+            assert await cache.get(h2) is None   # Evicted (was LRU)
+            assert await cache.get(h3) == "r3"  # Still present
+            assert await cache.get(h4) == "r4"  # Just inserted
+        finally:
+            if old is None:
+                os.environ.pop("YUNSHU_RESPONSE_CACHE", None)
+            else:
+                os.environ["YUNSHU_RESPONSE_CACHE"] = old
+
+    @pytest.mark.asyncio
+    async def test_stats_reflect_operations(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
             cache = ResponseCache()
             h = cache.hash_request("m", [])
 
-            cache.get(h)  # miss
-            cache.put(h, "r")  # store
-            cache.get(h)  # hit
-            cache.invalidate()  # eviction
+            await cache.get(h)  # miss
+            await cache.put(h, "r")  # store
+            await cache.get(h)  # hit
+            await cache.invalidate()  # eviction
 
             stats = cache.get_stats()
             assert stats["enabled"] is True
@@ -601,19 +685,88 @@ class TestResponseCache:
             else:
                 os.environ["YUNSHU_RESPONSE_CACHE"] = old
 
-    def test_put_updates_existing_entry(self):
+    @pytest.mark.asyncio
+    async def test_put_updates_existing_entry(self):
         old = os.environ.get("YUNSHU_RESPONSE_CACHE")
         try:
             os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
             cache = ResponseCache()
             h = cache.hash_request("m", [])
 
-            cache.put(h, "old_value")
-            cache.put(h, "new_value")
+            await cache.put(h, "old_value")
+            await cache.put(h, "new_value")
 
-            assert cache.get(h) == "new_value"
+            assert await cache.get(h) == "new_value"
             stats = cache.get_stats()
             assert stats["entries"] == 1
+        finally:
+            if old is None:
+                os.environ.pop("YUNSHU_RESPONSE_CACHE", None)
+            else:
+                os.environ["YUNSHU_RESPONSE_CACHE"] = old
+
+    @pytest.mark.asyncio
+    async def test_lru_uses_ordered_dict_o1(self):
+        """Verify that the LRU uses OrderedDict for O(1) operations."""
+        old = os.environ.get("YUNSHU_RESPONSE_CACHE")
+        try:
+            os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
+            cache = ResponseCache()
+            assert hasattr(cache._lru, "move_to_end")
+            assert hasattr(cache._lru, "popitem")
+        finally:
+            if old is None:
+                os.environ.pop("YUNSHU_RESPONSE_CACHE", None)
+            else:
+                os.environ["YUNSHU_RESPONSE_CACHE"] = old
+
+    @pytest.mark.asyncio
+    async def test_large_cache_lru_performance(self):
+        """Verify LRU performance is reasonable with 1000+ entries."""
+        import time as _time
+        old = os.environ.get("YUNSHU_RESPONSE_CACHE")
+        try:
+            os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
+            cache = ResponseCache(max_entries=2000)
+
+            # Insert 1000 entries
+            hashes = []
+            for i in range(1000):
+                h = cache.hash_request("m", [{"i": i}])
+                hashes.append(h)
+                await cache.put(h, f"result-{i}")
+
+            # Access all entries (LRU promotion)
+            t0 = _time.monotonic()
+            for h in hashes:
+                await cache.get(h)
+            elapsed = _time.monotonic() - t0
+
+            # Should be fast — O(1) per operation, not O(n)
+            assert elapsed < 2.0, f"LRU promotion took {elapsed:.3f}s for 1000 entries"
+        finally:
+            if old is None:
+                os.environ.pop("YUNSHU_RESPONSE_CACHE", None)
+            else:
+                os.environ["YUNSHU_RESPONSE_CACHE"] = old
+
+    @pytest.mark.asyncio
+    async def test_memory_based_eviction(self):
+        """Cache evicts entries when memory limit is exceeded."""
+        old = os.environ.get("YUNSHU_RESPONSE_CACHE")
+        try:
+            os.environ["YUNSHU_RESPONSE_CACHE"] = "1"
+            # 1KB memory limit
+            cache = ResponseCache(max_entries=100, max_memory_bytes=256)
+
+            # Each entry is ~100+ bytes
+            for i in range(20):
+                h = cache.hash_request("m", [{"i": i}])
+                await cache.put(h, "x" * 100)
+
+            stats = cache.get_stats()
+            assert stats["memory_bytes"] <= 256
+            assert stats["evictions"] > 0
         finally:
             if old is None:
                 os.environ.pop("YUNSHU_RESPONSE_CACHE", None)

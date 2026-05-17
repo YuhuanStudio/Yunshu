@@ -11,7 +11,7 @@ EncoderCacheManager. This module provides:
   entries, TTL, and stats tracking (hits, misses, evictions, memory_bytes).
 
 Design notes (vLLM EncoderCacheManager pattern):
-- Encoder outputs are typically large (batch_size × seq_len × hidden_dim)
+- Encoder outputs are typically large (batch_size x seq_len x hidden_dim)
   so a bounded cache with TTL eviction is essential for memory hygiene.
 - TTL defaults to 300 s (5 min) — encoder outputs for a request are only
   needed while the decoder is still generating, which rarely exceeds this.
@@ -19,11 +19,16 @@ Design notes (vLLM EncoderCacheManager pattern):
   loop to reclaim memory from stale entries.
 - Memory tracking uses ``sys.getsizeof`` as a lower bound and falls back
   to element-count estimation for numpy/MLX arrays.
+
+Thread-safety: All public methods are protected by a threading lock, making
+this safe for use from async contexts (e.g. VLM engine concurrent encoding).
 """
 
 import logging
 import sys
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -102,6 +107,7 @@ class EncoderCacheManager:
     - Configurable max entries (default 64) — oldest entry evicted when full.
     - Configurable TTL (default 300 s) — entries expire after deadline.
     - Stats tracking (hits, misses, evictions, memory_bytes).
+    - Thread-safety via internal lock for async/coroutine access patterns.
 
     Usage::
 
@@ -109,10 +115,6 @@ class EncoderCacheManager:
         cache.put("req-abc", encoder_hidden_states)
         states = cache.get("req-abc")
         cache.evict("req-abc")
-
-    Thread-safety: This class is designed for use within the scheduler's
-    single-threaded step loop. If concurrent access is needed, callers
-    should add their own locking.
     """
 
     def __init__(
@@ -122,10 +124,9 @@ class EncoderCacheManager:
     ) -> None:
         self.max_entries = max_entries
         self.ttl_seconds = ttl_seconds
-        self._entries: dict[str, EncoderCacheEntry] = {}
+        self._entries: OrderedDict[str, EncoderCacheEntry] = OrderedDict()
         self._stats = EncoderCacheStats()
-        # Insertion-order tracking for LRU eviction (oldest first)
-        self._insertion_order: list[str] = []
+        self._lock = threading.Lock()
 
     # ── Core API ──
 
@@ -140,30 +141,30 @@ class EncoderCacheManager:
             request_id: Unique identifier for the request.
             encoder_outputs: Encoder hidden states to cache.
         """
-        now = time.monotonic()
+        with self._lock:
+            now = time.monotonic()
 
-        # If overwriting an existing entry, remove old one first
-        if request_id in self._entries:
-            self._remove_entry(request_id)
+            # If overwriting an existing entry, remove old one first
+            if request_id in self._entries:
+                self._remove_entry_unlocked(request_id)
 
-        # Evict oldest entries if at capacity
-        while len(self._entries) >= self.max_entries:
-            self._evict_oldest()
+            # Evict oldest entries if at capacity
+            while len(self._entries) >= self.max_entries:
+                self._evict_oldest_unlocked()
 
-        mem_bytes = _estimate_memory(encoder_outputs)
-        entry = EncoderCacheEntry(
-            request_id=request_id,
-            encoder_outputs=encoder_outputs,
-            created_at=now,
-            deadline=now + self.ttl_seconds,
-            memory_bytes=mem_bytes,
-        )
-        self._entries[request_id] = entry
-        self._insertion_order.append(request_id)
+            mem_bytes = _estimate_memory(encoder_outputs)
+            entry = EncoderCacheEntry(
+                request_id=request_id,
+                encoder_outputs=encoder_outputs,
+                created_at=now,
+                deadline=now + self.ttl_seconds,
+                memory_bytes=mem_bytes,
+            )
+            self._entries[request_id] = entry
 
-        self._stats.total_puts += 1
-        self._stats.num_entries = len(self._entries)
-        self._stats.memory_bytes += mem_bytes
+            self._stats.total_puts += 1
+            self._stats.num_entries = len(self._entries)
+            self._stats.memory_bytes += mem_bytes
 
     def get(self, request_id: str) -> Any | None:
         """Retrieve encoder outputs for a request.
@@ -177,19 +178,22 @@ class EncoderCacheManager:
         Returns:
             Encoder hidden states, or ``None`` if not found / expired.
         """
-        entry = self._entries.get(request_id)
-        if entry is None:
-            self._stats.misses += 1
-            return None
+        with self._lock:
+            entry = self._entries.get(request_id)
+            if entry is None:
+                self._stats.misses += 1
+                return None
 
-        # Check TTL expiration
-        if time.monotonic() > entry.deadline:
-            self.evict(request_id)
-            self._stats.misses += 1
-            return None
+            # Check TTL expiration
+            if time.monotonic() > entry.deadline:
+                self._evict_entry_unlocked(request_id)
+                self._stats.misses += 1
+                return None
 
-        self._stats.hits += 1
-        return entry.encoder_outputs
+            # Promote to most-recently-used (move to end of OrderedDict)
+            self._entries.move_to_end(request_id)
+            self._stats.hits += 1
+            return entry.encoder_outputs
 
     def evict(self, request_id: str) -> bool:
         """Explicitly evict a specific entry.
@@ -200,12 +204,12 @@ class EncoderCacheManager:
         Returns:
             ``True`` if the entry was found and evicted, ``False`` otherwise.
         """
-        if request_id not in self._entries:
-            return False
+        with self._lock:
+            if request_id not in self._entries:
+                return False
 
-        self._remove_entry(request_id)
-        self._stats.evictions += 1
-        return True
+            self._evict_entry_unlocked(request_id)
+            return True
 
     def evict_all_expired(self) -> int:
         """Evict all entries whose TTL has elapsed.
@@ -216,67 +220,75 @@ class EncoderCacheManager:
         Returns:
             Number of entries evicted.
         """
-        now = time.monotonic()
-        expired_ids = [
-            rid
-            for rid, entry in self._entries.items()
-            if now > entry.deadline
-        ]
-        for rid in expired_ids:
-            self._remove_entry(rid)
-        self._stats.evictions += len(expired_ids)
-        if expired_ids:
-            logger.debug(
-                "EncoderCacheManager: evicted %d expired entries",
-                len(expired_ids),
-            )
-        return len(expired_ids)
+        with self._lock:
+            now = time.monotonic()
+            expired_ids = [
+                rid
+                for rid, entry in self._entries.items()
+                if now > entry.deadline
+            ]
+            for rid in expired_ids:
+                self._remove_entry_unlocked(rid)
+            self._stats.evictions += len(expired_ids)
+            if expired_ids:
+                logger.debug(
+                    "EncoderCacheManager: evicted %d expired entries",
+                    len(expired_ids),
+                )
+            return len(expired_ids)
 
     def clear(self) -> None:
         """Remove all entries and reset stats counters."""
-        count = len(self._entries)
-        self._entries.clear()
-        self._insertion_order.clear()
-        self._stats.memory_bytes = 0
-        self._stats.num_entries = 0
-        self._stats.evictions += count
-        if count:
-            logger.debug("EncoderCacheManager: cleared %d entries", count)
+        with self._lock:
+            count = len(self._entries)
+            # Recalculate memory before clearing
+            total_mem = sum(e.memory_bytes for e in self._entries.values())
+            self._entries.clear()
+            self._stats.memory_bytes -= total_mem
+            self._stats.num_entries = 0
+            self._stats.evictions += count
+            if count:
+                logger.debug("EncoderCacheManager: cleared %d entries", count)
 
     # ── Stats ──
 
     def get_stats(self) -> dict[str, Any]:
         """Return cache statistics as a dictionary."""
-        self._stats.num_entries = len(self._entries)
-        self._stats.memory_bytes = sum(
-            e.memory_bytes for e in self._entries.values()
-        )
-        stats = self._stats.as_dict()
-        stats["max_entries"] = self.max_entries
-        stats["ttl_seconds"] = self.ttl_seconds
-        return stats
+        with self._lock:
+            self._stats.num_entries = len(self._entries)
+            stats = self._stats.as_dict()
+            stats["max_entries"] = self.max_entries
+            stats["ttl_seconds"] = self.ttl_seconds
+            return stats
 
     @property
     def num_entries(self) -> int:
         return len(self._entries)
 
-    # ── Internal ──
+    # ── Internal (must be called under self._lock) ──
 
-    def _remove_entry(self, request_id: str) -> None:
-        """Remove an entry and update memory tracking."""
+    def _remove_entry_unlocked(self, request_id: str) -> None:
+        """Remove an entry and update memory tracking. Caller must hold lock."""
         entry = self._entries.pop(request_id, None)
         if entry is not None:
             self._stats.memory_bytes -= entry.memory_bytes
-        try:
-            self._insertion_order.remove(request_id)
-        except ValueError:
-            pass
+            # Clamp to zero to avoid negative drift from estimation errors
+            if self._stats.memory_bytes < 0:
+                self._stats.memory_bytes = 0
 
-    def _evict_oldest(self) -> None:
-        """Evict the oldest (first-inserted) entry to make room."""
-        if not self._insertion_order:
-            return
-        oldest_id = self._insertion_order[0]
-        self._remove_entry(oldest_id)
+    def _evict_entry_unlocked(self, request_id: str) -> None:
+        """Evict a specific entry and count it. Caller must hold lock."""
+        self._remove_entry_unlocked(request_id)
         self._stats.evictions += 1
-        logger.debug("EncoderCacheManager: evicted oldest entry %s", oldest_id)
+
+    def _evict_oldest_unlocked(self) -> None:
+        """Evict the oldest (first-inserted) entry to make room. Caller must hold lock."""
+        if not self._entries:
+            return
+        # popitem(last=False) removes the first (oldest) item in OrderedDict
+        request_id, entry = self._entries.popitem(last=False)
+        self._stats.memory_bytes -= entry.memory_bytes
+        if self._stats.memory_bytes < 0:
+            self._stats.memory_bytes = 0
+        self._stats.evictions += 1
+        logger.debug("EncoderCacheManager: evicted oldest entry %s", request_id)

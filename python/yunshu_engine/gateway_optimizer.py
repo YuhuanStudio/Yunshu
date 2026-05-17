@@ -18,9 +18,8 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, field
-from threading import Lock
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -45,6 +44,10 @@ class RequestCoalescer:
     window (default 5ms), they are grouped into a single batch sent to the
     engine.  This is the "request batching" optimization used by vLLM
     (continuous batching) and SGLang (RadixAttention).
+
+    Only coalesces requests that share the same model AND have identical
+    parameter fingerprints (temperature, top_p, max_tokens, etc).
+    Requests with different parameters go into separate batches.
 
     Usage::
 
@@ -73,7 +76,8 @@ class RequestCoalescer:
         """Add a request to the pending batch for its model.
 
         Returns a Future that will be resolved with the engine result
-        when the batch is flushed.
+        when the batch is flushed.  If the request fails, the Future
+        will receive an exception.
         """
         loop = self._get_loop()
         model = getattr(request, "model", "default")
@@ -129,14 +133,19 @@ class RequestCoalescer:
 
     def _get_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None or self._loop.is_closed():
-            self._loop = asyncio.get_event_loop()
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop — fall back to get_event_loop for
+                # callers that create the coalescer outside async context.
+                self._loop = asyncio.get_event_loop()
         return self._loop
 
     def _schedule_flush(self, model: str) -> None:
         """Called by the timer — schedules async flush on the event loop."""
         loop = self._get_loop()
         try:
-            asyncio.ensure_future(self.flush(model), loop=loop)
+            asyncio.ensure_future(self.flush(model))
         except RuntimeError:
             # Loop closed during shutdown
             pass
@@ -176,6 +185,18 @@ class RequestCoalescer:
         for future, result in zip(batch.futures, results):
             if not future.done():
                 future.set_result(result)
+
+    async def reject_batch(
+        self, batch: _PendingBatch, error: Exception
+    ) -> None:
+        """Reject all futures in a flushed batch with an error.
+
+        Called when the engine fails to process the batch, so that
+        waiting callers receive the exception instead of hanging.
+        """
+        for future in batch.futures:
+            if not future.done():
+                future.set_exception(error)
 
 
 @dataclass
@@ -220,10 +241,16 @@ class StreamingResponseBuffer:
 
         n = len(data)
         if n > self._available():
-            # Not enough space — trigger an implicit flush by wrapping or
-            # expanding.  For safety we just truncate to available space.
+            # Not enough space — truncate to available space and log warning.
+            # Caller should flush() before writing to avoid data loss.
+            original_n = n
             n = self._available()
             data = data[:n]
+            logger.warning(
+                "StreamingResponseBuffer: truncated write %d -> %d bytes "
+                "(buffer full, flush before writing)",
+                original_n, n,
+            )
 
         if n == 0:
             return 0
@@ -245,6 +272,11 @@ class StreamingResponseBuffer:
 
         Returns individual events (split on '\\n\\n' boundaries) so the
         caller can yield them individually.
+
+        Note: SSE events are returned with their content preserved
+        exactly as written (no whitespace stripping). A trailing
+        incomplete event (no \\n\\n terminator) is kept as-is so the
+        caller can decide whether to buffer or yield it.
         """
         if self._used == 0:
             return []
@@ -258,10 +290,9 @@ class StreamingResponseBuffer:
 
         # Split into SSE events (each ends with \n\n)
         events = []
-        for line in raw.split(b"\n\n"):
-            stripped = line.strip()
-            if stripped:
-                events.append(stripped + b"\n\n")
+        for part in raw.split(b"\n\n"):
+            if part:
+                events.append(part + b"\n\n")
         return events
 
     def _read_all(self) -> bytes:
@@ -329,6 +360,13 @@ class GatewayConnectionPool:
     Reuses TCP connections across requests instead of creating new ones.
     Includes health checking that removes stale connections.
 
+    Connection lifecycle:
+      1. get_connection(endpoint) — returns idle conn or creates new one
+      2. Caller uses conn.connection for the HTTP request
+      3. return_connection(conn) — marks idle, prunes stale entries
+      4. health_check() — periodic cleanup of stale idle connections
+      5. close_all() — shutdown: close all connections gracefully
+
     Usage::
 
         pool = GatewayConnectionPool(max_per_host=4)
@@ -351,17 +389,23 @@ class GatewayConnectionPool:
         self._health_check_interval = health_check_interval
         # endpoint -> list of connections
         self._pool: dict[str, list[_PooledConnection]] = defaultdict(list)
-        self._lock = Lock()
+        self._lock = asyncio.Lock()
 
         # Stats
         self._total_gets = 0
         self._reuse_count = 0
         self._create_count = 0
         self._eviction_count = 0
+        self._rejection_count = 0
 
     async def get_connection(self, endpoint: str) -> _PooledConnection:
-        """Get or create a pooled connection for the given endpoint."""
-        with self._lock:
+        """Get or create a pooled connection for the given endpoint.
+
+        Returns an idle connection if available, otherwise creates a new
+        one.  Raises ConnectionError if the pool is exhausted (all
+        connections for this endpoint are active and at max_per_host).
+        """
+        async with self._lock:
             self._total_gets += 1
 
             # Try to find an idle connection
@@ -373,6 +417,22 @@ class GatewayConnectionPool:
                     conn.requests_served += 1
                     self._reuse_count += 1
                     return conn
+
+            # Prune stale connections to make room
+            before = len(conns)
+            self._pool[endpoint] = [c for c in conns if c.active or not self._is_stale(c)]
+            pruned = before - len(self._pool[endpoint])
+            self._eviction_count += pruned
+            conns = self._pool[endpoint]
+
+            # Check max_per_host limit (count only active connections)
+            active_count = sum(1 for c in conns if c.active)
+            if active_count >= self._max_per_host:
+                self._rejection_count += 1
+                raise ConnectionError(
+                    f"Connection pool exhausted for {endpoint}: "
+                    f"{active_count}/{self._max_per_host} active connections"
+                )
 
             # Create a new connection (mock for now; real impl uses httpx)
             self._create_count += 1
@@ -387,7 +447,7 @@ class GatewayConnectionPool:
 
     async def return_connection(self, conn: _PooledConnection) -> None:
         """Return a connection to the pool for reuse."""
-        with self._lock:
+        async with self._lock:
             conn.active = False
             conn.last_used = time.monotonic()
 
@@ -400,7 +460,7 @@ class GatewayConnectionPool:
         Active connections are preserved even if idle-timer exceeded,
         since they are mid-request.
         """
-        with self._lock:
+        async with self._lock:
             removed = 0
             for endpoint in list(self._pool):
                 conns = self._pool[endpoint]
@@ -414,36 +474,52 @@ class GatewayConnectionPool:
             return removed
 
     async def close_all(self) -> None:
-        """Close all connections. Call during shutdown."""
-        with self._lock:
+        """Close all connections. Call during shutdown.
+
+        Properly closes connections that have an aclose() coroutine
+        (e.g. httpx.AsyncClient).  Connections currently in use are
+        marked inactive before closing.
+        """
+        async with self._lock:
             for endpoint, conns in self._pool.items():
                 for conn in conns:
-                    if hasattr(conn.connection, "aclose"):
-                        # In production, await conn.connection.aclose()
-                        pass
+                    conn.active = False
+                    if conn.connection is not None and hasattr(conn.connection, "aclose"):
+                        try:
+                            # aclose is typically async
+                            import inspect
+                            if inspect.iscoroutinefunction(conn.connection.aclose):
+                                await conn.connection.aclose()
+                            else:
+                                conn.connection.aclose()
+                        except Exception:
+                            logger.debug(
+                                "Failed to close connection to %s",
+                                endpoint, exc_info=True,
+                            )
             self._pool.clear()
 
     def get_stats(self) -> dict[str, Any]:
-        with self._lock:
-            total = sum(len(c) for c in self._pool.values())
-            active = sum(1 for c in self._pool.values() for conn in c if conn.active)
-            idle = total - active
-            reuse_rate = (
-                self._reuse_count / self._total_gets
-                if self._total_gets > 0
-                else 0.0
-            )
-            return {
-                "pool_size": total,
-                "active_connections": active,
-                "idle_connections": idle,
-                "endpoints": len(self._pool),
-                "total_gets": self._total_gets,
-                "reuse_count": self._reuse_count,
-                "create_count": self._create_count,
-                "reuse_rate": reuse_rate,
-                "eviction_count": self._eviction_count,
-            }
+        total = sum(len(c) for c in self._pool.values())
+        active = sum(1 for c in self._pool.values() for conn in c if conn.active)
+        idle = total - active
+        reuse_rate = (
+            self._reuse_count / self._total_gets
+            if self._total_gets > 0
+            else 0.0
+        )
+        return {
+            "pool_size": total,
+            "active_connections": active,
+            "idle_connections": idle,
+            "endpoints": len(self._pool),
+            "total_gets": self._total_gets,
+            "reuse_count": self._reuse_count,
+            "create_count": self._create_count,
+            "reuse_rate": reuse_rate,
+            "eviction_count": self._eviction_count,
+            "rejection_count": self._rejection_count,
+        }
 
     def _is_stale(self, conn: _PooledConnection) -> bool:
         """Check if a connection has exceeded the idle timeout."""
@@ -485,6 +561,14 @@ class ResponseCache:
 
     Only enabled when YUNSHU_RESPONSE_CACHE=1 is set.
 
+    Thread-safe: uses asyncio.Lock for async compatibility.
+    LRU eviction uses OrderedDict for O(1) operations.
+
+    IMPORTANT: Should NOT be used for:
+      - Streaming requests (each chunk is different)
+      - n>1 completions (each choice is independently generated)
+      - Requests with non-deterministic sampling (temperature > 0, no seed)
+
     Usage::
 
         cache = ResponseCache()
@@ -507,9 +591,9 @@ class ResponseCache:
         self._max_memory = max_memory_bytes
         self._enabled = os.environ.get("YUNSHU_RESPONSE_CACHE", "").strip() == "1"
         self._entries: dict[str, _CacheEntry] = {}
-        # LRU order
-        self._lru: list[str] = []
-        self._lock = Lock()
+        # OrderedDict for O(1) LRU: front = oldest, back = newest
+        self._lru: OrderedDict[str, None] = OrderedDict()
+        self._lock = asyncio.Lock()
         self._total_memory = 0
 
         # Stats
@@ -537,12 +621,12 @@ class ResponseCache:
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def get(self, request_hash: str) -> Any | None:
+    async def get(self, request_hash: str) -> Any | None:
         """Return the cached response or None if not found / expired."""
         if not self._enabled:
             return None
 
-        with self._lock:
+        async with self._lock:
             entry = self._entries.get(request_hash)
             if entry is None:
                 self._misses += 1
@@ -554,17 +638,15 @@ class ResponseCache:
                 self._misses += 1
                 return None
 
-            # Promote in LRU
+            # Promote in LRU (move to end = most recently used)
             entry.last_accessed = time.monotonic()
             entry.access_count += 1
-            if request_hash in self._lru:
-                self._lru.remove(request_hash)
-                self._lru.append(request_hash)
+            self._lru.move_to_end(request_hash)
 
             self._hits += 1
             return entry.response
 
-    def put(self, request_hash: str, response: Any) -> bool:
+    async def put(self, request_hash: str, response: Any) -> bool:
         """Store a response in the cache.  Returns True if stored."""
         if not self._enabled:
             return False
@@ -575,9 +657,9 @@ class ResponseCache:
         except (TypeError, ValueError):
             size = 1024  # default estimate
 
-        with self._lock:
+        async with self._lock:
             # Evict if necessary
-            self._evict_if_needed(size)
+            await self._evict_if_needed(size)
 
             if request_hash in self._entries:
                 # Update existing entry
@@ -588,9 +670,8 @@ class ResponseCache:
                 old.last_accessed = time.monotonic()
                 old.size_bytes = size
                 self._total_memory += size
-                if request_hash in self._lru:
-                    self._lru.remove(request_hash)
-                    self._lru.append(request_hash)
+                # Promote in LRU
+                self._lru.move_to_end(request_hash)
             else:
                 # New entry
                 entry = _CacheEntry(
@@ -599,19 +680,19 @@ class ResponseCache:
                     size_bytes=size,
                 )
                 self._entries[request_hash] = entry
-                self._lru.append(request_hash)
+                self._lru[request_hash] = None
                 self._total_memory += size
 
             self._stores += 1
             return True
 
-    def invalidate(self, pattern: str | None = None) -> int:
+    async def invalidate(self, pattern: str | None = None) -> int:
         """Invalidate cache entries.  If pattern is None, clears all.
 
         If pattern is a string, removes entries whose hash starts with
         the given prefix.  Returns the number of entries removed.
         """
-        with self._lock:
+        async with self._lock:
             if pattern is None:
                 count = len(self._entries)
                 self._entries.clear()
@@ -629,24 +710,23 @@ class ResponseCache:
             return len(to_remove)
 
     def get_stats(self) -> dict[str, Any]:
-        with self._lock:
-            total = self._hits + self._misses
-            return {
-                "enabled": self._enabled,
-                "hits": self._hits,
-                "misses": self._misses,
-                "hit_rate": (self._hits / total) if total > 0 else 0.0,
-                "stores": self._stores,
-                "evictions": self._evictions,
-                "entries": len(self._entries),
-                "memory_bytes": self._total_memory,
-                "memory_limit_bytes": self._max_memory,
-                "memory_utilization_pct": (
-                    self._total_memory / self._max_memory * 100
-                    if self._max_memory > 0
-                    else 0
-                ),
-            }
+        total = self._hits + self._misses
+        return {
+            "enabled": self._enabled,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": (self._hits / total) if total > 0 else 0.0,
+            "stores": self._stores,
+            "evictions": self._evictions,
+            "entries": len(self._entries),
+            "memory_bytes": self._total_memory,
+            "memory_limit_bytes": self._max_memory,
+            "memory_utilization_pct": (
+                self._total_memory / self._max_memory * 100
+                if self._max_memory > 0
+                else 0
+            ),
+        }
 
     def _is_expired(self, entry: _CacheEntry) -> bool:
         return (time.monotonic() - entry.created_at) > self._ttl
@@ -656,11 +736,15 @@ class ResponseCache:
         entry = self._entries.pop(key, None)
         if entry is not None:
             self._total_memory -= entry.size_bytes
-        if key in self._lru:
-            self._lru.remove(key)
+        self._lru.pop(key, None)
 
-    def _evict_if_needed(self, incoming_size: int) -> None:
-        """Evict LRU entries to make room. Must be called under lock."""
+    async def _evict_if_needed(self, incoming_size: int) -> int:
+        """Evict LRU entries to make room. Must be called under lock.
+
+        Returns the number of entries evicted.
+        """
+        evicted = 0
+
         # Evict expired entries first
         now = time.monotonic()
         expired = [
@@ -669,16 +753,22 @@ class ResponseCache:
         ]
         for k in expired:
             self._remove_entry(k)
-            self._evictions += 1
+            evicted += 1
 
         # Evict LRU until under limits
         while (
             len(self._entries) >= self._max_entries
             or (self._total_memory + incoming_size > self._max_memory)
         ) and self._lru:
-            oldest_key = self._lru.pop(0)
+            # popitem(last=False) pops the OLDEST (front) entry — O(1)
+            oldest_key, _ = self._lru.popitem(last=False)
+            # _remove_entry will try to pop from _lru again, but it's
+            # already gone, so the pop(..., None) is a no-op.
             self._remove_entry(oldest_key)
-            self._evictions += 1
+            evicted += 1
+
+        self._evictions += evicted
+        return evicted
 
 
 def _sort_dict(d: dict) -> dict:
@@ -689,7 +779,11 @@ def _sort_dict(d: dict) -> dict:
         if isinstance(v, dict):
             result[k] = _sort_dict(v)
         elif isinstance(v, list):
-            result[k] = [_sort_dict(i) if isinstance(i, dict) else i for i in v]
+            result[k] = [
+                _sort_dict(i) if isinstance(i, dict) else i for i in v
+            ]
+        elif isinstance(v, tuple):
+            result[k] = list(v)
         else:
             result[k] = v
     return result
@@ -712,9 +806,34 @@ def get_request_coalescer() -> RequestCoalescer:
 
 
 def get_streaming_buffer() -> StreamingResponseBuffer:
-    """Get or create a StreamingResponseBuffer (one per streaming request)."""
-    buf = StreamingResponseBuffer()
-    return buf
+    """Get or create a StreamingResponseBuffer (one per streaming request).
+
+    Recycles buffers from the pool when available. Callers should call
+    ``return_streaming_buffer()`` when done to allow reuse.
+    """
+    global _streaming_buffer_pool
+    if _streaming_buffer_pool:
+        buf = _streaming_buffer_pool.pop()
+        # Reset buffer state for reuse
+        buf._read_pos = 0
+        buf._write_pos = 0
+        buf._used = 0
+        buf._flush_count = 0
+        buf._write_count = 0
+        buf._bytes_written = 0
+        return buf
+    return StreamingResponseBuffer()
+
+
+def return_streaming_buffer(buf: StreamingResponseBuffer) -> None:
+    """Return a StreamingResponseBuffer to the pool for reuse.
+
+    Limits pool size to prevent unbounded memory growth.
+    """
+    global _streaming_buffer_pool
+    max_pool_size = 32
+    if len(_streaming_buffer_pool) < max_pool_size:
+        _streaming_buffer_pool.append(buf)
 
 
 def get_connection_pool() -> GatewayConnectionPool:

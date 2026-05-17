@@ -310,10 +310,13 @@ class InferenceWorker:
         # Crash tracking for circuit breaker
         self._crash_times: deque[float] = deque()
 
-        # Pipes: parent ↔ child communication
-        self._request_pipe: Optional[multiprocessing.Pipe] = None
-        self._result_pipe: Optional[multiprocessing.Pipe] = None
-        self._heartbeat_pipe: Optional[multiprocessing.Pipe] = None
+        # Lock protecting state transitions, crash tracking, and stats
+        self._lifecycle_lock = threading.Lock()
+
+        # Pipes: parent <-> child communication
+        self._request_pipe: Optional[tuple] = None
+        self._result_pipe: Optional[tuple] = None
+        self._heartbeat_pipe: Optional[tuple] = None
 
         # Subprocess handle
         self._process: Optional[multiprocessing.Process] = None
@@ -323,7 +326,7 @@ class InferenceWorker:
         self._last_heartbeat: float = 0.0
         self._heartbeat_thread_running: bool = False
 
-        # Pending requests: request_id → IsolatedResult
+        # Pending requests: request_id -> IsolatedResult
         self._pending: dict[str, IsolatedResult] = {}
         self._pending_lock = threading.Lock()
 
@@ -345,14 +348,15 @@ class InferenceWorker:
     @property
     def stats(self) -> WorkerStats:
         """Return a snapshot of worker stats."""
-        s = WorkerStats(
-            request_count=self._stats.request_count,
-            crash_count=self._stats.crash_count,
-            total_latency_ms=self._stats.total_latency_ms,
-            last_request_time=self._stats.last_request_time,
-            last_crash_time=self._stats.last_crash_time,
-            memory_usage_mb=self._stats.memory_usage_mb,
-        )
+        with self._lifecycle_lock:
+            s = WorkerStats(
+                request_count=self._stats.request_count,
+                crash_count=self._stats.crash_count,
+                total_latency_ms=self._stats.total_latency_ms,
+                last_request_time=self._stats.last_request_time,
+                last_crash_time=self._stats.last_crash_time,
+                memory_usage_mb=self._stats.memory_usage_mb,
+            )
         if self._state == WorkerState.RUNNING and self._start_time > 0:
             s.uptime_seconds = time.monotonic() - self._start_time
         return s
@@ -363,10 +367,10 @@ class InferenceWorker:
 
     def start(self) -> None:
         """Start the worker subprocess."""
-        if self._state == WorkerState.RUNNING:
-            return
-
-        self._state = WorkerState.STARTING
+        with self._lifecycle_lock:
+            if self._state == WorkerState.RUNNING:
+                return
+            self._state = WorkerState.STARTING
 
         try:
             # Create pipes (each returns (parent_conn, child_conn))
@@ -414,26 +418,28 @@ class InferenceWorker:
             )
             self._heartbeat_thread.start()
 
-            self._state = WorkerState.RUNNING
+            with self._lifecycle_lock:
+                self._state = WorkerState.RUNNING
             logger.info(
                 "Worker %s started (pid=%d)",
                 self._config.model_id,
                 self._process.pid,
             )
         except Exception:
-            self._state = WorkerState.CRASHED
+            with self._lifecycle_lock:
+                self._state = WorkerState.CRASHED
             logger.exception("Failed to start worker %s", self._config.model_id)
             raise
 
     def stop(self) -> None:
         """Gracefully stop the worker subprocess."""
-        if self._state == WorkerState.STOPPED:
-            return
-        if self._state == WorkerState.IDLE:
-            self._state = WorkerState.STOPPED
-            return
-
-        self._state = WorkerState.STOPPING
+        with self._lifecycle_lock:
+            if self._state == WorkerState.STOPPED:
+                return
+            if self._state == WorkerState.IDLE:
+                self._state = WorkerState.STOPPED
+                return
+            self._state = WorkerState.STOPPING
 
         # Signal shutdown via request pipe
         try:
@@ -475,11 +481,19 @@ class InferenceWorker:
                 )
             self._pending.clear()
 
-        self._state = WorkerState.STOPPED
+        with self._lifecycle_lock:
+            self._state = WorkerState.STOPPED
         logger.info("Worker %s stopped", self._config.model_id)
 
     def restart(self) -> None:
-        """Stop and re-start the worker (e.g. after a crash)."""
+        """Stop and re-start the worker (e.g. after a crash).
+
+        Protected by lifecycle lock to prevent concurrent restart attempts.
+        """
+        with self._lifecycle_lock:
+            # Save state before releasing lock for stop/start
+            if self._state == WorkerState.STOPPING:
+                return  # Already restarting
         self.stop()
         self.start()
 
@@ -488,30 +502,43 @@ class InferenceWorker:
 
         Returns an IsolatedResult that can be awaited for the response.
         """
-        if self._state != WorkerState.RUNNING:
-            raise WorkerCrashError(
-                f"Worker {self._config.model_id} is not running "
-                f"(state={self._state.name})",
-                model_id=self._config.model_id,
-            )
+        with self._lifecycle_lock:
+            if self._state != WorkerState.RUNNING:
+                raise WorkerCrashError(
+                    f"Worker {self._config.model_id} is not running "
+                    f"(state={self._state.name})",
+                    model_id=self._config.model_id,
+                )
 
         request_id = str(uuid.uuid4())
         result = IsolatedResult(request_id=request_id)
 
         with self._pending_lock:
+            # Double-check state under lock to prevent TOCTOU
+            if self._state != WorkerState.RUNNING:
+                raise WorkerCrashError(
+                    f"Worker {self._config.model_id} is not running "
+                    f"(state={self._state.name})",
+                    model_id=self._config.model_id,
+                )
             self._pending[request_id] = result
 
-        try:
-            parent_conn = self._request_pipe[0]
-            parent_conn.send((request_id, request))
-        except (BrokenPipeError, OSError) as exc:
-            with self._pending_lock:
+            try:
+                if self._request_pipe is None:
+                    self._pending.pop(request_id, None)
+                    raise WorkerCrashError(
+                        f"Worker {self._config.model_id} pipe not available",
+                        model_id=self._config.model_id,
+                    )
+                parent_conn = self._request_pipe[0]
+                parent_conn.send((request_id, request))
+            except (BrokenPipeError, OSError) as exc:
                 self._pending.pop(request_id, None)
-            self._record_crash()
-            raise WorkerCrashError(
-                f"Worker {self._config.model_id} pipe broken during submit",
-                model_id=self._config.model_id,
-            ) from exc
+                self._record_crash()
+                raise WorkerCrashError(
+                    f"Worker {self._config.model_id} pipe broken during submit",
+                    model_id=self._config.model_id,
+                ) from exc
 
         return result
 
@@ -547,21 +574,25 @@ class InferenceWorker:
             self._crash_times.popleft()
 
     def _record_crash(self) -> None:
-        """Record a crash event and update stats."""
-        now = time.monotonic()
-        self._crash_times.append(now)
-        self._stats.crash_count += 1
-        self._stats.last_crash_time = now
+        """Record a crash event and update stats.
 
-        if self._is_circuit_open():
-            self._state = WorkerState.CIRCUIT_OPEN
-            logger.warning(
-                "Circuit breaker tripped for worker %s "
-                "(%d crashes in %.0fs)",
-                self._config.model_id,
-                len(self._crash_times),
-                self._config.restart_window_seconds,
-            )
+        Thread-safe: protected by lifecycle lock.
+        """
+        with self._lifecycle_lock:
+            now = time.monotonic()
+            self._crash_times.append(now)
+            self._stats.crash_count += 1
+            self._stats.last_crash_time = now
+
+            if self._is_circuit_open():
+                self._state = WorkerState.CIRCUIT_OPEN
+                logger.warning(
+                    "Circuit breaker tripped for worker %s "
+                    "(%d crashes in %.0fs)",
+                    self._config.model_id,
+                    len(self._crash_times),
+                    self._config.restart_window_seconds,
+                )
 
     def _close_pipes(self) -> None:
         """Close all pipe connections."""
@@ -605,17 +636,25 @@ class InferenceWorker:
                                 )
                             else:
                                 result.set_result(msg.get("result"))
-                                self._stats.request_count += 1
-                                latency = msg.get("latency_ms", 0)
-                                self._stats.total_latency_ms += latency
-                                self._stats.last_request_time = time.time()
+                                with self._lifecycle_lock:
+                                    self._stats.request_count += 1
+                                    latency = msg.get("latency_ms", 0)
+                                    self._stats.total_latency_ms += latency
+                                    self._stats.last_request_time = time.time()
         except (OSError, BrokenPipeError):
             pass
         finally:
-            # If we exit due to pipe closure, the worker has crashed
-            if self._result_thread_running and self._state == WorkerState.RUNNING:
+            # Only record crash if we exited due to pipe closure (not
+            # intentional stop).  Check STOPPING to avoid false positives
+            # when stop() is in progress.
+            if (
+                self._result_thread_running
+                and self._state not in (WorkerState.STOPPING, WorkerState.STOPPED)
+            ):
                 self._record_crash()
-                self._state = WorkerState.CRASHED
+                with self._lifecycle_lock:
+                    if self._state != WorkerState.CIRCUIT_OPEN:
+                        self._state = WorkerState.CRASHED
 
     def _heartbeat_monitor_loop(self) -> None:
         """Background thread: reads heartbeats from the subprocess pipe."""
@@ -757,7 +796,7 @@ class WorkerSupervisor:
         """Check health of all registered workers.
 
         Returns:
-            Dict mapping model_id → health status dict.
+            Dict mapping model_id -> health status dict.
         """
         result: dict[str, dict[str, Any]] = {}
         with self._lock:
@@ -877,11 +916,10 @@ _supervisor_lock = threading.Lock()
 def get_supervisor() -> WorkerSupervisor:
     """Get or create the module-level WorkerSupervisor singleton."""
     global _supervisor
-    if _supervisor is None:
-        with _supervisor_lock:
-            if _supervisor is None:
-                _supervisor = WorkerSupervisor()
-    return _supervisor
+    with _supervisor_lock:
+        if _supervisor is None:
+            _supervisor = WorkerSupervisor()
+        return _supervisor
 
 
 def reset_supervisor() -> None:

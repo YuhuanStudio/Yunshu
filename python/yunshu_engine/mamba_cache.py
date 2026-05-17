@@ -777,6 +777,19 @@ class HybridKVCache:
                 total_blocks=mb,
                 cache_shape=cache_shape,
             )
+        else:
+            # Validate shape consistency: all layers of the same type should
+            # use the same cache shape. Warn on mismatch but do not override
+            # (the first registration wins, which is correct for homogeneous
+            # models; heterogeneous models need separate block types).
+            existing = self._pools[block_type]
+            if existing.cache_shape != cache_shape:
+                logger.warning(
+                    "HybridKVCache: shape mismatch for layer %d (%s pool): "
+                    "existing=%s, new=%s. Using existing shape.",
+                    layer_idx, block_type.value,
+                    existing.cache_shape, cache_shape,
+                )
 
         self._pools[block_type].register_layer(layer_idx)
 
@@ -932,11 +945,32 @@ class HybridKVCache:
         }
 
     def clear(self) -> None:
-        """Clear all cache data and reset pools."""
+        """Clear all cache data and reset pools to initial state.
+
+        Frees all allocated blocks back to their pools, clears layer cache
+        data and SSM states.  Layer type registrations and pool configurations
+        are preserved so the cache can be reused without re-registration.
+        """
         for pool in self._pools.values():
             pool.free(list(pool._used_blocks))
         self._layer_caches.clear()
         self._ssm_states.clear()
+
+    def reset(self) -> None:
+        """Complete reset: clear data AND unregister all layers.
+
+        Unlike ``clear()``, this removes all layer type registrations and
+        pool configurations. Use this when switching to a different model
+        or when the cache structure needs to change.
+        """
+        for pool in self._pools.values():
+            pool.free(list(pool._used_blocks))
+        self._layer_types.clear()
+        self._pools.clear()
+        self._layer_caches.clear()
+        self._ssm_states.clear()
+        self._block_size_overrides.clear()
+        self._max_blocks_overrides.clear()
 
     @property
     def num_layers(self) -> int:

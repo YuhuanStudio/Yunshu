@@ -118,6 +118,12 @@ class TokenPipeline:
     Stage 3 (CPU: detokenize + grammar + distribute) of token N
     overlaps with Stage 1 (GPU forward) of token N+1.
 
+    The overlap is achieved by deferring stage3 results: when next_token()
+    is called, it launches stage3 for the current token but returns the
+    *previous* token's completed stage3 result.  The current token's
+    stage3 runs concurrently while the caller performs GPU work for the
+    next token.
+
     Usage:
       pipeline = TokenPipeline(config)
       pipeline.start_pipeline(request_ctx)
@@ -133,6 +139,8 @@ class TokenPipeline:
         self._stage3_queue: asyncio.Queue[PipelineToken | None] = asyncio.Queue()
         self._current: PipelineToken | None = None
         self._prev_stage3_task: asyncio.Task | None = None
+        # Completed token from previous next_token() call, awaiting retrieval.
+        self._completed_token: PipelineToken | None = None
         self._running = False
         self._finished = False
         self._tokens_generated = 0
@@ -179,6 +187,7 @@ class TokenPipeline:
         self._start_time = time.perf_counter()
         self._current = None
         self._prev_stage3_task = None
+        self._completed_token = None
         logger.debug("TokenPipeline started")
 
     def stop(self) -> None:
@@ -188,6 +197,7 @@ class TokenPipeline:
             self._prev_stage3_task.cancel()
             self._prev_stage3_task = None
         self._current = None
+        self._completed_token = None
         logger.debug(
             "TokenPipeline stopped: %d tokens, %.2f ms avg overlap",
             self._tokens_yielded,
@@ -272,15 +282,18 @@ class TokenPipeline:
         grammar_fn: Any = None,
         gpu_forward_fn: Any = None,
     ) -> PipelineToken | None:
-        """Get the next token, overlapping GPU/CPU work when possible.
+        """Get the next completed token, overlapping GPU/CPU work.
 
-        When enable_overlap is True:
-        1. Launch Stage 3 for current token asynchronously
-        2. Launch Stage 1 for next token on GPU (if gpu_forward_fn provided)
-        3. Wait for both to complete
-        4. Return the token with all stages complete
+        Pipeline flow with overlap enabled:
+        1. Return the *previous* token's completed stage3 result
+        2. Launch stage3 for the *current* token asynchronously
+        3. The caller then does GPU work (stage1+stage2 for next token)
+           while stage3 of the current token runs concurrently
 
-        Returns None when pipeline is finished.
+        On the first call, there is no previous result, so we run stage3
+        synchronously and return immediately.
+
+        Returns None when pipeline is finished and all tokens are drained.
         """
         if not self._running:
             return None
@@ -289,30 +302,76 @@ class TokenPipeline:
         if token is None:
             return None
 
-        if self.config.enable_overlap and gpu_forward_fn is not None:
-            # Overlap Stage 3 of current token with Stage 1 of next token
+        if self.config.enable_overlap:
+            # Overlap mode: launch stage3 for current token, return
+            # previous token's result.
             stage3_task = asyncio.create_task(
                 self.run_stage3_overlap(token, detokenize_fn, grammar_fn)
             )
 
-            # Wait for previous stage3 if still running (depth limit)
+            # Collect the previous token's completed stage3 result
+            result = self._completed_token
+
             if self._prev_stage3_task is not None:
-                await self._prev_stage3_task
+                # The previous stage3 was running during the caller's GPU work.
+                # It should be done by now. Await it to get the completed token.
+                try:
+                    self._completed_token = await self._prev_stage3_task
+                except Exception:
+                    logger.debug("Previous stage3 task failed", exc_info=True)
+                    self._completed_token = None
+            else:
+                # First token: no previous result to return yet.
+                # Run current stage3 synchronously so we have something
+                # to return on the next call.
+                self._completed_token = await stage3_task
+                stage3_task = None  # Already awaited
 
             self._prev_stage3_task = stage3_task
-            token = await stage3_task
-        else:
-            # No overlap — run stage 3 synchronously
-            token = await self.run_stage3_overlap(token, detokenize_fn, grammar_fn)
+            self._current = None
 
-        self._tokens_yielded += 1
-        self._current = None
-        return token
+            if result is not None:
+                self._tokens_yielded += 1
+                self._total_overlap_ms += result.overlap_savings_ms
+            return result
+        else:
+            # No overlap -- run stage 3 synchronously
+            token = await self.run_stage3_overlap(token, detokenize_fn, grammar_fn)
+            self._tokens_yielded += 1
+            self._current = None
+            return token
 
     def finish(self) -> None:
         """Mark pipeline as finished. Call after last token is generated."""
         self._finished = True
         self._running = False
+
+    async def drain_last_token(self) -> PipelineToken | None:
+        """Drain the final pending token from the pipeline.
+
+        Must be called after ``finish()`` when overlap is enabled, because
+        the last token's stage3 result is still pending in
+        ``_prev_stage3_task``.  Returns the completed token or None.
+        """
+        if self._prev_stage3_task is not None:
+            try:
+                token = await self._prev_stage3_task
+            except Exception:
+                logger.debug("Final stage3 task failed", exc_info=True)
+                token = None
+            self._prev_stage3_task = None
+            if token is not None:
+                self._tokens_yielded += 1
+                self._total_overlap_ms += token.overlap_savings_ms
+            return token
+        # Also check _completed_token (set during synchronous first-token path)
+        if self._completed_token is not None:
+            token = self._completed_token
+            self._completed_token = None
+            self._tokens_yielded += 1
+            self._total_overlap_ms += token.overlap_savings_ms
+            return token
+        return None
 
     def get_stats(self) -> dict[str, Any]:
         """Return pipeline performance statistics."""
