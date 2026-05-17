@@ -35,7 +35,7 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6302 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6351 passed, 16 skipped** (0 failures).
 
 ### 已完成修復 (2026-05-18 Wave 141 — Architecture Gap Completion: Compute Utilization + WebUI Exposure)
 
