@@ -441,7 +441,7 @@ class GatewayConnectionPool:
                 connection=None,  # Would be httpx.AsyncClient in production
             )
             new_conn.active = True
-            new_conn.requests_served += 1
+            new_conn.requests_served = 1
             conns.append(new_conn)
             return new_conn
 
@@ -710,12 +710,19 @@ class ResponseCache:
             return len(to_remove)
 
     def get_stats(self) -> dict[str, Any]:
-        total = self._hits + self._misses
+        # Snapshot counters to avoid torn reads during concurrent async updates.
+        # Since asyncio.Lock is not reentrant and get_stats() may be called
+        # from sync contexts (monitoring endpoints), we read directly.
+        # In CPython, simple int attribute reads are atomic (GIL), so this
+        # is safe for monitoring purposes — worst case is a slightly stale value.
+        hits = self._hits
+        misses = self._misses
+        total = hits + misses
         return {
             "enabled": self._enabled,
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate": (self._hits / total) if total > 0 else 0.0,
+            "hits": hits,
+            "misses": misses,
+            "hit_rate": (hits / total) if total > 0 else 0.0,
             "stores": self._stores,
             "evictions": self._evictions,
             "entries": len(self._entries),

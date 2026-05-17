@@ -8,6 +8,7 @@ Wires the gateway optimizer modules into the request lifecycle:
 Both are opt-in via YUNSHU_RESPONSE_CACHE=1 env var.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -56,7 +57,8 @@ class ResponseCacheMiddleware:
                 return
 
             cache_key = hashlib.sha256(body).hexdigest()
-            hit = cache.get(cache_key)
+            # cache.get() is async (uses asyncio.Lock internally)
+            hit = await cache.get(cache_key)
             if hit is not None:
                 response = JSONResponse(content=hit)
                 response.headers["X-Cache"] = "HIT"
@@ -88,7 +90,8 @@ class ResponseCacheMiddleware:
                     try:
                         full_body = b"".join(body_parts)
                         result = json.loads(full_body)
-                        cache.put(cache_key, result)
+                        # cache.put() is async (uses asyncio.Lock internally)
+                        asyncio.ensure_future(cache.put(cache_key, result))
                     except Exception:
                         logger.debug("cache store failed", exc_info=True)
 

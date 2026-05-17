@@ -171,17 +171,18 @@ class ServerMetrics:
 
         Called from Scheduler._process_responses for each generated token.
         Maintains a bounded buffer and computes percentiles on flush.
+        Thread-safe: acquires self._lock for all mutable state access.
         """
-        self._itl_samples.append(itl_seconds)
-        # Keep buffer bounded (flush and compute percentiles every 1000 samples)
-        if len(self._itl_samples) >= 1000:
-            self._compute_itl_percentiles()
+        with self._lock:
+            self._itl_samples.append(itl_seconds)
+            # Keep buffer bounded (flush and compute percentiles every 1000 samples)
+            if len(self._itl_samples) >= 1000:
+                self._compute_itl_percentiles_unlocked()
 
-    def _compute_itl_percentiles(self) -> None:
-        """Compute ITL percentiles from collected samples."""
+    def _compute_itl_percentiles_unlocked(self) -> None:
+        """Compute ITL percentiles from collected samples. Caller must hold self._lock."""
         if not self._itl_samples:
             return
-        import bisect
         samples = sorted(self._itl_samples)
         n = len(samples)
         self._itl_p50 = samples[n // 2]
@@ -190,26 +191,29 @@ class ServerMetrics:
 
     def get_itl_stats(self) -> dict[str, Any]:
         """Return ITL statistics."""
-        if self._itl_samples:
-            self._compute_itl_percentiles()
-        return {
-            "itl_p50_ms": round(self._itl_p50 * 1000, 2),
-            "itl_p99_ms": round(self._itl_p99 * 1000, 2),
-            "itl_samples_buffered": len(self._itl_samples),
-        }
+        with self._lock:
+            if self._itl_samples:
+                self._compute_itl_percentiles_unlocked()
+            return {
+                "itl_p50_ms": round(self._itl_p50 * 1000, 2),
+                "itl_p99_ms": round(self._itl_p99 * 1000, 2),
+                "itl_samples_buffered": len(self._itl_samples),
+            }
 
     def record_batch_size(self, batch_size: int) -> None:
         """Record a scheduler batch size sample (MON-2).
 
         Called from engine_core._engine_loop after each scheduler step.
         Maintains a bounded buffer and computes percentiles on flush.
+        Thread-safe: acquires self._lock for all mutable state access.
         """
-        self._batch_size_samples.append(batch_size)
-        if len(self._batch_size_samples) >= 1000:
-            self._compute_batch_size_percentiles()
+        with self._lock:
+            self._batch_size_samples.append(batch_size)
+            if len(self._batch_size_samples) >= 1000:
+                self._compute_batch_size_percentiles_unlocked()
 
-    def _compute_batch_size_percentiles(self) -> None:
-        """Compute batch size percentiles from collected samples."""
+    def _compute_batch_size_percentiles_unlocked(self) -> None:
+        """Compute batch size percentiles from collected samples. Caller must hold self._lock."""
         if not self._batch_size_samples:
             return
         samples = sorted(self._batch_size_samples)
@@ -220,13 +224,14 @@ class ServerMetrics:
 
     def get_batch_size_stats(self) -> dict[str, Any]:
         """Return batch size distribution statistics."""
-        if self._batch_size_samples:
-            self._compute_batch_size_percentiles()
-        return {
-            "batch_size_p50": self._batch_size_p50,
-            "batch_size_p99": self._batch_size_p99,
-            "batch_size_samples_buffered": len(self._batch_size_samples),
-        }
+        with self._lock:
+            if self._batch_size_samples:
+                self._compute_batch_size_percentiles_unlocked()
+            return {
+                "batch_size_p50": self._batch_size_p50,
+                "batch_size_p99": self._batch_size_p99,
+                "batch_size_samples_buffered": len(self._batch_size_samples),
+            }
 
     def _build_snapshot(
         self,
@@ -309,19 +314,24 @@ class ServerMetrics:
             self._per_model.clear()
 
 
-# Global singleton
+# Global singleton (thread-safe)
 _server_metrics: Optional[ServerMetrics] = None
+_server_metrics_lock = threading.Lock()
 
 
 def get_server_metrics() -> ServerMetrics:
     global _server_metrics
     if _server_metrics is None:
-        _server_metrics = ServerMetrics()
+        with _server_metrics_lock:
+            # Double-checked locking after acquiring the lock
+            if _server_metrics is None:
+                _server_metrics = ServerMetrics()
     return _server_metrics
 
 
 def reset_server_metrics(stats_path: Optional[Path] = None) -> None:
     global _server_metrics
-    if _server_metrics is not None:
-        _server_metrics.save_alltime()
-    _server_metrics = ServerMetrics(stats_path=stats_path)
+    with _server_metrics_lock:
+        if _server_metrics is not None:
+            _server_metrics.save_alltime()
+        _server_metrics = ServerMetrics(stats_path=stats_path)

@@ -2646,7 +2646,7 @@ class BatchedEngine:
 
         # Inflight prefix sharing: defined at _run level so it's accessible
         # from exception handlers even if _run_inner crashes early
-        _inflight_req_id = f"fp-s-{id(_run_inner)}-{int(time.monotonic()*1e6)}"
+        _inflight_req_id = f"fp-s-{int(time.monotonic()*1e6)}"
 
         def _unregister_inflight():
             try:
@@ -2654,22 +2654,6 @@ class BatchedEngine:
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
                 logger.debug("inflight prefix unregister failed in streaming", exc_info=True)
-
-        def _run():
-            try:
-                _run_inner()
-            except (MemoryError, RuntimeError) as e:
-                _unregister_inflight()
-                if isinstance(e, MemoryError) or "memory" in str(e).lower():
-                    logger.warning(f"OOM during streaming: {e}")
-                    _put(e)
-                else:
-                    _put(e)
-            except Exception as e:
-                _unregister_inflight()
-                _put(e)
-            finally:
-                _put(_sentinel)
 
         _stream_gen_t0 = time.perf_counter()  # TTFT timing for streaming fast path
         _stream_ttft_recorded = [False]  # mutable box to track first-token observation
@@ -2878,6 +2862,22 @@ class BatchedEngine:
                 if _prefill_tracker is not None:
                     _prefill_tracker.remove(_prefill_req_id)
                 _unregister_inflight()
+
+        def _run():
+            try:
+                _run_inner()
+            except (MemoryError, RuntimeError) as e:
+                _unregister_inflight()
+                if isinstance(e, MemoryError) or "memory" in str(e).lower():
+                    logger.warning(f"OOM during streaming: {e}")
+                    _put(e)
+                else:
+                    _put(e)
+            except Exception as e:
+                _unregister_inflight()
+                _put(e)
+            finally:
+                _put(_sentinel)
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()

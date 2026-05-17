@@ -263,7 +263,8 @@ class EncoderCacheManager:
 
     @property
     def num_entries(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
     # ── Internal (must be called under self._lock) ──
 
@@ -275,6 +276,7 @@ class EncoderCacheManager:
             # Clamp to zero to avoid negative drift from estimation errors
             if self._stats.memory_bytes < 0:
                 self._stats.memory_bytes = 0
+            self._stats.num_entries = len(self._entries)
 
     def _evict_entry_unlocked(self, request_id: str) -> None:
         """Evict a specific entry and count it. Caller must hold lock."""
@@ -291,4 +293,5 @@ class EncoderCacheManager:
         if self._stats.memory_bytes < 0:
             self._stats.memory_bytes = 0
         self._stats.evictions += 1
+        self._stats.num_entries = len(self._entries)
         logger.debug("EncoderCacheManager: evicted oldest entry %s", request_id)

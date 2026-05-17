@@ -7,6 +7,7 @@ via the /v1/cancel endpoint. Tracks request_id → cancellation Event mapping.
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -90,11 +91,14 @@ class RequestTracker:
 
 
 _tracker: Optional[RequestTracker] = None
+_tracker_lock = threading.Lock()
 
 
 def get_request_tracker() -> RequestTracker:
-    """Get the global RequestTracker singleton."""
+    """Get the global RequestTracker singleton (thread-safe)."""
     global _tracker
     if _tracker is None:
-        _tracker = RequestTracker()
+        with _tracker_lock:
+            if _tracker is None:
+                _tracker = RequestTracker()
     return _tracker

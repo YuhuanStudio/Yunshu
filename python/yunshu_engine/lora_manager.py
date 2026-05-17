@@ -106,8 +106,9 @@ class LoRAAdapterManager:
         weights are shared). If a different adapter is loaded, it is
         unloaded first.
 
-        Thread safety: _gpu_lock serializes all GPU work so no other thread
-        can restore_base while we are applying. _lock (RLock) protects state.
+        Thread safety: _lock is held throughout to prevent TOCTOU races
+        with concurrent unload_adapter calls. _gpu_lock serializes GPU
+        work (apply/restore) so unload waits until apply completes.
         """
         with self._lock:
             if adapter_id not in self._adapters:
@@ -130,19 +131,20 @@ class LoRAAdapterManager:
             # Mark as loading to prevent concurrent load of same adapter
             entry.is_loaded = True  # tentative — will be reverted on failure
 
-        # Apply adapter under gpu_lock (serializes with unload/restore)
-        with self._gpu_lock:
-            try:
-                self._apply_adapter(entry)
-                with self._lock:
+            # Apply adapter under gpu_lock while still holding _lock.
+            # _lock is an RLock so reentrant acquisition is safe.
+            # This prevents unload_adapter from seeing is_loaded=True and
+            # starting a restore while we're still applying.
+            with self._gpu_lock:
+                try:
+                    self._apply_adapter(entry)
                     self._touch(adapter_id)
-                logger.info(f"Loaded LoRA adapter: {adapter_id}")
-                return True
-            except Exception as e:
-                with self._lock:
+                    logger.info(f"Loaded LoRA adapter: {adapter_id}")
+                    return True
+                except Exception as e:
                     entry.is_loaded = False
-                logger.error(f"Failed to load LoRA adapter {adapter_id}: {e}", exc_info=True)
-                return False
+                    logger.error(f"Failed to load LoRA adapter {adapter_id}: {e}", exc_info=True)
+                    return False
 
     def unload_adapter(self, adapter_id: str) -> bool:
         """Unload a LoRA adapter, restoring base model weights."""
@@ -157,19 +159,20 @@ class LoRAAdapterManager:
             if adapter_id in self._lru_order:
                 self._lru_order.remove(adapter_id)
 
-        # Restore under gpu_lock (serializes with load/apply)
-        with self._gpu_lock:
-            try:
-                self._restore_base()
-                logger.info(f"Unloaded LoRA adapter: {adapter_id}")
-                return True
-            except Exception as e:
-                # Revert state on failure
-                with self._lock:
+            # Restore under gpu_lock while still holding _lock.
+            # This prevents load_adapter from seeing is_loaded=False and
+            # starting an apply while we're still restoring.
+            with self._gpu_lock:
+                try:
+                    self._restore_base()
+                    logger.info(f"Unloaded LoRA adapter: {adapter_id}")
+                    return True
+                except Exception as e:
+                    # Revert state on failure
                     entry.is_loaded = True
                     self._touch(adapter_id)
-                logger.error(f"Failed to unload LoRA adapter {adapter_id}: {e}", exc_info=True)
-                return False
+                    logger.error(f"Failed to unload LoRA adapter {adapter_id}: {e}", exc_info=True)
+                    return False
 
     def merge_adapter(self, adapter_id: str) -> bool:
         """Merge LoRA weights permanently into base model.

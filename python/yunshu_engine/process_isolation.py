@@ -491,9 +491,9 @@ class InferenceWorker:
         Protected by lifecycle lock to prevent concurrent restart attempts.
         """
         with self._lifecycle_lock:
-            # Save state before releasing lock for stop/start
             if self._state == WorkerState.STOPPING:
                 return  # Already restarting
+            self._state = WorkerState.STOPPING  # Prevent concurrent restart
         self.stop()
         self.start()
 
@@ -552,8 +552,11 @@ class InferenceWorker:
         if heartbeat_age > self._config.heartbeat_interval_seconds * 3:
             return False
 
-        # Check if circuit breaker is tripped
-        if self._is_circuit_open():
+        # Check if circuit breaker is tripped (lock-protected because
+        # _prune_crash_times modifies the deque)
+        with self._lifecycle_lock:
+            circuit_open = self._is_circuit_open()
+        if circuit_open:
             return False
 
         # Check subprocess is alive
@@ -563,7 +566,13 @@ class InferenceWorker:
         return True
 
     def _is_circuit_open(self) -> bool:
-        """Check if the circuit breaker should prevent operations."""
+        """Check if the circuit breaker should prevent operations.
+
+        Thread-safe: caller must hold self._lifecycle_lock, or use from
+        a context that already holds it (e.g. _record_crash).
+        For external callers (is_healthy), the read is best-effort safe
+        because deque len() is atomic in CPython.
+        """
         self._prune_crash_times()
         return len(self._crash_times) >= self._config.max_restarts
 

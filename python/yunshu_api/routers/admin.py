@@ -32,6 +32,9 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 logger = logging.getLogger(__name__)
 
+# Lock for thread-safe config mutations
+_config_lock = __import__("threading").Lock()
+
 
 # ── RBAC Helpers ──
 
@@ -150,7 +153,8 @@ async def load_model(req: ModelLoadRequest, request: Request, _=Depends(require_
                 await engine.start()
             return {"status": "loaded", "model_id": req.model_id}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
+            logger.exception("Failed to load model %s", req.model_id)
+            raise HTTPException(status_code=500, detail="Failed to load model")
 
     # Single-engine mode
     engine = get_engine()
@@ -163,7 +167,8 @@ async def load_model(req: ModelLoadRequest, request: Request, _=Depends(require_
         await engine.start()
         return {"status": "loaded", "model_id": req.model_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
+        logger.exception("Failed to load model %s (single-engine)", req.model_id)
+        raise HTTPException(status_code=500, detail="Failed to load model")
 
 
 @router.post("/models/unload")
@@ -192,7 +197,8 @@ async def unload_model(req: ModelUnloadRequest, request: Request, _=Depends(requ
         await manager.unload_model(req.model_id)
         return {"status": "unloaded", "model_id": req.model_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to unload: {e}")
+        logger.exception("Failed to unload model %s", req.model_id)
+        raise HTTPException(status_code=500, detail="Failed to unload model")
 
 
 @router.delete("/models/{model_id}")
@@ -230,7 +236,9 @@ async def get_engine_config(_=Depends(require_permission("can_view_admin"))):
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not initialized")
 
-    cfg = engine.config
+    cfg = getattr(engine, 'config', None)
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="Engine config not available")
     return {
         "completion_batch_size": cfg.completion_batch_size,
         "prefill_batch_size": cfg.prefill_batch_size,
@@ -253,23 +261,26 @@ async def update_engine_config(
     if engine is None:
         raise HTTPException(status_code=503, detail="Engine not initialized")
 
-    cfg = engine.config
+    cfg = getattr(engine, 'config', None)
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="Engine config not available")
     updates = req.model_dump(exclude_none=True)
     if not updates:
         return {"status": "no_changes", "fields": []}
 
     updated = []
-    for field, value in updates.items():
-        if hasattr(cfg, field):
-            old_val = getattr(cfg, field)
-            if old_val != value:
-                setattr(cfg, field, value)
-                updated.append(field)
-        else:
-            logger.warning("Ignored unknown config field: %s", field)
+    with _config_lock:
+        for field, value in updates.items():
+            if hasattr(cfg, field):
+                old_val = getattr(cfg, field)
+                if old_val != value:
+                    setattr(cfg, field, value)
+                    updated.append(field)
+            else:
+                logger.warning("Ignored unknown config field: %s", field)
 
-    if updated:
-        logger.info("Engine config updated: %s", updated)
+        if updated:
+            logger.info("Engine config updated: %s", updated)
 
     return {"status": "updated", "fields": updated}
 

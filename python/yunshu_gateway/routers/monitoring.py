@@ -141,9 +141,9 @@ def _get_model_status() -> list[dict[str, Any]]:
         return results
 
     engine = get_engine()
-    if engine and engine.is_loaded:
+    if engine and hasattr(engine, 'is_loaded') and engine.is_loaded:
         results.append({
-            "model_id": engine.model_name,
+            "model_id": getattr(engine, 'model_name', 'default'),
             "loaded": True,
             "stats": engine.get_stats() if hasattr(engine, "get_stats") else {},
         })
@@ -169,7 +169,7 @@ def _get_active_requests() -> dict[str, Any]:
                 processed += s.get("num_requests_processed", 0)
     else:
         engine = get_engine()
-        if engine and hasattr(engine, "get_stats"):
+        if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
             s = engine.get_stats()
             active = s.get("active", 0)
             waiting = s.get("waiting", 0)
@@ -255,12 +255,14 @@ async def prometheus_export() -> str:
                 pm.set_gauge("spec_ngram_proposals", ngram_stats.get("proposals", 0))
                 pm.set_gauge("spec_ngram_accepted", ngram_stats.get("accepted", 0))
                 pm.set_gauge("spec_ngram_draft", ngram_stats.get("total_draft", 0))
+                spec_enabled = getattr(entry.engine, '_spec_enabled', False)
+                ngram_proposer = getattr(entry.engine, '_ngram_proposer', None)
                 pm.set_gauge("spec_enabled",
-                    1 if (entry.engine._spec_enabled or entry.engine._ngram_proposer is not None) else 0)
+                    1 if (spec_enabled or ngram_proposer is not None) else 0)
 
                 # ITL stats from ServerMetrics
                 try:
-                    core = entry.engine._engine_core
+                    core = getattr(entry.engine, '_engine_core', None)
                     if core and hasattr(core, '_memory_guard') and core._memory_guard:
                         sm = core._memory_guard._monitor if hasattr(core._memory_guard, '_monitor') else None
                 except Exception:
@@ -307,7 +309,7 @@ async def prometheus_export() -> str:
 
                 # MON-2/4/5: Scheduler monitoring gauges from engine_core
                 try:
-                    core = entry.engine._engine_core
+                    core = getattr(entry.engine, '_engine_core', None)
                     if core is not None:
                         pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
                         pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
@@ -319,9 +321,9 @@ async def prometheus_export() -> str:
 
                 # H2O attention eviction gauges
                 try:
-                    core = entry.engine._engine_core
+                    core = getattr(entry.engine, '_engine_core', None)
                     if core is not None:
-                        tracker = getattr(core.scheduler, '_attention_score_tracker', None)
+                        tracker = getattr(getattr(core, 'scheduler', None), '_attention_score_tracker', None)
                         if tracker is not None:
                             at_stats = tracker.get_stats()
                             pm.set_gauge("attention_eviction_tracked_requests", at_stats.get("tracked_requests", 0))
@@ -634,6 +636,17 @@ async def reasoning_tokens_stats() -> dict[str, Any]:
                         "model_id": entry.model_id,
                         "reasoning_tokens": rt,
                     })
+    else:
+        engine = get_engine()
+        if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, 'get_stats'):
+            s = engine.get_stats()
+            rt = s.get("reasoning_tokens", 0)
+            if rt > 0:
+                total_reasoning += rt
+                stats["engines"].append({
+                    "model_id": getattr(engine, 'model_name', 'default'),
+                    "reasoning_tokens": rt,
+                })
 
     stats["total_reasoning_tokens"] = total_reasoning
     return stats
@@ -723,11 +736,16 @@ async def token_scheduler_stats() -> dict[str, Any]:
         if engine is not None and hasattr(engine, '_engine_core'):
             core = engine._engine_core
             if core is not None:
-                return {
-                    "token_scheduler": core._token_scheduler.get_stats(),
-                    "priority_inversion": core._priority_guard.get_stats(),
-                    "fairness": core._fairness_tracker.get_stats(),
-                }
+                result = {}
+                if hasattr(core, '_token_scheduler'):
+                    result["token_scheduler"] = core._token_scheduler.get_stats()
+                if hasattr(core, '_priority_guard'):
+                    result["priority_inversion"] = core._priority_guard.get_stats()
+                if hasattr(core, '_fairness_tracker'):
+                    result["fairness"] = core._fairness_tracker.get_stats()
+                if result:
+                    return result
+                return {"enabled": False, "reason": "scheduler components not initialized"}
         return {"enabled": False, "reason": "engine_core not active"}
     except Exception:
         logger.debug("operation failed", exc_info=True)
@@ -750,7 +768,7 @@ async def kv_migration_stats() -> dict[str, Any]:
             pass
         if engine is not None and hasattr(engine, '_engine_core'):
             core = engine._engine_core
-            if core is not None:
+            if core is not None and hasattr(core, '_kv_migration'):
                 return core._kv_migration.get_stats()
         return {"enabled": False, "reason": "engine_core not active"}
     except Exception:

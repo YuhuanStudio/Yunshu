@@ -159,7 +159,7 @@ class _Metrics:
                             total_waiting += s.get("waiting", 0)
             else:
                 engine = get_engine()
-                if engine and hasattr(engine, "get_stats"):
+                if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
                     s = engine.get_stats()
                     total_active = s.get("active", 0)
                     total_waiting = s.get("waiting", 0)
@@ -204,7 +204,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                     from yunshu_engine.batched_engine import BatchedEngine
                     engines = []
                     engine = get_engine()
-                    if engine and engine.is_loaded:
+                    if engine and hasattr(engine, 'is_loaded') and engine.is_loaded:
                         engines.append(engine)
                     manager = get_model_manager()
                     if manager:

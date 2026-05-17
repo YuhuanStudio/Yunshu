@@ -158,7 +158,10 @@ class PerformanceProfiler:
         self._bottleneck_memory_threshold = bottleneck_memory_threshold
         self._bottleneck_compute_threshold = bottleneck_compute_threshold
         self._history: deque[StepMetrics] = deque(maxlen=window_size)
-        self._all_history: list[StepMetrics] = []
+        # NOTE: _all_history was an unbounded list that grew forever (memory
+        # leak).  Replaced with a capped deque matching the window size so
+        # that long-running servers don't accumulate unbounded memory.
+        self._all_history: deque[StepMetrics] = deque(maxlen=window_size * 10)
         self._bottleneck_counts: dict[BottleneckType, int] = {
             b: 0 for b in BottleneckType
         }

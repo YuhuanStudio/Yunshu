@@ -273,7 +273,8 @@ class TokenPipeline:
                 _ = grammar_fn(token.text)
 
         token.mark_stage3_done()
-        self._total_overlap_ms += token.overlap_savings_ms
+        # Note: overlap_savings_ms is accumulated in next_token()/drain_last_token()
+        # when the completed token is yielded, NOT here, to avoid double-counting.
         return token
 
     async def next_token(

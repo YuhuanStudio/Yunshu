@@ -1603,37 +1603,14 @@ class EngineCore:
                     pass
             except asyncio.CancelledError:
                 logger.info("Engine loop cancelled, failing all in-flight requests")
-                failed = self.scheduler.fail_all_requests()
-                from .request import RequestOutput
-                for req_id in failed:
-                    collector = self._output_collectors.get(req_id)
-                    if collector is not None:
-                        collector.put(RequestOutput(
-                            request_id=req_id,
-                            finished=True,
-                            finish_reason="error",
-                            error="Engine loop cancelled",
-                        ))
-                        collector.put(None)  # sentinel
-                    self._signal_finished(req_id)
-                    self._finalize_request(req_id)
+                self._fail_active_requests("Engine loop cancelled")
                 raise
             except Exception as e:
                 logger.error(f"Scheduler step error: {e}", exc_info=True)
-                failed = self.scheduler.fail_all_requests()
-                from .request import RequestOutput
-                for req_id in failed:
-                    collector = self._output_collectors.get(req_id)
-                    if collector is not None:
-                        collector.put(RequestOutput(
-                            request_id=req_id,
-                            finished=True,
-                            finish_reason="error",
-                            error=f"Scheduler step error: {e}",
-                        ))
-                        collector.put(None)  # sentinel
-                    self._signal_finished(req_id)
-                    self._finalize_request(req_id)
+                self._fail_active_requests(f"Scheduler step error: {e}")
+                # Back-off to avoid tight loop if scheduler is persistently broken.
+                # If no requests remain after failing, the loop will idle-wait
+                # on _wake_event instead of spinning.
                 await asyncio.sleep(0.1)
                 continue
 
@@ -2011,6 +1988,41 @@ class EngineCore:
                 logger.debug("sliding window cleanup failed", exc_info=True)
         # Remove from scheduler
         self.scheduler.remove_finished_request(request_id)
+
+    def _fail_active_requests(self, error_msg: str) -> None:
+        """Fail all active requests (scheduler + dedup shadows) with an error.
+
+        Used by engine loop exception handlers to ensure ALL requests —
+        including dedup shadow requests that are not in the scheduler —
+        receive error outputs and sentinel values so consumers don't hang.
+        """
+        from .request import RequestOutput
+
+        # Fail scheduler-tracked requests first
+        failed = self.scheduler.fail_all_requests()
+
+        # Also collect dedup shadow request IDs that have collectors but
+        # are NOT in the scheduler (short-circuited in add_request).
+        shadow_ids = []
+        if self._request_dedup is not None:
+            for sid, primary_id in list(self._dedup_shadows.items()):
+                if sid not in failed:
+                    shadow_ids.append(sid)
+
+        all_ids = failed + shadow_ids
+
+        for req_id in all_ids:
+            collector = self._output_collectors.get(req_id)
+            if collector is not None:
+                collector.put(RequestOutput(
+                    request_id=req_id,
+                    finished=True,
+                    finish_reason="error",
+                    error=error_msg,
+                ))
+                collector.put(None)  # sentinel
+            self._signal_finished(req_id)
+            self._finalize_request(req_id)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request state (consumer-side entry point).

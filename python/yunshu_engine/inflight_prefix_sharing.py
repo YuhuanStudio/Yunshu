@@ -35,6 +35,9 @@ class InflightEntry:
     last_update_len: int = 0
     created_at: float = field(default_factory=time.monotonic)
     model_name: str = ""
+    # Track all prefix tuples indexed for this request so _deindex_prefix
+    # can clean up every entry, including intermediate prefixes added by update().
+    _indexed_prefixes: set[tuple[int, ...]] = field(default_factory=set)
 
 
 class InflightPrefixTracker:
@@ -101,10 +104,11 @@ class InflightPrefixTracker:
             old_len = len(entry.token_ids)
             entry.token_ids = list(new_token_ids)
             entry.last_update_len = len(new_token_ids)
-            # Update prefix index with new tokens
-            for start in range(old_len, len(new_token_ids)):
-                prefix = tuple(new_token_ids[:start + 1])
-                self._prefix_index[prefix].add(request_id)
+            # Update prefix index with new tokens at checkpoint boundaries only.
+            # This avoids the O(n) per-update blowup that caused memory leaks
+            # when update() indexed every intermediate position but _deindex_prefix
+            # only cleaned up at checkpoints.
+            self._index_checkpoints(entry, start_offset=old_len)
 
     def find_prefix(self, token_ids: list[int], model_name: str = "") -> InflightEntry | None:
         """Find the longest matching in-flight prefix.
@@ -159,8 +163,8 @@ class InflightPrefixTracker:
             entry = self._entries.pop(request_id, None)
             if entry is None:
                 return
-            # Clean up prefix index
-            self._deindex_prefix(request_id, entry.token_ids)
+            # Clean up ALL prefix index entries using the tracked set
+            self._deindex_all(request_id, entry)
 
     def get_stats(self) -> dict:
         with self._lock:
@@ -176,27 +180,51 @@ class InflightPrefixTracker:
             self._prefix_index.clear()
 
     def _index_prefix(self, request_id: str, token_ids: list[int]) -> None:
-        # Index prefix at block boundaries for efficient lookup
-        # Use first token, first 4, first 16, first 64, first 256, etc.
-        checkpoints = {1, 4, 16, 64, 256, 1024, 4096}
-        for cp in sorted(checkpoints):
-            if cp <= len(token_ids):
-                prefix = tuple(token_ids[:cp])
-                self._prefix_index[prefix].add(request_id)
-        # Always index the full prefix
-        full = tuple(token_ids)
-        if full:
-            self._prefix_index[full].add(request_id)
+        """Index prefix at checkpoint boundaries for efficient lookup."""
+        entry = self._entries.get(request_id)
+        self._index_checkpoints(entry, token_ids=token_ids, start_offset=0)
 
-    def _deindex_prefix(self, request_id: str, token_ids: list[int]) -> None:
+    def _index_checkpoints(
+        self,
+        entry: InflightEntry | None,
+        token_ids: list[int] | None = None,
+        start_offset: int = 0,
+    ) -> None:
+        """Index prefix entries at checkpoint boundaries.
+
+        Uses the entry's _indexed_prefixes set to track all indexed tuples
+        so they can be fully cleaned up during deindex.
+
+        Args:
+            entry: The InflightEntry to index. If None, does nothing.
+            token_ids: Token IDs to index. Uses entry.token_ids if not given.
+            start_offset: Only index checkpoints at or after this offset.
+        """
+        if entry is None:
+            return
+        tids = token_ids if token_ids is not None else entry.token_ids
+        rid = entry.request_id
         checkpoints = {1, 4, 16, 64, 256, 1024, 4096}
         for cp in sorted(checkpoints):
-            if cp <= len(token_ids):
-                prefix = tuple(token_ids[:cp])
-                self._prefix_index.get(prefix, set()).discard(request_id)
-        full = tuple(token_ids)
-        if full:
-            self._prefix_index.get(full, set()).discard(request_id)
+            if cp <= len(tids) and cp > start_offset:
+                prefix = tuple(tids[:cp])
+                self._prefix_index[prefix].add(rid)
+                entry._indexed_prefixes.add(prefix)
+        # Always index the full prefix
+        full = tuple(tids)
+        if full and len(full) > start_offset:
+            self._prefix_index[full].add(rid)
+            entry._indexed_prefixes.add(full)
+
+    def _deindex_all(self, request_id: str, entry: InflightEntry) -> None:
+        """Remove ALL prefix index entries for a request using tracked prefixes."""
+        for prefix in entry._indexed_prefixes:
+            bucket = self._prefix_index.get(prefix)
+            if bucket is not None:
+                bucket.discard(request_id)
+                if not bucket:
+                    del self._prefix_index[prefix]
+        entry._indexed_prefixes.clear()
 
     def _evict_expired(self) -> None:
         now = time.monotonic()
@@ -217,10 +245,13 @@ class InflightPrefixTracker:
 
 
 _tracker_instance: InflightPrefixTracker | None = None
+_tracker_lock = threading.Lock()
 
 
 def get_inflight_tracker() -> InflightPrefixTracker:
     global _tracker_instance
     if _tracker_instance is None:
-        _tracker_instance = InflightPrefixTracker()
+        with _tracker_lock:
+            if _tracker_instance is None:
+                _tracker_instance = InflightPrefixTracker()
     return _tracker_instance
