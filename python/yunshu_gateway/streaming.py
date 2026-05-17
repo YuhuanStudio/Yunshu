@@ -794,7 +794,7 @@ def format_openai_non_stream(
                 "type": "function",
                 "function": {
                     "name": tc["name"],
-                    "arguments": tc["arguments"],
+                    "arguments": _sanitize_arguments(tc.get("arguments", {})),
                 },
             }
             for i, tc in enumerate(tool_calls)

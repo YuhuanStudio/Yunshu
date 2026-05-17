@@ -1365,6 +1365,15 @@ class BatchedEngine:
         # TTFT from engine_core (computed before request cleanup)
         _ttft_ms = getattr(result, 'ttft_ms', 0.0)
 
+        # Record TTFT in Prometheus (consistency with fast path)
+        if _ttft_ms > 0:
+            try:
+                from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                pm = get_prometheus_metrics()
+                pm.observe_histogram("ttft_seconds", _ttft_ms / 1000.0)
+            except Exception:
+                logger.debug("engine loop TTFT prometheus recording failed", exc_info=True)
+
         engine_loop_result = GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -1956,6 +1965,7 @@ class BatchedEngine:
                     break
 
         # Record TTFT + ITL in Prometheus
+        _ttft_ms_val = round(ttft_s * 1000, 1)
         if ttft_s > 0:
             try:
                 from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
@@ -1971,6 +1981,24 @@ class BatchedEngine:
                     pm.observe_histogram("itl_seconds", avg_itl)
             except Exception:
                 logger.debug("TTFT/ITL prometheus recording failed", exc_info=True)
+
+        # Record in ServerMetrics (consistency with engine loop path)
+        try:
+            from .server_metrics import get_server_metrics
+            _sm = get_server_metrics()
+            _sm.record_request_complete(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=len(tokens),
+                cached_tokens=cached_tokens,
+                prefill_duration=ttft_s,
+                generation_duration=ttft_s,
+                model_id=self.model_name,
+            )
+            if _itl_samples:
+                for _itl in _itl_samples:
+                    _sm.record_itl(_itl)
+        except Exception:
+            logger.debug("ServerMetrics recording failed in fast path", exc_info=True)
 
         self._total_reasoning_tokens += len(_thinking_tokens)
 
@@ -1998,7 +2026,7 @@ class BatchedEngine:
             finish_reason=finish_reason,
             cached_tokens=cached_tokens,
             logprobs=lp_result,
-            ttft_ms=round(ttft_s * 1000, 1),
+            ttft_ms=_ttft_ms_val,
             reasoning_tokens=_reasoning_tok,
         )
 
@@ -2236,6 +2264,13 @@ class BatchedEngine:
                     _stream_ttft_ms = round((time.perf_counter() - _stream_t0) * 1000, 1)
                     _ttft_ms = _stream_ttft_ms
                     _first_token = False
+                    # Record TTFT in Prometheus (consistency with fast path)
+                    try:
+                        from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                        pm = get_prometheus_metrics()
+                        pm.observe_histogram("ttft_seconds", _stream_ttft_ms / 1000.0)
+                    except Exception:
+                        logger.debug("engine loop streaming TTFT prometheus recording failed", exc_info=True)
                 gen_output = GenerationOutput(
                     text=_clean_special_tokens(output.output_text),
                     new_text=cleaned,
@@ -2726,10 +2761,26 @@ class BatchedEngine:
                     reasoning_tokens=_reasoning_tokens,
                     logprobs=_lp_list,
                     cached_tokens=_cached_tokens_box[0],
+                    ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
                 )
                 if done:
                     break
         finally:
+            # Record in ServerMetrics for streaming fast path (consistency)
+            if n_tok > 0:
+                try:
+                    from .server_metrics import get_server_metrics
+                    _sm = get_server_metrics()
+                    _sm.record_request_complete(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        cached_tokens=_cached_tokens_box[0],
+                        prefill_duration=_stream_ttft_box[0],
+                        generation_duration=(time.perf_counter() - _stream_gen_t0),
+                        model_id=self.model_name,
+                    )
+                except Exception:
+                    logger.debug("ServerMetrics recording failed in streaming fast path", exc_info=True)
             # Stop pipeline and log stats
             if _pipeline is not None:
                 _pipeline.stop()

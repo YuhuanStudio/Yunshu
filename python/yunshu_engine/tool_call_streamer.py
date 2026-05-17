@@ -157,10 +157,11 @@ class ToolCallStreamer:
                 # Check if this is actually a closing tag </tool_call...>
                 if self._buffer[idx:].startswith(TOOL_CALL_CLOSE):
                     # It's a closing tag appearing without opening — treat as text
+                    closing_text = self._buffer[idx:]
                     self._state = StreamState.TEXT
                     self._buffer = ""
                     results.append(StreamOutput(
-                        text=self._buffer if not results else "",
+                        text=closing_text,
                         state=self._state,
                     ))
                     return results
@@ -324,7 +325,13 @@ class ToolCallStreamer:
             if isinstance(data, dict) and "name" in data:
                 name = data["name"]
                 arguments = data.get("arguments", data.get("parameters", {}))
-                args_str = json.dumps(arguments, ensure_ascii=False) if not isinstance(arguments, str) else arguments
+                if isinstance(arguments, str):
+                    # Validate that string arguments are valid JSON
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                args_str = json.dumps(arguments, ensure_ascii=False) if isinstance(arguments, dict) else "{}"
                 return ToolCallResult(
                     id=self._next_call_id(),
                     name=name,

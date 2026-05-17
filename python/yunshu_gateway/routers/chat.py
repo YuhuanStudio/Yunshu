@@ -321,13 +321,21 @@ def _extract_messages(msgs: list[ChatMessage]) -> list[dict]:
 
 
 def _has_images(messages: list[dict]) -> bool:
-    """Check if any message contains image content."""
+    """Check if any message contains image content.
+
+    Handles all OpenAI image content types:
+    - image_url (with url field — http/https/data URLs)
+    - image (with image_url or data field — some models)
+    - image_data (base64 inline)
+    """
     for msg in messages:
         content = msg.get("content", "")
         if isinstance(content, list):
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "image_url":
-                    return True
+                if isinstance(part, dict):
+                    ptype = part.get("type", "")
+                    if ptype in ("image_url", "image", "image_data"):
+                        return True
     return False
 
 
@@ -549,6 +557,11 @@ async def _build_multi_choice(
             pt = result.prompt_tokens
             ct = result.completion_tokens
             fr = result.finish_reason or "stop"
+            lp = _format_logprobs(
+                getattr(result, 'logprobs', None),
+                getattr(engine, '_tokenizer', None),
+                req.top_logprobs,
+            )
         else:
             state = await engine.generate(
                 prompt=messages,
@@ -580,6 +593,11 @@ async def _build_multi_choice(
             pt = state.prompt_token_count
             ct = state.completion_token_count
             fr = state.finish_reason or "stop"
+            lp = _format_logprobs(
+                getattr(state, 'logprobs', None),
+                getattr(engine, '_tokenizer', None),
+                req.top_logprobs,
+            )
 
         thinking_content, regular_content = extract_thinking(text, req.model)
         cleaned = regular_content.strip()
@@ -595,26 +613,29 @@ async def _build_multi_choice(
         if thinking_content:
             message["reasoning_content"] = thinking_content
         if tool_calls:
+            from ..streaming import _sanitize_arguments
             message["tool_calls"] = [
-                {"id": f"call_{idx}:{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                {"id": f"call_{idx}_{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": _sanitize_arguments(tc.get("arguments", {}))}}
                 for i, tc in enumerate(tool_calls)
             ]
 
         _record_metrics(pt, ct)
         _rt = getattr(result, 'reasoning_tokens', 0) if is_batched else 0
         _ct_cached = getattr(result, 'cached_tokens', 0) if is_batched else 0
-        return idx, pt, ct, _rt, _ct_cached, {"index": idx, "message": message, "finish_reason": fr}
+        choice = {"index": idx, "message": message, "finish_reason": fr}
+        if lp:
+            choice["logprobs"] = lp
+        return idx, pt, ct, _rt, _ct_cached, choice
 
     results = await asyncio.gather(
         *[_gen_one(i) for i in range(req.n)], return_exceptions=True,
     )
 
     errors = []
-    for r in results:
+    for i, r in enumerate(results):
         if isinstance(r, BaseException):
-            idx = results.index(r)
-            errors.append((idx, r))
-            logger.error(f"choice {idx} failed: {r}", exc_info=r)
+            errors.append((i, r))
+            logger.error(f"choice {i} failed: {r}", exc_info=r)
             continue
         idx, pt, ct, _rt, _ct_cached, choice = r
         choices.append(choice)
@@ -1062,9 +1083,9 @@ async def _handle_vlm_chat(
             logger.error("VLM engine inference failed", exc_info=True)
             return idx, None, str(e)
 
-        content = r.get("text", "")
+        content = r.get("text", "") or ""
         rt = r.get("reasoning_tokens", 0)
-        ct = len(tok.encode(content)) if tok else max(1, len(content) // 4)
+        ct = r.get("completion_tokens", 0) or (len(tok.encode(content)) if tok else max(1, len(content) // 4))
         finish_reason = r.get("finish_reason", "stop")
         tool_calls = None
         if req.tools:
@@ -1109,8 +1130,9 @@ async def _handle_vlm_chat(
         total_reasoning_tok += data["reasoning_tokens"]
         message = {"role": "assistant", "content": data["content"]}
         if data["tool_calls"]:
+            from ..streaming import _sanitize_arguments
             message["tool_calls"] = [
-                {"id": f"call_vlm:{idx}:{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                {"id": f"call_vlm_{idx}_{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": _sanitize_arguments(tc.get("arguments", {}))}}
                 for i, tc in enumerate(data["tool_calls"])
             ]
         choices.append({
@@ -1545,21 +1567,21 @@ async def _stream_response(
     reasoning_tok = 0
     cached_tok = 0
 
-    def _format_tool_call_chunk(tc, idx: int) -> str:
+    def _format_tool_call_chunk(tc, idx: int, include_role: bool = False) -> str:
         """Format a tool_call as an OpenAI streaming chunk with delta."""
-        delta: dict[str, Any] = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "index": idx,
-                "id": tc.id,
-                "type": "function",
-                "function": {
-                    "name": tc.name,
-                    "arguments": tc.arguments,
-                },
-            }],
-        }
+        delta: dict[str, Any] = {}
+        if include_role:
+            delta["role"] = "assistant"
+        delta["content"] = None
+        delta["tool_calls"] = [{
+            "index": idx,
+            "id": tc.id,
+            "type": "function",
+            "function": {
+                "name": tc.name,
+                "arguments": tc.arguments,
+            },
+        }]
         chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -1581,7 +1603,7 @@ async def _stream_response(
         logger.debug("StreamingResponseBuffer creation failed", exc_info=True)
 
     async def _token_source():
-        nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok, cached_tok
+        nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok, reasoning_tok, cached_tok
         first_chunk = True
         last_finish_reason = None  # track actual finish_reason from engine
 
@@ -1654,9 +1676,10 @@ async def _stream_response(
                             )
                             first_chunk = False
                         elif out.tool_call:
-                            yield _format_tool_call_chunk(out.tool_call, tool_call_index)
+                            yield _format_tool_call_chunk(out.tool_call, tool_call_index, include_role=first_chunk)
                             tool_call_index += 1
                             has_emitted_tool_call = True
+                            first_chunk = False
                 else:
                     yield format_openai_chunk(
                         completion_id=completion_id,
@@ -1733,9 +1756,10 @@ async def _stream_response(
                                 )
                                 first_chunk = False
                             elif out.tool_call:
-                                yield _format_tool_call_chunk(out.tool_call, tool_call_index)
+                                yield _format_tool_call_chunk(out.tool_call, tool_call_index, include_role=first_chunk)
                                 tool_call_index += 1
                                 has_emitted_tool_call = True
+                                first_chunk = False
                     else:
                         yield format_openai_chunk(
                             completion_id=completion_id,
@@ -1757,9 +1781,10 @@ async def _stream_response(
                         delta_content=out.text,
                     )
                 elif out.tool_call:
-                    yield _format_tool_call_chunk(out.tool_call, tool_call_index)
+                    yield _format_tool_call_chunk(out.tool_call, tool_call_index, include_role=first_chunk)
                     tool_call_index += 1
                     has_emitted_tool_call = True
+                    first_chunk = False
 
         # Final chunk with finish_reason from engine
         # If no tokens were emitted (first_chunk is still True), this is also
