@@ -45,6 +45,14 @@ class EmbeddingRequest(BaseModel):
                 f"encoding_format: must be one of {', '.join(sorted(_VALID_ENCODING_FORMATS))}, "
                 f"got '{self.encoding_format}'"
             )
+        # Validate input: string must be non-empty, list must have elements
+        if isinstance(self.input, str) and not self.input.strip():
+            raise ValueError("input: cannot be empty or whitespace-only")
+        if isinstance(self.input, list) and not self.input:
+            raise ValueError("input: cannot be an empty list")
+        # Validate dimensions
+        if self.dimensions is not None and self.dimensions <= 0:
+            raise ValueError("dimensions must be a positive integer")
         return self
 
 
@@ -68,21 +76,6 @@ async def create_embedding(req: EmbeddingRequest):
         raise HTTPException(
             status_code=400,
             detail=f"Too many inputs: {len(texts)} > 2048",
-        )
-
-    # Validate encoding_format
-    if req.encoding_format not in _VALID_ENCODING_FORMATS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid encoding_format '{req.encoding_format}'. "
-                   f"Must be one of: {', '.join(sorted(_VALID_ENCODING_FORMATS))}",
-        )
-
-    # Validate dimensions
-    if req.dimensions is not None and req.dimensions <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"dimensions must be a positive integer, got {req.dimensions}",
         )
 
     # Resolve embedding engine

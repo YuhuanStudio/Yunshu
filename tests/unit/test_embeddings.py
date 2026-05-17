@@ -63,8 +63,9 @@ class TestEmbeddingRequest:
         assert req.encoding_format == "float"
 
     def test_empty_list_input(self):
-        req = EmbeddingRequest(model="test", input=[])
-        assert req.input == []
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="empty list"):
+            EmbeddingRequest(model="test", input=[])
 
     def test_valid_encoding_formats(self):
         """encoding_format must be 'float' or 'base64'."""
@@ -332,10 +333,10 @@ class TestEmbeddingsEndpoint:
         assert resp.status_code in (200, 404, 500, 503)
 
     def test_embeddings_rejects_empty_input(self):
-        """Should return 400 for empty input list."""
-        req = EmbeddingRequest(model="test", input=[])
-        texts = req.input if isinstance(req.input, list) else [req.input]
-        assert len(texts) == 0  # Empty should trigger 400 in endpoint
+        """Should reject empty input list at model validation level."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="empty list"):
+            EmbeddingRequest(model="test", input=[])
 
 
 class TestEmbeddingIndexCorrespondence:

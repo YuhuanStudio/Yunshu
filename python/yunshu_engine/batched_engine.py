@@ -2602,6 +2602,7 @@ class BatchedEngine:
                     cached_tokens=getattr(output, 'cached_tokens', 0),
                     logprobs=getattr(output, 'logprobs', None),
                     ttft_ms=_ttft_ms,
+                    current_state=getattr(output, 'current_state', None),
                 )
                 if output.finished:
                     finished_normally = True

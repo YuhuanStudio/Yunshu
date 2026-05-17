@@ -115,8 +115,11 @@ class PipelineLastLayer(nn.Module):
         # Intermediate ranks have already sent their activations to the next
         # stage and must NOT participate in all_gather (it would deadlock or
         # produce incorrect results).
+        #
+        # all_gather concatenates along axis 0: [stage_0_out, stage_1_out, ...]
+        # The full concatenated result is needed for correct logits on the last rank.
         if not self.is_prefill and self.r == self.s - 1:
-            output = mx.distributed.all_gather(output, group=self.group)[-output.shape[0]:]
+            output = mx.distributed.all_gather(output, group=self.group)
             mx.eval(output)
 
         return output

@@ -44,6 +44,11 @@ class ResponseTool(BaseModel):
     parameters: Optional[dict] = None
 
 
+class StreamOptions(BaseModel):
+    """OpenAI stream_options parameter."""
+    include_usage: bool = False
+
+
 class ResponsesRequest(BaseModel):
     model: str
     input: str | list[ResponseInputText]
@@ -74,7 +79,7 @@ class ResponsesRequest(BaseModel):
     xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
     grammar: Optional[dict] = None
     lora_adapter: Optional[str] = None
-    stream_options: Optional[dict] = None  # {"include_usage": true}
+    stream_options: Optional[StreamOptions] = None  # {"include_usage": true}
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: Optional[list] = None  # User-provided custom logits processors

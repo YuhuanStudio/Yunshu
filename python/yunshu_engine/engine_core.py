@@ -1354,6 +1354,11 @@ class EngineCore:
         # Check if the scheduler rejected the request (queue full, etc.)
         # If rejected, generate error output immediately so resources are
         # cleaned up via the normal finalize path.
+        # NOTE: do NOT call _cleanup_request() here — the consumer (generate()
+        # or stream_outputs()) must drain the collector before cleanup.
+        # _finalize_request() is called to release scheduler-side resources,
+        # but consumer-side state (collector, event) must remain until the
+        # consumer reads them.
         from .request import RequestStatus
         if RequestStatus.is_finished(request.status):
             error_reason = request.finish_reason or "rejected"
@@ -1370,7 +1375,7 @@ class EngineCore:
                 ))
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
-            self._cleanup_request(req_id)
+            self._finalize_request(req_id)
             return req_id
 
         # Wake engine loop from idle sleep (event-driven scheduling)
@@ -1636,8 +1641,8 @@ class EngineCore:
                         logger.debug("composition post_step failed", exc_info=True)
 
                 # AdaptiveBatchSizer: adjust batch size using ACTUAL step wall time
+                _step_wall_ms = (time.monotonic() - _step_start) * 1000
                 try:
-                    _step_wall_ms = (time.monotonic() - _step_start) * 1000
                     queue_depth = len(self.scheduler.waiting)
                     if _hw_info is None:
                         from .utils.hardware import get_hardware_info as _ghw
@@ -1685,92 +1690,104 @@ class EngineCore:
 
             # Distribute outputs to per-request collectors
             for req_output in scheduler_output.outputs:
-                rid = req_output.request_id
-                collector = self._output_collectors.get(rid)
-                if collector is None:
-                    continue
+                try:
+                    rid = req_output.request_id
+                    collector = self._output_collectors.get(rid)
+                    if collector is None:
+                        continue
 
-                # Output parser: extract reasoning/tool_calls from raw text
-                # (output_parser.py parse_output — model-specific extraction)
-                if req_output.finished and req_output.output_text:
-                    try:
-                        model_name = getattr(self.scheduler, 'model_id', None)
-                        parsed = self._parse_output(req_output.output_text, model_name)
-                        if parsed.reasoning and parsed.content != req_output.output_text:
-                            req_output.output_text = parsed.content
-                        if parsed.finish_reason:
-                            req_output.finish_reason = parsed.finish_reason
-                    except Exception:
-                        logger.debug("output parser failed", exc_info=True)
+                    # Output parser: extract reasoning/tool_calls from raw text
+                    # (output_parser.py parse_output — model-specific extraction)
+                    if req_output.finished and req_output.output_text:
+                        try:
+                            model_name = getattr(self.scheduler, 'model_id', None)
+                            parsed = self._parse_output(req_output.output_text, model_name)
+                            if parsed.reasoning and parsed.content != req_output.output_text:
+                                req_output.output_text = parsed.content
+                            if parsed.finish_reason:
+                                req_output.finish_reason = parsed.finish_reason
+                        except Exception:
+                            logger.debug("output parser failed", exc_info=True)
 
-                if use_simple_streaming:
-                    collector.put(req_output)
-                else:
-                    stream_state = self._stream_states.get(rid)
-                    if stream_state and stream_state.should_send(
-                        req_output.completion_tokens, req_output.finished
-                    ):
+                    if use_simple_streaming:
                         collector.put(req_output)
-                        stream_state.mark_sent(req_output.completion_tokens)
+                    else:
+                        stream_state = self._stream_states.get(rid)
+                        if stream_state and stream_state.should_send(
+                            req_output.completion_tokens, req_output.finished
+                        ):
+                            collector.put(req_output)
+                            stream_state.mark_sent(req_output.completion_tokens)
 
-                if req_output.finished:
-                    self._num_requests_processed += 1
-                    # FairnessTracker: record completion before finalize pops timestamp
-                    _start_ts = self._request_timestamps.get(rid)
-                    if _start_ts is not None:
-                        try:
-                            self._fairness_tracker.record_completion(
-                                rid, 0.0, time.monotonic() - _start_ts,
-                            )
-                        except Exception:
-                            logger.debug("fairness record_completion failed", exc_info=True)
-                    # Checkpoint: save final state for crash recovery
-                    if self._checkpoint_mgr is not None:
-                        try:
-                            from .checkpoint import InferenceState
-                            self._checkpoint_mgr.save(rid, InferenceState(
-                                request_id=rid,
-                                output_text=req_output.output_text or "",
-                                position=req_output.prompt_tokens + req_output.completion_tokens,
-                            ))
-                        except Exception:
-                            logger.debug("checkpoint save failed", exc_info=True)
-                    # Dedup fan-out: deliver output to shadow requests before finalize
-                    if self._request_dedup is not None:
-                        content_hash = self._dedup_hashes.get(rid)
-                        if content_hash:
-                            all_ids = self._request_dedup.complete(content_hash)
-                            from .request import RequestOutput as _RO
-                            for shadow_id in all_ids:
-                                if shadow_id == rid:
-                                    continue
-                                shadow_collector = self._output_collectors.get(shadow_id)
-                                if shadow_collector is not None:
-                                    shadow_output = _RO(
-                                        request_id=shadow_id,
-                                        new_token_ids=req_output.new_token_ids,
-                                        new_text=req_output.new_text,
-                                        output_token_ids=req_output.output_token_ids,
-                                        output_text=req_output.output_text,
-                                        finished=True,
-                                        finish_reason=req_output.finish_reason,
-                                        prompt_tokens=req_output.prompt_tokens,
-                                        completion_tokens=req_output.completion_tokens,
-                                        logprobs=req_output.logprobs,
-                                        current_state=req_output.current_state,
-                                        reasoning_tokens=req_output.reasoning_tokens,
-                                        cached_tokens=req_output.cached_tokens,
-                                    )
-                                    shadow_collector.put(shadow_output)
-                                    shadow_collector.put(None)  # sentinel
-                                    # Signal shadow finished before finalize
-                                    self._signal_finished(shadow_id)
-                                    self._finalize_request(shadow_id)
-                    # Signal request completion before finalize so generate()
-                    # consumers waiting on the event can wake up.
-                    self._signal_finished(rid)
-                    # Finalize: release scheduler-side resources for this request
-                    self._finalize_request(rid)
+                    if req_output.finished:
+                        self._num_requests_processed += 1
+                        # FairnessTracker: record completion before finalize pops timestamp
+                        _start_ts = self._request_timestamps.get(rid)
+                        if _start_ts is not None:
+                            try:
+                                self._fairness_tracker.record_completion(
+                                    rid, 0.0, time.monotonic() - _start_ts,
+                                )
+                            except Exception:
+                                logger.debug("fairness record_completion failed", exc_info=True)
+                        # Checkpoint: save final state for crash recovery
+                        if self._checkpoint_mgr is not None:
+                            try:
+                                from .checkpoint import InferenceState
+                                self._checkpoint_mgr.save(rid, InferenceState(
+                                    request_id=rid,
+                                    output_text=req_output.output_text or "",
+                                    position=req_output.prompt_tokens + req_output.completion_tokens,
+                                ))
+                            except Exception:
+                                logger.debug("checkpoint save failed", exc_info=True)
+                        # Dedup fan-out: deliver output to shadow requests before finalize
+                        if self._request_dedup is not None:
+                            content_hash = self._dedup_hashes.get(rid)
+                            if content_hash:
+                                all_ids = self._request_dedup.complete(content_hash)
+                                from .request import RequestOutput as _RO
+                                for shadow_id in all_ids:
+                                    if shadow_id == rid:
+                                        continue
+                                    shadow_collector = self._output_collectors.get(shadow_id)
+                                    if shadow_collector is not None:
+                                        shadow_output = _RO(
+                                            request_id=shadow_id,
+                                            new_token_ids=req_output.new_token_ids,
+                                            new_text=req_output.new_text,
+                                            output_token_ids=req_output.output_token_ids,
+                                            output_text=req_output.output_text,
+                                            finished=True,
+                                            finish_reason=req_output.finish_reason,
+                                            prompt_tokens=req_output.prompt_tokens,
+                                            completion_tokens=req_output.completion_tokens,
+                                            logprobs=req_output.logprobs,
+                                            current_state=req_output.current_state,
+                                            reasoning_tokens=req_output.reasoning_tokens,
+                                            cached_tokens=req_output.cached_tokens,
+                                        )
+                                        shadow_collector.put(shadow_output)
+                                        shadow_collector.put(None)  # sentinel
+                                        # Signal shadow finished before finalize
+                                        self._signal_finished(shadow_id)
+                                        self._finalize_request(shadow_id)
+                        # Signal request completion before finalize so generate()
+                        # consumers waiting on the event can wake up.
+                        self._signal_finished(rid)
+                        # Finalize: release scheduler-side resources for this request
+                        self._finalize_request(rid)
+                except Exception as _output_err:
+                    logger.error(
+                        "Output distribution error for %s: %s",
+                        getattr(req_output, 'request_id', '?'), _output_err,
+                        exc_info=True,
+                    )
+                    # Ensure the request is finalized even if distribution failed
+                    _rid = getattr(req_output, 'request_id', None)
+                    if _rid:
+                        self._signal_finished(_rid)
+                        self._finalize_request(_rid)
 
             # Update adaptive batch scheduler metrics
             if scheduler_output.outputs:

@@ -231,15 +231,17 @@ class CollectiveOps:
         chunks = list(mx.split(x, n, axis=0))
 
         # Phase 1: Reduce-scatter
+        # At step s, rank r sends chunk (r-s)%n to (r+1)%n, receives chunk
+        # (r-s-1)%n from (r-1)%n, and accumulates into the received chunk.
         for step in range(n - 1):
             send_rank = (rank + 1) % n
             recv_rank = (rank - 1 + n) % n
-            chunk_idx = (rank - step + n) % n
-            recv_chunk_idx = (chunk_idx - 1 + n) % n
+            send_chunk_idx = (rank - step + n) % n
+            recv_chunk_idx = (rank - step - 1 + n) % n
 
             # Avoid deadlock: even ranks send first, odd ranks recv first.
             if rank % 2 == 0:
-                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+                self.send(chunks[send_chunk_idx].astype(mx.float32), send_rank)
                 received = self.recv(
                     chunks[recv_chunk_idx].shape,
                     mx.float32,
@@ -251,32 +253,36 @@ class CollectiveOps:
                     mx.float32,
                     recv_rank,
                 )
-                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+                self.send(chunks[send_chunk_idx].astype(mx.float32), send_rank)
 
-            chunks[chunk_idx] = chunks[chunk_idx].astype(mx.float32) + received
+            # Accumulate received partial sum into the recv chunk index
+            chunks[recv_chunk_idx] = chunks[recv_chunk_idx].astype(mx.float32) + received
 
         # Phase 2: All-gather
+        # At step s, rank r sends chunk (r-s+1)%n to (r+1)%n, receives chunk
+        # (r-s)%n from (r-1)%n, and overwrites with the received (fully reduced) value.
         for step in range(n - 1):
             send_rank = (rank + 1) % n
             recv_rank = (rank - 1 + n) % n
-            chunk_idx = (rank - step + 1 + n) % n
+            send_chunk_idx = (rank - step + 1 + n) % n
+            recv_chunk_idx = (rank - step + n) % n
 
             if rank % 2 == 0:
-                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+                self.send(chunks[send_chunk_idx].astype(mx.float32), send_rank)
                 received = self.recv(
-                    chunks[chunk_idx].shape,
+                    chunks[recv_chunk_idx].shape,
                     mx.float32,
                     recv_rank,
                 )
             else:
                 received = self.recv(
-                    chunks[chunk_idx].shape,
+                    chunks[recv_chunk_idx].shape,
                     mx.float32,
                     recv_rank,
                 )
-                self.send(chunks[chunk_idx].astype(mx.float32), send_rank)
+                self.send(chunks[send_chunk_idx].astype(mx.float32), send_rank)
 
-            chunks[chunk_idx] = received
+            chunks[recv_chunk_idx] = received
 
         return mx.concatenate(chunks, axis=0).astype(x.dtype)
 
@@ -312,7 +318,14 @@ class CollectiveOps:
         mx.eval(x)
 
         lats: list[float] = []
-        nbytes = tensor_size * 4  # assume float32
+        # Compute actual byte size from dtype, not hardcoded float32
+        dtype_sizes = {
+            mx.float16: 2, mx.float32: 4, mx.float64: 8,
+            mx.int8: 1, mx.int32: 4, mx.int64: 8,
+            mx.bfloat16: 2,
+        }
+        elem_size = dtype_sizes.get(dtype, 4)
+        nbytes = tensor_size * elem_size
 
         for _ in range(num_iters):
             t0 = time.monotonic()

@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine
 from .chat import _apply_lora_adapter, _release_lora_adapter
@@ -106,10 +106,10 @@ class AnthropicMessagesRequest(BaseModel):
     # ── Anthropic-native fields ──
     model: str
     messages: list[AnthropicMessage]
-    max_tokens: int = 1024
-    temperature: float = 0.7
-    top_p: float = 1.0
-    top_k: int = 0
+    max_tokens: int = Field(default=1024, ge=1, le=131072)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    top_k: int = Field(default=0, ge=0)
     stream: bool = False
     stop_sequences: Optional[list[str]] = None
     system: Optional[str | list[dict]] = None
@@ -120,21 +120,21 @@ class AnthropicMessagesRequest(BaseModel):
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: Optional[str] = None
-    min_p: float = 0.0
-    repetition_penalty: float = 1.0
-    frequency_penalty: float = 0.0
-    presence_penalty: float = 0.0
+    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
+    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: Optional[dict[str, float]] = None
     seed: Optional[int] = None
     reasoning_effort: Optional[str] = None
     stop_token_ids: Optional[list[int]] = None
     spec_decode: bool = False
-    xtc_probability: float = 0.0
-    xtc_threshold: float = 0.0
-    priority: int = 0
+    xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
+    xtc_threshold: float = Field(default=0.0, ge=0.0, le=1.0)
+    priority: int = Field(default=0, ge=0, le=100)
     json_schema: Optional[dict] = None
     logprobs: bool = False
-    top_logprobs: Optional[int] = None
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
     logits_processors: Optional[list] = None
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: Optional[dict] = None
@@ -146,10 +146,10 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("model: field is required and cannot be empty")
         if not self.messages:
             raise ValueError("messages: field is required and cannot be empty")
-        if self.max_tokens <= 0:
-            raise ValueError("max_tokens: must be a positive integer")
         if self.stop_sequences and len(self.stop_sequences) > 16:
             raise ValueError("stop_sequences: maximum 16 stop sequences")
+        if self.stop_token_ids and len(self.stop_token_ids) > 16:
+            raise ValueError("stop_token_ids: maximum 16 stop token IDs")
         # Validate thinking configuration per Anthropic spec
         if self.thinking:
             thinking_type = self.thinking.get("type")
@@ -158,6 +158,11 @@ class AnthropicMessagesRequest(BaseModel):
                 if budget is not None:
                     if not isinstance(budget, int) or budget < 1:
                         raise ValueError("thinking: budget_tokens must be a positive integer")
+        # Validate response_format type if provided
+        if self.response_format is not None:
+            rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
+            if rf_type not in ("json_object", "json_schema", "text", None):
+                raise ValueError(f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'")
         return self
 
 

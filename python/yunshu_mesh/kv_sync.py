@@ -264,8 +264,9 @@ class KVSynchronizationService:
 
         # Pending transfers: request_id -> TransferRequest
         self._pending_transfers: dict[str, TransferRequest] = {}
-        # Transfer history: request_id -> TransferResponse (recent)
+        # Transfer history: request_id -> TransferResponse (capped)
         self._transfer_history: dict[str, TransferResponse] = {}
+        self._transfer_history_max = 10_000
 
         # Stats
         self._stats = KVSyncStats()
@@ -619,6 +620,7 @@ class KVSynchronizationService:
             if response.status != TransferStatus.COMPLETED:
                 self._stats.transfers_failed += 1
                 self._transfer_history[response.request_id] = response
+                self._trim_history()
                 return 0
 
             blocks = list(response.blocks)
@@ -633,6 +635,7 @@ class KVSynchronizationService:
 
             self._transfer_history[response.request_id] = response
             self._pending_transfers.pop(response.request_id, None)
+            self._trim_history()
 
         # Call consumer outside lock — it may do I/O or acquire other locks.
         loaded = 0
@@ -701,6 +704,18 @@ class KVSynchronizationService:
         for key, _ in sorted_entries[:to_remove]:
             registry.pop(key, None)
 
+    def _trim_history(self) -> None:
+        """Cap transfer history to prevent unbounded memory growth.
+
+        Must be called while holding _lock.
+        """
+        if len(self._transfer_history) > self._transfer_history_max:
+            # Evict oldest entries (by insertion order — dict preserves order)
+            excess = len(self._transfer_history) - self._transfer_history_max
+            keys_to_remove = list(self._transfer_history.keys())[:excess]
+            for k in keys_to_remove:
+                self._transfer_history.pop(k, None)
+
 
 # ── MeshHealthMonitor ────────────────────────────────────────────────
 
@@ -753,8 +768,9 @@ class MeshHealthMonitor:
         self._on_node_failure_callbacks: list[Callable] = []
         self._on_node_join_callbacks: list[Callable] = []
 
-        # Rebalance events log
+        # Rebalance events log (capped to prevent unbounded growth)
         self._rebalance_events: list[RebalanceEvent] = []
+        self._rebalance_events_max = 10_000
 
         # Layer allocator integration
         self._layer_allocator: Any = None
@@ -926,6 +942,12 @@ class MeshHealthMonitor:
             if status is None:
                 return
 
+            # If the node is already unhealthy, this is a re-entry from
+            # _run_health_check (which marks unhealthy under lock before
+            # calling this method).  In that case we must NOT append
+            # another RebalanceEvent or fire callbacks again.
+            already_unhealthy = not status.healthy
+
             # Only mark unhealthy if not already done by _run_health_check.
             # Direct callers (e.g., MeshManager._on_node_timeout) may invoke
             # this without going through the health-check loop, in which case
@@ -942,23 +964,27 @@ class MeshHealthMonitor:
             # Capture failure count under lock for logging.
             fail_count = status.consecutive_failures
 
-            self._rebalance_events.append(RebalanceEvent(
-                event_type="node_failure",
-                node_id=node_id,
-            ))
+            if not already_unhealthy:
+                self._rebalance_events.append(RebalanceEvent(
+                    event_type="node_failure",
+                    node_id=node_id,
+                ))
+                if len(self._rebalance_events) > self._rebalance_events_max:
+                    self._rebalance_events = self._rebalance_events[-self._rebalance_events_max:]
 
-        # Fire callbacks (outside lock)
-        for cb in self._on_node_failure_callbacks:
-            try:
-                cb(node_id, self._nodes.get(node_id))
-            except Exception:
-                logger.debug("on_node_failure callback error", exc_info=True)
+        # Fire callbacks (outside lock) — only on the first transition.
+        if not already_unhealthy:
+            for cb in self._on_node_failure_callbacks:
+                try:
+                    cb(node_id, self._nodes.get(node_id))
+                except Exception:
+                    logger.debug("on_node_failure callback error", exc_info=True)
 
-        logger.warning(
-            "Node failure detected: %s (failures=%d)",
-            node_id,
-            fail_count,
-        )
+            logger.warning(
+                "Node failure detected: %s (failures=%d)",
+                node_id,
+                fail_count,
+            )
 
     def on_node_join(self, node_id: str, node: MeshNode | None = None) -> None:
         """Handle a node joining — register and trigger rebalancing.
@@ -982,6 +1008,8 @@ class MeshHealthMonitor:
                 event_type="node_join",
                 node_id=node_id,
             ))
+            if len(self._rebalance_events) > self._rebalance_events_max:
+                self._rebalance_events = self._rebalance_events[-self._rebalance_events_max:]
 
         # Fire callbacks (outside lock)
         for cb in self._on_node_join_callbacks:
