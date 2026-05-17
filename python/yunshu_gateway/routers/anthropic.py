@@ -151,6 +151,14 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("max_tokens: must be a positive integer")
         if self.stop_sequences and len(self.stop_sequences) > 16:
             raise ValueError("stop_sequences: maximum 16 stop sequences")
+        # Validate thinking configuration per Anthropic spec
+        if self.thinking:
+            thinking_type = self.thinking.get("type")
+            if thinking_type == "enabled":
+                budget = self.thinking.get("budget_tokens")
+                if budget is not None:
+                    if not isinstance(budget, int) or budget < 1:
+                        raise ValueError("thinking: budget_tokens must be a positive integer")
         return self
 
 
@@ -413,11 +421,8 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         )
 
     if req.stream:
-        # Note: temp files for streaming are cleaned up by the caller
-        # (HTTP response completion). For long-running streams, this is
-        # acceptable since the files are small.
         return StreamingResponse(
-            _stream_anthropic(engine, messages, req, stop, request, is_batched=is_batched),
+            _stream_anthropic(engine, messages, req, stop, request, is_batched=is_batched, temp_files=_temp_files),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
@@ -468,7 +473,13 @@ def _convert_logit_bias(req):
     """Convert logit_bias keys from str to int for engine compatibility."""
     _lb = req.logit_bias
     if _lb:
-        return {int(k): v for k, v in _lb.items()}
+        result = {}
+        for k, v in _lb.items():
+            try:
+                result[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Skipping non-integer logit_bias key: {k!r}")
+        return result if result else None
     return None
 
 
@@ -532,6 +543,18 @@ async def _non_stream_batched(engine, messages, req, stop):
 
     text_block: dict = {"type": "text", "text": visible_text}
 
+    # Check for matched stop sequences — trim BEFORE tool call extraction
+    matched_stop = None
+    if stop and visible_text:
+        for seq in stop:
+            idx = visible_text.find(seq)
+            if idx != -1:
+                matched_stop = seq
+                # Strip stop sequence text from visible_text per Anthropic spec
+                visible_text = visible_text[:idx]
+                text_block["text"] = visible_text
+                break
+
     # Include logprobs in the text content block if requested
     if req.logprobs:
         _result_lp = getattr(result, 'logprobs', None)
@@ -565,13 +588,6 @@ async def _non_stream_batched(engine, messages, req, stop):
                     "name": tc["name"],
                     "input": inp,
                 })
-
-    matched_stop = None
-    if stop and visible_text:
-        for seq in stop:
-            if visible_text.rstrip().endswith(seq.rstrip()):
-                matched_stop = seq
-                break
 
     stop_reason = _map_stop_reason(result.finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
@@ -660,6 +676,18 @@ async def _non_stream_legacy(engine, messages, req, stop):
             content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
     text_block: dict = {"type": "text", "text": visible_text}
 
+    # Check for matched stop sequences — trim BEFORE tool call extraction
+    matched_stop = None
+    if stop and visible_text:
+        for seq in stop:
+            idx = visible_text.find(seq)
+            if idx != -1:
+                matched_stop = seq
+                # Strip stop sequence text from visible_text per Anthropic spec
+                visible_text = visible_text[:idx]
+                text_block["text"] = visible_text
+                break
+
     # Include logprobs in the text content block if requested
     if req.logprobs:
         _result_lp = getattr(result, 'logprobs', None)
@@ -692,14 +720,6 @@ async def _non_stream_legacy(engine, messages, req, stop):
                     "input": inp,
                 })
 
-    # Check for matched stop sequences
-    matched_stop = None
-    if stop and visible_text:
-        for seq in stop:
-            if visible_text.rstrip().endswith(seq.rstrip()):
-                matched_stop = seq
-                break
-
     stop_reason = _map_stop_reason(finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
     return JSONResponse({
@@ -721,7 +741,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
 
 
 async def _stream_anthropic(
-    engine, messages, req, stop, request, is_batched=False
+    engine, messages, req, stop, request, is_batched=False, temp_files=None
 ) -> AsyncIterator[bytes]:
     """Anthropic SSE streaming with keepalive, disconnect detection, and tool-use deltas."""
     parser = ThinkingParser()
@@ -1030,6 +1050,14 @@ async def _stream_anthropic(
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         _anth_tracker.unregister(message_id)
+        # Clean up temp files created for image blocks during streaming
+        if temp_files:
+            import os as _os
+            for _tf_path in temp_files:
+                try:
+                    _os.unlink(_tf_path)
+                except OSError:
+                    pass
 
     _record_metrics(input_tokens, output_tokens)
 

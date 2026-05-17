@@ -28,12 +28,12 @@ class ModelRegistry:
     _init_lock = threading.Lock()
 
     def __new__(cls) -> ModelRegistry:
-        if cls._instance is None:
-            with cls._init_lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._owners: dict[int, tuple[weakref.ref, str]] = {}
-                    cls._instance._lock = threading.Lock()
+        with cls._init_lock:
+            if cls._instance is None:
+                instance = super().__new__(cls)
+                instance._owners: dict[int, tuple[weakref.ref, str]] = {}
+                instance._lock = threading.Lock()
+                cls._instance = instance  # publish after full initialization
         return cls._instance
 
     def acquire(

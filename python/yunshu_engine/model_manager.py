@@ -463,13 +463,21 @@ class ModelManager:
     async def unload_model(self, model_id: str) -> None:
         """Unload a model and reclaim memory.
 
+        Acquires self._lock for the critical section, then does the
+        expensive GC/cache-clear outside the lock.
+
+        Idempotent: safe to call on already-unloaded or non-existent models.
+        """
+        async with self._lock:
+            await self._unload_model_locked(model_id)
+
+    async def _unload_model_locked(self, model_id: str) -> None:
+        """Internal unload — caller MUST hold self._lock.
+
         oMLX EnginePool._unload_engine pattern:
         - Stop engine, clear reference BEFORE settle barrier
         - gc.collect() + sync + clear_cache on MLX executor
         - Poll mx.get_active_memory() until Metal buffers released
-
-        Idempotent: safe to call on already-unloaded or non-existent models.
-        Thread-safe: acquires self._lock to prevent concurrent load/unload races.
         """
         entry = self._entries.get(model_id)
         if entry is None or not entry.is_loaded:
@@ -485,6 +493,7 @@ class ModelManager:
         entry.is_loaded = False
 
         pre_unload_active = mx.get_active_memory()
+        estimated_bytes = entry.estimated_bytes
 
         if entry.engine is not None:
             # Release model ownership in ModelRegistry
@@ -516,8 +525,8 @@ class ModelManager:
         )
 
         # Memory settle barrier: poll until Metal buffers actually released
-        settle_tolerance = max(2 * 1024**3, int(entry.estimated_bytes * 0.05))
-        min_expected_freed = max(0, entry.estimated_bytes - settle_tolerance)
+        settle_tolerance = max(2 * 1024**3, int(estimated_bytes * 0.05))
+        min_expected_freed = max(0, estimated_bytes - settle_tolerance)
         settled = False
 
         for _ in range(10):
@@ -534,7 +543,7 @@ class ModelManager:
             )
 
         self._current_memory_bytes = max(
-            0, self._current_memory_bytes - entry.estimated_bytes
+            0, self._current_memory_bytes - estimated_bytes
         )
 
         logger.info(
@@ -544,7 +553,11 @@ class ModelManager:
         )
 
     async def _ensure_memory_available(self, needed_bytes: int) -> None:
-        """Evict LRU models until enough memory is free."""
+        """Evict LRU models until enough memory is free.
+
+        Caller MUST hold self._lock. Uses _unload_model_locked to avoid
+        deadlock since asyncio.Lock is not reentrant.
+        """
         if self.max_memory_bytes is None:
             return
 
@@ -556,22 +569,27 @@ class ModelManager:
                     f"used {self._current_memory_bytes / 1e9:.1f} / "
                     f"{self.max_memory_bytes / 1e9:.1f} GB"
                 )
-            await self.unload_model(victim.model_id)
+            await self._unload_model_locked(victim.model_id)
 
     async def _ensure_model_slot_available(self) -> None:
-        """Evict LRU models until under max_models limit."""
+        """Evict LRU models until under max_models limit.
+
+        Caller MUST hold self._lock. Recounts after each eviction to
+        handle concurrent state changes correctly.
+        """
         if self.max_models <= 0:
             return
 
-        loaded_count = sum(1 for e in self._entries.values() if e.is_loaded)
-        while loaded_count >= self.max_models:
+        while True:
+            loaded_count = sum(1 for e in self._entries.values() if e.is_loaded)
+            if loaded_count < self.max_models:
+                break
             victim = self._find_lru_victim()
             if victim is None:
                 raise MemoryError(
                     f"Cannot free model slot: max_models={self.max_models} reached"
                 )
-            await self.unload_model(victim.model_id)
-            loaded_count -= 1
+            await self._unload_model_locked(victim.model_id)
 
     def _find_lru_victim(self) -> Optional[ModelEntry]:
         """Find the least-recently-used non-pinned, loaded model.
@@ -631,14 +649,14 @@ class ModelManager:
 
         unloaded = []
         now = time.monotonic()
-        for entry in list(self._entries.values()):
-            if (
-                entry.is_loaded
-                and not entry.is_pinned
-                and now - entry.last_access > self.ttl_seconds
-            ):
-                await self.unload_model(entry.model_id)
-                unloaded.append(entry.model_id)
+        async with self._lock:
+            candidates = [
+                e for e in self._entries.values()
+                if e.is_loaded and not e.is_pinned and now - e.last_access > self.ttl_seconds
+            ]
+        for entry in candidates:
+            await self.unload_model(entry.model_id)
+            unloaded.append(entry.model_id)
         return unloaded
 
     @property
@@ -755,13 +773,17 @@ class ModelManager:
             event.set()
         self._loading_events.clear()
 
-        for model_id in list(self._entries.keys()):
-            entry = self._entries.get(model_id)
-            if entry and entry.is_loaded:
-                try:
-                    await self.unload_model(model_id)
-                except Exception as e:
-                    logger.error(f"Error unloading {model_id} during shutdown: {e}", exc_info=True)
+        # Collect loaded model IDs under the lock, then unload each
+        async with self._lock:
+            loaded_ids = [
+                mid for mid, e in self._entries.items() if e.is_loaded
+            ]
+
+        for model_id in loaded_ids:
+            try:
+                await self.unload_model(model_id)
+            except Exception as e:
+                logger.error(f"Error unloading {model_id} during shutdown: {e}", exc_info=True)
 
         logger.info(
             "ModelManager shutdown complete: %d models registered, %d loaded",

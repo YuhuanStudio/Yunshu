@@ -489,13 +489,20 @@ class InferenceWorker:
         """Stop and re-start the worker (e.g. after a crash).
 
         Protected by lifecycle lock to prevent concurrent restart attempts.
+        Only one restart can be in-flight at a time.
         """
         with self._lifecycle_lock:
-            if self._state == WorkerState.STOPPING:
-                return  # Already restarting
+            if self._state in (WorkerState.STOPPING, WorkerState.IDLE):
+                return  # Already restarting or not started yet
             self._state = WorkerState.STOPPING  # Prevent concurrent restart
-        self.stop()
-        self.start()
+        try:
+            self.stop()
+            self.start()
+        except Exception:
+            with self._lifecycle_lock:
+                if self._state != WorkerState.CIRCUIT_OPEN:
+                    self._state = WorkerState.CRASHED
+            raise
 
     def submit_request(self, request: dict) -> IsolatedResult:
         """Submit a request to the worker subprocess.
@@ -543,20 +550,25 @@ class InferenceWorker:
         return result
 
     def is_healthy(self) -> bool:
-        """Check if the worker is healthy based on heartbeat + crash count."""
-        if self._state != WorkerState.RUNNING:
-            return False
+        """Check if the worker is healthy based on heartbeat + crash count.
+
+        All reads are under the lifecycle lock to prevent races with
+        state transitions, heartbeat updates, and crash recording.
+        """
+        with self._lifecycle_lock:
+            if self._state != WorkerState.RUNNING:
+                return False
+
+            # Check if circuit breaker is tripped
+            if self._is_circuit_open():
+                return False
 
         # Check heartbeat freshness (allow 3x interval before declaring unhealthy)
+        # _last_heartbeat is updated by heartbeat thread; monotonic read is safe
+        # because Python float assignment is atomic on CPython and the value is
+        # only ever set to time.monotonic() (monotonically increasing).
         heartbeat_age = time.monotonic() - self._last_heartbeat
         if heartbeat_age > self._config.heartbeat_interval_seconds * 3:
-            return False
-
-        # Check if circuit breaker is tripped (lock-protected because
-        # _prune_crash_times modifies the deque)
-        with self._lifecycle_lock:
-            circuit_open = self._is_circuit_open()
-        if circuit_open:
             return False
 
         # Check subprocess is alive
@@ -654,12 +666,14 @@ class InferenceWorker:
             pass
         finally:
             # Only record crash if we exited due to pipe closure (not
-            # intentional stop).  Check STOPPING to avoid false positives
-            # when stop() is in progress.
-            if (
-                self._result_thread_running
-                and self._state not in (WorkerState.STOPPING, WorkerState.STOPPED)
-            ):
+            # intentional stop).  Read both flags under the lifecycle lock
+            # to avoid TOCTOU with stop() which sets both under the same lock.
+            with self._lifecycle_lock:
+                should_record = (
+                    self._result_thread_running
+                    and self._state not in (WorkerState.STOPPING, WorkerState.STOPPED)
+                )
+            if should_record:
                 self._record_crash()
                 with self._lifecycle_lock:
                     if self._state != WorkerState.CIRCUIT_OPEN:
@@ -819,12 +833,15 @@ class WorkerSupervisor:
                 continue
 
             healthy = worker.is_healthy()
+            # Read circuit_open safely under the worker's lifecycle lock
+            with worker._lifecycle_lock:
+                circuit_open = worker._is_circuit_open()
             result[model_id] = {
                 "healthy": healthy,
                 "state": worker.state.name,
                 "model_id": model_id,
                 "stats": worker.stats.to_dict(),
-                "circuit_open": worker._is_circuit_open(),
+                "circuit_open": circuit_open,
                 "has_fallback": model_id in self._fallbacks,
             }
 

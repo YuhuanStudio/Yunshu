@@ -191,6 +191,19 @@ async def create_completion(req: CompletionRequest, request: Request):
     is_batched = isinstance(engine, BatchedEngine)
 
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+
+    # Register with request tracker for cancellation support in non-streaming path
+    _ns_tracker = None
+    _ns_gen = None
+    _ns_cancel_event = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _ns_tracker = get_request_tracker()
+        _ns_gen = _ns_tracker.register(completion_id, req.model)
+        _ns_cancel_event = _ns_gen.cancel_event
+    except Exception:
+        _ns_tracker = None
+
     try:
         async def _gen_one(idx: int):
             if is_batched:
@@ -215,10 +228,11 @@ async def create_completion(req: CompletionRequest, request: Request):
                     reasoning_effort=req.reasoning_effort,
                     xtc_probability=req.xtc_probability,
                     xtc_threshold=req.xtc_threshold,
-                    logprobs=req.logprobs,
+                    logprobs=req.logprobs > 0,
                     top_logprobs=req.top_logprobs,
                     priority=req.priority,
                     logits_processors=req.logits_processors,
+                    cancel_event=_ns_cancel_event,
                 )
                 text = result.text
                 pt = result.prompt_tokens
@@ -226,6 +240,10 @@ async def create_completion(req: CompletionRequest, request: Request):
                 fr = result.finish_reason
                 rt = getattr(result, 'reasoning_tokens', 0)
                 lp = None
+                if req.logprobs > 0:
+                    lp = _format_logprobs(
+                        result, getattr(engine, '_tokenizer', None), req.logprobs
+                    )
             else:
                 state = await engine.generate(
                     prompt=prompt,
@@ -252,6 +270,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     top_logprobs=req.top_logprobs,
                     priority=req.priority,
                     logits_processors=req.logits_processors,
+                    cancel_event=_ns_cancel_event,
                 )
                 text = state.generated_text
                 pt = state.prompt_token_count
@@ -331,6 +350,11 @@ async def create_completion(req: CompletionRequest, request: Request):
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
+        if _ns_tracker is not None:
+            try:
+                _ns_tracker.unregister(completion_id)
+            except Exception:
+                pass
 
 
 async def _stream_completion(
@@ -510,7 +534,10 @@ async def _stream_completion(
         yield b"data: [DONE]\n\n"
     finally:
         _release_lora_adapter(engine, loaded_adapter)
-        _tracker.unregister(completion_id)
+        try:
+            _tracker.unregister(completion_id)
+        except Exception:
+            pass
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:

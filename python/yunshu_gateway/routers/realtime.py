@@ -241,6 +241,8 @@ class RealtimeSession:
         self._vad_speaking = False
         self._vad_silence_start: float | None = None
         self._vad_speech_start_offset: int = 0
+        # Track whether the active response includes audio modality
+        self._active_modalities: list[str] = []
 
     async def send_event(self, event: dict) -> None:
         try:
@@ -426,6 +428,7 @@ class RealtimeSession:
         )
         self._active_response._response_id = response_id
         self._active_response._item_id = item_id
+        self._active_modalities = modalities
 
     async def _generate_response(
         self,
@@ -663,6 +666,7 @@ class RealtimeSession:
             # Prevents race: cancel → new response.create → old finally wipes new task ref.
             if self._active_response is asyncio.current_task():
                 self._active_response = None
+                self._active_modalities = []
             self._cancel_event = None
 
     async def _handle_response_cancel(self, event: dict) -> None:
@@ -687,14 +691,21 @@ class RealtimeSession:
                 await task
             except asyncio.CancelledError:
                 pass
-            # Signal audio truncation so client stops playback immediately
-            await self.send_event(_event(
-                RealtimeEvent.RESPONSE_AUDIO_DONE,
-                response_id=response_id,
-                item_id=item_id,
-                output_index=0,
-                content_index=0,
-            ))
+            # Signal audio truncation if audio modality was active.
+            # Send when audio was in modalities, or when modalities are unknown
+            # (edge case: cancel without a proper response.create flow).
+            _has_audio = (
+                "audio" in self._active_modalities
+                or not self._active_modalities
+            )
+            if _has_audio:
+                await self.send_event(_event(
+                    RealtimeEvent.RESPONSE_AUDIO_DONE,
+                    response_id=response_id,
+                    item_id=item_id,
+                    output_index=0,
+                    content_index=0,
+                ))
 
     async def _synthesize_audio_response(
         self, text: str, response_id: str, item_id: str,
@@ -875,14 +886,13 @@ class RealtimeSession:
 
         # Transcribe via ASR engine
         try:
-            import tempfile, os, numpy as np
+            import tempfile, os
             from ..engine import get_model_manager
 
             # Convert raw PCM to WAV for ASR engine
             import wave
             fd, tmp_path = tempfile.mkstemp(suffix=".wav")
-            with os.fdopen(fd, "wb") as _f:
-                pass  # Just create the file; wave.open will write to it
+            os.close(fd)  # Close raw fd so wave.open can write to the path
             with wave.open(tmp_path, 'wb') as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)  # 16-bit

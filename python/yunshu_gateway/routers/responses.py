@@ -255,6 +255,18 @@ async def create_response(req: ResponsesRequest, request: Request):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # Non-streaming: register with request tracker for cancellation support
+    _ns_tracker = None
+    _ns_gen = None
+    _ns_cancel_event = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _ns_tracker = get_request_tracker()
+        _ns_gen = _ns_tracker.register(response_id, req.model)
+        _ns_cancel_event = _ns_gen.cancel_event
+    except Exception:
+        _ns_tracker = None
+
     # Non-streaming: LoRA is released in the finally block below.
     try:
         from yunshu_engine.batched_engine import BatchedEngine
@@ -288,6 +300,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                cancel_event=_ns_cancel_event,
             )
             text = result.text
             pt = result.prompt_tokens
@@ -321,6 +334,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                cancel_event=_ns_cancel_event,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -366,6 +380,17 @@ async def create_response(req: ResponsesRequest, request: Request):
                     "arguments": tc["arguments"],
                 })
 
+        _record_metrics(pt, ct)
+
+        # End tracing
+        tracer.end_trace(trace_id, result={
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "finish_reason": finish_reason,
+        })
+        slog.info("inference_complete", model=req.model, trace_id=trace_id,
+                  prompt_tokens=pt, completion_tokens=ct)
+
         return JSONResponse({
             "id": response_id,
             "object": "response",
@@ -381,7 +406,6 @@ async def create_response(req: ResponsesRequest, request: Request):
                 **({"input_tokens_details": {"cached_tokens": _cached_tokens}} if _cached_tokens else {}),
             },
         })
-        _record_metrics(pt, ct)
     except MemoryError:
         return JSONResponse(
             status_code=507,
@@ -395,6 +419,11 @@ async def create_response(req: ResponsesRequest, request: Request):
         )
     finally:
         _release_lora_adapter(engine, loaded_adapter)
+        if _ns_tracker is not None:
+            try:
+                _ns_tracker.unregister(response_id)
+            except Exception:
+                pass
 
 
 async def _stream_response(engine, req, messages, response_id, json_schema, loaded_adapter=None, request=None):

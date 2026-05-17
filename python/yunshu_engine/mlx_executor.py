@@ -11,6 +11,7 @@ This is the foundation for safe multi-model serving.
 
 import logging
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import mlx.core as mx
@@ -18,6 +19,7 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 _executor: ThreadPoolExecutor | None = None
+_executor_lock = threading.Lock()
 
 
 def _init_mlx_thread() -> None:
@@ -45,18 +47,39 @@ def _init_mlx_thread() -> None:
 def get_mlx_executor() -> ThreadPoolExecutor:
     """Get or create the global MLX executor (lazy singleton).
 
+    Thread-safe: concurrent callers will not create duplicate executors.
+
     mlx-lm's BatchGenerator uses a module-level Metal stream (generation_stream),
     so ALL MLX GPU operations across all models MUST be serialized onto one thread
     to prevent Metal command buffer races that cause segfaults.
     """
     global _executor
     if _executor is None:
-        _executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="mlx-global",
-            initializer=_init_mlx_thread,
-        )
+        with _executor_lock:
+            if _executor is None:
+                _executor = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="mlx-global",
+                    initializer=_init_mlx_thread,
+                )
     return _executor
+
+
+def shutdown_mlx_executor(wait: bool = True) -> None:
+    """Shut down the global MLX executor.
+
+    Should be called during graceful server shutdown to ensure all
+    pending GPU work completes before process exit.
+
+    Args:
+        wait: If True, block until all submitted work is done.
+    """
+    global _executor
+    with _executor_lock:
+        if _executor is not None:
+            _executor.shutdown(wait=wait)
+            _executor = None
+            logger.info("MLX executor shut down")
 
 
 def sync_and_clear_cache() -> None:
@@ -68,12 +91,17 @@ def sync_and_clear_cache() -> None:
     'completeMemory() prepare count underflow' kernel panic on M4 hardware
     (and SIGSEGV/SIGABRT on M3).
 
+    Safe to call even if the MLX executor has not been started or was
+    already shut down — synchronization happens on the current thread.
+
     Studied from oMLX scheduler.py:_sync_and_clear_cache().
     """
     try:
         gen_mod = sys.modules.get("mlx_lm.generate")
         if gen_mod is not None and hasattr(gen_mod, "generation_stream"):
-            mx.synchronize(gen_mod.generation_stream)
+            stream = getattr(gen_mod, "generation_stream", None)
+            if stream is not None:
+                mx.synchronize(stream)
     except RuntimeError:
         pass
     mx.synchronize()
