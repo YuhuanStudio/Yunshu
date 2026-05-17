@@ -222,7 +222,7 @@ async def delete_model(model_id: str, request: Request, _=Depends(require_permis
 
 
 @router.get("/config/engine")
-async def get_engine_config():
+async def get_engine_config(_=Depends(require_permission("can_view_admin"))):
     """Get current engine configuration."""
     from yunshu_gateway.engine import get_engine
 
@@ -242,7 +242,10 @@ async def get_engine_config():
 
 
 @router.patch("/config/engine")
-async def update_engine_config(req: EngineConfigUpdate):
+async def update_engine_config(
+    req: EngineConfigUpdate,
+    _=Depends(require_permission("can_load_models")),
+):
     """Update engine configuration (takes effect on next request cycle)."""
     from yunshu_gateway.engine import get_engine
 
@@ -251,11 +254,22 @@ async def update_engine_config(req: EngineConfigUpdate):
         raise HTTPException(status_code=503, detail="Engine not initialized")
 
     cfg = engine.config
+    updates = req.model_dump(exclude_none=True)
+    if not updates:
+        return {"status": "no_changes", "fields": []}
+
     updated = []
-    for field, value in req.model_dump(exclude_none=True).items():
+    for field, value in updates.items():
         if hasattr(cfg, field):
-            setattr(cfg, field, value)
-            updated.append(field)
+            old_val = getattr(cfg, field)
+            if old_val != value:
+                setattr(cfg, field, value)
+                updated.append(field)
+        else:
+            logger.warning("Ignored unknown config field: %s", field)
+
+    if updated:
+        logger.info("Engine config updated: %s", updated)
 
     return {"status": "updated", "fields": updated}
 
@@ -266,7 +280,7 @@ async def update_engine_config(req: EngineConfigUpdate):
 @router.get("/models/{model_id}/settings")
 async def get_model_settings(model_id: str, _=Depends(require_permission("can_view_admin"))):
     """Get per-model runtime settings."""
-    from yunshu_engine.model_manager import get_model_manager
+    from yunshu_gateway.engine import get_model_manager
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not available")
@@ -298,7 +312,7 @@ async def update_model_settings(
     _=Depends(require_permission("can_load_models")),
 ):
     """Update per-model runtime settings (hot-reloadable)."""
-    from yunshu_engine.model_manager import get_model_manager
+    from yunshu_gateway.engine import get_model_manager
     manager = get_model_manager()
     if manager is None:
         raise HTTPException(status_code=503, detail="Model manager not available")

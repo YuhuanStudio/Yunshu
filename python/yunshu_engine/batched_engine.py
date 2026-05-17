@@ -1146,6 +1146,123 @@ class BatchedEngine:
             return True
         return False
 
+    # ── Non-generative tasks: embeddings, pooling ────────────────────────────
+
+    def embed(self, texts: list[str], normalize: bool = True) -> list[list[float]]:
+        """Generate embeddings for the given texts.
+
+        Uses the model's forward pass to extract hidden states, applies mean
+        pooling, and optionally L2-normalizes the result (default: True, matching
+        the OpenAI embeddings API contract).
+
+        Runs synchronously — callers in async contexts should wrap with
+        ``await loop.run_in_executor(get_mlx_executor(), engine.embed, texts)``.
+        """
+        if not self._loaded or self._model is None or self._tokenizer is None:
+            raise RuntimeError("Engine not loaded — call start() first")
+
+        import mlx.core as mx
+
+        embeddings: list[list[float]] = []
+        for text in texts:
+            tokens = self._tokenizer.encode(text)
+            if not tokens:
+                # Return zero vector of the model's hidden size
+                hidden_size = self._get_hidden_size()
+                embeddings.append([0.0] * hidden_size)
+                continue
+
+            input_ids = mx.array([tokens])
+            output = self._model(input_ids)
+
+            # Extract hidden states from model output
+            hidden = self._extract_hidden_states(output)
+
+            # Mean pooling over sequence dimension
+            pooled = mx.mean(hidden, axis=1).squeeze(0)
+
+            if normalize:
+                norm = mx.sqrt(mx.sum(pooled * pooled) + 1e-12)
+                pooled = pooled / norm
+
+            embeddings.append(pooled.tolist())
+
+        return embeddings
+
+    def pool(self, texts: list[str], pooling_type: str = "MEAN") -> list[list[float]]:
+        """Extract pooled hidden states for the given texts.
+
+        Args:
+            texts: List of input strings.
+            pooling_type: One of "MEAN", "CLS", "LAST".
+
+        Returns:
+            List of pooled hidden-state vectors (NOT normalized).
+        """
+        if not self._loaded or self._model is None or self._tokenizer is None:
+            raise RuntimeError("Engine not loaded — call start() first")
+
+        import mlx.core as mx
+
+        results: list[list[float]] = []
+        for text in texts:
+            tokens = self._tokenizer.encode(text)
+            if not tokens:
+                hidden_size = self._get_hidden_size()
+                results.append([0.0] * hidden_size)
+                continue
+
+            input_ids = mx.array([tokens])
+            output = self._model(input_ids)
+            hidden = self._extract_hidden_states(output)
+
+            if pooling_type.upper() == "CLS":
+                pooled = hidden[0, 0, :]  # batch=0, first token
+            elif pooling_type.upper() == "LAST":
+                pooled = hidden[0, -1, :]  # batch=0, last token
+            else:  # MEAN
+                pooled = mx.mean(hidden, axis=1).squeeze(0)  # [1, seq, d] -> [1, d] -> [d]
+
+            results.append(pooled.tolist())
+
+        return results
+
+    def _extract_hidden_states(self, output) -> "mx.array":
+        """Extract hidden states from various model output formats.
+
+        MLX models return either:
+        - A plain mx.array (the logits or hidden states)
+        - A tuple/list where the first element is hidden states
+        - An object with .last_hidden_state attribute
+        """
+        import mlx.core as mx
+
+        if isinstance(output, mx.array):
+            # Output shape: [batch, seq_len, hidden_size]
+            return output
+        if isinstance(output, (tuple, list)):
+            return output[0]
+        if hasattr(output, 'last_hidden_state'):
+            return output.last_hidden_state
+        # Fallback
+        return output[0] if isinstance(output, (tuple, list)) else output
+
+    def _get_hidden_size(self) -> int:
+        """Get the model's hidden dimension size."""
+        if hasattr(self._model, 'config'):
+            cfg = self._model.config
+            for attr in ('hidden_size', 'd_model', 'n_embd', 'embed_dim'):
+                val = getattr(cfg, attr, None)
+                if val is not None:
+                    return val
+        # Heuristic: check model layers
+        if hasattr(self._model, 'layers') and len(self._model.layers) > 0:
+            layer = self._model.layers[0]
+            if hasattr(layer, 'mlp') and hasattr(layer.mlp, 'fc1'):
+                return layer.mlp.fc1.weight.shape[1]
+        # Default fallback for common models
+        return 768
+
     async def generate(
         self,
         prompt: str,

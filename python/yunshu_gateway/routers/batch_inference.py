@@ -3,20 +3,37 @@ from __future__ import annotations
 
 Leverages Yunshu's continuous batching to handle multiple prompts
 in a single batch with optimal GPU utilization.
+
+Features:
+- Configurable concurrency and batch timeout
+- Progress tracking via in-memory store + status/results endpoints
+- Partial success: individual item failures don't abort the batch
+- CSV upload for bulk prompts and CSV download of results
 """
 
 import asyncio
+import csv
+import io
 import logging
+import os
+import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["batch"])
+
+# Configurable limits
+_BATCH_MAX_ITEMS = int(os.environ.get("YUNSHU_BATCH_MAX_ITEMS", "500"))
+_BATCH_DEFAULT_TIMEOUT = float(os.environ.get("YUNSHU_BATCH_TIMEOUT", "300"))
+
+# In-memory progress tracking
+_batch_store: dict[str, dict] = {}
 
 
 class BatchItem(BaseModel):
@@ -28,7 +45,11 @@ class BatchItem(BaseModel):
 
 class BatchRequest(BaseModel):
     requests: list[BatchItem]
-    max_concurrent: int = 4
+    max_concurrent: int = Field(default=4, ge=1, le=64)
+    timeout: float = Field(
+        default=_BATCH_DEFAULT_TIMEOUT,
+        description="Seconds before the entire batch is aborted",
+    )
 
 
 class BatchResponse(BaseModel):
@@ -40,52 +61,261 @@ class BatchResponse(BaseModel):
 
 @router.post("/batch", response_model=None)
 async def create_batch(req: BatchRequest):
-    """Execute a batch of inference requests concurrently."""
+    """Execute a batch of inference requests concurrently.
+
+    Supports configurable concurrency, batch timeout, and partial success.
+    """
     if not req.requests:
         raise HTTPException(status_code=400, detail="Batch cannot be empty")
 
-    if len(req.requests) > 100:
+    if len(req.requests) > _BATCH_MAX_ITEMS:
         raise HTTPException(
             status_code=400,
-            detail=f"Batch size {len(req.requests)} exceeds limit of 100",
+            detail=f"Batch size {len(req.requests)} exceeds limit of {_BATCH_MAX_ITEMS} (set YUNSHU_BATCH_MAX_ITEMS env var)",
         )
 
     batch_id = f"batch_{uuid.uuid4().hex[:24]}"
+    total = len(req.requests)
+
+    # Initialize progress tracking
+    _batch_store[batch_id] = {
+        "id": batch_id,
+        "status": "in_progress",
+        "total": total,
+        "completed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "started_at": time.time(),
+        "results": [None] * total,
+    }
+
     semaphore = asyncio.Semaphore(req.max_concurrent)
-
-    async def _process_item(item: BatchItem) -> dict:
-        async with semaphore:
-            return await _execute_batch_item(item)
-
-    tasks = [_process_item(item) for item in req.requests]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    processed = []
+    processed = [None] * total
     errors = 0
-    for item, result in zip(req.requests, results):
-        if isinstance(result, Exception):
-            processed.append({
-                "custom_id": item.custom_id,
-                "status": "error",
-                "error": str(result),
-            })
-            errors += 1
-        else:
-            processed.append({
-                "custom_id": item.custom_id,
-                "status": "success",
-                "response": result,
-            })
+    timed_out = 0
 
-    return JSONResponse({
+    async def _process_item(index: int, item: BatchItem) -> tuple[int, dict, str]:
+        async with semaphore:
+            result = await _execute_batch_item(item)
+        return index, result, "success"
+
+    tasks = [_process_item(i, item) for i, item in enumerate(req.requests)]
+    task_handles = [asyncio.create_task(t) for t in tasks]
+
+    try:
+        done, pending = await asyncio.wait(task_handles, timeout=req.timeout)
+    except Exception as exc:
+        _batch_store[batch_id]["status"] = "error"
+        raise HTTPException(status_code=500, detail=f"Batch execution failed: {exc}")
+
+    # Cancel pending tasks
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    timed_out = len(pending)
+
+    # Collect results
+    for task in done:
+        try:
+            index, result, status = task.result()
+            processed[index] = {
+                "custom_id": req.requests[index].custom_id,
+                "status": status,
+                "response": result,
+            }
+        except Exception as exc:
+            for i in range(total):
+                if processed[i] is None:
+                    processed[i] = {
+                        "custom_id": req.requests[i].custom_id,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                    errors += 1
+                    break
+
+    # Handle timed-out items
+    for i in range(total):
+        if processed[i] is None:
+            processed[i] = {
+                "custom_id": req.requests[i].custom_id,
+                "status": "error",
+                "error": "Timed out",
+            }
+            errors += 1
+
+    final_status = "completed" if errors == 0 else ("partial" if errors < total else "failed")
+
+    response_data = {
         "id": batch_id,
         "object": "batch",
-        "status": "completed",
-        "total": len(processed),
-        "succeeded": len(processed) - errors,
+        "status": final_status,
+        "total": total,
+        "succeeded": total - errors,
         "failed": errors,
+        "timed_out": timed_out,
+        "elapsed_s": round(time.time() - _batch_store[batch_id]["started_at"], 2),
         "results": processed,
+    }
+
+    _batch_store[batch_id].update({
+        "status": final_status,
+        "completed": total,
+        "succeeded": total - errors,
+        "failed": errors,
+        "timed_out": timed_out,
+        "results": processed,
+        "finished_at": time.time(),
     })
+
+    return JSONResponse(response_data)
+
+
+@router.get("/batch/{batch_id}/status")
+async def get_batch_status(batch_id: str):
+    """Get progress/status of a previously submitted batch."""
+    info = _batch_store.get(batch_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    summary = {
+        "id": info["id"],
+        "status": info["status"],
+        "total": info["total"],
+        "completed": info["completed"],
+        "succeeded": info["succeeded"],
+        "failed": info["failed"],
+    }
+    if "finished_at" in info:
+        summary["elapsed_s"] = round(info["finished_at"] - info["started_at"], 2)
+    else:
+        summary["elapsed_s"] = round(time.time() - info["started_at"], 2)
+    return JSONResponse(summary)
+
+
+@router.get("/batch/{batch_id}/results")
+async def get_batch_results(batch_id: str):
+    """Get full results of a completed batch."""
+    info = _batch_store.get(batch_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    if info["status"] == "in_progress":
+        raise HTTPException(status_code=409, detail="Batch is still in progress")
+    return JSONResponse({
+        "id": info["id"],
+        "status": info["status"],
+        "total": info["total"],
+        "succeeded": info["succeeded"],
+        "failed": info["failed"],
+        "results": info["results"],
+    })
+
+
+@router.get("/batch/{batch_id}/results.csv")
+async def download_batch_csv(batch_id: str):
+    """Download batch results as CSV file."""
+    info = _batch_store.get(batch_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    if info["status"] == "in_progress":
+        raise HTTPException(status_code=409, detail="Batch is still in progress")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["custom_id", "status", "finish_reason", "content", "error",
+                      "prompt_tokens", "completion_tokens", "total_tokens"])
+
+    for r in info["results"]:
+        if r is None:
+            continue
+        row = [r.get("custom_id", ""), r.get("status", "")]
+        resp = r.get("response", {})
+        if resp:
+            choices = resp.get("choices", [])
+            if choices:
+                row.append(choices[0].get("finish_reason", ""))
+                msg = choices[0].get("message", {})
+                row.append(msg.get("content", ""))
+            else:
+                row.extend(["", ""])
+            usage = resp.get("usage", {})
+            row.extend([
+                usage.get("prompt_tokens", ""),
+                usage.get("completion_tokens", ""),
+                usage.get("total_tokens", ""),
+            ])
+        else:
+            row.extend(["", r.get("error", ""), "", "", ""])
+        writer.writerow(row)
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=batch_{batch_id}.csv"},
+    )
+
+
+@router.post("/batch/upload/csv", response_model=None)
+async def upload_batch_csv(
+    file: UploadFile = File(...),
+    model: str = "default",
+    max_tokens: int = 512,
+    max_concurrent: int = 4,
+):
+    """Upload a CSV file with prompts and execute as a batch.
+
+    Expected CSV columns: custom_id, prompt (or messages_json)
+    Optional columns: max_tokens, temperature, system_prompt
+    """
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are accepted")
+
+    content = await file.read()
+    text_content = content.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text_content))
+
+    items: list[BatchItem] = []
+    for row in reader:
+        custom_id = row.get("custom_id", str(uuid.uuid4().hex[:8]))
+        prompt = row.get("prompt", "")
+        messages_json = row.get("messages_json", "")
+        system_prompt = row.get("system_prompt", "")
+        row_max_tokens = int(row.get("max_tokens", max_tokens))
+        row_temp = float(row.get("temperature", 0.7))
+
+        if messages_json:
+            import json
+            try:
+                messages = json.loads(messages_json)
+            except json.JSONDecodeError:
+                messages = [{"role": "user", "content": prompt}]
+        elif prompt:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+        else:
+            continue
+
+        items.append(BatchItem(
+            custom_id=custom_id,
+            url="/v1/chat/completions",
+            body={
+                "model": model,
+                "messages": messages,
+                "max_tokens": row_max_tokens,
+                "temperature": row_temp,
+            },
+        ))
+
+    if not items:
+        raise HTTPException(status_code=400, detail="CSV contained no valid prompts")
+
+    batch_req = BatchRequest(requests=items, max_concurrent=max_concurrent)
+    return await create_batch(batch_req)
 
 
 async def _execute_batch_item(item: BatchItem) -> dict:

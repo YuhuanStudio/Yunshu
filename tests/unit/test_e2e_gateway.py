@@ -286,7 +286,7 @@ class TestE2EGateway:
             json={
                 "requests": [
                     {"custom_id": f"r{i}", "body": {"model": "test"}}
-                    for i in range(101)
+                    for i in range(501)
                 ]
             },
         )

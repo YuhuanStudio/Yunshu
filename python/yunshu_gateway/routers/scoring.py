@@ -1,13 +1,14 @@
 from __future__ import annotations
-"""Scoring endpoints: /v1/pooling, /v1/score, /v1/rerank.
+"""Scoring endpoints: /v1/pooling, /v1/score, /v1/rerank, /v1/classify.
 
 Implements vLLM-compatible scoring endpoints built on the existing
-embeddings infrastructure. All three endpoints leverage the same
+embeddings infrastructure. All endpoints leverage the same
 underlying engine resolution and embedding generation.
 
-- /v1/pooling  — raw hidden state pooling (CLS, mean, last)
-- /v1/score    — single/pair similarity scoring
+- /v1/pooling  — raw hidden state pooling (CLS, MEAN, LAST)
+- /v1/score    — single/pair similarity scoring (cosine, dot, euclidean)
 - /v1/rerank   — cross-encoder reranking with relevance scores
+- /v1/classify — zero-shot classification via label similarity
 """
 import logging
 import math
@@ -22,8 +23,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["scoring"])
 
+_VALID_POOLING_TYPES = {"CLS", "MEAN", "LAST"}
+_VALID_SCORING_TYPES = {"cosine", "dot", "euclidean"}
+_MAX_DOCUMENT_LENGTH = 8192  # max characters per document for rerank
 
-# ── /v1/pooling ──────────────────────────────────────────────────────────────
+
+# ── Request models ───────────────────────────────────────────────────────────
 
 class PoolingRequest(BaseModel):
     model: str
@@ -32,18 +37,49 @@ class PoolingRequest(BaseModel):
     encoding_format: str = "float"
 
 
+class ScoreRequest(BaseModel):
+    model: str
+    text_1: str | list[str]
+    text_2: str | list[str]
+    scoring_type: str = "cosine"  # cosine, dot, euclidean
+
+
+class RerankRequest(BaseModel):
+    model: str
+    query: str
+    documents: list[str]
+    top_n: Optional[int] = None
+    return_documents: bool = True
+
+
+class ClassifyRequest(BaseModel):
+    model: str
+    input: str
+    labels: list[str] = Field(default_factory=list)
+
+
+# ── /v1/pooling ──────────────────────────────────────────────────────────────
+
 @router.post("/pooling", response_model=None)
 async def create_pooling(req: PoolingRequest):
     texts = req.input if isinstance(req.input, list) else [req.input]
     if not texts:
         raise HTTPException(status_code=400, detail="Input cannot be empty")
 
+    # Validate pooling type
+    if req.pooling_type.upper() not in _VALID_POOLING_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid pooling_type '{req.pooling_type}'. "
+                   f"Must be one of: {', '.join(sorted(_VALID_POOLING_TYPES))}",
+        )
+
     engine = await _resolve_engine(req.model)
     if engine is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")
 
     try:
-        raw = await _get_hidden_states(engine, texts, req.pooling_type)
+        raw = await _get_hidden_states(engine, texts, req.pooling_type.upper())
     except MemoryError:
         logger.error("Pooling OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory")
@@ -55,6 +91,8 @@ async def create_pooling(req: PoolingRequest):
     total_tokens = 0
     tok = getattr(engine, '_tokenizer', None)
     for i, vec in enumerate(raw):
+        if not vec:
+            continue
         if req.encoding_format == "base64":
             import base64, struct
             packed = struct.pack(f"{len(vec)}f", *vec)
@@ -74,25 +112,33 @@ async def create_pooling(req: PoolingRequest):
 
 # ── /v1/score ────────────────────────────────────────────────────────────────
 
-class ScoreRequest(BaseModel):
-    model: str
-    text_1: str | list[str]
-    text_2: str | list[str]
-    scoring_type: str = "cosine"  # cosine, dot, euclidean
-
-
 @router.post("/score", response_model=None)
 async def create_score(req: ScoreRequest):
     texts_a = req.text_1 if isinstance(req.text_1, list) else [req.text_1]
     texts_b = req.text_2 if isinstance(req.text_2, list) else [req.text_2]
 
+    # Validate scoring type
+    if req.scoring_type not in _VALID_SCORING_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid scoring_type '{req.scoring_type}'. "
+                   f"Must be one of: {', '.join(sorted(_VALID_SCORING_TYPES))}",
+        )
+
+    if not texts_a or not texts_b:
+        raise HTTPException(status_code=400, detail="text_1 and text_2 cannot be empty")
+
+    # Broadcast single-element lists
     if len(texts_a) != len(texts_b):
         if len(texts_a) == 1:
             texts_a = texts_a * len(texts_b)
         elif len(texts_b) == 1:
             texts_b = texts_b * len(texts_a)
         else:
-            raise HTTPException(status_code=400, detail="text_1 and text_2 must have same length or be broadcastable (length 1)")
+            raise HTTPException(
+                status_code=400,
+                detail="text_1 and text_2 must have same length or be broadcastable (length 1)",
+            )
 
     engine = await _resolve_engine(req.model)
     if engine is None:
@@ -127,27 +173,38 @@ async def create_score(req: ScoreRequest):
 
 # ── /v1/rerank ───────────────────────────────────────────────────────────────
 
-class RerankRequest(BaseModel):
-    model: str
-    query: str
-    documents: list[str]
-    top_n: Optional[int] = None
-    return_documents: bool = True
-
-
 @router.post("/rerank", response_model=None)
 async def create_rerank(req: RerankRequest):
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
     if not req.documents:
         raise HTTPException(status_code=400, detail="Documents cannot be empty")
+    if len(req.documents) > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many documents: {len(req.documents)} > 2048",
+        )
+
+    # Truncate long documents
+    truncated_docs = []
+    for doc in req.documents:
+        if len(doc) > _MAX_DOCUMENT_LENGTH:
+            logger.debug(
+                "Truncating document from %d to %d chars",
+                len(doc), _MAX_DOCUMENT_LENGTH,
+            )
+            truncated_docs.append(doc[:_MAX_DOCUMENT_LENGTH])
+        else:
+            truncated_docs.append(doc)
 
     engine = await _resolve_engine(req.model)
     if engine is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")
 
     try:
-        # Build query+doc pairs and compute embeddings
+        # Compute normalized embeddings for query and documents
         query_emb = (await _get_embeddings(engine, [req.query]))[0]
-        doc_embs = await _get_embeddings(engine, req.documents)
+        doc_embs = await _get_embeddings(engine, truncated_docs)
     except MemoryError:
         logger.error("Rerank OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory")
@@ -155,11 +212,15 @@ async def create_rerank(req: RerankRequest):
         logger.error(f"Rerank error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Reranking failed")
 
-    # Score each document against the query
+    # Score each document against the query using cosine similarity
+    # Since embeddings are L2-normalized, cosine similarity = dot product
     scored = []
     for i, doc_emb in enumerate(doc_embs):
+        if not doc_emb:
+            scored.append((i, 0.0))
+            continue
         cos_sim = _compute_similarity(query_emb, doc_emb, "cosine")
-        # Scale to [0, 1] relevance range
+        # Scale cosine [-1, 1] to relevance [0, 1]
         relevance = (cos_sim + 1.0) / 2.0
         scored.append((i, relevance))
 
@@ -172,7 +233,7 @@ async def create_rerank(req: RerankRequest):
 
     tok = getattr(engine, '_tokenizer', None)
     total_tokens = len(tok.encode(req.query)) if tok else max(1, len(req.query) // 4)
-    for doc in req.documents:
+    for doc in truncated_docs:
         total_tokens += len(tok.encode(doc)) if tok else max(1, len(doc) // 4)
 
     results = []
@@ -194,17 +255,23 @@ async def create_rerank(req: RerankRequest):
     })
 
 
-# ── Shared helpers ───────────────────────────────────────────────────────────
+# ── /v1/classify ─────────────────────────────────────────────────────────────
 
 @router.post("/classify", response_model=None)
-async def classify_input(req: "ClassifyRequest"):
+async def classify_input(req: ClassifyRequest):
     """Classify input text using a model's hidden states.
 
     Returns class probabilities computed from the model's pooled
     hidden representation using a softmax over label embeddings.
+    Uses temperature scaling (temperature=0.07) on cosine similarities
+    to produce well-separated probability distributions.
     """
-    if not req.input:
+    if not req.input or not req.input.strip():
         raise HTTPException(status_code=400, detail="Input cannot be empty")
+    if not req.labels:
+        raise HTTPException(status_code=400, detail="Labels cannot be empty")
+    if len(req.labels) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 labels required for classification")
 
     engine = await _resolve_engine(req.model)
     if engine is None:
@@ -212,6 +279,7 @@ async def classify_input(req: "ClassifyRequest"):
 
     try:
         input_emb = (await _get_embeddings(engine, [req.input]))[0]
+        label_embs = await _get_embeddings(engine, req.labels)
     except MemoryError:
         logger.error("Classify OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory")
@@ -219,26 +287,26 @@ async def classify_input(req: "ClassifyRequest"):
         logger.error(f"Classify error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Classification failed")
 
-    if req.labels:
-        label_embs = await _get_embeddings(engine, req.labels)
-        scores = []
-        for label_emb in label_embs:
-            sim = _compute_similarity(input_emb, label_emb, "cosine")
-            scores.append(sim)
-        # Softmax normalization
-        import math
-        max_score = max(scores) if scores else 0
-        exp_scores = [math.exp(s - max_score) for s in scores]
-        total = sum(exp_scores)
-        probs = [e / total for e in exp_scores]
+    # Compute cosine similarity between input and each label embedding.
+    # Temperature scaling (0.07) sharpens the distribution so the top label
+    # gets a meaningful probability rather than a near-uniform spread.
+    temperature = 0.07
+    scores = []
+    for label_emb in label_embs:
+        sim = _compute_similarity(input_emb, label_emb, "cosine")
+        scores.append(sim / temperature)
 
-        results = []
-        for i, (label, prob) in enumerate(zip(req.labels, probs)):
-            results.append({"label": label, "score": round(prob, 6), "index": i})
+    # Stable softmax
+    max_score = max(scores) if scores else 0
+    exp_scores = [math.exp(s - max_score) for s in scores]
+    total = sum(exp_scores)
+    probs = [e / total for e in exp_scores]
 
-        results.sort(key=lambda x: x["score"], reverse=True)
-    else:
-        results = []
+    results = []
+    for i, (label, prob) in enumerate(zip(req.labels, probs)):
+        results.append({"label": label, "score": round(prob, 6), "index": i})
+
+    results.sort(key=lambda x: x["score"], reverse=True)
 
     return JSONResponse({
         "model": req.model,
@@ -246,11 +314,7 @@ async def classify_input(req: "ClassifyRequest"):
     })
 
 
-class ClassifyRequest(BaseModel):
-    model: str
-    input: str
-    labels: list[str] = Field(default_factory=list)
-
+# ── Shared helpers ───────────────────────────────────────────────────────────
 
 async def _resolve_engine(model_id: str):
     from ..engine import get_engine, get_model_manager
@@ -272,21 +336,50 @@ async def _resolve_engine(model_id: str):
 
 
 async def _get_embeddings(engine, texts: list[str]) -> list[list[float]]:
+    """Get L2-normalized embeddings for scoring tasks.
+
+    Uses engine.embed() when available (already normalized).
+    Falls back to raw hidden-state extraction + mean pooling + L2 normalization.
+    """
     if hasattr(engine, 'embed'):
-        return engine.embed(texts)
-    return await _fallback_embeddings(engine, texts, "MEAN")
+        import asyncio
+        from yunshu_engine.mlx_executor import get_mlx_executor
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(get_mlx_executor(), engine.embed, texts)
+
+    return await _fallback_embeddings(engine, texts, "MEAN", normalize=True)
 
 
 async def _get_hidden_states(engine, texts: list[str], pooling_type: str) -> list[list[float]]:
-    if hasattr(engine, 'embed'):
-        embs = engine.embed(texts)
-        if pooling_type == "CLS" and hasattr(engine, 'embed_cls'):
-            return engine.embed_cls(texts)
-        return embs
-    return await _fallback_embeddings(engine, texts, pooling_type)
+    """Get pooled hidden states (NOT normalized) for the pooling endpoint.
+
+    Uses engine.pool() when available for proper pooling support.
+    Falls back to engine.embed() only when no pooling-specific method exists.
+    """
+    if hasattr(engine, 'pool'):
+        import asyncio
+        from yunshu_engine.mlx_executor import get_mlx_executor
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(get_mlx_executor(), engine.pool, texts, pooling_type)
+
+    # Fallback: raw hidden state extraction with pooling
+    return await _fallback_embeddings(engine, texts, pooling_type, normalize=False)
 
 
-async def _fallback_embeddings(engine, texts: list[str], pooling_type: str) -> list[list[float]]:
+async def _fallback_embeddings(
+    engine,
+    texts: list[str],
+    pooling_type: str,
+    normalize: bool = False,
+) -> list[list[float]]:
+    """Fallback embedding extraction using raw model forward pass.
+
+    Args:
+        engine: Engine with _tokenizer and _model attributes.
+        texts: Input strings.
+        pooling_type: "CLS", "MEAN", or "LAST".
+        normalize: If True, L2-normalize the output vectors.
+    """
     import mlx.core as mx
     from yunshu_engine.mlx_executor import get_mlx_executor
     import asyncio
@@ -297,42 +390,58 @@ async def _fallback_embeddings(engine, texts: list[str], pooling_type: str) -> l
         raise RuntimeError("Engine does not support embedding generation")
 
     loop = asyncio.get_running_loop()
-    results = []
 
-    for text in texts:
-        tokens = tokenizer.encode(text)
-        if not tokens:
-            results.append([])
-            continue
+    def _compute_all():
+        results = []
+        for text in texts:
+            tokens = tokenizer.encode(text)
+            if not tokens:
+                results.append([])
+                continue
 
-        input_ids = mx.array([tokens])
+            input_ids = mx.array([tokens])
 
-        def _forward():
             out = model(input_ids)
+
+            # Extract hidden states
             if isinstance(out, mx.array):
-                return out
-            if isinstance(out, (tuple, list)):
-                return out[0]
-            if hasattr(out, 'last_hidden_state'):
-                return out.last_hidden_state
-            return out[0] if isinstance(out, (tuple, list)) else out
+                hidden = out
+            elif isinstance(out, (tuple, list)):
+                hidden = out[0]
+            elif hasattr(out, 'last_hidden_state'):
+                hidden = out.last_hidden_state
+            else:
+                hidden = out[0] if isinstance(out, (tuple, list)) else out
 
-        hidden = await loop.run_in_executor(get_mlx_executor(), _forward)
+            # Pooling
+            if pooling_type == "CLS":
+                pooled = hidden[:, 0, :]
+            elif pooling_type == "LAST":
+                pooled = hidden[:, -1, :]
+            else:  # MEAN
+                pooled = mx.mean(hidden, axis=1)
 
-        if pooling_type == "CLS":
-            pooled = hidden[:, 0, :]
-        elif pooling_type == "LAST":
-            pooled = hidden[:, -1, :]
-        else:  # MEAN
-            pooled = mx.mean(hidden, axis=1)
+            if normalize:
+                # L2 normalize
+                pooled_flat = pooled.reshape(-1)
+                norm = mx.sqrt(mx.sum(pooled_flat * pooled_flat) + 1e-12)
+                pooled = pooled / norm
 
-        pooled_list = pooled.tolist()
-        results.append(pooled_list[0] if isinstance(pooled_list, list) and len(pooled_list) == 1 else pooled_list)
+            pooled_list = pooled.tolist()
+            results.append(
+                pooled_list[0] if isinstance(pooled_list, list) and len(pooled_list) == 1
+                else pooled_list
+            )
+        return results
 
-    return results
+    return await loop.run_in_executor(get_mlx_executor(), _compute_all)
 
 
 def _compute_similarity(a: list[float], b: list[float], method: str) -> float:
+    """Compute similarity between two vectors."""
+    if not a or not b:
+        return 0.0
+
     if method == "cosine":
         dot = sum(x * y for x, y in zip(a, b))
         norm_a = math.sqrt(sum(x * x for x in a))

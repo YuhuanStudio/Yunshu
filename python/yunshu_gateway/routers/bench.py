@@ -163,8 +163,11 @@ async def _run_latency(request: LatencyRequest) -> dict:
                         headers={"Content-Type": "application/json"},
                     )
 
-                    with urllib.request.urlopen(req, timeout=120) as resp:
-                        await asyncio.to_thread(resp.read)
+                    def _blocking_request():
+                        with urllib.request.urlopen(req, timeout=120) as resp:
+                            return resp.read()
+
+                    await asyncio.to_thread(_blocking_request)
                     elapsed = time.perf_counter() - start
                     latencies.append(elapsed)
                 except Exception as e:

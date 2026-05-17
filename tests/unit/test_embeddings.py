@@ -66,6 +66,13 @@ class TestEmbeddingRequest:
         req = EmbeddingRequest(model="test", input=[])
         assert req.input == []
 
+    def test_valid_encoding_formats(self):
+        """encoding_format must be 'float' or 'base64'."""
+        from yunshu_gateway.routers.embeddings import _VALID_ENCODING_FORMATS
+        assert "float" in _VALID_ENCODING_FORMATS
+        assert "base64" in _VALID_ENCODING_FORMATS
+        assert len(_VALID_ENCODING_FORMATS) == 2
+
     def test_long_list_input(self):
         texts = [f"text_{i}" for i in range(100)]
         req = EmbeddingRequest(model="test", input=texts)

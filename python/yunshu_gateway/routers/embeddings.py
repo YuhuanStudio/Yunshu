@@ -6,9 +6,14 @@ Uses MLX-native model inference (BGE, E5, Nomic, etc.).
 When YUNSHU_ANE_EMBEDDINGS=1 is set and ANE is available, embeddings are
 computed on the Apple Neural Engine via CoreML for lower latency and
 reduced GPU contention.
+
+All embeddings are L2-normalized to unit vectors by default, matching the
+OpenAI API contract. Matryoshka dimension truncation is supported via the
+``dimensions`` parameter.
 """
 
 import logging
+import math
 import os
 from typing import Optional
 
@@ -21,6 +26,8 @@ from ..engine import get_engine, get_model_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["embeddings"])
+
+_VALID_ENCODING_FORMATS = {"float", "base64"}
 
 
 class EmbeddingRequest(BaseModel):
@@ -38,10 +45,33 @@ async def create_embedding(req: EmbeddingRequest):
     if not texts:
         raise HTTPException(status_code=400, detail="Input cannot be empty")
 
+    # Reject empty strings in the list
+    for i, t in enumerate(texts):
+        if not t.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Input at index {i} is empty or whitespace-only",
+            )
+
     if len(texts) > 2048:
         raise HTTPException(
             status_code=400,
             detail=f"Too many inputs: {len(texts)} > 2048",
+        )
+
+    # Validate encoding_format
+    if req.encoding_format not in _VALID_ENCODING_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid encoding_format '{req.encoding_format}'. "
+                   f"Must be one of: {', '.join(sorted(_VALID_ENCODING_FORMATS))}",
+        )
+
+    # Validate dimensions
+    if req.dimensions is not None and req.dimensions <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"dimensions must be a positive integer, got {req.dimensions}",
         )
 
     # Resolve embedding engine
@@ -61,13 +91,21 @@ async def create_embedding(req: EmbeddingRequest):
         logger.error(f"Embedding error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Embedding generation failed")
 
+    # Resolve tokenizer for token counting (shared across iterations)
+    tokenizer = getattr(engine, '_tokenizer', None) if engine else None
+
     # Format response
     data = []
     total_tokens = 0
     for i, (emb, text) in enumerate(zip(embeddings, texts)):
+        # Skip empty embeddings (from empty input edge case)
+        if not emb:
+            continue
+
         # Truncate to requested dimensions (Matryoshka embedding support)
         if req.dimensions is not None and req.dimensions > 0:
             emb = emb[:req.dimensions]
+
         if req.encoding_format == "base64":
             import base64
             import struct
@@ -82,9 +120,8 @@ async def create_embedding(req: EmbeddingRequest):
             "embedding": emb_value,
         })
         # Use tokenizer for accurate token count, fallback to word count
-        tok = getattr(engine, '_tokenizer', None) if engine else None
-        if tok:
-            total_tokens += len(tok.encode(text))
+        if tokenizer:
+            total_tokens += len(tokenizer.encode(text))
         else:
             total_tokens += max(1, len(text) // 4)
 
@@ -130,9 +167,8 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "") -> 
 
     Supports:
     1. ANE path: when YUNSHU_ANE_EMBEDDINGS=1 and ANE is available
-    2. Engine with embed() method (native embedding model)
-    3. BatchedEngine with embed() method
-    4. Fallback: use hidden states from the model
+    2. Engine with embed() method (native embedding model, already normalized)
+    3. Fallback: use hidden states from the model with L2 normalization
     """
     # ── ANE path: offload to Apple Neural Engine via CoreML ──
     if os.environ.get("YUNSHU_ANE_EMBEDDINGS", "").strip() in ("1", "true", "yes"):
@@ -147,8 +183,13 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "") -> 
                 "ANE embedding failed, falling back to GPU: %s", exc, exc_info=True,
             )
 
+    # ── Engine with embed() method (BatchedEngine.embed normalizes by default) ──
     if hasattr(engine, 'embed'):
-        return engine.embed(texts)
+        import asyncio
+        from yunshu_engine.mlx_executor import get_mlx_executor
+        loop = asyncio.get_running_loop()
+        # embed() is synchronous and does GPU work — run on MLX executor thread
+        return await loop.run_in_executor(get_mlx_executor(), engine.embed, texts)
 
     # Fallback: use the model's tokenizer + forward pass for last hidden state
     tokenizer = getattr(engine, '_tokenizer', None)
@@ -157,44 +198,48 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "") -> 
         raise RuntimeError("Engine does not support embedding generation")
 
     import mlx.core as mx
-    from ...yunshu_engine.mlx_executor import get_mlx_executor
+    from yunshu_engine.mlx_executor import get_mlx_executor
     import asyncio
 
-    async def _generate_embeddings_async():
+    loop = asyncio.get_running_loop()
+
+    def _generate_all():
         embeddings = []
         for text in texts:
             tokens = tokenizer.encode(text)
             if not tokens:
-                embeddings.append([])
+                # Return zero vector — dimension unknown without a forward pass,
+                # so we use a common default. Callers should check for all-zeros.
+                embeddings.append([0.0] * 768)
                 continue
 
             input_ids = mx.array([tokens])
+            output = model(input_ids)
 
-            # Run on MLX executor thread (not blocking event loop)
-            def _forward():
-                if hasattr(model, '__call__'):
-                    return model(input_ids)
-                else:
-                    return model(input_ids)
+            # Extract hidden states
+            hidden = _extract_hidden(output)
 
-            loop = asyncio.get_running_loop()
-            output = await loop.run_in_executor(get_mlx_executor(), _forward)
+            # Mean pooling over sequence dimension
+            pooled = mx.mean(hidden, axis=1).squeeze(0)
 
-            # Get last hidden state
-            if isinstance(output, mx.array):
-                hidden = output
-            elif isinstance(output, (tuple, list)):
-                hidden = output[0]
-            elif hasattr(output, 'last_hidden_state'):
-                hidden = output.last_hidden_state
-            else:
-                hidden = output[0] if isinstance(output, (tuple, list)) else output
+            # L2 normalize (OpenAI API contract)
+            norm = mx.sqrt(mx.sum(pooled * pooled) + 1e-12)
+            pooled = pooled / norm
 
-            # Mean pooling over sequence length
-            pooled = mx.mean(hidden, axis=1)
-            pooled_np = pooled.tolist()
-            embeddings.append(pooled_np[0] if isinstance(pooled_np, list) and len(pooled_np) == 1 else pooled_np)
-
+            embeddings.append(pooled.tolist())
         return embeddings
 
-    return await _generate_embeddings_async()
+    return await loop.run_in_executor(get_mlx_executor(), _generate_all)
+
+
+def _extract_hidden(output) -> "mx.array":
+    """Extract hidden states from various model output formats."""
+    import mlx.core as mx
+
+    if isinstance(output, mx.array):
+        return output
+    if isinstance(output, (tuple, list)):
+        return output[0]
+    if hasattr(output, 'last_hidden_state'):
+        return output.last_hidden_state
+    return output[0] if isinstance(output, (tuple, list)) else output

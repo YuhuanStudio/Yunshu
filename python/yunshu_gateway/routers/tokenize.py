@@ -1,5 +1,10 @@
 from __future__ import annotations
-"""OpenAI Tokenize API compatible router."""
+"""OpenAI Tokenize API compatible router.
+
+Supports encode, decode, and token counting. Model-aware:
+resolves tokenizer from loaded engine or model manager with
+case-insensitive and provider-prefix fallbacks.
+"""
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -24,6 +29,7 @@ class TokenCountRequest(BaseModel):
 class DetokenizeRequest(BaseModel):
     model: str
     tokens: list[int]
+    skip_special_tokens: bool = True
 
 
 @router.post("/tokenize", response_model=None)
@@ -36,7 +42,10 @@ async def tokenize(req: TokenizeRequest):
         if req.add_special_tokens:
             tokens = tokenizer.encode(text)
         else:
-            tokens = tokenizer.encode(text, add_special_tokens=False)
+            try:
+                tokens = tokenizer.encode(text, add_special_tokens=False)
+            except TypeError:
+                tokens = tokenizer.encode(text)
         all_tokens.append(tokens)
 
     return {
@@ -49,7 +58,13 @@ async def tokenize(req: TokenizeRequest):
 async def detokenize(req: DetokenizeRequest):
     """Convert token IDs back to text."""
     tokenizer = _resolve_tokenizer(req.model)
-    text = tokenizer.decode(req.tokens)
+    if req.skip_special_tokens:
+        try:
+            text = tokenizer.decode(req.tokens, skip_special_tokens=True)
+        except TypeError:
+            text = tokenizer.decode(req.tokens)
+    else:
+        text = tokenizer.decode(req.tokens)
     return {"text": text, "model": req.model}
 
 
@@ -69,7 +84,7 @@ async def token_count(req: TokenCountRequest):
 
 
 def _resolve_tokenizer(model_id: str):
-
+    """Resolve tokenizer by model ID with case-insensitive and prefix-stripping fallbacks."""
     manager = get_model_manager()
     if manager is not None:
         entry = manager.get_entry(model_id)
@@ -77,6 +92,23 @@ def _resolve_tokenizer(model_id: str):
             tok = getattr(entry.engine, '_tokenizer', None)
             if tok:
                 return tok
+
+        # Case-insensitive fallback
+        lower = model_id.lower()
+        for e in manager.list_entries():
+            if e.model_id.lower() == lower and e.is_loaded and e.engine:
+                tok = getattr(e.engine, '_tokenizer', None)
+                if tok:
+                    return tok
+
+        # Provider prefix stripping (e.g. "org/model" -> "model")
+        if '/' in model_id:
+            stripped = model_id.rsplit('/', 1)[-1]
+            for e in manager.list_entries():
+                if e.model_id.lower() == stripped.lower() and e.is_loaded and e.engine:
+                    tok = getattr(e.engine, '_tokenizer', None)
+                    if tok:
+                        return tok
 
     engine = get_engine()
     if engine:

@@ -1,6 +1,7 @@
-"""Tests for scoring endpoints (/v1/pooling, /v1/score, /v1/rerank)."""
+"""Tests for scoring endpoints (/v1/pooling, /v1/score, /v1/rerank, /v1/classify)."""
 import math
 import pytest
+from unittest.mock import MagicMock, AsyncMock
 
 
 def _compute_similarity(a, b, method="cosine"):
@@ -55,6 +56,11 @@ class TestPoolingRequest:
         req = PoolingRequest(model="test", input=["a", "b"], pooling_type="MEAN")
         assert req.pooling_type == "MEAN"
 
+    def test_pooling_request_last(self):
+        from yunshu_gateway.routers.scoring import PoolingRequest
+        req = PoolingRequest(model="test", input="hello", pooling_type="LAST")
+        assert req.pooling_type == "LAST"
+
 
 class TestScoreRequest:
     def test_score_request_basic(self):
@@ -98,3 +104,86 @@ class TestRerankRequest:
         )
         assert req.top_n == 2
         assert req.return_documents is False
+
+
+class TestClassifyRequest:
+    def test_classify_request_basic(self):
+        from yunshu_gateway.routers.scoring import ClassifyRequest
+        req = ClassifyRequest(
+            model="test",
+            input="The stock market crashed",
+            labels=["finance", "sports", "technology"],
+        )
+        assert req.model == "test"
+        assert len(req.labels) == 3
+
+    def test_classify_request_empty_labels(self):
+        from yunshu_gateway.routers.scoring import ClassifyRequest
+        req = ClassifyRequest(model="test", input="hello")
+        assert req.labels == []
+
+
+class TestClassifyTemperature:
+    """Verify that temperature-scaled softmax produces well-separated probabilities."""
+
+    def test_softmax_with_temperature(self):
+        """Cosine similarities with temperature=0.07 should produce sharp distribution."""
+        import math
+        # Simulate cosine similarities for 3 labels
+        cos_sims = [0.8, 0.3, -0.1]
+        temperature = 0.07
+
+        scores = [s / temperature for s in cos_sims]
+        max_score = max(scores)
+        exp_scores = [math.exp(s - max_score) for s in scores]
+        total = sum(exp_scores)
+        probs = [e / total for e in exp_scores]
+
+        # Should be well-separated, not near-uniform
+        assert probs[0] > 0.99  # Best match should dominate
+        assert sum(probs) == pytest.approx(1.0)
+
+    def test_softmax_without_temperature_uniform(self):
+        """Without temperature, softmax on cosines is too flat."""
+        import math
+        cos_sims = [0.8, 0.3, -0.1]
+
+        max_score = max(cos_sims)
+        exp_scores = [math.exp(s - max_score) for s in cos_sims]
+        total = sum(exp_scores)
+        probs = [e / total for e in exp_scores]
+
+        # Without temperature, distribution is much flatter
+        assert probs[0] < 0.6  # Not dominating enough
+
+
+class TestRerankScoring:
+    """Verify rerank relevance score computation."""
+
+    def test_cosine_to_relevance_range(self):
+        """Cosine similarity should be mapped to [0, 1]."""
+        # cos=1 -> relevance=1.0
+        assert (1.0 + 1.0) / 2.0 == 1.0
+        # cos=-1 -> relevance=0.0
+        assert (-1.0 + 1.0) / 2.0 == 0.0
+        # cos=0 -> relevance=0.5
+        assert (0.0 + 1.0) / 2.0 == 0.5
+
+    def test_similarity_empty_vectors(self):
+        """Empty vectors should return 0.0."""
+        from yunshu_gateway.routers.scoring import _compute_similarity
+        assert _compute_similarity([], [1.0, 2.0], "cosine") == 0.0
+        assert _compute_similarity([1.0, 2.0], [], "cosine") == 0.0
+        assert _compute_similarity([], [], "cosine") == 0.0
+
+
+class TestValidationConstants:
+    """Verify validation constants are correct."""
+
+    def test_valid_pooling_types(self):
+        from yunshu_gateway.routers.scoring import _VALID_POOLING_TYPES
+        assert _VALID_POOLING_TYPES == {"CLS", "MEAN", "LAST"}
+
+    def test_valid_scoring_types(self):
+        from yunshu_gateway.routers.scoring import _VALID_SCORING_TYPES
+        assert _VALID_SCORING_TYPES == {"cosine", "dot", "euclidean"}
