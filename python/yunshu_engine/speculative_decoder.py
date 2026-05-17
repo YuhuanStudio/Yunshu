@@ -370,12 +370,21 @@ class SpeculativeDecoder:
             return 0.0
         return self._stats["total_accepted_tokens"] / self._stats["total_draft_tokens"]
 
-    def generate_draft(self, input_ids: mx.array, cache: list) -> DraftResult:
+    def generate_draft(
+        self,
+        input_ids: mx.array,
+        cache: list,
+        skip_prefill: bool = False,
+    ) -> DraftResult:
         """Generate K draft tokens from the draft model.
 
         Args:
-            input_ids: Current sequence token IDs [1, seq_len]
-            cache: Draft model's KV cache
+            input_ids: Current sequence token IDs [1, seq_len] or [1, 1].
+            cache: Draft model's KV cache.
+            skip_prefill: If True, assume input_ids is a single token already
+                          in cache; only use it for the first forward logits.
+                          This avoids double-prefilling when the cache already
+                          has the prompt.
 
         Returns:
             DraftResult with proposed token IDs and their logprobs
@@ -389,7 +398,7 @@ class SpeculativeDecoder:
 
         current_ids = input_ids
 
-        for _ in range(K):
+        for step in range(K):
             output = self.draft(current_ids, cache=cache)
             logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
 
@@ -418,36 +427,59 @@ class SpeculativeDecoder:
     ) -> VerifyResult:
         """Verify draft tokens against the target model in one pass.
 
-        The target model processes all K draft tokens simultaneously,
-        producing logits at each position. We compare the target's
-        distribution against the draft's to determine acceptance.
+        Correct logits alignment: includes input_ids (last token) in the
+        forward pass alongside draft tokens, producing K+1 logits positions.
+        This gives exactly K correct comparisons plus 1 bonus position.
 
-        Vectorized acceptance check (llama.cpp batched verification pattern):
-          1. Batched forward pass: all K tokens in one call
-          2. Vectorized gather: extract target logprobs at draft positions
-          3. Vectorized ratio computation: min(1, P_target/P_draft) for all K
-          4. Sequential scan for first rejection (unavoidable — sequential
-             dependency)
+          Feed [last_tok, d0, d1, ..., dK-1] to target:
+            logits[0] = P(. | ctx, last_tok) -> compare with d0
+            logits[i] = P(. | ctx, last_tok, d0..d{i-1}) -> compare with d[i]
+            logits[K] = P(. | ctx, last_tok, d0..dK-1) -> bonus token
 
         EAGLE-3 acceptance criterion:
           Accept token i if: U < min(1, P_target(x_i) / P_draft(x_i))
           where U ~ Uniform(0, 1)
+
+        Args:
+            draft_result: Draft tokens and logprobs from generate_draft().
+            input_ids: Last token(s) to include in forward pass for alignment.
+            cache: Target model's KV cache.
+
+        Returns:
+            VerifyResult with accepted tokens and bonus token.
         """
         K = len(draft_result.token_ids)
-        draft_tokens = mx.array(draft_result.token_ids).reshape(1, K)
+        if K == 0:
+            return VerifyResult(
+                accepted_count=0,
+                accepted_ids=[],
+                rejected_at=-1,
+                bonus_token_id=-1,
+                target_logprobs=[],
+            )
 
-        # Batched forward pass: all K tokens in one call
-        output = self.target(draft_tokens, cache=cache)
+        # Build aligned input: [last_token(s), d0, d1, ..., dK-1]
+        last_tok = input_ids[:, -1:]  # [1, 1] — last token from previous step
+        draft_tokens = mx.array(draft_result.token_ids).reshape(1, K)
+        aligned_input = mx.concatenate([last_tok, draft_tokens], axis=1)  # [1, K+1]
+
+        # Batched forward pass: all K+1 tokens in one call
+        output = self.target(aligned_input, cache=cache)
         logits = output.logits if hasattr(output, 'logits') else output
 
         # Get target log probabilities at each position
-        target_logprobs = mx.log(mx.softmax(logits, axis=-1))
+        target_logprobs_full = mx.log(mx.softmax(logits, axis=-1))
+
+        # Verify: logits[i] predicts position i+1 -> compare with draft[i]
+        # We need logits[0..K-1] for draft verification, logits[K] for bonus
+        target_logprobs = target_logprobs_full[0, :K, :]  # [K, vocab]
+        bonus_logits = target_logprobs_full[0, K:K+1, :]  # [1, vocab]
 
         # Vectorized gather: extract target logprob for each draft token
-        # target_lp[i] = target_logprobs[0, i, draft_result.token_ids[i]]
+        # target_lp[i] = target_logprobs[i, draft_result.token_ids[i]]
         draft_ids_arr = mx.array(draft_result.token_ids).reshape(K, 1)
         target_lps_arr = mx.take_along_axis(
-            target_logprobs[0, :K], draft_ids_arr, axis=-1
+            target_logprobs, draft_ids_arr, axis=-1
         ).squeeze(-1)
         draft_lps_arr = mx.array(draft_result.logprobs)
 
@@ -474,17 +506,18 @@ class SpeculativeDecoder:
                 rejected_at = i
                 break
 
-        # Bonus token: sample from target's distribution at rejection point
+        # Bonus token: from target's distribution at rejection point or last
         bonus_pos = len(accepted_ids)
         from mlx_lm.sample_utils import make_sampler
         sampler = make_sampler(temp=0.0)
 
-        if bonus_pos < K:
+        if rejected_at >= 0:
+            # Rejected at bonus_pos: use logits at that position for resample
             bonus_token = sampler(logits[0, bonus_pos:bonus_pos + 1, :])
-            bonus_id = bonus_token.item()
         else:
-            bonus_token = sampler(logits[0, -1:, :])
-            bonus_id = bonus_token.item()
+            # All accepted: bonus from position K (prediction after all drafts)
+            bonus_token = sampler(bonus_logits)
+        bonus_id = bonus_token.item()
 
         return VerifyResult(
             accepted_count=len(accepted_ids),

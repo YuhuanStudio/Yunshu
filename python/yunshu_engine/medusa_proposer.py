@@ -416,21 +416,16 @@ class MedusaProposer:
             if not frontier:
                 break
 
-        # Extract paths from frontier nodes
-        candidates = []
+        # Extract paths from frontier nodes with their cumulative logprobs
+        candidate_pairs = []
         for node in frontier:
             tokens = node.path_tokens()
             if tokens:
-                candidates.append(tokens)
+                candidate_pairs.append((tokens, node.cumulative_logprob))
 
-        # Sort by cumulative logprob (descending)
-        candidates.sort(
-            key=lambda t: sum(
-                float(top_logprobs[k].item()) if k < len(top_logprobs) else 0.0
-                for k in range(len(t))
-            ),
-            reverse=True,
-        )
+        # Sort by cumulative logprob from tree nodes (descending)
+        candidate_pairs.sort(key=lambda pair: pair[1], reverse=True)
+        candidates = [tokens for tokens, _ in candidate_pairs]
 
         return candidates
 

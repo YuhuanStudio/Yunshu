@@ -463,6 +463,19 @@ class BatchedEngine:
     def is_loaded(self) -> bool:
         return self._loaded
 
+    @property
+    def is_running(self) -> bool:
+        """True when the engine core loop is active (continuous batching).
+
+        Used by ``_ensure_engine_started`` in the gateway engine module
+        to decide whether ``start()`` needs to be called.  The legacy
+        Engine class has the same property; BatchedEngine was missing it,
+        which caused an ``AttributeError`` in single-engine fallback mode.
+        """
+        return self._loaded and (
+            self._engine_core is not None and self._engine_core.is_running
+        )
+
     async def start(self) -> None:
         """Load model and start EngineCore (oMLX BatchedEngine.start pattern)."""
         if self._loaded:
@@ -1735,6 +1748,12 @@ class BatchedEngine:
         if _custom_logits_processors:
             logits_processors.extend(_wrap_custom_logits_processor(p) for p in _custom_logits_processors)
 
+        # Generate inflight request ID outside the closure so it is
+        # accessible in the outer exception handlers below.  Previously
+        # this was defined inside _run() which caused a NameError when
+        # an exception fired before the executor ran the closure.
+        _inflight_req_id = f"fp-{id(generate_step)}-{int(time.monotonic()*1e6)}"
+
         def _run():
             import mlx.core as mx
             from mlx_lm.models.cache import make_prompt_cache
@@ -1829,7 +1848,6 @@ class BatchedEngine:
                     logger.debug("inflight prefix lookup failed", exc_info=True)
 
             # Register our prefill as in-flight for concurrent requests to share
-            _inflight_req_id = f"fp-{id(_run)}-{int(time.monotonic()*1e6)}"
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().register(
@@ -3544,7 +3562,6 @@ class BatchedEngine:
         draft_cache = make_prompt_cache(self._spec_decoder.draft)
 
         generated_tokens = []
-        current_ids = input_array
         prompt_tokens = len(input_ids)
 
         # Incremental detokenizer for correct multi-byte UTF-8
@@ -3559,6 +3576,12 @@ class BatchedEngine:
         await loop.run_in_executor(executor, _prefill)
         _spec_gen_t0 = time.perf_counter()  # TTFT timing starts after prefill
 
+        # After prefill, both caches have the prompt.
+        # For generate_draft, feed only the last prompt token to get first draft
+        # (not the full prompt again — that would double-prefill).
+        # For verify_draft, current_ids provides the alignment token.
+        current_ids = input_array[:, -1:]  # [1, 1] last prompt token
+
         try:
           _spec_ttft_ms_val = 0.0
           _spec_ttft_recorded = False
@@ -3566,8 +3589,21 @@ class BatchedEngine:
             if cancel_event is not None and cancel_event.is_set():
                 logger.debug("Cancel event triggered during spec decode streaming")
                 break
+
+            # Snapshot draft cache for rollback on rejection
+            draft_snap = self._spec_decoder._snapshot_cache(draft_cache)
+
             def _spec_step():
+                # generate_draft: current_ids is [1,1] single token.
+                # First iteration: last prompt token (already in cache from prefill,
+                # so forward pass advances the cache by 1 and returns logits).
+                # Subsequent iterations: last accepted/bonus token.
                 draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache)
+                # verify_draft: includes current_ids as alignment token so logits
+                # are correctly positioned. Returns accepted tokens + bonus.
+                # NOTE: verify_draft feeds [current_ids, draft_tokens] to target,
+                # populating target_cache with K+1 tokens. We must NOT re-feed
+                # accepted tokens to target (that would double-populate the cache).
                 verify_result = self._spec_decoder.verify_draft(
                     draft_result, current_ids, target_cache,
                 )
@@ -3575,10 +3611,12 @@ class BatchedEngine:
 
             _, verify_result = await loop.run_in_executor(executor, _spec_step)
 
+            K = self._spec_decoder.config.draft_length
+            accepted_count = verify_result.accepted_count
             new_tokens = verify_result.accepted_ids + [verify_result.bonus_token_id]
 
-            self._spec_decoder._stats["total_draft_tokens"] += self._spec_decoder.config.draft_length
-            self._spec_decoder._stats["total_accepted_tokens"] += verify_result.accepted_count
+            self._spec_decoder._stats["total_draft_tokens"] += K
+            self._spec_decoder._stats["total_accepted_tokens"] += accepted_count
             self._spec_decoder._stats["total_bonus_tokens"] += 1
             self._spec_decoder._stats["total_steps"] += 1
 
@@ -3640,14 +3678,46 @@ class BatchedEngine:
                 detokenizer.finalize()
                 break
 
-            # Feed accepted tokens back
-            def _feedback():
-                accepted_tensor = mx.array(new_tokens).reshape(1, -1)
-                self._spec_decoder.target(accepted_tensor, cache=target_cache)
-                self._spec_decoder.draft(accepted_tensor, cache=draft_cache)
-                return accepted_tensor[:, -1:]
+            # Update caches for next iteration:
+            # - Target cache: verify_draft already fed [last_tok, d0..dK-1].
+            #   If all accepted, target has exactly the right state (last_tok + K drafts).
+            #   If partially accepted, we need to trim rejected tokens from target cache.
+            # - Draft cache: if all accepted, draft already has K tokens from generate_draft.
+            #   If partially accepted, restore snapshot and refeed accepted + bonus.
+            def _update_caches():
+                nonlocal draft_snap
 
-            current_ids = await loop.run_in_executor(executor, _feedback)
+                if accepted_count < K:
+                    # Partial acceptance: trim target cache to remove rejected entries.
+                    # verify_draft fed K+1 tokens (last_tok + K drafts).
+                    # We want to keep: last_tok + accepted_count drafts = accepted_count + 1
+                    # Trim: (K+1) - (accepted_count + 1) = K - accepted_count entries.
+                    from mlx_lm.models.cache import trim_prompt_cache
+                    trim_count = K - accepted_count
+                    try:
+                        trim_prompt_cache(target_cache, trim_count)
+                    except Exception:
+                        for c in target_cache:
+                            if hasattr(c, "trim"):
+                                c.trim(trim_count)
+
+                    # Restore draft cache to pre-draft state and refeed accepted + bonus
+                    self._spec_decoder._restore_cache(draft_cache, draft_snap)
+                    refeed_tokens = verify_result.accepted_ids + [verify_result.bonus_token_id]
+                    for tok in refeed_tokens:
+                        self._spec_decoder.draft(mx.array([[tok]]), cache=draft_cache)
+
+                # Feed bonus token to both caches (target already has it from verify_draft
+                # when all accepted; when partial, we trimmed and need to re-add).
+                # For draft: bonus token needs to be fed in both cases.
+                # For target: when all accepted, bonus is the last token from verify_draft
+                #   logits[K] — already in cache. When partial, we trimmed and re-added
+                #   accepted+bonus above, so target is current.
+
+                # Update current_ids for next iteration
+                return mx.array([[verify_result.bonus_token_id]])
+
+            current_ids = await loop.run_in_executor(executor, _update_caches)
         except GeneratorExit:
             logger.debug("Client disconnected during spec decode streaming")
         except Exception as e:

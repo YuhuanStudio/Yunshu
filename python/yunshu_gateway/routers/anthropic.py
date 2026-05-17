@@ -746,7 +746,12 @@ async def _stream_anthropic(
             "stop_reason": None,
             "stop_sequence": None,
             "created_at": _start_ts,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                },
         },
     }
     yield f"event: message_start\ndata: {json.dumps(msg_start)}\n\n".encode("utf-8")
@@ -952,6 +957,9 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
 
         # message_delta (stop + usage)
+        # Per Anthropic streaming spec, message_delta usage ONLY contains output_tokens.
+        # cache_creation_input_tokens / cache_read_input_tokens belong in message_start usage
+        # but are sent there as 0 since we don't have them until streaming begins.
         stop_reason = _map_stop_reason(None, matched_stop, has_tool_calls=tool_use_block_started)
         cache_creation = max(0, input_tokens - cached_tokens)
         delta_data = {
@@ -959,8 +967,6 @@ async def _stream_anthropic(
             "delta": {"stop_reason": stop_reason, "stop_sequence": matched_stop},
             "usage": {
                 "output_tokens": output_tokens,
-                "cache_creation_input_tokens": cache_creation,
-                "cache_read_input_tokens": max(0, cached_tokens),
             },
         }
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"

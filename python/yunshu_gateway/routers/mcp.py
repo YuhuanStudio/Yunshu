@@ -99,7 +99,7 @@ class MCPSession:
     def is_initialized(self) -> bool:
         return self._initialized
 
-    def handle_message(self, message: dict) -> dict:
+    async def handle_message(self, message: dict) -> dict:
         """Dispatch an incoming MCP JSON-RPC message to the correct handler."""
         method = message.get("method", "")
         params = message.get("params")
@@ -119,7 +119,10 @@ class MCPSession:
                 req_id,
             )
 
-        return handler(params, req_id)
+        result = handler(params, req_id)
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
 
     def _handle_initialize(self, params: dict | None, req_id: Any) -> dict:
         """Handle MCP initialize request.
@@ -146,7 +149,7 @@ class MCPSession:
         tools = [t.to_dict() for t in self._tool_registry.values()]
         return _rpc_response({"tools": tools}, req_id)
 
-    def _handle_tools_call(self, params: dict | None, req_id: Any) -> dict:
+    async def _handle_tools_call(self, params: dict | None, req_id: Any) -> dict:
         """Handle tools/call request — execute a tool."""
         if params is None:
             return _rpc_error(JSONRPCError.INVALID_PARAMS, "Missing params", req_id)
@@ -166,7 +169,7 @@ class MCPSession:
             try:
                 result_text = tool.handler(arguments)
                 if asyncio.iscoroutine(result_text):
-                    result_text = asyncio.run(result_text)
+                    result_text = await result_text
                 return _rpc_response(
                     {
                         "content": [

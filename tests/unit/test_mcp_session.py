@@ -92,11 +92,12 @@ class TestMCPSession:
 
     # --- initialize ---
 
-    def test_initialize(self):
+    @pytest.mark.asyncio
+    async def test_initialize(self):
         session = self._make_session()
         assert not session.is_initialized
 
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "initialize",
             "id": 1,
@@ -110,10 +111,11 @@ class TestMCPSession:
         assert "tools" in result["capabilities"]
         assert session.is_initialized
 
-    def test_initialize_custom_config(self):
+    @pytest.mark.asyncio
+    async def test_initialize_custom_config(self):
         cfg = MCPServerConfig(server_name="my-server", version="2.0.0")
         session = MCPSession(cfg)
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "initialize",
             "id": 1,
@@ -123,9 +125,10 @@ class TestMCPSession:
 
     # --- tools/list ---
 
-    def test_tools_list(self):
+    @pytest.mark.asyncio
+    async def test_tools_list(self):
         session = self._make_session()
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/list",
             "id": 2,
@@ -137,9 +140,10 @@ class TestMCPSession:
         assert tools[0]["description"] == "Do math"
         assert "inputSchema" in tools[0]
 
-    def test_tools_list_empty(self):
+    @pytest.mark.asyncio
+    async def test_tools_list_empty(self):
         session = MCPSession(MCPServerConfig(tools=[]))
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/list",
             "id": 3,
@@ -148,9 +152,10 @@ class TestMCPSession:
 
     # --- tools/call ---
 
-    def test_tools_call_known_tool(self):
+    @pytest.mark.asyncio
+    async def test_tools_call_known_tool(self):
         session = self._make_session()
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {
@@ -166,9 +171,10 @@ class TestMCPSession:
         assert len(result["content"]) >= 1
         assert "calculator" in result["content"][0]["text"]
 
-    def test_tools_call_unknown_tool(self):
+    @pytest.mark.asyncio
+    async def test_tools_call_unknown_tool(self):
         session = self._make_session()
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {"name": "nonexistent", "arguments": {}},
@@ -177,9 +183,10 @@ class TestMCPSession:
         assert "error" in resp
         assert resp["error"]["code"] == JSONRPCError.METHOD_NOT_FOUND
 
-    def test_tools_call_missing_params(self):
+    @pytest.mark.asyncio
+    async def test_tools_call_missing_params(self):
         session = self._make_session()
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "id": 6,
@@ -187,9 +194,10 @@ class TestMCPSession:
         assert "error" in resp
         assert resp["error"]["code"] == JSONRPCError.INVALID_PARAMS
 
-    def test_tools_call_null_params(self):
+    @pytest.mark.asyncio
+    async def test_tools_call_null_params(self):
         session = self._make_session()
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": None,
@@ -199,9 +207,10 @@ class TestMCPSession:
 
     # --- method not found ---
 
-    def test_unknown_method(self):
+    @pytest.mark.asyncio
+    async def test_unknown_method(self):
         session = self._make_session()
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "nonexistent/method",
             "id": 8,
@@ -211,14 +220,15 @@ class TestMCPSession:
 
     # --- tool registration ---
 
-    def test_register_tool(self):
+    @pytest.mark.asyncio
+    async def test_register_tool(self):
         session = MCPSession(MCPServerConfig(tools=[]))
         assert len(session.tools) == 0
 
         session.register_tool(MCPTool(name="new_tool", description="A new tool"))
         assert len(session.tools) == 1
 
-        resp = session.handle_message({
+        resp = await session.handle_message({
             "jsonrpc": "2.0",
             "method": "tools/list",
             "id": 10,

@@ -47,7 +47,6 @@ class RealtimeEvent:
     INPUT_AUDIO_BUFFER_COMMITTED = "input_audio_buffer.committed"
     INPUT_AUDIO_BUFFER_SPEECH_STARTED = "input_audio_buffer.speech_started"
     INPUT_AUDIO_BUFFER_SPEECH_STOPPED = "input_audio_buffer.speech_stopped"
-    RESPONSE_AUDIO_TRANSCRIPT_DONE = "response.audio_transcript.done"
     CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED = "conversation.item.input_audio_transcription.completed"
     ERROR = "error"
 
@@ -670,6 +669,10 @@ class RealtimeSession:
         sends response.audio.done to signal the client to truncate playback.
         """
         if self._active_response and not self._active_response.done():
+            # Capture task attributes before cancelling (cancel triggers finally which
+            # sets self._active_response = None)
+            response_id = getattr(self._active_response, '_response_id', '')
+            item_id = getattr(self._active_response, '_item_id', '')
             # Signal the cancel_event so the engine can stop mid-generation
             if self._cancel_event is not None:
                 self._cancel_event.set()
@@ -677,8 +680,8 @@ class RealtimeSession:
             # Signal audio truncation so client stops playback immediately
             await self.send_event(_event(
                 RealtimeEvent.RESPONSE_AUDIO_DONE,
-                response_id=getattr(self._active_response, '_response_id', ''),
-                item_id=getattr(self._active_response, '_item_id', ''),
+                response_id=response_id,
+                item_id=item_id,
                 output_index=0,
                 content_index=0,
             ))

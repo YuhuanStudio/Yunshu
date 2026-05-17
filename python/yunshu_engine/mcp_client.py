@@ -52,6 +52,8 @@ class MCPServerConnection:
     Manages tool discovery and execution for one server.
     """
 
+    _next_id = 1  # Class-level monotonic ID counter for JSON-RPC requests
+
     def __init__(self, config: MCPServerConfig) -> None:
         self.config = config
         self.tools: list[MCPTool] = []
@@ -120,13 +122,21 @@ class MCPServerConnection:
             return await self._send_http(method, params)
         return None
 
+    @classmethod
+    def _next_request_id(cls) -> int:
+        """Generate a unique monotonic ID for JSON-RPC requests."""
+        req_id = cls._next_id
+        cls._next_id += 1
+        return req_id
+
     async def _send_stdio(self, method: str, params: dict) -> Any:
         """Send request via stdio transport."""
         if not self._process or not self._process.stdin:
             return None
+        req_id = self._next_request_id()
         request = {
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": req_id,
             "method": method,
             "params": params,
         }
@@ -135,11 +145,33 @@ class MCPServerConnection:
         await self._process.stdin.drain()
 
         if self._process.stdout:
-            response_line = await asyncio.wait_for(
-                self._process.stdout.readline(), timeout=30.0
-            )
-            if response_line:
-                response = json.loads(response_line.decode())
+            # Read lines until we get a response with matching ID
+            # (skip server notifications which have no "id" field)
+            deadline = asyncio.get_event_loop().time() + 30.0
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    logger.warning(f"MCP stdio timeout waiting for response to {method}")
+                    return None
+                response_line = await asyncio.wait_for(
+                    self._process.stdout.readline(), timeout=remaining
+                )
+                if not response_line:
+                    return None
+                try:
+                    response = json.loads(response_line.decode())
+                except json.JSONDecodeError:
+                    logger.debug(f"MCP stdio: skipping non-JSON line")
+                    continue
+                # Skip notifications (no "id" field) — they're informational
+                if "id" not in response:
+                    logger.debug(f"MCP stdio: skipping notification: {response.get('method', '?')}")
+                    continue
+                # Check for error response
+                if "error" in response:
+                    err = response["error"]
+                    logger.error(f"MCP server error: {err.get('code')} {err.get('message')}")
+                    return None
                 return response.get("result")
         return None
 
@@ -149,9 +181,10 @@ class MCPServerConnection:
         url = self.config.url
         if not url:
             return None
+        req_id = self._next_request_id()
         request = {
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": req_id,
             "method": method,
             "params": params,
         }
@@ -164,6 +197,10 @@ class MCPServerConnection:
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        if "error" in data:
+                            err = data["error"]
+                            logger.error(f"MCP HTTP error: {err.get('code')} {err.get('message')}")
+                            return None
                         return data.get("result")
         except Exception as e:
             logger.error(f"HTTP MCP request failed: {e}", exc_info=True)

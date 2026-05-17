@@ -148,8 +148,8 @@ class DiffusionScheduler:
         elif self.noise_schedule == NoiseScheduleType.SCALED_LINEAR:
             start_sqrt = math.sqrt(self.beta_start)
             end_sqrt = math.sqrt(self.beta_end)
-            return [start_sqrt + i * (end_sqrt - start_sqrt) /
-                    (self.num_train_timesteps - 1)
+            return [(start_sqrt + i * (end_sqrt - start_sqrt) /
+                     (self.num_train_timesteps - 1)) ** 2
                     for i in range(self.num_train_timesteps)]
         elif self.noise_schedule == NoiseScheduleType.COSINE:
             return self._cosine_betas()
