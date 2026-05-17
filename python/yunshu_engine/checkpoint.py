@@ -71,8 +71,22 @@ class InferenceState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> InferenceState:
-        """Deserialize from dict."""
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        """Deserialize from dict.
+
+        Raises ValueError if required fields are missing or have wrong types.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f"Checkpoint data must be a dict, got {type(data).__name__}")
+        # Validate required field
+        if "request_id" not in data:
+            raise ValueError("Checkpoint data missing required field: request_id")
+        if not isinstance(data["request_id"], str):
+            raise ValueError(f"request_id must be str, got {type(data['request_id']).__name__}")
+        filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        try:
+            return cls(**filtered)
+        except TypeError as e:
+            raise ValueError(f"Invalid checkpoint data: {e}") from e
 
 
 class AutoCheckpointPolicy(enum.Enum):
@@ -182,18 +196,18 @@ class InferenceCheckpoint:
             # boundary since last checkpoint
             with self._lock:
                 existing = self._checkpoints.get(request_id)
-            prev_tokens = len(existing.generated_tokens) if existing else 0
+                prev_tokens = len(existing.generated_tokens) if existing else 0
             prev_interval = prev_tokens // self._auto_interval
             curr_interval = tokens_generated // self._auto_interval
             return curr_interval > prev_interval
         if self._auto_policy == AutoCheckpointPolicy.EVERY_N_SECONDS:
             with self._lock:
                 existing = self._checkpoints.get(request_id)
-            if existing is None:
-                return True
-            # Compute elapsed from stored checkpoint timestamp if not given
-            if elapsed_s <= 0:
-                elapsed_s = time.monotonic() - existing.timestamp
+                if existing is None:
+                    return True
+                # Compute elapsed from stored checkpoint timestamp if not given
+                if elapsed_s <= 0:
+                    elapsed_s = time.monotonic() - existing.timestamp
             return elapsed_s >= self._auto_interval
         return False
 
@@ -345,7 +359,8 @@ class FaultRecoveryManager:
         Returns:
             RecoveryResult with the outcome of the best available recovery.
         """
-        self._errors_handled += 1
+        with self._lock:
+            self._errors_handled += 1
 
         # Save current state as checkpoint if provided (for future recovery)
         if current_state is not None:
@@ -356,11 +371,13 @@ class FaultRecoveryManager:
         for strategy in self._strategy_priority:
             result = self._execute_strategy(request_id, error, strategy)
             if result.success:
-                self._recoveries_success += 1
+                with self._lock:
+                    self._recoveries_success += 1
                 return result
 
         # All strategies exhausted
-        self._recoveries_failed += 1
+        with self._lock:
+            self._recoveries_failed += 1
         return RecoveryResult(
             strategy=RecoveryStrategy.GRACEFUL_ERROR,
             success=False,
@@ -374,7 +391,8 @@ class FaultRecoveryManager:
         strategy: RecoveryStrategy,
     ) -> RecoveryResult:
         """Execute a single recovery strategy."""
-        self._strategy_stats[strategy.value]["attempts"] += 1
+        with self._lock:
+            self._strategy_stats[strategy.value]["attempts"] += 1
 
         try:
             if strategy == RecoveryStrategy.RETRY:
@@ -421,12 +439,14 @@ class FaultRecoveryManager:
                 error_message="No checkpoint available for retry",
             )
 
-        self._strategy_stats[RecoveryStrategy.RETRY.value]["successes"] += 1
+        with self._lock:
+            self._strategy_stats[RecoveryStrategy.RETRY.value]["successes"] += 1
+            retry_count = self._retry_counts.get(request_id, 0)
         return RecoveryResult(
             strategy=RecoveryStrategy.RETRY,
             success=True,
             restored_state=state,
-            metadata={"retry_count": self._retry_counts[request_id]},
+            metadata={"retry_count": retry_count},
         )
 
     def _strategy_truncate(
@@ -441,17 +461,19 @@ class FaultRecoveryManager:
                 error_message="No checkpoint available for truncate",
             )
 
+        original_max_tokens = state.max_tokens
         remaining = state.max_tokens - len(state.generated_tokens)
         new_remaining = max(1, int(remaining * self._truncate_ratio))
         state.max_tokens = len(state.generated_tokens) + new_remaining
 
-        self._strategy_stats[RecoveryStrategy.TRUNCATE.value]["successes"] += 1
+        with self._lock:
+            self._strategy_stats[RecoveryStrategy.TRUNCATE.value]["successes"] += 1
         return RecoveryResult(
             strategy=RecoveryStrategy.TRUNCATE,
             success=True,
             restored_state=state,
             metadata={
-                "original_max_tokens": state.max_tokens,
+                "original_max_tokens": original_max_tokens,
                 "truncated_max_tokens": state.max_tokens,
                 "truncate_ratio": self._truncate_ratio,
             },
@@ -479,9 +501,10 @@ class FaultRecoveryManager:
             )
 
         state.model_name = fallback
-        self._strategy_stats[RecoveryStrategy.FALLBACK_MODEL.value][
-            "successes"
-        ] += 1
+        with self._lock:
+            self._strategy_stats[RecoveryStrategy.FALLBACK_MODEL.value][
+                "successes"
+            ] += 1
         return RecoveryResult(
             strategy=RecoveryStrategy.FALLBACK_MODEL,
             success=True,
@@ -499,9 +522,10 @@ class FaultRecoveryManager:
         state = self._checkpoints.load(request_id)
         partial = state.output_text if state is not None else ""
 
-        self._strategy_stats[RecoveryStrategy.GRACEFUL_ERROR.value][
-            "successes"
-        ] += 1
+        with self._lock:
+            self._strategy_stats[RecoveryStrategy.GRACEFUL_ERROR.value][
+                "successes"
+            ] += 1
         return RecoveryResult(
             strategy=RecoveryStrategy.GRACEFUL_ERROR,
             success=True,
@@ -520,17 +544,18 @@ class FaultRecoveryManager:
 
     def get_stats(self) -> dict[str, Any]:
         """Return fault recovery statistics."""
-        total = self._errors_handled
-        success_rate = (
-            self._recoveries_success / total if total > 0 else 0.0
-        )
-        return {
-            "errors_handled": self._errors_handled,
-            "recoveries_success": self._recoveries_success,
-            "recoveries_failed": self._recoveries_failed,
-            "success_rate": success_rate,
-            "strategy_stats": dict(self._strategy_stats),
-        }
+        with self._lock:
+            total = self._errors_handled
+            success_rate = (
+                self._recoveries_success / total if total > 0 else 0.0
+            )
+            return {
+                "errors_handled": self._errors_handled,
+                "recoveries_success": self._recoveries_success,
+                "recoveries_failed": self._recoveries_failed,
+                "success_rate": success_rate,
+                "strategy_stats": dict(self._strategy_stats),
+            }
 
 
 # ── Progress Estimator ──

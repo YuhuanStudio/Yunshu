@@ -1183,7 +1183,7 @@ class BatchedEngine:
                         prompt = result.messages
                         logger.debug(
                             f"Context window truncated: {token_count} → "
-                            f"{result.original_tokens} tokens (saved {result.tokens_removed})"
+                            f"{result.truncated_token_count} tokens (saved {result.tokens_saved})"
                         )
             except Exception:
                 logger.warning("context window truncation skipped", exc_info=True)
@@ -1948,6 +1948,13 @@ class BatchedEngine:
         finish_reason = "stop" if _stopped_by_suffix or (tokens and tokens[-1] in stop_ids) else "length"
         output_text = _clean_special_tokens(output_text)
 
+        # Trim stop suffix from output text when matched during generation
+        if _stopped_by_suffix and stop_suffixes:
+            for s in stop_suffixes:
+                if output_text.endswith(s):
+                    output_text = output_text[:-len(s)]
+                    break
+
         # Record TTFT + ITL in Prometheus
         if ttft_s > 0:
             try:
@@ -2564,6 +2571,7 @@ class BatchedEngine:
                     if not stop_hit and stop_suffixes:
                         if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                             suffix_hit = True
+                            new_text = ""  # Don't emit suffix text
                     # Thinking budget enforcement in streaming
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
@@ -4340,10 +4348,17 @@ class BatchedEngine:
 
         if tokenizer and hasattr(tokenizer, "apply_chat_template"):
             try:
-                clean = [
-                    {"role": m.get("role", "user"), "content": m.get("content", "")}
-                    for m in messages
-                ]
+                clean = []
+                for m in messages:
+                    msg = {"role": m.get("role", "user"), "content": m.get("content", "")}
+                    # Preserve tool-related fields for correct template rendering
+                    if m.get("tool_calls"):
+                        msg["tool_calls"] = m["tool_calls"]
+                    if m.get("tool_call_id"):
+                        msg["tool_call_id"] = m["tool_call_id"]
+                    if m.get("name"):
+                        msg["name"] = m["name"]
+                    clean.append(msg)
                 kwargs = {"tokenize": False, "add_generation_prompt": True}
                 if thinking is not None:
                     kwargs["enable_thinking"] = thinking

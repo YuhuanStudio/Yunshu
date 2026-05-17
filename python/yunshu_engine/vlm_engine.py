@@ -714,13 +714,15 @@ class VLMEngine:
                     finish_reason = None
                     if is_eos:
                         finish_reason = "stop"
+                        token_text = ""  # Don't emit EOS token text
                     elif stop:
                         for s in stop:
                             if accumulated.endswith(s):
-                                # Trim the stop suffix from output
-                                trim_pos = len(accumulated) - len(s)
-                                token_text = accumulated[trim_pos:]
-                                accumulated = accumulated[:trim_pos]
+                                # Trim the stop suffix from output.
+                                # The suffix may span multiple tokens, so compute
+                                # the non-suffix portion of this token's text.
+                                accumulated = accumulated[:-len(s)]
+                                token_text = ""  # Suffix trimmed; emit nothing for this chunk
                                 finish_reason = "stop"
                                 break
 
@@ -1196,10 +1198,8 @@ class VLMEngine:
                     for s in stop_suffixes:
                         if accumulated.endswith(s):
                             # Trim the stop suffix from the output
-                            trim_pos = len(accumulated) - len(s)
-                            # Emit only the non-suffix portion as the final token text
-                            text = accumulated[trim_pos:]
-                            accumulated = accumulated[:trim_pos]
+                            accumulated = accumulated[:-len(s)]
+                            text = ""  # Suffix trimmed; emit nothing for this chunk
                             finish_reason = "stop"
                             break
 
@@ -1427,20 +1427,26 @@ class VLMEngine:
                     if token_id == think_end_id:
                         _in_thinking = False
             is_eos = token_id in stop_ids
+            token_text = ""
             suffix_hit = False
-            if not is_eos and stop_suffixes and has_detokenizer:
-                if any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                    suffix_hit = True
-            finish_reason = "stop" if (is_eos or suffix_hit) else None
 
             if not is_eos:
                 if has_detokenizer:
                     detokenizer.add_token(token_id)
-                    token_text = detokenizer.last_segment
+                    # Check stop suffixes AFTER add_token so detokenizer.text
+                    # includes the current token's decoded text
+                    if stop_suffixes:
+                        if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            suffix_hit = True
+                        else:
+                            token_text = detokenizer.last_segment
+                    else:
+                        token_text = detokenizer.last_segment
                 else:
                     token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
-            else:
-                token_text = ""
+            # When suffix_hit or is_eos, token_text stays "" (stop text is trimmed)
+
+            finish_reason = "stop" if (is_eos or suffix_hit) else None
 
             queue.put_nowait(RequestOutput(
                 request_id=req_id,

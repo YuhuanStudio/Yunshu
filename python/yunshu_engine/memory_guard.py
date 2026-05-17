@@ -23,6 +23,7 @@ Integration:
 """
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -54,7 +55,8 @@ class MemoryGuard:
         self._max_concurrent = max_concurrent_requests
         self._safety_margin_pct = safety_margin_pct
 
-        # Stats tracking
+        # Stats tracking (atomic via _stats_lock)
+        self._stats_lock = threading.Lock()
         self._total_checks: int = 0
         self._total_rejections: int = 0
         self._preflight_rejections: int = 0
@@ -81,7 +83,8 @@ class MemoryGuard:
             (ok, reason) — ok=True if request can proceed,
             ok=False with reason if it should be rejected.
         """
-        self._total_checks += 1
+        with self._stats_lock:
+            self._total_checks += 1
 
         info = self._monitor.get_memory_info()
         available = info.available_bytes
@@ -89,8 +92,9 @@ class MemoryGuard:
         usable = available - safety_headroom
 
         if usable <= 0:
-            self._total_rejections += 1
-            self._preflight_rejections += 1
+            with self._stats_lock:
+                self._total_rejections += 1
+                self._preflight_rejections += 1
             reason = (
                 f"No usable memory available: "
                 f"available={info.available_bytes}, "
@@ -114,8 +118,9 @@ class MemoryGuard:
         total_estimated = prompt_kv + decode_kv + prefill_peak
 
         if total_estimated > usable:
-            self._total_rejections += 1
-            self._preflight_rejections += 1
+            with self._stats_lock:
+                self._total_rejections += 1
+                self._preflight_rejections += 1
             reason = (
                 f"Insufficient memory: estimated={total_estimated}, "
                 f"usable={usable}, "
@@ -141,12 +146,14 @@ class MemoryGuard:
         - Number of active requests exceeds max_concurrent_requests
         - Memory is under pressure (>90% utilization)
         """
-        self._total_checks += 1
+        with self._stats_lock:
+            self._total_checks += 1
 
         # Hard limit on concurrent requests
         if num_active_requests >= self._max_concurrent:
-            self._total_rejections += 1
-            self._concurrent_rejections += 1
+            with self._stats_lock:
+                self._total_rejections += 1
+                self._concurrent_rejections += 1
             logger.warning(
                 f"Generation guard rejected: "
                 f"{num_active_requests} >= {self._max_concurrent} concurrent"
@@ -155,8 +162,9 @@ class MemoryGuard:
 
         # Memory pressure check
         if self._monitor.is_under_pressure(threshold_pct=90.0):
-            self._total_rejections += 1
-            self._concurrent_rejections += 1
+            with self._stats_lock:
+                self._total_rejections += 1
+                self._concurrent_rejections += 1
             info = self._monitor.get_memory_info()
             logger.warning(
                 f"Generation guard rejected: memory pressure "
@@ -208,16 +216,21 @@ class MemoryGuard:
     def get_stats(self) -> dict:
         """Return memory guard statistics."""
         monitor_stats = self._monitor.get_stats()
+        with self._stats_lock:
+            total_checks = self._total_checks
+            total_rejections = self._total_rejections
+            preflight_rejections = self._preflight_rejections
+            concurrent_rejections = self._concurrent_rejections
         return {
-            "total_checks": self._total_checks,
-            "total_rejections": self._total_rejections,
-            "preflight_rejections": self._preflight_rejections,
-            "concurrent_rejections": self._concurrent_rejections,
+            "total_checks": total_checks,
+            "total_rejections": total_rejections,
+            "preflight_rejections": preflight_rejections,
+            "concurrent_rejections": concurrent_rejections,
             "max_concurrent_requests": self._max_concurrent,
             "safety_margin_pct": self._safety_margin_pct,
             "rejection_rate": (
-                self._total_rejections / self._total_checks * 100
-                if self._total_checks > 0
+                total_rejections / total_checks * 100
+                if total_checks > 0
                 else 0.0
             ),
             "memory": monitor_stats,

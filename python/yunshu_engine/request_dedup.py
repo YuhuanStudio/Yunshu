@@ -14,6 +14,7 @@ This is especially useful for:
 import hashlib
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -69,6 +70,7 @@ class RequestDeduplicator:
         self._max_entries = max_entries
         self._ttl = ttl_seconds
         self._entries: dict[str, DeduplicationEntry] = {}
+        self._lock = threading.Lock()
         self._total_deduplicated = 0
         self._total_saved_requests = 0
         self._total_inferences = 0
@@ -116,28 +118,31 @@ class RequestDeduplicator:
 
         Returns the existing entry if deduplication is possible,
         or None if this is a unique request.
+
+        Thread-safe: uses internal lock for all state mutations.
         """
-        # Prune expired entries
-        self._prune_expired()
+        with self._lock:
+            # Prune expired entries
+            self._prune_expired()
 
-        entry = self._entries.get(content_hash)
+            entry = self._entries.get(content_hash)
 
-        if entry is None or entry.is_completed:
-            return None
+            if entry is None or entry.is_completed:
+                return None
 
-        # Check if within deduplication window
-        if entry.age_ms > self._window_ms:
-            return None
+            # Check if within deduplication window
+            if entry.age_ms > self._window_ms:
+                return None
 
-        # Check fan-out limit
-        if entry.fan_out >= self._max_fan_out:
-            return None
+            # Check fan-out limit
+            if entry.fan_out >= self._max_fan_out:
+                return None
 
-        # Deduplicate: add to existing entry
-        entry.request_ids.append(request_id)
-        self._total_saved_requests += 1
-        self._total_deduplicated += 1
-        return entry
+            # Deduplicate: add to existing entry
+            entry.request_ids.append(request_id)
+            self._total_saved_requests += 1
+            self._total_deduplicated += 1
+            return entry
 
     def register(
         self,
@@ -147,33 +152,35 @@ class RequestDeduplicator:
         prompt_hash: str = "",
     ) -> DeduplicationEntry:
         """Register a new request (not deduplicated)."""
-        self._prune_expired()
-        # Check capacity
-        if len(self._entries) >= self._max_entries:
-            self._evict_oldest()
+        with self._lock:
+            self._prune_expired()
+            # Check capacity
+            if len(self._entries) >= self._max_entries:
+                self._evict_oldest()
 
-        entry = DeduplicationEntry(
-            content_hash=content_hash,
-            request_ids=[request_id],
-            primary_request_id=request_id,
-            model=model,
-            prompt_hash=prompt_hash,
-        )
-        self._entries[content_hash] = entry
-        self._total_inferences += 1
-        return entry
+            entry = DeduplicationEntry(
+                content_hash=content_hash,
+                request_ids=[request_id],
+                primary_request_id=request_id,
+                model=model,
+                prompt_hash=prompt_hash,
+            )
+            self._entries[content_hash] = entry
+            self._total_inferences += 1
+            return entry
 
     def complete(self, content_hash: str) -> list[str]:
         """Mark a deduplication entry as completed.
 
         Returns all request IDs that should receive the output.
         """
-        entry = self._entries.get(content_hash)
-        if entry is None:
-            return []
+        with self._lock:
+            entry = self._entries.get(content_hash)
+            if entry is None:
+                return []
 
-        entry.completed_at = time.monotonic()
-        return list(entry.request_ids)
+            entry.completed_at = time.monotonic()
+            return list(entry.request_ids)
 
     def _prune_expired(self) -> None:
         now = time.monotonic()
