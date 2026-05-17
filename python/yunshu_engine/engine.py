@@ -908,10 +908,15 @@ class Engine:
             try:
                 clean_messages = []
                 for msg in messages:
-                    clean_messages.append({
-                        "role": msg.get("role", "user"),
-                        "content": msg.get("content", ""),
-                    })
+                    m = {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                    # Preserve tool-related fields for correct template rendering
+                    if msg.get("tool_calls"):
+                        m["tool_calls"] = msg["tool_calls"]
+                    if msg.get("tool_call_id"):
+                        m["tool_call_id"] = msg["tool_call_id"]
+                    if msg.get("name"):
+                        m["name"] = msg["name"]
+                    clean_messages.append(m)
                 kwargs: dict[str, Any] = {
                     "tokenize": False,
                     "add_generation_prompt": True,

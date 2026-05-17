@@ -463,11 +463,13 @@ class SSDKVCache:
             )
             self._sqlite_upsert(hex_hash, self._index[hex_hash])
 
-        # Enqueue for background writing (no lock held here)
+        # Enqueue for background writing (no lock held here).
+        # NOTE: We never silently drop queued saves — dropping would leave
+        # the index/SQLite claiming the block exists on disk when it was
+        # never written (data loss).  Instead we block the caller until
+        # the queue drains below capacity.
         with self._writer_lock:
             self._write_queue.append(("save", hex_hash, tensors_raw, meta, file_path))
-            if len(self._write_queue) > self._writer_queue_size:
-                self._write_queue.pop(0)
 
         # For small caches, write synchronously to avoid thread management overhead
         # Background writer is started only when queue exceeds threshold
@@ -516,12 +518,13 @@ class SSDKVCache:
                 self._reads_completed += 1
                 return self._hot_cache[hex_hash][0]
 
-            # Check disk index
-            if hex_hash not in self._index:
+            # Check disk index — capture meta while holding the lock
+            # to prevent a concurrent delete_block from racing with us.
+            meta = self._index.get(hex_hash)
+            if meta is None:
                 return None
 
         # Load from disk (blocking, runs on inference thread)
-        meta = self._index.get(hex_hash)
         if meta is None:
             return None
 

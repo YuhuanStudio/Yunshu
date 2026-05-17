@@ -225,11 +225,15 @@ def _build_constrained_sampler(sampler, json_schema, tokenizer):
     # Standard JSON schema path
     from .json_schema import JsonSchemaConstraint, ConstrainedSampler
     if isinstance(json_schema, str):
-        import json as _json
-        schema = _json.loads(json_schema)
+        if json_schema == "json_object":
+            # Generic JSON object mode — no specific schema
+            constraint = JsonSchemaConstraint(None)
+        else:
+            import json as _json
+            schema = _json.loads(json_schema)
+            constraint = JsonSchemaConstraint(schema)
     else:
-        schema = json_schema
-    constraint = JsonSchemaConstraint(schema)
+        constraint = JsonSchemaConstraint(json_schema)
     return ConstrainedSampler(sampler, constraint, tokenizer)
 
 
@@ -3716,6 +3720,13 @@ class BatchedEngine:
                         if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                             _stopped = True
                             break
+                        # Advance sampler's grammar constraint to stay in sync
+                        if _grammar_constraint is not None:
+                            try:
+                                tok_text = tokenizer.decode([tid])
+                                _grammar_constraint.advance(tok_text)
+                            except Exception:
+                                pass
 
                     # Emit bonus token (model's own prediction at rejection/last point)
                     if not _stopped and result.bonus_token is not None and remaining > 0:
@@ -3727,6 +3738,13 @@ class BatchedEngine:
                             detokenizer.add_token(bonus)
                         if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                             pass
+                        # Advance sampler's grammar constraint for bonus token
+                        if _grammar_constraint is not None:
+                            try:
+                                tok_text = tokenizer.decode([bonus])
+                                _grammar_constraint.advance(tok_text)
+                            except Exception:
+                                pass
 
                     self._ngram_stats["accepted"] += result.accepted_count
 

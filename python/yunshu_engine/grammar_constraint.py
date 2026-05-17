@@ -61,26 +61,35 @@ class RegexConstraint:
         """Compute characters that can follow the current partial match.
 
         Returns None if any character is valid, or a set of valid chars.
+        Uses a two-pronged check:
+          1. fullmatch(candidate) — char completes the pattern
+          2. match(candidate) with end() < len(candidate) — char extends a valid prefix
         """
         if self._done:
             return set()
 
-        # Try extending with each printable ASCII char + common unicode
+        # Try extending with each printable ASCII char + common whitespace
         valid = set()
         test_chars = [chr(i) for i in range(32, 127)]
         test_chars.extend(['\n', '\t', '\r'])
 
         for ch in test_chars:
             candidate = self._text_buffer + ch
-            # A char is valid if the candidate is a partial match
-            # (can still be extended to full match)
-            if self._compiled.match(candidate) is not None:
+            # A char is valid if the candidate is a full match
+            if self._compiled.fullmatch(candidate) is not None:
                 valid.add(ch)
-            # Or if the candidate is already a full match
-            elif self._compiled.fullmatch(candidate) is not None:
+                continue
+            # Or if candidate is a valid prefix that can be extended
+            m = self._compiled.match(candidate)
+            if m is not None:
+                # match() succeeded — the candidate starts with a match
+                # This is a valid prefix if either:
+                # (a) the match consumed the whole candidate (prefix), or
+                # (b) the match consumed a prefix but there's more pattern to go
+                # In both cases, this character is valid
                 valid.add(ch)
 
-        if len(valid) > 90:  # almost all chars valid
+        if len(valid) > 90:  # almost all chars valid — unrestricted
             return None
         return valid
 

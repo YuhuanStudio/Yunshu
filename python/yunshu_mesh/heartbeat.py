@@ -147,6 +147,7 @@ class HeartbeatMonitor:
                         self._timed_out.add(node_id)
                         node = self._nodes.get(node_id)
                         if node:
+                            node.state = MeshNodeState.OFFLINE
                             logger.warning(f"Node timeout: {node.hostname} ({node_id})")
                             for cb in self._on_timeout_callbacks:
                                 try:

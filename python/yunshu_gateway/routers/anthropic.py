@@ -145,6 +145,31 @@ class AnthropicMessagesRequest(BaseModel):
 # ── Content block helpers ──
 
 
+def _resolve_json_schema(req) -> dict | str | None:
+    """Resolve json_schema from req.json_schema or req.response_format.
+
+    The Anthropic API doesn't have a standard structured output mechanism,
+    but clients may send response_format (OpenAI-style) or json_schema directly.
+    """
+    # Direct json_schema field takes priority
+    js = getattr(req, 'json_schema', None)
+    if js is not None:
+        return js
+    # Fall back to OpenAI-style response_format
+    rf = getattr(req, 'response_format', None)
+    if rf is not None:
+        rf_type = rf.get("type")
+        if rf_type == "json_object":
+            return "json_object"
+        if rf_type == "json_schema":
+            js_obj = rf.get("json_schema", {})
+            schema = js_obj.get("schema")
+            if schema:
+                return schema
+            return "json_object"
+    return None
+
+
 def _extract_text_from_content(content: str | list[dict] | None) -> str:
     """Convert Anthropic content (string or list of blocks) to plain text.
 
@@ -453,7 +478,7 @@ async def _non_stream_batched(engine, messages, req, stop):
         xtc_probability=getattr(req, 'xtc_probability', 0.0),
         xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
         priority=getattr(req, 'priority', 0),
-        json_schema=getattr(req, 'json_schema', None),
+        json_schema=_resolve_json_schema(req),
         logprobs=getattr(req, 'logprobs', False),
         top_logprobs=getattr(req, 'top_logprobs', None),
         logits_processors=getattr(req, 'logits_processors', None),
@@ -578,7 +603,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
             xtc_probability=getattr(req, 'xtc_probability', 0.0),
             xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
             priority=getattr(req, 'priority', 0),
-            json_schema=getattr(req, 'json_schema', None),
+            json_schema=_resolve_json_schema(req),
             logprobs=getattr(req, 'logprobs', False),
             top_logprobs=getattr(req, 'top_logprobs', None),
             logits_processors=getattr(req, 'logits_processors', None),
@@ -747,7 +772,7 @@ async def _stream_anthropic(
                 xtc_probability=getattr(req, 'xtc_probability', 0.0),
                 xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
                 priority=getattr(req, 'priority', 0),
-                json_schema=getattr(req, 'json_schema', None),
+                json_schema=_resolve_json_schema(req),
                 logprobs=getattr(req, 'logprobs', False),
                 top_logprobs=getattr(req, 'top_logprobs', None),
                 logits_processors=getattr(req, 'logits_processors', None),
@@ -837,7 +862,7 @@ async def _stream_anthropic(
                 xtc_probability=getattr(req, 'xtc_probability', 0.0),
                 xtc_threshold=getattr(req, 'xtc_threshold', 0.0),
                 priority=getattr(req, 'priority', 0),
-                json_schema=getattr(req, 'json_schema', None),
+                json_schema=_resolve_json_schema(req),
                 logprobs=getattr(req, 'logprobs', False),
                 top_logprobs=getattr(req, 'top_logprobs', None),
                 logits_processors=getattr(req, 'logits_processors', None),

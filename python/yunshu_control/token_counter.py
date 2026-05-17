@@ -31,7 +31,13 @@ def count_tokens(text: str, tokenizer=None) -> int:
 
 
 def count_message_tokens(messages: list[dict], tokenizer=None) -> int:
-    """Count total tokens across a list of chat messages."""
+    """Count total tokens across a list of chat messages.
+
+    Handles tool call fields in assistant messages and tool_call_id/name
+    in tool role messages for accurate multi-turn token estimation.
+    """
+    import json as _json
+
     total = 0
     for msg in messages:
         # Role overhead (~4 tokens per message)
@@ -48,6 +54,22 @@ def count_message_tokens(messages: list[dict], tokenizer=None) -> int:
                         total += 85  # Fixed overhead for image tokens
                 elif isinstance(part, str):
                     total += count_tokens(part, tokenizer)
+        # Account for tool_calls in assistant messages
+        tool_calls = msg.get("tool_calls")
+        if tool_calls and isinstance(tool_calls, list):
+            for tc in tool_calls:
+                total += 4  # tool call overhead (id, type)
+                func = tc.get("function", {}) if isinstance(tc, dict) else {}
+                total += count_tokens(func.get("name", ""), tokenizer)
+                args = func.get("arguments", "")
+                if isinstance(args, dict):
+                    args = _json.dumps(args)
+                total += count_tokens(str(args), tokenizer)
+        # Account for tool_call_id and name in tool role messages
+        if msg.get("tool_call_id"):
+            total += 4  # tool_call_id overhead
+        if msg.get("name"):
+            total += count_tokens(msg["name"], tokenizer)
     total += 2  # Priming tokens
     return total
 

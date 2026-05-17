@@ -2631,18 +2631,47 @@ class Scheduler:
         else:
             sampler = base_sampler
 
-        # JSON schema constrained generation
+        # JSON schema / grammar constrained generation
         json_schema = getattr(sp, 'json_schema', None)
-        if json_schema is not None:
-            from .json_schema import make_constrained_sampler
-            schema = json_schema if isinstance(json_schema, dict) else None
-            constrained_sampler = make_constrained_sampler(
-                base_sampler=sampler if logits_processors else base_sampler,
-                schema=schema,
-                tokenizer=self.tokenizer,
-                mode="json_schema" if schema else "json_object",
-            )
-            return constrained_sampler
+        grammar = getattr(sp, 'grammar', None)
+        if json_schema is not None or grammar is not None:
+            from .json_schema import JsonSchemaConstraint, ConstrainedSampler
+            from .grammar_constraint import ConstraintFactory
+
+            # grammar field takes priority for non-JSON types (regex, choice, cfg)
+            if grammar is not None and isinstance(grammar, dict):
+                gtype = grammar.get("type")
+                if gtype in ("regex", "choice", "cfg"):
+                    try:
+                        if gtype == "regex":
+                            gpayload = grammar.get("pattern", "")
+                        elif gtype == "choice":
+                            gpayload = grammar.get("choices", [])
+                        elif gtype == "cfg":
+                            gpayload = grammar.get("grammar", "")
+                        else:
+                            gpayload = None
+
+                        constraint = ConstraintFactory.create(gtype, gpayload, self.tokenizer)
+                        return ConstrainedSampler(sampler, constraint, self.tokenizer)
+                    except Exception:
+                        logger.debug("grammar constraint setup failed, falling back", exc_info=True)
+                elif gtype == "json":
+                    schema = grammar.get("schema")
+                    constraint = JsonSchemaConstraint(schema)
+                    return ConstrainedSampler(sampler, constraint, self.tokenizer)
+
+            # Fallback to json_schema field
+            if json_schema is not None:
+                from .json_schema import make_constrained_sampler
+                schema = json_schema if isinstance(json_schema, dict) else None
+                constrained_sampler = make_constrained_sampler(
+                    base_sampler=sampler if logits_processors else base_sampler,
+                    schema=schema,
+                    tokenizer=self.tokenizer,
+                    mode="json_schema" if schema else "json_object",
+                )
+                return constrained_sampler
 
         return sampler
 

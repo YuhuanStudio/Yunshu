@@ -885,7 +885,8 @@ class MeshHealthMonitor:
         """Detect nodes that have exceeded the heartbeat timeout.
 
         Returns:
-            List of node IDs that have timed out.
+            List of node IDs that are currently healthy but whose last
+            heartbeat exceeds the timeout.
         """
         now = time.time()
         timed_out: list[str] = []
@@ -911,9 +912,15 @@ class MeshHealthMonitor:
             if status is None:
                 return
 
+            # If the node was healthy (direct call from external code or
+            # tests), count this as a failure.  If already unhealthy
+            # (called from _run_health_check after threshold counting),
+            # consecutive_failures was already set.
+            if status.healthy:
+                status.consecutive_failures += 1
+
             status.healthy = False
             status.state = MeshNodeState.OFFLINE
-            status.consecutive_failures += 1
 
             node = self._nodes.get(node_id)
             if node:
@@ -1086,23 +1093,22 @@ class MeshHealthMonitor:
             await asyncio.sleep(self._check_interval)
 
     def _run_health_check(self) -> None:
-        """Execute a single health check cycle."""
+        """Execute a single health check cycle.
+
+        For each timed-out healthy node, increments its consecutive_failures
+        counter.  When the counter reaches the failure threshold, triggers
+        failover via on_node_failure.
+        """
         timed_out = self._detect_failures()
-        # Check which timed-out nodes have reached the failure threshold.
-        # Note: consecutive_failures is incremented inside on_node_failure,
-        # so we only need to check the threshold here for nodes that are
-        # not yet marked as failed (healthy but timed out).
-        nodes_to_failover: list[str] = []
         for node_id in timed_out:
             with self._lock:
                 status = self._node_status.get(node_id)
-                # Only trigger failover once (the threshold check uses
-                # the count *after* the next increment in on_node_failure).
-                if status and status.consecutive_failures + 1 >= self._failure_threshold:
-                    nodes_to_failover.append(node_id)
-        # Trigger failover outside the lock to avoid deadlock.
-        # on_node_failure increments consecutive_failures.
-        for node_id in nodes_to_failover:
+                if status is None:
+                    continue
+                status.consecutive_failures += 1
+                if status.consecutive_failures < self._failure_threshold:
+                    continue
+            # Trigger failover outside the lock to avoid deadlock.
             self.on_node_failure(node_id)
 
     # ── Stats ────────────────────────────────────────────────────────

@@ -163,9 +163,26 @@ class ImageContent(BaseModel):
 ContentPart = Union[TextContent, ImageContent, dict]
 
 
+class ToolCallFunction(BaseModel):
+    """Function call within a tool_call."""
+    name: str
+    arguments: str = ""
+
+
+class ToolCall(BaseModel):
+    """OpenAI tool_call structure in assistant messages."""
+    id: str = ""
+    type: str = "function"
+    function: ToolCallFunction = ToolCallFunction(name="")
+
+
 class ChatMessage(BaseModel):
     role: str
     content: Union[str, list[ContentPart], None] = None
+    # Tool call fields for multi-turn conversations (OpenAI spec)
+    tool_calls: Optional[list[ToolCall]] = None       # assistant messages with tool calls
+    tool_call_id: Optional[str] = None                 # tool role messages (result of a tool call)
+    name: Optional[str] = None                          # tool role messages (function name)
 
 
 class ToolFunction(BaseModel):
@@ -295,6 +312,7 @@ def _extract_messages(msgs: list[ChatMessage]) -> list[dict]:
     Follows oMLX's extract_multimodal_content pattern:
     - String content -> {"role": ..., "content": "..."}
     - List content with image_url -> {"role": ..., "content": [{type: "text", ...}, {type: "image_url", ...}]}
+    - Tool call fields (tool_calls, tool_call_id, name) preserved for multi-turn conversations
     """
     result = []
     for msg in msgs:
@@ -319,6 +337,23 @@ def _extract_messages(msgs: list[ChatMessage]) -> list[dict]:
             d["content"] = parts
         else:
             d["content"] = str(msg.content)
+        # Preserve tool call fields for multi-turn conversations (OpenAI spec)
+        if msg.tool_calls is not None:
+            d["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in msg.tool_calls
+            ]
+        if msg.tool_call_id is not None:
+            d["tool_call_id"] = msg.tool_call_id
+        if msg.name is not None:
+            d["name"] = msg.name
         result.append(d)
     return result
 

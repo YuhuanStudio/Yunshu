@@ -47,11 +47,14 @@ class HarmonyMessageAdapter(MessageAdapter):
                     "content": content,
                 })
             elif role == "tool":
-                adapted.append({
+                tool_msg = {
                     "role": "tool",
                     "content": content,
                     "tool_call_id": msg.get("tool_call_id", ""),
-                })
+                }
+                if msg.get("name"):
+                    tool_msg["name"] = msg["name"]
+                adapted.append(tool_msg)
             elif role == "assistant":
                 new_msg = {"role": "assistant", "content": content}
                 if msg.get("tool_calls"):
@@ -102,6 +105,8 @@ class Gemma4MessageAdapter(MessageAdapter):
                 new_msg["tool_calls"] = msg["tool_calls"]
             if role == "tool":
                 new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
 
             adapted.append(new_msg)
             prev_role = role
@@ -145,6 +150,8 @@ class DeepSeekMessageAdapter(MessageAdapter):
                 new_msg["tool_calls"] = msg["tool_calls"]
             if role == "tool":
                 new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
 
             adapted.append(new_msg)
 
@@ -182,6 +189,8 @@ class QwenMessageAdapter(MessageAdapter):
                     new_msg["reasoning_content"] = msg["reasoning_content"]
             if role == "tool":
                 new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
 
             adapted.append(new_msg)
         return adapted

@@ -100,10 +100,15 @@ class JsonSchemaConstraint:
         self._is_first_value: bool = True  # track first value in object/array
         # Snapshot stack for rollback (speculative draft validation)
         self._snapshots: list[tuple] = []
+        # Track length of value literals for robust detection
+        self._literal_remaining: int = 0  # chars remaining in true/false/null
 
         # If no schema, default to generic object
         if schema is None:
             self._schema = {"type": "object"}
+
+        # Detect top-level type for START state initialization
+        self._top_level_type = self._get_type_from_schema(self._schema)
 
     @property
     def state(self) -> JsonState:
@@ -181,6 +186,8 @@ class JsonSchemaConstraint:
         state = self._state
 
         if state == JsonState.START:
+            if self._top_level_type == "array":
+                return {'['}
             return {'{'}
 
         if state == JsonState.OBJECT_OPEN:
@@ -341,6 +348,7 @@ class JsonSchemaConstraint:
             self._string_start,
             self._number_start,
             self._is_first_value,
+            self._literal_remaining,
         ))
 
     def rollback(self) -> None:
@@ -357,6 +365,7 @@ class JsonSchemaConstraint:
             self._string_start,
             self._number_start,
             self._is_first_value,
+            self._literal_remaining,
         ) = self._snapshots.pop()
 
     def _process_text(self, text: str) -> None:
@@ -370,6 +379,10 @@ class JsonSchemaConstraint:
                     self._state = JsonState.OBJECT_OPEN
                     self._is_first_value = True
                     self._init_object_keys(self._schema)
+                    self._schema_stack.append((JsonState.DONE, self._schema))
+                elif ch == '[':
+                    self._state = JsonState.ARRAY_OPEN
+                    self._is_first_value = True
                     self._schema_stack.append((JsonState.DONE, self._schema))
                 i += 1
                 continue
@@ -533,39 +546,30 @@ class JsonSchemaConstraint:
                 if ch in _DIGIT_CHARS or ch in '.eE+-':
                     i += 1
                     continue
-                # Number ended — the terminating char will be re-processed
-                # in the parent context
-                self._text_buffer = self._text_buffer[:-len(text) + i]
+                # Number ended — transition to completed state
                 self._value_completed()
-                # Re-process remaining text in new state
-                remaining = text[i:]
-                if remaining:
-                    self._process_text(remaining)
-                return
+                # Re-process the terminating char in the new state
+                # (e.g., ',' or '}' or ']')
+                continue
 
             if self._state == JsonState.BOOLEAN_TRUE:
-                # Check if "true" is completed
-                buf_end = self._text_buffer[-(5 - (len(self._text_buffer) - self._text_buffer.rfind('t'))):]
-                # Simpler: check if we have "true" somewhere
-                if self._text_buffer.rstrip().endswith('true'):
-                    self._value_completed()
-                elif ch == 'e' and self._text_buffer.rstrip().endswith('tru'):
+                # Use literal_remaining counter for robust detection
+                self._literal_remaining -= 1
+                if self._literal_remaining <= 0:
                     self._value_completed()
                 i += 1
                 continue
 
             if self._state == JsonState.BOOLEAN_FALSE:
-                if self._text_buffer.rstrip().endswith('false'):
-                    self._value_completed()
-                elif ch == 'e' and self._text_buffer.rstrip().endswith('fals'):
+                self._literal_remaining -= 1
+                if self._literal_remaining <= 0:
                     self._value_completed()
                 i += 1
                 continue
 
             if self._state == JsonState.NULL:
-                if self._text_buffer.rstrip().endswith('null'):
-                    self._value_completed()
-                elif ch == 'l' and self._text_buffer.rstrip().endswith('nul'):
+                self._literal_remaining -= 1
+                if self._literal_remaining <= 0:
                     self._value_completed()
                 i += 1
                 continue
@@ -592,10 +596,13 @@ class JsonSchemaConstraint:
             self._is_first_value = True
         elif ch == 't':
             self._state = JsonState.BOOLEAN_TRUE
+            self._literal_remaining = 3  # "rue" remaining after 't'
         elif ch == 'f':
             self._state = JsonState.BOOLEAN_FALSE
+            self._literal_remaining = 4  # "alse" remaining after 'f'
         elif ch == 'n':
             self._state = JsonState.NULL
+            self._literal_remaining = 3  # "ull" remaining after 'n'
         elif ch == '-' or ch in _DIGIT_CHARS:
             self._state = JsonState.NUMBER
             self._number_start = len(self._text_buffer) - 1
@@ -629,10 +636,13 @@ class JsonSchemaConstraint:
             self._is_first_value = True
         elif ch == 't':
             self._state = JsonState.BOOLEAN_TRUE
+            self._literal_remaining = 3  # "rue"
         elif ch == 'f':
             self._state = JsonState.BOOLEAN_FALSE
+            self._literal_remaining = 4  # "alse"
         elif ch == 'n':
             self._state = JsonState.NULL
+            self._literal_remaining = 3  # "ull"
         elif ch == '-' or ch in _DIGIT_CHARS:
             self._state = JsonState.NUMBER
             self._number_start = len(self._text_buffer) - 1
@@ -800,6 +810,7 @@ class JsonSchemaConstraint:
         self._string_start = 0
         self._number_start = 0
         self._is_first_value = True
+        self._literal_remaining = 0
 
     def get_stats(self) -> dict[str, Any]:
         """Return constraint statistics for monitoring."""
@@ -910,6 +921,16 @@ class ConstrainedSampler:
     @property
     def constraint(self) -> JsonSchemaConstraint:
         return self._constraint
+
+    def checkpoint(self) -> None:
+        """Forward checkpoint to underlying constraint (for spec decode)."""
+        if hasattr(self._constraint, 'checkpoint'):
+            self._constraint.checkpoint()
+
+    def rollback(self) -> None:
+        """Forward rollback to underlying constraint (for spec decode)."""
+        if hasattr(self._constraint, 'rollback'):
+            self._constraint.rollback()
 
 
 def make_constrained_sampler(

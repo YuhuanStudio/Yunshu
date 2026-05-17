@@ -50,7 +50,14 @@ class MeshTopology:
         return list(self._nodes)
 
     def add_node(self, node: MeshNode) -> int:
-        """Add a node and assign it a rank. Returns the assigned rank."""
+        """Add a node and assign it a rank. Returns the assigned rank.
+
+        If a node with the same node_id already exists, returns its
+        existing rank without adding a duplicate.
+        """
+        for existing in self._nodes:
+            if existing.node_id == node.node_id:
+                return existing.rank
         if node.rank >= 0:
             rank = node.rank
         else:

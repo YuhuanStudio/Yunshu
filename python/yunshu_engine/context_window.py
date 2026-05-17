@@ -24,6 +24,39 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 
+def _truncate_first_message_group(messages: list[dict]) -> None:
+    """Remove the first message (and related tool messages) from a message list.
+
+    Modifies the list in-place. When the first message is an assistant message
+    with tool_calls, also removes the following tool role messages to keep the
+    sequence valid. When the first message is an orphaned tool result (no
+    preceding assistant tool_calls), removes it too.
+
+    This ensures truncation never splits a tool call/response pair.
+    """
+    if not messages:
+        return
+
+    idx = 0
+    first_role = messages[idx].get("role")
+
+    # If the first message is an orphaned tool result, remove it
+    if first_role == "tool":
+        messages.pop(idx)
+        return
+
+    # If the first message is an assistant with tool_calls, remove it + all following tool results
+    if first_role == "assistant" and messages[idx].get("tool_calls"):
+        messages.pop(idx)
+        # Remove consecutive tool messages that are responses to this assistant's tool_calls
+        while messages and messages[0].get("role") == "tool":
+            messages.pop(0)
+        return
+
+    # Default: remove just the first message
+    messages.pop(0)
+
+
 class TruncationStrategy(str, Enum):
     """Available context window truncation strategies."""
 
@@ -211,7 +244,12 @@ class ContextWindowManager:
     def _truncate_oldest(
         self, messages: list[dict], max_tokens: int
     ) -> list[dict]:
-        """Drop oldest messages until under budget. Always keeps system prompt."""
+        """Drop oldest messages until under budget. Always keeps system prompt.
+
+        Preserves tool call/response pairs: if an assistant message with
+        tool_calls is at the truncation boundary, also removes the following
+        tool role messages to keep the message sequence valid for chat templates.
+        """
         if not messages:
             return []
 
@@ -222,7 +260,8 @@ class ContextWindowManager:
 
         # Remove oldest non-system messages first
         while non_system and self._count_messages_tokens(system_msgs + non_system) > max_tokens:
-            non_system.pop(0)
+            # Check if removing the first message would orphan tool results
+            _truncate_first_message_group(non_system)
 
         return system_msgs + non_system
 
@@ -232,6 +271,7 @@ class ContextWindowManager:
         """Keep only the most recent messages that fit in the window.
 
         Always preserves system messages at the start.
+        Ensures tool call/response pairs are kept together.
         """
         if not messages:
             return []
@@ -247,6 +287,10 @@ class ContextWindowManager:
                 break
             window.insert(0, msg)
 
+        # Ensure the window doesn't start with orphaned tool results
+        while window and window[0].get("role") == "tool":
+            window.pop(0)
+
         return system_msgs + window
 
     def _importance_aware(
@@ -258,6 +302,8 @@ class ContextWindowManager:
         - Role (system > user > assistant)
         - Content length (longer = more context)
         - Recency (recent = more relevant)
+
+        Tool call/response pairs are always kept together.
         """
         if not messages:
             return []
@@ -269,15 +315,40 @@ class ContextWindowManager:
         if not non_system:
             return deepcopy(system_msgs)
 
-        # Always keep the most recent N turns
-        recent = non_system[-self._min_recent_turns * 2:]  # user+assistant pairs
+        # Always keep the most recent N turns (expand to include any
+        # trailing tool messages that belong to the last tool call)
+        recent_count = self._min_recent_turns * 2
+        recent = non_system[-recent_count:]  # user+assistant pairs
+        # Extend recent to include any tool call groups at the boundary
+        while recent and recent[0].get("role") == "tool":
+            # This tool message at the start of 'recent' is orphaned without
+            # its assistant tool_calls message. Include one more message.
+            recent_count += 1
+            if recent_count > len(non_system):
+                recent = list(non_system)
+                break
+            recent = non_system[-recent_count:]
+
         middle = non_system[:-len(recent)] if len(non_system) > len(recent) else []
 
-        # Score middle messages by importance
+        # Score middle messages by importance, treating tool call groups as units
         scored = []
+        skip_next = 0
         for i, msg in enumerate(middle):
+            if skip_next > 0:
+                skip_next -= 1
+                continue
+            # Compute importance for this message
             score = self._compute_importance(msg, i, len(middle))
-            scored.append((score, i, msg))
+            # If this is an assistant with tool_calls, group it with following tool messages
+            group_size = 1
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                j = i + 1
+                while j < len(middle) and middle[j].get("role") == "tool":
+                    j += 1
+                group_size = j - i
+                skip_next = group_size - 1
+            scored.append((score, i, msg, group_size))
 
         # Sort by score descending, keep highest-scoring middle messages
         scored.sort(key=lambda x: -x[0])
@@ -287,11 +358,16 @@ class ContextWindowManager:
         current = deepcopy(system_msgs + recent)
         budget_remaining = max_tokens - self._count_messages_tokens(current)
 
-        for score, idx, msg in scored:
-            msg_tokens = self._count_messages_tokens([msg])
-            if msg_tokens <= budget_remaining and score >= self._importance_threshold:
-                kept_middle_indices.add(idx)
-                budget_remaining -= msg_tokens
+        for score, idx, msg, group_size in scored:
+            if idx in kept_middle_indices:
+                continue
+            # Calculate tokens for the entire group (assistant + tool responses)
+            group = middle[idx:idx + group_size]
+            group_tokens = self._count_messages_tokens(group)
+            if group_tokens <= budget_remaining and score >= self._importance_threshold:
+                for gi in range(group_size):
+                    kept_middle_indices.add(idx + gi)
+                budget_remaining -= group_tokens
 
         # Reconstruct in original order
         kept_middle = [middle[i] for i in range(len(middle)) if i in kept_middle_indices]
@@ -353,8 +429,44 @@ class ContextWindowManager:
 
     # ── Helpers ──
 
+    def _find_safe_truncate_point(self, non_system: list[dict], start: int = 0) -> int:
+        """Find the next safe truncation point that preserves tool call/response pairs.
+
+        When truncating messages from the beginning, we must not split a tool call
+        group. A tool call group is:
+          - assistant message with tool_calls
+          - followed by one or more tool role messages (the results)
+
+        If removing an assistant+tool_calls message, we must also remove all the
+        following tool messages that respond to those calls.
+
+        Returns the index of the first message to keep after truncation.
+        """
+        if start >= len(non_system):
+            return start
+
+        # Walk past any tool messages at the start (orphaned tool results)
+        idx = start
+        while idx < len(non_system) and non_system[idx].get("role") == "tool":
+            idx += 1
+
+        # Check if the next message is an assistant with tool_calls
+        if idx < len(non_system) and non_system[idx].get("role") == "assistant" and non_system[idx].get("tool_calls"):
+            idx += 1  # skip the assistant message
+            # Skip all following tool result messages
+            while idx < len(non_system) and non_system[idx].get("role") == "tool":
+                idx += 1
+
+        return max(idx, start + 1)  # always remove at least one message
+
     def _count_messages_tokens(self, messages: list[dict]) -> int:
-        """Count total tokens in a list of messages."""
+        """Count total tokens in a list of messages.
+
+        Includes tool_calls in assistant messages and tool_call_id/name
+        in tool role messages for accurate multi-turn token estimation.
+        """
+        import json as _json
+
         total = 0
         for msg in messages:
             content = msg.get("content", "")
@@ -368,6 +480,22 @@ class ContextWindowManager:
                         total += self._token_counter(text)
                     elif isinstance(block, str):
                         total += self._token_counter(block)
+            # Account for tool_calls in assistant messages
+            tool_calls = msg.get("tool_calls")
+            if tool_calls and isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    total += 4  # tool call overhead
+                    func = tc.get("function", {}) if isinstance(tc, dict) else {}
+                    total += self._token_counter(func.get("name", ""))
+                    args = func.get("arguments", "")
+                    if isinstance(args, dict):
+                        args = _json.dumps(args)
+                    total += self._token_counter(str(args))
+            # Account for tool_call_id and name in tool role messages
+            if msg.get("tool_call_id"):
+                total += 4
+            if msg.get("name"):
+                total += self._token_counter(msg["name"])
             # Role overhead (~4 tokens per message for role markers)
             total += 4
         return total

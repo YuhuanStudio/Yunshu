@@ -387,7 +387,10 @@ def build_bitmask_engine(
 
         schema = grammar if grammar_type == "json_schema" else None
         if isinstance(grammar, str) and grammar_type == "json_schema":
-            schema = json.loads(grammar)
+            if grammar == "json_object":
+                schema = None  # generic JSON object mode
+            else:
+                schema = json.loads(grammar)
         constraint = JsonSchemaConstraint(schema)
         return GrammarBitmaskEngine(constraint)
 

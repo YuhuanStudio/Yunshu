@@ -806,3 +806,241 @@ class TestEnumValues:
         # Enum values are still strings
         chars = c._get_expected_chars()
         assert '"' in chars
+
+
+# ── Bug Fix Regression Tests ─────────────────────────────────────────────────
+
+
+class TestTopLevelArray:
+    """Test that top-level arrays are supported (START state supports '[')."""
+
+    def test_top_level_array_starts_with_bracket(self):
+        """Schema type 'array' should expect '[' at START."""
+        c = JsonSchemaConstraint({"type": "array", "items": {"type": "string"}})
+        chars = c._get_expected_chars()
+        assert '[' in chars
+        assert '{' not in chars
+
+    def test_top_level_array_empty(self):
+        c = JsonSchemaConstraint({"type": "array", "items": {"type": "string"}})
+        c.advance('[')
+        c.advance(']')
+        assert c.is_done
+
+    def test_top_level_array_with_items(self):
+        c = JsonSchemaConstraint({"type": "array", "items": {"type": "string"}})
+        c.advance('[')
+        c.advance('"a"')
+        c.advance(',')
+        c.advance('"b"')
+        c.advance(']')
+        assert c.is_done
+
+
+class TestBooleanNullLiteralCounter:
+    """Test that boolean/null detection uses a counter, not fragile string matching."""
+
+    def test_true_literal_completes(self):
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {"flag": {"type": "boolean"}}
+        })
+        c.advance('{')
+        c.advance('"flag"')
+        c.advance(':')
+        c.advance('true')
+        assert c.state == JsonState.OBJECT_COMMA
+
+    def test_false_literal_completes(self):
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {"flag": {"type": "boolean"}}
+        })
+        c.advance('{')
+        c.advance('"flag"')
+        c.advance(':')
+        c.advance('false')
+        assert c.state == JsonState.OBJECT_COMMA
+
+    def test_null_literal_completes(self):
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {"data": {"type": "null"}}
+        })
+        c.advance('{')
+        c.advance('"data"')
+        c.advance(':')
+        c.advance('null')
+        assert c.state == JsonState.OBJECT_COMMA
+
+    def test_boolean_in_array(self):
+        """Boolean values inside arrays should also transition correctly."""
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {"flags": {"type": "array", "items": {"type": "boolean"}}}
+        })
+        c.advance('{')
+        c.advance('"flags"')
+        c.advance(':')
+        c.advance('[')
+        c.advance('true')
+        assert c.state == JsonState.ARRAY_COMMA
+        c.advance(',')
+        c.advance('false')
+        assert c.state == JsonState.ARRAY_COMMA
+        c.advance(']')
+        assert c.state == JsonState.OBJECT_COMMA
+        c.advance('}')
+        assert c.is_done
+
+
+class TestNumberStateNoCorruption:
+    """Test that number state transitions don't corrupt the text buffer."""
+
+    def test_number_followed_by_comma(self):
+        """Number followed by comma should correctly transition to OBJECT_COMMA."""
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer"},
+                "y": {"type": "string"}
+            }
+        })
+        c.advance('{')
+        c.advance('"x"')
+        c.advance(':')
+        c.advance('42,')
+        # After '42,' the number 42 completes and comma transitions to OBJECT_KEY
+        assert c.state == JsonState.OBJECT_KEY
+        c.advance('"y"')
+        c.advance(':')
+        c.advance('"test"')
+        c.advance('}')
+        assert c.is_done
+
+    def test_number_followed_by_close_brace(self):
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {"count": {"type": "integer"}}
+        })
+        c.advance('{')
+        c.advance('"count"')
+        c.advance(':')
+        c.advance('99}')
+        assert c.is_done
+
+
+class TestCheckpointRollbackWithLiteralCounter:
+    """Test that checkpoint/rollback preserves literal_remaining state."""
+
+    def test_rollback_restores_boolean_state(self):
+        c = JsonSchemaConstraint({
+            "type": "object",
+            "properties": {"flag": {"type": "boolean"}}
+        })
+        c.advance('{')
+        c.advance('"flag"')
+        c.advance(':')
+        # In BOOLEAN_TRUE state, 't' consumed, 3 chars remaining
+        c.checkpoint()
+        c.advance('ru')  # advance by 2 chars, 1 remaining
+        # Rollback should restore to before 'ru'
+        c.rollback()
+        # The state should allow completing 'true' still
+        assert c.state in (JsonState.OBJECT_VALUE, JsonState.BOOLEAN_TRUE)
+
+
+class TestBuildConstrainedSamplerJsonString:
+    """Test that _build_constrained_sampler handles 'json_object' string correctly."""
+
+    def test_json_object_string(self):
+        from yunshu_engine.batched_engine import _build_constrained_sampler
+        import mlx.core as mx
+
+        def base_sampler(logits):
+            return mx.argmax(logits)
+
+        tokenizer = FakeTokenizer()
+        # This used to crash with json.JSONDecodeError
+        sampler = _build_constrained_sampler(base_sampler, "json_object", tokenizer)
+        assert isinstance(sampler, ConstrainedSampler)
+
+    def test_json_schema_string(self):
+        from yunshu_engine.batched_engine import _build_constrained_sampler
+        import mlx.core as mx
+        import json
+
+        def base_sampler(logits):
+            return mx.argmax(logits)
+
+        tokenizer = FakeTokenizer()
+        schema = json.dumps({"type": "object", "properties": {"x": {"type": "string"}}})
+        sampler = _build_constrained_sampler(base_sampler, schema, tokenizer)
+        assert isinstance(sampler, ConstrainedSampler)
+
+
+class TestGatewayCompletionsResponseFormat:
+    """Test completions.py response_format handling consistency."""
+
+    def test_json_object_mode(self):
+        """json_object type should produce a valid constraint."""
+        from yunshu_engine.batched_engine import _build_constrained_sampler
+        import mlx.core as mx
+
+        def base_sampler(logits):
+            return mx.argmax(logits)
+
+        tokenizer = FakeTokenizer()
+        # Empty dict should create a valid constraint (generic object)
+        sampler = _build_constrained_sampler(base_sampler, {}, tokenizer)
+        assert isinstance(sampler, ConstrainedSampler)
+        # Should constrain first token to '{'
+        logits = mx.full((1, tokenizer.vocab_size), -100.0)
+        logits[0, ord('{')] = 10.0
+        token = sampler(logits)
+        assert int(token) == ord('{')
+
+
+class TestConstrainedSamplerCheckpointRollback:
+    """Test that ConstrainedSampler forwards checkpoint/rollback."""
+
+    def test_checkpoint_rollback(self):
+        import mlx.core as mx
+
+        def base_sampler(logits):
+            return mx.argmax(logits)
+
+        tokenizer = FakeTokenizer()
+        sampler = make_constrained_sampler(base_sampler, None, tokenizer)
+
+        # Should not raise
+        sampler.checkpoint()
+        sampler.rollback()
+
+    def test_rollback_restores_state(self):
+        import mlx.core as mx
+
+        def base_sampler(logits):
+            return mx.argmax(logits)
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        tokenizer = FakeTokenizer()
+        sampler = make_constrained_sampler(base_sampler, schema, tokenizer)
+
+        # Generate '{'
+        logits = mx.full((1, tokenizer.vocab_size), -100.0)
+        logits[0, ord('{')] = 10.0
+        sampler(logits)
+
+        # Checkpoint after '{'
+        sampler.checkpoint()
+        assert sampler.constraint.state == JsonState.OBJECT_OPEN
+
+        # Generate '"'
+        logits = mx.full((1, tokenizer.vocab_size), -100.0)
+        logits[0, ord('"')] = 10.0
+        sampler(logits)
+
+        # Rollback should restore to OBJECT_OPEN
+        sampler.rollback()
+        assert sampler.constraint.state == JsonState.OBJECT_OPEN
