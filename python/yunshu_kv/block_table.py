@@ -78,10 +78,22 @@ class BlockTable:
     def block_id_for_token(self, token_position: int) -> int:
         """Get the physical block ID for a given token position."""
         logical_idx = token_position // self.block_size
+        if logical_idx < 0 or logical_idx >= len(self._blocks):
+            raise IndexError(
+                f"Token position {token_position} maps to logical block "
+                f"{logical_idx}, but table has {len(self._blocks)} blocks "
+                f"(total_tokens={self.total_tokens})"
+            )
         return self._blocks[logical_idx].block_id
 
     def slot_for_token(self, token_position: int) -> tuple[int, int]:
         """Get (block_id, offset_within_block) for a token position."""
         logical_idx = token_position // self.block_size
+        if logical_idx < 0 or logical_idx >= len(self._blocks):
+            raise IndexError(
+                f"Token position {token_position} maps to logical block "
+                f"{logical_idx}, but table has {len(self._blocks)} blocks "
+                f"(total_tokens={self.total_tokens})"
+            )
         offset = token_position % self.block_size
         return self._blocks[logical_idx].block_id, offset

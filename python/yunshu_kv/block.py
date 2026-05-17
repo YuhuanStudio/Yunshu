@@ -175,6 +175,9 @@ class BlockPool:
         """Decrease ref count; blocks reaching 0 go back to free list."""
         freed = []
         for block in blocks:
+            if block.ref_count <= 0:
+                # Guard against underflow — block already free or null
+                continue
             block.ref_count -= 1
             if block.ref_count == 0 and not block.is_null:
                 freed.append(block)
@@ -252,6 +255,9 @@ class BlockPool:
         # Decrement original's ref_count (we're detaching from it)
         block.ref_count -= 1
         if block.ref_count == 0 and not block.is_null:
+            # Block going to free queue — must clear its hash to prevent
+            # stale _hash_to_block lookups from returning a freed block
+            self._evict_cached_block(block)
             self.free_queue.append(block)
 
         self._cow_clones += 1

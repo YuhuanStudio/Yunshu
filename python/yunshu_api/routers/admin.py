@@ -435,7 +435,7 @@ async def create_rbac_key(req: RBACTokenCreate, request: Request, _=Depends(requ
 async def list_rbac_keys(request: Request, _=Depends(require_permission("can_manage_tokens"))):
     """List all RBAC API keys."""
     manager = _get_rbac_manager(request)
-    return manager.list_keys()
+    return {"keys": manager.list_keys()}
 
 
 @router.delete("/keys/{key_name}")

@@ -29,6 +29,30 @@ from ..streaming import format_openai_completion_chunk, format_openai_done, form
 router = APIRouter(tags=["completions"])
 
 
+def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
+    """Record token counts to metrics middleware and server stats for completions endpoint."""
+    try:
+        from ..middleware.metrics import get_metrics
+        get_metrics().record_tokens(prompt_tokens, completion_tokens)
+        get_metrics().record_inference()
+    except Exception:
+        logger.debug("metrics recording failed", exc_info=True)
+    try:
+        from yunshu_engine.server_metrics import get_server_metrics
+        get_server_metrics().record_request_complete(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    except Exception:
+        logger.debug("server_metrics recording failed", exc_info=True)
+    try:
+        from yunshu_engine.tracing import get_metrics_v2
+        get_metrics_v2().counter("yunshu_tokens_total", {"type": "prompt"}, prompt_tokens)
+        get_metrics_v2().counter("yunshu_tokens_total", {"type": "completion"}, completion_tokens)
+    except Exception:
+        logger.debug("metrics recording failed", exc_info=True)
+
+
 class StreamOptions(BaseModel):
     """OpenAI stream_options parameter."""
     include_usage: bool = False
@@ -262,6 +286,9 @@ async def create_completion(req: CompletionRequest, request: Request):
         slog.info("inference_complete", model=req.model, trace_id=trace_id,
                   prompt_tokens=prompt_tokens, completion_tokens=total_completion_tokens)
 
+        # Record metrics for completions endpoint
+        _record_metrics(prompt_tokens, total_completion_tokens)
+
         usage = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": total_completion_tokens,
@@ -438,6 +465,10 @@ async def _stream_completion(
                 reasoning_tokens=_total_reasoning,
                 cached_tokens=cached_tok,
             )
+
+        # Record metrics for completions streaming path
+        if prompt_tok > 0 or completion_tok > 0:
+            _record_metrics(prompt_tok, completion_tok)
 
         yield format_openai_done()
 

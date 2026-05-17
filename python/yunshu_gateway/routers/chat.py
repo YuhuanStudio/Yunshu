@@ -105,7 +105,10 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
         logger.debug("metrics recording failed", exc_info=True)
     try:
         from yunshu_engine.server_metrics import get_server_metrics
-        get_server_metrics().record(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+        get_server_metrics().record_request_complete(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
     except Exception:
         logger.debug("server_metrics recording failed", exc_info=True)
     try:

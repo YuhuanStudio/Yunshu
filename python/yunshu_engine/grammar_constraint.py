@@ -61,9 +61,11 @@ class RegexConstraint:
         """Compute characters that can follow the current partial match.
 
         Returns None if any character is valid, or a set of valid chars.
-        Uses a two-pronged check:
+        Uses a three-pronged check:
           1. fullmatch(candidate) — char completes the pattern
-          2. match(candidate) with end() < len(candidate) — char extends a valid prefix
+          2. match(candidate) consuming ALL of candidate — candidate is a
+             valid prefix (the regex matched to the end of the candidate)
+          3. No match — candidate is not a valid prefix, skip
         """
         if self._done:
             return set()
@@ -79,14 +81,11 @@ class RegexConstraint:
             if self._compiled.fullmatch(candidate) is not None:
                 valid.add(ch)
                 continue
-            # Or if candidate is a valid prefix that can be extended
+            # Or if candidate is a valid prefix that can be extended.
+            # Key: match must consume the ENTIRE candidate string to be
+            # considered a valid prefix (not just a prefix of candidate).
             m = self._compiled.match(candidate)
-            if m is not None:
-                # match() succeeded — the candidate starts with a match
-                # This is a valid prefix if either:
-                # (a) the match consumed the whole candidate (prefix), or
-                # (b) the match consumed a prefix but there's more pattern to go
-                # In both cases, this character is valid
+            if m is not None and m.end() == len(candidate):
                 valid.add(ch)
 
         if len(valid) > 90:  # almost all chars valid — unrestricted
@@ -155,17 +154,18 @@ class ChoiceConstraint:
     def __init__(self, choices: list[str], case_sensitive: bool = True) -> None:
         self._choices = choices
         self._case_sensitive = case_sensitive
-        self._original_choices = choices if case_sensitive else [c.lower() for c in choices]
+        self._original_choices = choices
         self._text_buffer = ""
         self._done = False
         self._matched_choice: str | None = None
-        # Build prefix trie
+        # Build prefix trie using appropriate case form
         self._trie: dict[str, Any] = {}
-        for choice in self._original_choices:
+        trie_choices = choices if case_sensitive else [c.lower() for c in choices]
+        for idx, choice in enumerate(trie_choices):
             node = self._trie
             for ch in choice:
                 node = node.setdefault(ch, {})
-            node["__end__"] = choice
+            node["__end__"] = choices[idx]  # store the original (cased) choice
 
     @property
     def state(self) -> str:
@@ -353,16 +353,14 @@ class LarkGrammarConstraint:
                 self._parser.parse(candidate)
                 valid.add(ch)
             except Exception:
-                logger.debug("CFG candidate parse failed for char %r", ch, exc_info=True)
-                # Check if it's a valid partial parse (Earley can handle this)
-                # For simplicity, if parse fails it might still be valid partial
-                # We accept it if it doesn't raise UnexpectedToken
+                # Incomplete parse — the char might still be valid as a
+                # prefix. Use parse_interactive if available (Lark >= 1.2).
                 try:
-                    # Use parse_interactive if available
-                    # If we get here without UnexpectedToken, the char is valid
+                    interactive = self._parser.parse_interactive(candidate)
+                    interactive.exhaust_lexer()
+                    # If we get here without error, char extends a valid partial parse
                     valid.add(ch)
-                except (ImportError, Exception):
-                    logger.debug("CFG partial parse test failed for char %r", ch, exc_info=True)
+                except Exception:
                     pass
 
         if len(valid) > 90:

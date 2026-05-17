@@ -24,7 +24,7 @@ Integration:
 
 import logging
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .memory_monitor import MemoryMonitor
@@ -53,6 +53,18 @@ class MemoryGuard:
     ) -> None:
         self._monitor = memory_monitor
         self._max_concurrent = max_concurrent_requests
+        if safety_margin_pct < 0:
+            logger.warning(
+                f"safety_margin_pct={safety_margin_pct} is negative, "
+                f"clamping to 0.0"
+            )
+            safety_margin_pct = 0.0
+        elif safety_margin_pct > 1.0:
+            logger.warning(
+                f"safety_margin_pct={safety_margin_pct} exceeds 1.0, "
+                f"clamping to 0.5"
+            )
+            safety_margin_pct = 0.5
         self._safety_margin_pct = safety_margin_pct
 
         # Stats tracking (atomic via _stats_lock)

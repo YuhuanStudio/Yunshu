@@ -134,7 +134,7 @@ class TestRBACKeyManagement:
 
         resp = client.get("/api/v1/admin/keys")
         assert resp.status_code == 200
-        keys = resp.json()
+        keys = resp.json()["keys"]
         assert len(keys) == 2
         names = {k["name"] for k in keys}
         assert names == {"key1", "key2"}
@@ -153,7 +153,7 @@ class TestRBACKeyManagement:
 
         # Should be gone from list
         resp = client.get("/api/v1/admin/keys")
-        keys = resp.json()
+        keys = resp.json()["keys"]
         assert not any(k["name"] == "to-delete" for k in keys)
 
     def test_delete_nonexistent_key(self):

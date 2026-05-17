@@ -385,36 +385,52 @@ class KVCacheManager:
     def evict_for_memory(self, needed_blocks: int) -> bool:
         """Try to evict cached blocks to free up space.
 
+        Strategy:
+        1. Blocks with ref_count==1 and block_hash: only held by prefix
+           cache (no active request). These can be freed to yield new
+           free blocks.
+        2. Blocks with ref_count==0 and block_hash: already in the free
+           queue — just clear stale hash entries (no new free blocks).
+        3. Blocks with ref_count>1: actively shared — cannot evict.
+
         If a warm tier is configured, evicted blocks are demoted to 4-bit
         quantized storage instead of being lost entirely.
 
         Returns:
             True if enough blocks were freed.
         """
-        # Try to demote cached blocks to warm tier first
-        if self._warm_tier is not None:
-            cached = self.block_pool.get_cached_blocks()
-            for block in list(cached):
-                if block.block_hash is None:
-                    continue
-                if self.block_pool.get_free_block_count() >= needed_blocks:
-                    break
-                if block.ref_count > 0:
-                    continue  # Block is in active use
-                # Demote to warm tier (if we have KV data to compress)
-                if self._key_cache is not None:
-                    try:
-                        block_idx = block.block_id
-                        kv_slice = self._key_cache[block_idx]
-                        self._warm_tier.demote(block.block_hash, kv_slice)
-                    except Exception:
-                        logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
-                # Remove from hot prefix cache
-                self.block_pool._evict_cached_block(block)
-                # If the block is still in the free list (ref_count already 0),
-                # it's already accounted for; only free if ref_count > 0.
-                if block.ref_count > 0:
-                    self.block_pool.free([block])
+        initial_free = self.block_pool.get_free_block_count()
+
+        cached = self.block_pool.get_cached_blocks()
+        for block in list(cached):
+            if block.block_hash is None:
+                continue
+            if self.block_pool.get_free_block_count() >= needed_blocks:
+                break
+
+            if block.ref_count > 1:
+                # Actively shared by multiple requests — cannot evict
+                continue
+
+            # Demote to warm tier (if we have KV data to compress)
+            if self._warm_tier is not None and self._key_cache is not None:
+                try:
+                    block_idx = block.block_id
+                    kv_slice = self._key_cache[block_idx]
+                    self._warm_tier.demote(block.block_hash, kv_slice)
+                except Exception:
+                    logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
+
+            # Remove from hot prefix cache
+            self.block_pool._evict_cached_block(block)
+
+            if block.ref_count == 1:
+                # Block is only in the prefix cache (not held by any request).
+                # free() will decrement ref_count to 0 and return it to the
+                # free queue, yielding a genuinely new free block.
+                self.block_pool.free([block])
+            # else ref_count == 0: already in the free queue; just clearing
+            # the stale hash above is sufficient — no new free block gained.
 
         return self.block_pool.get_free_block_count() >= needed_blocks
 
@@ -446,13 +462,14 @@ class KVCacheManager:
 
         evicted = 0
         cached = self.block_pool.get_cached_blocks()
-        # Sort by recency: evict oldest first
         for block in cached:
             if evicted >= blocks_to_free:
                 break
-            if block.ref_count > 0:
-                continue  # In active use
             if block.block_hash is None:
+                continue
+
+            if block.ref_count > 1:
+                # Actively shared by multiple requests — cannot evict
                 continue
 
             # Demote to warm tier if available
@@ -464,9 +481,12 @@ class KVCacheManager:
                     logger.debug("warm tier demote failed in memory_pressure_evict", exc_info=True)
 
             self.block_pool._evict_cached_block(block)
-            if block.ref_count > 0:
+
+            if block.ref_count == 1:
+                # Only in prefix cache — free() yields a new free block
                 self.block_pool.free([block])
-            evicted += 1
+                evicted += 1
+            # else ref_count == 0: already free; clearing stale hash only
 
         if evicted > 0:
             logger.debug(

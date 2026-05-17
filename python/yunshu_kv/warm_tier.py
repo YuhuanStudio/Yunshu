@@ -134,14 +134,26 @@ class KVWarmTier:
 
             return dequantize_kv_4bit(packed, scales)
         except Exception:
+            # Dequantization failed — re-insert the raw data so it can be
+            # retried later, since the compressed data itself may be fine
+            # (the error might be transient, e.g. MLX device issue).
             logger.warning(
-                "Failed to promote block 0x%x from warm tier — data lost (decompression error)",
+                "Failed to promote block 0x%x from warm tier — re-inserting for retry",
                 block_hash, exc_info=True,
             )
-            # Re-insert the raw entry so it can be retried, since we already
-            # popped it and adjusted memory accounting. The block data itself
-            # is corrupt/unusable, so we log the loss rather than re-inserting
-            # bad data.
+            self._store[block_hash] = (packed, scales)
+            self._store.move_to_end(block_hash)
+            # Re-add memory accounting since we re-inserted
+            try:
+                packed_nbytes = (
+                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                )
+                scales_nbytes = (
+                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                )
+                self._memory_used += packed_nbytes + scales_nbytes
+            except Exception:
+                logger.debug("memory accounting re-insert in promote failed", exc_info=True)
             return None
 
     def contains(self, block_hash: int) -> bool:

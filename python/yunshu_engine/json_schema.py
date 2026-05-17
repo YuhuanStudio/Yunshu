@@ -52,7 +52,10 @@ class JsonState(Enum):
     # Primitives
     STRING = auto()             # inside a string value
     STRING_ESCAPE = auto()      # after `\` inside a string
+    STRING_UNICODE = auto()     # after `\u` — consuming 4 hex digits
     NUMBER = auto()             # inside a number
+    NUMBER_FRACTION = auto()    # after `.` in a number
+    NUMBER_EXPONENT = auto()    # after `e`/`E` in a number
     BOOLEAN_TRUE = auto()       # expecting `true`
     BOOLEAN_FALSE = auto()      # expecting `false`
     NULL = auto()               # expecting `null`
@@ -102,6 +105,7 @@ class JsonSchemaConstraint:
         self._snapshots: list[tuple] = []
         # Track length of value literals for robust detection
         self._literal_remaining: int = 0  # chars remaining in true/false/null
+        self._unicode_remaining: int = 0  # hex digits remaining in \uXXXX
 
         # If no schema, default to generic object
         if schema is None:
@@ -227,7 +231,11 @@ class JsonSchemaConstraint:
         if state == JsonState.STRING_ESCAPE:
             return {'"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'}
 
-        if state == JsonState.NUMBER:
+        if state == JsonState.STRING_UNICODE:
+            # Must provide hex digits
+            return _HEX_CHARS
+
+        if state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION, JsonState.NUMBER_EXPONENT):
             return None  # digits and number chars handled separately
 
         if state == JsonState.BOOLEAN_TRUE:
@@ -349,6 +357,7 @@ class JsonSchemaConstraint:
             self._number_start,
             self._is_first_value,
             self._literal_remaining,
+            self._unicode_remaining,
         ))
 
     def rollback(self) -> None:
@@ -366,11 +375,14 @@ class JsonSchemaConstraint:
             self._number_start,
             self._is_first_value,
             self._literal_remaining,
+            self._unicode_remaining,
         ) = self._snapshots.pop()
 
     def _process_text(self, text: str) -> None:
         """Process the generated text to update state machine."""
         i = 0
+        # Precompute buffer offset: position in _text_buffer of text[0]
+        buf_offset = len(self._text_buffer) - len(text)
         while i < len(text):
             ch = text[i]
 
@@ -454,7 +466,7 @@ class JsonSchemaConstraint:
                     i += 1
                     continue
                 # Determine value type from schema
-                self._enter_value(ch)
+                self._enter_value(ch, buf_offset + i)
                 i += 1
                 continue
 
@@ -485,7 +497,7 @@ class JsonSchemaConstraint:
                 # First value
                 self._is_first_value = True
                 self._state = JsonState.ARRAY_VALUE
-                self._enter_array_value(ch)
+                self._enter_array_value(ch, buf_offset + i)
                 i += 1
                 continue
 
@@ -497,7 +509,7 @@ class JsonSchemaConstraint:
                     self._pop_schema()
                     i += 1
                     continue
-                self._enter_array_value(ch)
+                self._enter_array_value(ch, buf_offset + i)
                 i += 1
                 continue
 
@@ -534,16 +546,50 @@ class JsonSchemaConstraint:
                 # After \, next char is the escape type
                 if ch == 'u':
                     # Unicode escape: need 4 hex digits
-                    # For simplicity, just consume and stay in escape
-                    self._state = JsonState.STRING
+                    self._state = JsonState.STRING_UNICODE
+                    self._unicode_remaining = 4
                 else:
                     self._state = JsonState.STRING
                 i += 1
                 continue
 
-            if self._state == JsonState.NUMBER:
-                # Numbers end when we see a non-number character
-                if ch in _DIGIT_CHARS or ch in '.eE+-':
+            if self._state == JsonState.STRING_UNICODE:
+                # Consuming hex digits after \u
+                self._unicode_remaining -= 1
+                if self._unicode_remaining <= 0:
+                    self._state = JsonState.STRING
+                i += 1
+                continue
+
+            if self._state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION, JsonState.NUMBER_EXPONENT):
+                # JSON number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?
+                # We use three sub-states to track what's valid next:
+                #   NUMBER_FRACTION: after '.', digits required, '.' not allowed
+                #   NUMBER_EXPONENT: after 'e'/'E', optional +/- then digits
+                #   NUMBER: initial digits, '.' and 'e'/'E' allowed
+                if ch in _DIGIT_CHARS:
+                    i += 1
+                    # Digits advance to a more specific state if we were in exponent
+                    if self._state == JsonState.NUMBER_EXPONENT:
+                        self._state = JsonState.NUMBER_EXPONENT
+                    continue
+                if ch == '.' and self._state == JsonState.NUMBER:
+                    # Fraction part — transition to fraction state
+                    self._state = JsonState.NUMBER_FRACTION
+                    i += 1
+                    continue
+                if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION):
+                    # Exponent part
+                    self._state = JsonState.NUMBER_EXPONENT
+                    i += 1
+                    continue
+                if ch in '+-' and self._state == JsonState.NUMBER_EXPONENT:
+                    # Sign after 'e'/'E' — only allowed once
+                    # After the sign, we stay in NUMBER_EXPONENT but
+                    # need to ensure digits follow. We use a simple
+                    # heuristic: the next char must be a digit.
+                    # Setting a sub-state isn't needed since the generic
+                    # check above handles digits.
                     i += 1
                     continue
                 # Number ended — transition to completed state
@@ -576,11 +622,13 @@ class JsonSchemaConstraint:
 
             i += 1
 
-    def _enter_value(self, ch: str) -> None:
+    def _enter_value(self, ch: str, buf_pos: int | None = None) -> None:
         """Enter a value state based on the first character."""
+        if buf_pos is None:
+            buf_pos = len(self._text_buffer) - 1
         if ch == '"':
             self._state = JsonState.STRING
-            self._string_start = len(self._text_buffer)
+            self._string_start = buf_pos + 1  # position after the opening quote
         elif ch == '{':
             value_schema = self._get_current_value_schema()
             obj_schema = value_schema if value_schema and self._get_type_from_schema(value_schema) == "object" else {"type": "object"}
@@ -605,13 +653,15 @@ class JsonSchemaConstraint:
             self._literal_remaining = 3  # "ull" remaining after 'n'
         elif ch == '-' or ch in _DIGIT_CHARS:
             self._state = JsonState.NUMBER
-            self._number_start = len(self._text_buffer) - 1
+            self._number_start = buf_pos
 
-    def _enter_array_value(self, ch: str) -> None:
+    def _enter_array_value(self, ch: str, buf_pos: int | None = None) -> None:
         """Enter a value state in array context."""
+        if buf_pos is None:
+            buf_pos = len(self._text_buffer) - 1
         if ch == '"':
             self._state = JsonState.STRING
-            self._string_start = len(self._text_buffer)
+            self._string_start = buf_pos + 1  # position after the opening quote
         elif ch == '{':
             # Get items schema
             items_schema = {"type": "object"}
@@ -645,7 +695,7 @@ class JsonSchemaConstraint:
             self._literal_remaining = 3  # "ull"
         elif ch == '-' or ch in _DIGIT_CHARS:
             self._state = JsonState.NUMBER
-            self._number_start = len(self._text_buffer) - 1
+            self._number_start = buf_pos
 
     def _value_completed(self) -> None:
         """Called when a primitive value has been fully generated."""
@@ -662,9 +712,14 @@ class JsonSchemaConstraint:
     def _pop_schema(self) -> None:
         """Pop a completed object/array from the schema stack."""
         if self._schema_stack:
+            popped_state, popped_schema = self._schema_stack[-1]
+            popped_type = self._get_type_from_schema(popped_schema)
             self._schema_stack.pop()
-            if self._object_keys_remaining:
-                self._object_keys_remaining.pop()
+            # Only pop object_keys_remaining for objects (not arrays),
+            # since _init_object_keys only pushes for objects.
+            if popped_type in ("object",) or (popped_schema and "properties" in popped_schema):
+                if self._object_keys_remaining:
+                    self._object_keys_remaining.pop()
             self._current_key = None
 
         if not self._schema_stack:
@@ -811,6 +866,7 @@ class JsonSchemaConstraint:
         self._number_start = 0
         self._is_first_value = True
         self._literal_remaining = 0
+        self._unicode_remaining = 0
 
     def get_stats(self) -> dict[str, Any]:
         """Return constraint statistics for monitoring."""

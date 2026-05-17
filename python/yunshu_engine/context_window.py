@@ -331,6 +331,12 @@ class ContextWindowManager:
 
         middle = non_system[:-len(recent)] if len(non_system) > len(recent) else []
 
+        # Safety check: if even system + recent exceed the budget, fall back
+        # to truncate_oldest which will trim the recent messages too.
+        baseline = deepcopy(system_msgs + recent)
+        if self._count_messages_tokens(baseline) > max_tokens:
+            return self._truncate_oldest(messages, max_tokens)
+
         # Score middle messages by importance, treating tool call groups as units
         scored = []
         skip_next = 0

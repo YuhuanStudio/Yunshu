@@ -123,7 +123,8 @@ class PagedScheduler(Scheduler):
             self._manage_kv_cache(output.outputs)
         # Periodic KV block compaction (every 50 steps)
         if self._compactor is not None:
-            step_counter = getattr(self, '_step_counter', 0)
+            step_counter = getattr(self, '_step_counter', 0) + 1
+            self._step_counter = step_counter
             self._compactor.maybe_compact(step_counter)
         return output
 
@@ -148,7 +149,7 @@ class PagedScheduler(Scheduler):
                                 self._kv_manager.cache_to_radix_tree(all_tokens, blocks, hashes)
                     self._kv_manager.free_request(table)
             else:
-                req = self.running.get(req_id)
+                req = self.requests.get(req_id)
                 if req is not None:
                     table = self._block_tables.get(req_id)
                     if table is not None and self._kv_manager is not None:
