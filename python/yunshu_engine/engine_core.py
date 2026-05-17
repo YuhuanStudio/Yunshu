@@ -1446,6 +1446,7 @@ class EngineCore:
         """Non-streaming generate: add request, wait for completion, return result."""
         from .request import RequestOutput
         req_id = await self.add_request(**kwargs)
+        _cleaned_up = False
 
         try:
             # Wait for completion with timeout protection
@@ -1458,7 +1459,10 @@ class EngineCore:
                     await asyncio.wait_for(event.wait(), timeout=timeout_s)
                 except asyncio.TimeoutError:
                     logger.warning(f"generate() timeout ({timeout_s}s) for {req_id}")
-                    # Abort the timed-out request so scheduler releases its slot
+                    # Abort the timed-out request so scheduler releases its slot.
+                    # abort_request() calls _cleanup_request() internally, so
+                    # mark _cleaned_up to prevent double cleanup in finally.
+                    _cleaned_up = True
                     await self.abort_request(req_id)
                     return RequestOutput(
                         request_id=req_id,
@@ -1494,7 +1498,8 @@ class EngineCore:
 
             return result
         finally:
-            self._cleanup_request(req_id)
+            if not _cleaned_up:
+                self._cleanup_request(req_id)
 
     # ── Engine Loop ──
 

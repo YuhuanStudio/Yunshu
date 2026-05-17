@@ -398,8 +398,8 @@ class TestStreamingLoRACleanup:
         # Build a mock engine with a LoRA manager
         mock_engine = MagicMock()
         mock_lora_mgr = MagicMock()
-        mock_lora_mgr.load_adapter = MagicMock(return_value=True)
-        mock_lora_mgr.unload_adapter = MagicMock()
+        mock_lora_mgr.acquire_adapter = MagicMock(return_value=True)
+        mock_lora_mgr.release_adapter = MagicMock()
         mock_engine.get_lora_manager = MagicMock(return_value=mock_lora_mgr)
 
         # Apply adapter
@@ -414,7 +414,7 @@ class TestStreamingLoRACleanup:
                 _release_lora_adapter(mock_engine, adapter_id)
 
         # Verify the adapter was released even though exception occurred
-        mock_lora_mgr.unload_adapter.assert_called_once_with("test-adapter")
+        mock_lora_mgr.release_adapter.assert_called_once_with("test-adapter")
 
     @pytest.mark.asyncio
     async def test_lora_cleanup_no_adapter(self):
@@ -427,7 +427,7 @@ class TestStreamingLoRACleanup:
 
         # Should not raise and should not call unload
         _release_lora_adapter(mock_engine, None)
-        mock_lora_mgr.unload_adapter.assert_not_called()
+        mock_lora_mgr.release_adapter.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_lora_cleanup_engine_no_manager(self):
@@ -447,7 +447,7 @@ class TestStreamingLoRACleanup:
 
         mock_engine = MagicMock()
         mock_lora_mgr = MagicMock()
-        mock_lora_mgr.load_adapter = MagicMock(return_value=False)
+        mock_lora_mgr.acquire_adapter = MagicMock(return_value=False)
         mock_engine.get_lora_manager = MagicMock(return_value=mock_lora_mgr)
 
         result = _apply_lora_adapter(mock_engine, "bad-adapter")

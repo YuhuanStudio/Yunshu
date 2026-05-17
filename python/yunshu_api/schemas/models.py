@@ -99,6 +99,7 @@ class RequestStatsResponse(BaseModel):
 class EngineConfigUpdate(BaseModel):
     completion_batch_size: Optional[int] = None
     prefill_batch_size: Optional[int] = None
+    prefill_step_size: Optional[int] = None
     max_kv_size: Optional[int] = None
     deferred_clear_delay: Optional[int] = None
     cache_cleanup_interval: Optional[int] = None

@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine, get_engine_for_model
-from .chat import _apply_lora_adapter, _release_lora_adapter
+from .chat import _apply_lora_adapter, _release_lora_adapter, _normalize_finish_reason
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_completion_chunk, format_openai_done, format_openai_completion_usage_chunk
@@ -237,7 +237,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                 text = result.text
                 pt = result.prompt_tokens
                 ct = result.completion_tokens
-                fr = result.finish_reason
+                fr = _normalize_finish_reason(result.finish_reason)
                 rt = getattr(result, 'reasoning_tokens', 0)
                 lp = None
                 if req.logprobs > 0:
@@ -275,7 +275,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                 text = state.generated_text
                 pt = state.prompt_token_count
                 ct = state.completion_token_count
-                fr = state.finish_reason or "stop"
+                fr = _normalize_finish_reason(state.finish_reason)
                 rt = getattr(state, 'reasoning_tokens', 0)
                 lp = None
                 if req.logprobs > 0:
@@ -485,7 +485,7 @@ async def _stream_completion(
             completion_id=completion_id,
             model=req.model,
             text="",
-            finish_reason=choice_finish_reason or "stop",
+            finish_reason=_normalize_finish_reason(choice_finish_reason),
             choice_index=choice_idx,
         )
 

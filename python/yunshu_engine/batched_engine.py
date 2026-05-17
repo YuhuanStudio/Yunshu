@@ -68,6 +68,7 @@ class GenerationOutput:
     logprobs: list[dict] | None = None
     ttft_ms: float = 0.0
     reasoning_tokens: int = 0
+    current_state: Optional[str] = None  # "reasoning" or "normal" — matches RequestOutput
 
 
 _PROGRESSIVE_QUANT_INTERVAL = 256
@@ -342,7 +343,7 @@ class BatchedEngine:
         import os
         if os.environ.get("YUNSHU_SSD_CACHE", "").strip() in ("1", "true", "yes"):
             ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR", "~/.cache/yunshu/kv-ssd")
-            ssd_max_gb = int(os.environ.get("YUNSHU_SSD_CACHE_MAX_GB", "10"))
+            ssd_max_gb = int(float(os.environ.get("YUNSHU_SSD_CACHE_MAX_GB", "10")))
             self._kv_prefix_cache.enable_ssd_cache(
                 cache_dir=ssd_dir,
                 max_size_bytes=ssd_max_gb * 1024 ** 3,
@@ -350,9 +351,21 @@ class BatchedEngine:
             )
 
         # KV cache quantization config (mlx-lm pattern: to_quantized)
-        # Enable via YUNSHU_KV_QUANT_BITS=4 or 8
+        # Enable via YUNSHU_KV_QUANT_BITS=4 or 8 (MLX only supports these values)
         _qbits = os.environ.get("YUNSHU_KV_QUANT_BITS")
-        self._kv_quant_bits: int | None = int(_qbits) if _qbits else None
+        if _qbits:
+            _qbits_int = int(_qbits)
+            if _qbits_int not in (2, 3, 4, 8):
+                logger.warning(
+                    "CONFIG: YUNSHU_KV_QUANT_BITS=%s is not a supported value "
+                    "(MLX supports 2, 3, 4, 8). Ignoring.",
+                    _qbits,
+                )
+                self._kv_quant_bits: int | None = None
+            else:
+                self._kv_quant_bits = _qbits_int
+        else:
+            self._kv_quant_bits = None
         self._kv_quant_group_size: int = int(
             os.environ.get("YUNSHU_KV_QUANT_GROUP_SIZE", "64")
         )
@@ -463,6 +476,19 @@ class BatchedEngine:
     @property
     def is_loaded(self) -> bool:
         return self._loaded
+
+    @property
+    def config(self):
+        """Engine config — delegates to EngineCoreConfig when available.
+
+        This property exists so that the admin ``/config/engine`` endpoint
+        (which reads ``engine.config``) works with both the legacy ``Engine``
+        class (which stores config directly) and ``BatchedEngine`` (which
+        keeps the config inside ``EngineCore``).
+        """
+        if self._engine_core is not None:
+            return self._engine_core.config
+        return None
 
     @property
     def is_running(self) -> bool:
@@ -2218,7 +2244,6 @@ class BatchedEngine:
                             tlp["bytes"] = []
             lp_result = token_logprobs
 
-        finish_reason = "stop" if _stopped_by_suffix or (tokens and tokens[-1] in stop_ids) else "length"
         output_text = _clean_special_tokens(output_text)
 
         # Trim stop suffix from output text when matched during generation
@@ -2227,6 +2252,26 @@ class BatchedEngine:
                 if output_text.endswith(s):
                     output_text = output_text[:-len(s)]
                     break
+
+        # Determine finish_reason.
+        # Priority: cancel > stop (suffix or stop_id) > length
+        # When cancel_event or timeout triggers, the loop breaks without
+        # setting _stopped_by_suffix or landing on a stop_id, so those
+        # tokens correctly show up as "stop" only when genuinely stopped.
+        _cancelled = cancel_event is not None and cancel_event.is_set()
+        if _cancelled:
+            finish_reason = "stop"
+        elif _stopped_by_suffix or (tokens and tokens[-1] in stop_ids):
+            finish_reason = "stop"
+        else:
+            finish_reason = "length"
+
+        # BUG FIX: When the first token is a stop_id (SpecPrefill path),
+        # it is popped from `tokens` but its logprob entry remains in
+        # `token_logprobs`.  Trim the stale entry so logprobs count matches
+        # `completion_tokens`.
+        if lp_result is not None:
+            lp_result = lp_result[:len(tokens)]
 
         # Record TTFT + ITL in Prometheus
         _ttft_ms_val = round(ttft_s * 1000, 1)
@@ -2853,7 +2898,7 @@ class BatchedEngine:
                         try:
                             remaining = detokenizer.finalize()
                             if remaining:
-                                _put((remaining, n_tok, None, len(_thinking_tokens), None))
+                                _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         except Exception:
                             logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
                         if _pipeline is not None:
@@ -2896,11 +2941,16 @@ class BatchedEngine:
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
-                            _put((new_text, n_tok, "stop", len(_thinking_tokens), _lp_entry))
+                            # Emit text before finalizing so consumer reads it
+                            # before the stop chunk (consumer breaks on done=True).
+                            if new_text:
+                                _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "reasoning" if _in_thinking else "normal"))
                             detokenizer.finalize()
                             _remaining = detokenizer.last_segment
                             if _remaining:
-                                _put((_remaining, n_tok, None, len(_thinking_tokens), None))
+                                _put((_remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                            # Final stop chunk — consumer breaks on this
+                            _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                             if _pipeline is not None:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
@@ -2921,15 +2971,25 @@ class BatchedEngine:
                             if token == think_end_token:
                                 _in_thinking = False
                                 self._lookahead_reasoning.check_thinking_state_text("</think")
-                    _put((new_text, n_tok, "stop" if (stop_hit or suffix_hit) else None, len(_thinking_tokens), _lp_entry))
-                    if stop_hit or suffix_hit:
+                    _is_stopping = stop_hit or suffix_hit
+                    _cur_state = "reasoning" if _in_thinking else "normal"
+                    if _is_stopping:
+                        # Emit current text without finish_reason so the consumer
+                        # reads it before breaking on done=True below.
+                        if new_text:
+                            _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, _cur_state))
+                    else:
+                        _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, _cur_state))
+                    if _is_stopping:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
                             _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _remaining:
-                            _put((_remaining, n_tok, None, len(_thinking_tokens), None))
+                            _put((_remaining, n_tok, None, len(_thinking_tokens), None, _cur_state))
+                        # Final stop chunk — consumer breaks on this
+                        _put(("", n_tok, "stop", len(_thinking_tokens), None, _cur_state))
                         if _pipeline is not None:
                             _pipeline.finish()
                         prefix_cache.add(ids, cache)
@@ -2943,9 +3003,10 @@ class BatchedEngine:
                 prefix_cache.add(ids, cache)
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment
+                _final_state = "reasoning" if _in_thinking else "normal"
                 if remaining:
-                    _put((remaining, n_tok, None, len(_thinking_tokens), None))
-                _put(("", n_tok, "length", len(_thinking_tokens), None))
+                    _put((remaining, n_tok, None, len(_thinking_tokens), None, _final_state))
+                _put(("", n_tok, "length", len(_thinking_tokens), None, _final_state))
                 mx.synchronize()
                 mx.clear_cache()
                 # Finish pipeline tracking at end of generation
@@ -3023,14 +3084,19 @@ class BatchedEngine:
                             finish_reason="memory_limit",
                         )
                     break
-                if len(item) == 5:
+                if len(item) >= 6:
+                    new_text, tok_count, _fr_val, _reasoning_tokens, _lp_entry, _cur_state = item[:6]
+                elif len(item) == 5:
                     new_text, tok_count, _fr_val, _reasoning_tokens, _lp_entry = item
+                    _cur_state = None
                 elif len(item) == 4:
                     new_text, tok_count, _fr_val, _reasoning_tokens = item
                     _lp_entry = None
+                    _cur_state = None
                 else:
                     new_text, tok_count, _fr_val = item
                     _lp_entry = None
+                    _cur_state = None
                 # Backward compat: _fr_val may be bool (from old-style tuples)
                 # or str ("stop"/"length") or None (intermediate token)
                 if isinstance(_fr_val, bool):
@@ -3090,6 +3156,7 @@ class BatchedEngine:
                     logprobs=_lp_list,
                     cached_tokens=_cached_tokens_box[0],
                     ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                    current_state=_cur_state,
                 )
                 if done:
                     break

@@ -124,6 +124,9 @@ def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:
 
     Returns the adapter_id if loaded, None if not applicable.
     The caller must call _release_lora_adapter() after generation.
+
+    Uses acquire_adapter/release_adapter (ref-counted) instead of
+    load_adapter/unload_adapter to prevent concurrent-request eviction.
     """
     if not adapter_id:
         return None
@@ -131,19 +134,23 @@ def _apply_lora_adapter(engine, adapter_id: str | None) -> str | None:
     if lora_mgr is None:
         logger.warning(f"LoRA adapter '{adapter_id}' requested but engine has no LoRA manager")
         return None
-    if lora_mgr.load_adapter(adapter_id):
+    if lora_mgr.acquire_adapter(adapter_id):
         return adapter_id
-    logger.warning(f"Failed to load LoRA adapter '{adapter_id}'")
+    logger.warning(f"Failed to acquire LoRA adapter '{adapter_id}'")
     return None
 
 
 def _release_lora_adapter(engine, adapter_id: str | None) -> None:
-    """Unload a LoRA adapter after generation completes."""
+    """Release a LoRA adapter after generation completes.
+
+    Uses release_adapter (decrements ref count) instead of unload_adapter.
+    The adapter stays loaded for reuse until LRU eviction or explicit unload.
+    """
     if not adapter_id:
         return
     lora_mgr = getattr(engine, 'get_lora_manager', lambda: None)()
     if lora_mgr is not None:
-        lora_mgr.unload_adapter(adapter_id)
+        lora_mgr.release_adapter(adapter_id)
 
 
 # ── Request / Response schemas (OpenAI-compatible) ──
@@ -567,6 +574,30 @@ def _format_logprobs(
     return {"content": entries}
 
 
+def _normalize_finish_reason(reason: str | None) -> str:
+    """Normalize engine finish_reason to OpenAI-compatible values.
+
+    The engine may produce internal finish reasons (abort, cancel, error,
+    timeout, memory_limit) that are not valid OpenAI finish reasons.
+    Map them to the closest OpenAI equivalent.
+    """
+    if not reason:
+        return "stop"
+    # Valid OpenAI finish reasons — pass through
+    if reason in ("stop", "length", "tool_calls", "content_filter"):
+        return reason
+    # Internal reasons → OpenAI equivalents
+    _INTERNAL_MAP = {
+        "abort": "stop",
+        "cancel": "stop",
+        "error": "stop",
+        "timeout": "length",
+        "memory_limit": "length",
+        "memory_exceeded": "length",
+    }
+    return _INTERNAL_MAP.get(reason, "stop")
+
+
 async def _build_multi_choice(
     engine, req, messages, completion_id, is_batched, json_schema,
 ):
@@ -611,7 +642,7 @@ async def _build_multi_choice(
             text = result.text
             pt = result.prompt_tokens
             ct = result.completion_tokens
-            fr = result.finish_reason or "stop"
+            fr = _normalize_finish_reason(result.finish_reason)
             lp = _format_logprobs(
                 getattr(result, 'logprobs', None),
                 getattr(engine, '_tokenizer', None),
@@ -647,7 +678,7 @@ async def _build_multi_choice(
             text = state.generated_text
             pt = state.prompt_token_count
             ct = state.completion_token_count
-            fr = state.finish_reason or "stop"
+            fr = _normalize_finish_reason(state.finish_reason)
             lp = _format_logprobs(
                 getattr(state, 'logprobs', None),
                 getattr(engine, '_tokenizer', None),
@@ -904,7 +935,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     raw_text = result.text
                     prompt_tok = result.prompt_tokens
                     completion_tok = result.completion_tokens
-                    finish = result.finish_reason or "stop"
+                    finish = _normalize_finish_reason(result.finish_reason)
                     _reasoning_tok = getattr(result, 'reasoning_tokens', 0)
                     _cached_tok = getattr(result, 'cached_tokens', 0)
                     logprobs_data = _format_logprobs(
@@ -942,7 +973,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     raw_text = state.generated_text
                     prompt_tok = state.prompt_token_count
                     completion_tok = state.completion_token_count
-                    finish = state.finish_reason or "stop"
+                    finish = _normalize_finish_reason(state.finish_reason)
                     _reasoning_tok = getattr(state, 'reasoning_tokens', 0)
                     _cached_tok = getattr(state, 'cached_tokens', 0)
                     logprobs_data = _format_logprobs(
@@ -1146,7 +1177,7 @@ async def _handle_vlm_chat(
         content = r.get("text", "") or ""
         rt = r.get("reasoning_tokens", 0)
         ct = r.get("completion_tokens", 0) or (len(tok.encode(content)) if tok else max(1, len(content) // 4))
-        finish_reason = r.get("finish_reason", "stop")
+        finish_reason = _normalize_finish_reason(r.get("finish_reason"))
         tool_calls = None
         if req.tools:
             tool_calls = extract_tool_calls_model_aware(content, req.model)
@@ -1352,9 +1383,11 @@ async def _stream_vlm_response(
       ):
           yield event.encode("utf-8")
     except MemoryError:
+        _vlm_gen.cancel_event.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
+        _vlm_gen.cancel_event.set()
         logger.error("VLM streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
@@ -1676,9 +1709,11 @@ async def _stream_response_multi(
       ):
           yield event.encode("utf-8")
     except MemoryError:
+        gen.cancel_event.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
+        gen.cancel_event.set()
         logger.error("Chat multi-choice streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
@@ -2050,9 +2085,11 @@ async def _stream_response(
                   logger.debug("StreamingResponseBuffer write failed", exc_info=True)
           yield encoded
     except MemoryError:
+        _tracker_gen.cancel_event.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
     except Exception as e:
+        _tracker_gen.cancel_event.set()
         logger.error("Chat streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"

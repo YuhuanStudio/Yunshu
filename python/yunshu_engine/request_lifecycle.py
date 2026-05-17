@@ -158,10 +158,19 @@ class AdaptiveConcurrencyController:
 
     @classmethod
     def from_env(cls) -> AdaptiveConcurrencyController:
+        # YUNSHU_MAX_CONCURRENT caps the maximum if set (CLI --max-concurrent)
+        max_concurrent_env = os.environ.get("YUNSHU_MAX_CONCURRENT")
+        max_concurrent_cap = int(max_concurrent_env) if max_concurrent_env else None
+        maximum = int(os.environ.get("YUNSHU_CONCURRENCY_MAX", "128"))
+        if max_concurrent_cap is not None and max_concurrent_cap > 0:
+            maximum = min(maximum, max_concurrent_cap)
+        initial = int(os.environ.get("YUNSHU_CONCURRENCY_INITIAL", "8"))
+        # Clamp initial to maximum
+        initial = min(initial, maximum)
         return cls(
-            initial=int(os.environ.get("YUNSHU_CONCURRENCY_INITIAL", "8")),
+            initial=initial,
             minimum=int(os.environ.get("YUNSHU_CONCURRENCY_MIN", "1")),
-            maximum=int(os.environ.get("YUNSHU_CONCURRENCY_MAX", "128")),
+            maximum=maximum,
             slo_ttft_ms=float(os.environ.get("YUNSHU_SLO_TTFT_MS", "500.0")),
             slo_total_ms=float(os.environ.get("YUNSHU_SLO_TOTAL_MS", "10000.0")),
         )

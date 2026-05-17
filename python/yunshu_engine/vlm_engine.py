@@ -663,11 +663,14 @@ class VLMEngine:
                     if thinking_budget is not None and enable_thinking and len(tokens) >= thinking_budget:
                         break
 
-                return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
+                # Return (decoded_text, thinking_tokens, total_token_count).
+                # total_token_count includes the stop token if present.
+                _decoded = self._tokenizer.decode(tokens, skip_special_tokens=True)
+                return _decoded, _thinking_tokens, len(tokens)
 
             loop = asyncio.get_running_loop()
             try:
-                result, reasoning_tokens = await loop.run_in_executor(self._executor, _generate_sync)
+                result, reasoning_tokens, completion_token_count = await loop.run_in_executor(self._executor, _generate_sync)
             except Exception:
                 self._active_count -= 1
                 self._num_requests_processed += 1
@@ -687,7 +690,7 @@ class VLMEngine:
                 "created": int(time.time()),
                 "reasoning_tokens": reasoning_tokens,
                 "prompt_tokens": prompt_tokens,
-                "completion_tokens": len(self._tokenizer.encode(result)) if result and self._tokenizer else 0,
+                "completion_tokens": completion_token_count,
             }
         finally:
             self._cleanup_temp_files()
@@ -805,6 +808,7 @@ class VLMEngine:
 
                 accumulated = ""
                 token_count = 0
+                _num_prompt_tokens = len(input_ids)
                 for token_id, _ in generate_step(
                     input_ids, self._model,
                     max_tokens=max_tokens,
@@ -830,6 +834,7 @@ class VLMEngine:
                             finish_reason="cancel",
                             finished=True,
                             completion_tokens=token_count,
+                            prompt_tokens=_num_prompt_tokens,
                         ))
                         return
                     token_count += 1
@@ -869,6 +874,7 @@ class VLMEngine:
                         finish_reason=finish_reason,
                         finished=finish_reason is not None,
                         completion_tokens=token_count,
+                        prompt_tokens=_num_prompt_tokens,
                     )
                     queue.put_nowait(output)
 
@@ -901,6 +907,7 @@ class VLMEngine:
                     finish_reason="length",
                     finished=True,
                     completion_tokens=token_count,
+                    prompt_tokens=_num_prompt_tokens,
                 )
                 queue.put_nowait(output)
 
@@ -919,6 +926,14 @@ class VLMEngine:
                             ))
                     except Exception:
                         logger.debug("detokenizer finalize in error handler failed", exc_info=True)
+                # Emit error output so the consumer can distinguish error from normal end
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text="",
+                    finish_reason="error",
+                    finished=True,
+                    error=str(e),
+                ))
             finally:
                 try:
                     queue.put_nowait(None)
@@ -1074,7 +1089,11 @@ class VLMEngine:
             if delta is not None:
                 logger.debug(f"mRoPE delta captured: {delta:.4f}")
 
-        return result.text if hasattr(result, 'text') else str(result), 0
+        # Return 3-tuple: (text, thinking_tokens, token_count)
+        _result_text = result.text if hasattr(result, 'text') else str(result)
+        # vlm_generate doesn't expose raw token list, estimate from text
+        _est_tokens = len(self._tokenizer.encode(_result_text)) if _result_text and self._tokenizer else 0
+        return _result_text, 0, _est_tokens
 
     # ── VLM text generation (for mlx-vlm models) ──
 
@@ -1175,7 +1194,7 @@ class VLMEngine:
 
             tokens = [current.item()]
             if current.item() in stop_ids:
-                return self._tokenizer.decode(tokens, skip_special_tokens=True), 0
+                return self._tokenizer.decode(tokens, skip_special_tokens=True), 0, len(tokens)
 
             _in_thinking = False
             _thinking_tokens = 0
@@ -1230,7 +1249,7 @@ class VLMEngine:
                 if tok_id in stop_ids:
                     break
 
-        return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens
+        return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens, len(tokens)
 
     def _stream_vlm_vision(
         self,

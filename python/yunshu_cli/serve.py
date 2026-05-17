@@ -151,8 +151,11 @@ def serve(
         env["no_proxy"] = no_proxy
     if base_path:
         env["YUNSHU_BASE_PATH"] = base_path
-    if max_concurrent:
+    if max_concurrent is not None:
         env["YUNSHU_MAX_CONCURRENT"] = str(max_concurrent)
+    env["YUNSHU_CACHE_SIZE_MB"] = str(cache_size_mb)
+    env["YUNSHU_PREFILL_BATCH_SIZE"] = str(prefill_batch_size)
+    env["YUNSHU_COMPLETION_BATCH_SIZE"] = str(completion_batch_size)
     env["YUNSHU_STARTUP_TIMEOUT"] = str(startup_timeout)
     env["YUNSHU_SLOW_REQUEST_THRESHOLD"] = str(slow_request_threshold)
     env["YUNSHU_DRAIN_TIMEOUT"] = str(drain_timeout)
@@ -180,8 +183,13 @@ def serve(
     # Override os.environ for the child process
     os.environ.update(env)
 
+    # Warn if reload=True with workers>1 (uvicorn ignores workers in reload mode)
+    if reload and workers > 1:
+        console.print("[yellow]Warning:[/] --reload with --workers > 1 is not supported by uvicorn. Using workers=1.")
+        workers = 1
+
     uvicorn.run(
-        "python.yunshu_gateway.main:app",
+        "yunshu_gateway.main:app",
         host=host,
         port=port,
         workers=workers,

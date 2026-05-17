@@ -290,8 +290,12 @@ async def update_engine_config(
     with _config_lock:
         for field, value in updates.items():
             if hasattr(cfg, field):
-                # Validate numeric config fields are positive
-                if isinstance(value, (int, float)) and value <= 0:
+                # Validate numeric config fields.
+                # max_kv_size allows 0 (meaning "no limit" / auto), all others
+                # must be strictly positive.
+                if field == "max_kv_size":
+                    pass  # 0 and None are valid for max_kv_size
+                elif isinstance(value, (int, float)) and value <= 0:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Config field '{field}' must be positive, got {value}",

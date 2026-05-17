@@ -58,6 +58,14 @@ def _validate_env_vars() -> list[str]:
         "YUNSHU_MODEL_TTL_SECONDS": (float, False),
         "YUNSHU_MAX_CONCURRENT": (int, False),
         "YUNSHU_RATE_LIMIT_RPM": (float, False),
+        "YUNSHU_RATE_LIMIT_MAX_BUCKETS": (int, False),
+        "YUNSHU_RATE_LIMIT_TTL_SECONDS": (float, False),
+        "YUNSHU_SLOW_REQUEST_THRESHOLD": (float, False),
+        "YUNSHU_STARTUP_TIMEOUT": (float, False),
+        "YUNSHU_SSD_CACHE_MAX_GB": (float, False),
+        "YUNSHU_KV_QUANT_BITS": (int, False),
+        "YUNSHU_KV_QUANT_GROUP_SIZE": (int, False),
+        "YUNSHU_MEM_PRESSURE_THRESHOLD": (float, False),
     }
     for var, (type_fn, required) in numeric_vars.items():
         val = os.environ.get(var)
@@ -86,6 +94,29 @@ def _validate_env_vars() -> list[str]:
             "YUNSHU_MODEL takes precedence (single-model mode)"
         )
 
+    # Range validation for numeric env vars
+    _mem_thresh = os.environ.get("YUNSHU_MEM_PRESSURE_THRESHOLD")
+    if _mem_thresh:
+        try:
+            _val = float(_mem_thresh)
+            if _val <= 0 or _val > 100:
+                warnings.append(
+                    f"YUNSHU_MEM_PRESSURE_THRESHOLD should be 0-100, got {_val}"
+                )
+        except (ValueError, TypeError):
+            pass  # Already caught by numeric_vars check above
+
+    _kv_bits = os.environ.get("YUNSHU_KV_QUANT_BITS")
+    if _kv_bits:
+        try:
+            _val = int(_kv_bits)
+            if _val not in (2, 3, 4, 8):
+                warnings.append(
+                    f"YUNSHU_KV_QUANT_BITS={_val} is not supported (MLX supports 2, 3, 4, 8)"
+                )
+        except (ValueError, TypeError):
+            pass
+
     return warnings
 
 
@@ -95,12 +126,20 @@ def _get_memory_limit_bytes() -> int:
     Uses YUNSHU_MAX_MEMORY_GB env var, or defaults to 80% of UMA.
     """
     env_val = os.environ.get("YUNSHU_MAX_MEMORY_GB")
-    if env_val:
+    if env_val and env_val.strip():
         # Strip optional "GB"/"gb" suffix for CLI ergonomics
         cleaned = env_val.strip().upper().removesuffix("GB").strip()
-        if cleaned.lower() == "disabled":
+        if not cleaned:
+            logger.warning("CONFIG: YUNSHU_MAX_MEMORY_GB is empty after stripping, ignoring")
+            # Fall through to default
+        elif cleaned.lower() == "disabled":
             return 0  # unlimited
-        return int(float(cleaned) * 1024**3)
+        else:
+            try:
+                return int(float(cleaned) * 1024**3)
+            except (ValueError, OverflowError):
+                logger.warning("CONFIG: Invalid YUNSHU_MAX_MEMORY_GB value '%s', ignoring", env_val)
+                # Fall through to default
 
     # Default: 80% of UMA (reserve for system + KV cache)
     try:
