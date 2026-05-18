@@ -195,7 +195,21 @@ class JsonSchemaConstraint:
         if state == JsonState.START:
             if self._top_level_type == "array":
                 return {'['}
-            return {'{'}
+            if self._top_level_type == "string":
+                return {'"'}
+            if self._top_level_type == "boolean":
+                return {'t', 'f'}
+            if self._top_level_type == "null":
+                return {'n'}
+            if self._top_level_type in ("number", "integer"):
+                return {'-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
+            if isinstance(self._top_level_type, list):
+                # Multiple types possible
+                chars = set()
+                for t in self._top_level_type:
+                    chars.update(self._type_to_start_chars(t))
+                return chars
+            return {'{'}  # default: object
 
         if state == JsonState.OBJECT_OPEN:
             # After `{`, expect `"` (key) or `}`
@@ -408,6 +422,26 @@ class JsonSchemaConstraint:
                 elif ch == '[':
                     self._state = JsonState.ARRAY_OPEN
                     self._is_first_value = True
+                    self._schema_stack.append((JsonState.DONE, self._schema))
+                elif ch == '"':
+                    # Top-level string value
+                    self._state = JsonState.STRING
+                    self._string_start = buf_offset + i + 1
+                    self._schema_stack.append((JsonState.DONE, self._schema))
+                elif ch in 'tf':
+                    # Top-level boolean
+                    self._state = JsonState.BOOLEAN_TRUE if ch == 't' else JsonState.BOOLEAN_FALSE
+                    self._literal_remaining = 3 if ch == 't' else 4
+                    self._schema_stack.append((JsonState.DONE, self._schema))
+                elif ch == 'n':
+                    # Top-level null
+                    self._state = JsonState.NULL
+                    self._literal_remaining = 3
+                    self._schema_stack.append((JsonState.DONE, self._schema))
+                elif ch == '-' or ch in _DIGIT_CHARS:
+                    # Top-level number
+                    self._state = JsonState.NUMBER
+                    self._number_start = buf_offset + i
                     self._schema_stack.append((JsonState.DONE, self._schema))
                 i += 1
                 continue
@@ -736,6 +770,15 @@ class JsonSchemaConstraint:
         if self._schema_stack:
             return_state, _ = self._schema_stack[-1]
             parent_type = self._get_type_from_schema(self._schema_stack[-1][1])
+            # For primitives at the true top level (stack has only one entry
+            # whose return_state is DONE), completion means the entire JSON
+            # value is done.
+            if len(self._schema_stack) == 1 and return_state == JsonState.DONE:
+                # Top-level primitive — check if schema allows only primitives
+                if parent_type not in ("object", "array") and not isinstance(parent_type, list):
+                    self._schema_stack.pop()
+                    self._state = JsonState.DONE
+                    return
             if parent_type == "array":
                 self._state = JsonState.ARRAY_COMMA
             else:
