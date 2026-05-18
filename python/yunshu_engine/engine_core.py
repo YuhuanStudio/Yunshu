@@ -1589,13 +1589,33 @@ class EngineCore:
                         high_req = next((r for r in _waiting if r.request_id == inv.high_request_id), None)
                         if low_req and high_req:
                             self._priority_guard.apply_inheritance(low_req, high_req)
-                            # Boost effective priority on the actual running request
+                            # Boost effective priority on the actual running request.
+                            # Save the original priority so it can be restored when
+                            # the boost expires (PriorityInversionGuard._expire_boosts).
                             actual = self.scheduler.running.get(inv.low_request_id)
                             if actual and actual.sampling_params:
+                                if not hasattr(actual.sampling_params, '_original_priority'):
+                                    actual.sampling_params._original_priority = actual.sampling_params.priority
                                 actual.sampling_params.priority = low_req.effective_priority
                             logger.debug(f"Priority inheritance: {inv.low_request_id} boosted to {low_req.effective_priority}")
                 except Exception:
                     logger.debug("priority inversion guard failed", exc_info=True)
+
+                # Restore expired priority boosts on actual running requests.
+                # PriorityInversionGuard._expire_boosts removes the boost record
+                # but doesn't restore the original priority on sampling_params.
+                try:
+                    for rid in list(self.scheduler.running.keys()):
+                        req = self.scheduler.running[rid]
+                        if req and hasattr(req, 'sampling_params') and hasattr(req.sampling_params, '_original_priority'):
+                            boost = self._priority_guard.get_boost(rid)
+                            if boost is None:
+                                # Boost expired or was cleared — restore original priority
+                                req.sampling_params.priority = req.sampling_params._original_priority
+                                del req.sampling_params._original_priority
+                                logger.debug(f"Priority boost restored for {rid}")
+                except Exception:
+                    logger.debug("priority boost restoration failed", exc_info=True)
 
                 # Token-level scheduling: convert running requests to schedulable form
                 try:
