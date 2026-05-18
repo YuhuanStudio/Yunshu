@@ -1263,11 +1263,22 @@ async def _handle_vlm_chat(
             results = [await _vlm_gen_one(0)]
         else:
             import asyncio
-            results = await asyncio.gather(*[_vlm_gen_one(i) for i in range(n)])
+            results = await asyncio.gather(*[_vlm_gen_one(i) for i in range(n)], return_exceptions=True)
+            # Filter out exceptions from gather
+            valid_results = []
+            for r in results:
+                if isinstance(r, BaseException):
+                    logger.error(f"VLM choice generation failed: {r}", exc_info=r)
+                else:
+                    valid_results.append(r)
+            results = valid_results
             results.sort(key=lambda x: x[0])
 
     finally:
         _release_lora_adapter(vlm_engine, loaded_adapter)
+
+    if not results:
+        return JSONResponse(status_code=500, content={"error": {"message": "All choices failed", "type": "inference_error"}})
 
     # Check for errors
     for idx, data, err in results:
@@ -1459,6 +1470,8 @@ async def _stream_vlm_response(
             _record_metrics(vlm_prompt_tok, vlm_completion_tok)
 
         yield format_openai_done()
+        done_emitted = True
+    done_emitted = False
     try:
       async for event in with_sse_keepalive(
           _token_source(),
@@ -1470,13 +1483,15 @@ async def _stream_vlm_response(
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not done_emitted:
+            yield b"data: [DONE]\n\n"
     except Exception as e:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
         logger.error("VLM streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not done_emitted:
+            yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(vlm_engine, loaded_adapter)
       if _vlm_tracker is not None:
@@ -1816,7 +1831,8 @@ async def _stream_response_multi(
                 cached_tokens=total_cached_tok,
             )
         yield format_openai_done()
-
+        done_emitted = True
+    done_emitted = False
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     try:
       async for event in with_sse_keepalive(
@@ -1829,13 +1845,15 @@ async def _stream_response_multi(
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not done_emitted:
+            yield b"data: [DONE]\n\n"
     except Exception as e:
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
         logger.error("Chat multi-choice streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not done_emitted:
+            yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(engine, loaded_adapter)
       if tracker is not None:
@@ -2228,7 +2246,8 @@ async def _stream_response(
             )
 
         yield format_openai_done()
-
+        done_emitted = True
+    done_emitted = False
     try:
       async for event in with_sse_keepalive(
           _token_source(),
@@ -2247,13 +2266,15 @@ async def _stream_response(
         if _cancel_evt is not None:
             _cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not done_emitted:
+            yield b"data: [DONE]\n\n"
     except Exception as e:
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not done_emitted:
+            yield b"data: [DONE]\n\n"
     finally:
       _release_lora_adapter(engine, loaded_adapter)
       if _tracker is not None:

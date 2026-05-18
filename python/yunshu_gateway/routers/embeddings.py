@@ -117,7 +117,12 @@ async def create_embedding(req: EmbeddingRequest):
                 i,
             )
             # Determine a reasonable dimension for the zero vector fallback
-            _dim = req.dimensions or (len(embeddings[0]) if embeddings and embeddings[0] else 768)
+            _native_dim = None
+            for _e in embeddings:
+                if _e:
+                    _native_dim = len(_e)
+                    break
+            _dim = req.dimensions or _native_dim or 768
             emb = [0.0] * _dim
 
         # Truncate to requested dimensions (Matryoshka embedding support)

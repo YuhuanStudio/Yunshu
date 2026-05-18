@@ -551,7 +551,8 @@ async def _stream_completion(
             _record_metrics(prompt_tok, _total_completion)
 
         yield format_openai_done()
-
+        metrics_recorded = True
+    metrics_recorded = False
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     # Register with request tracker for cancellation support
     _tracker = None
@@ -588,6 +589,14 @@ async def _stream_completion(
                 _tracker.unregister(completion_id)
             except Exception:
                 pass
+        # Fallback metrics recording if generator raised before completing
+        if not metrics_recorded:
+            _total = sum(completion_tok_per_choice.values()) if completion_tok_per_choice else completion_tok
+            if prompt_tok > 0 or _total > 0:
+                try:
+                    _record_metrics(prompt_tok, _total)
+                except Exception:
+                    pass
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:

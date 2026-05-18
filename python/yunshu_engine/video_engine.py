@@ -402,6 +402,19 @@ class VideoEngine:
                 video_data = b""
                 if output_format == "mp4" and frames:
                     video_data = self._encode_frames_to_mp4(frames, fps)
+                # When MP4 encoding fails, report 0 frames to avoid
+                # claiming video data that doesn't exist.
+                if output_format == "mp4" and not video_data:
+                    return VideoGenOutput(
+                        video_data=b"",
+                        frames=[],
+                        width=width,
+                        height=height,
+                        num_frames=0,
+                        fps=fps,
+                        method="native_mlx",
+                        metadata={"error": "MP4 encoding failed"},
+                    )
                 return VideoGenOutput(
                     video_data=video_data if output_format == "mp4" else b"",
                     frames=frames,
