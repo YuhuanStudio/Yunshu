@@ -64,6 +64,8 @@ class _Metrics:
         key = f"{method}:{endpoint}:{status}"
         with self._lock:
             self.request_count[key] += 1
+            if status >= 400:
+                self.error_count += 1
             self.request_latency[endpoint].append(latency)
             if len(self.request_latency[endpoint]) > 1000:
                 self.request_latency[endpoint] = self.request_latency[endpoint][-500:]
@@ -102,7 +104,7 @@ class _Metrics:
         lines.append("# HELP yunshu_request_count Total requests")
         lines.append("# TYPE yunshu_request_count counter")
         for key, count in sorted(req_counts.items()):
-            parts = key.split(":")
+            parts = key.split(":", 2)
             if len(parts) == 3:
                 lines.append(
                     f'yunshu_request_count{{method="{_esc_prom(parts[0])}",endpoint="{_esc_prom(parts[1])}",status="{_esc_prom(parts[2])}"}} {count}'
