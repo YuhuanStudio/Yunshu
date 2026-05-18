@@ -246,6 +246,23 @@ class KVCacheManager:
                     # Directly setting block_hash without cache_block() would
                     # make the block invisible to lookup_hash().
                     self.block_pool.cache_block(new_block, h)
+                    # Write promoted KV data into the cache tensors.
+                    # The packed format is [2, num_heads, block_size, head_dim]
+                    # where dim 0 has key at [0] and value at [1].
+                    try:
+                        if self._key_cache is not None:
+                            import mlx.core as mx
+                            if promoted.ndim == 4 and promoted.shape[0] == 2:
+                                self._key_cache[new_block.block_id] = promoted[0]
+                                if self._value_cache is not None:
+                                    self._value_cache[new_block.block_id] = promoted[1]
+                            else:
+                                self._key_cache[new_block.block_id] = promoted
+                    except Exception:
+                        logger.debug(
+                            "warm tier KV data write failed for block %d",
+                            new_block.block_id, exc_info=True,
+                        )
                     # ref_count is already 1 from allocate(); do NOT touch again
                     _warm_promoted_blocks.add(id(new_block))
                     matched_blocks.append(new_block)
@@ -492,8 +509,16 @@ class KVCacheManager:
             if self._warm_tier is not None and self._key_cache is not None:
                 try:
                     block_idx = block.block_id
-                    kv_slice = self._key_cache[block_idx]
-                    self._warm_tier.demote(block.block_hash, kv_slice)
+                    key_slice = self._key_cache[block_idx]
+                    val_slice = self._value_cache[block_idx] if self._value_cache is not None else None
+                    # Pack key + value into a single array for warm storage.
+                    # On promotion, the caller must split them back.
+                    import mlx.core as mx
+                    if val_slice is not None:
+                        kv_packed = mx.stack([key_slice, val_slice], axis=0)
+                    else:
+                        kv_packed = key_slice
+                    self._warm_tier.demote(block.block_hash, kv_packed)
                 except Exception:
                     logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
 
@@ -566,8 +591,15 @@ class KVCacheManager:
             # Demote to warm tier if available
             if self._warm_tier is not None and self._key_cache is not None:
                 try:
-                    kv_slice = self._key_cache[block.block_id]
-                    self._warm_tier.demote(block.block_hash, kv_slice)
+                    block_idx = block.block_id
+                    key_slice = self._key_cache[block_idx]
+                    val_slice = self._value_cache[block_idx] if self._value_cache is not None else None
+                    import mlx.core as mx
+                    if val_slice is not None:
+                        kv_packed = mx.stack([key_slice, val_slice], axis=0)
+                    else:
+                        kv_packed = key_slice
+                    self._warm_tier.demote(block.block_hash, kv_packed)
                 except Exception:
                     logger.debug("warm tier demote failed in memory_pressure_evict", exc_info=True)
 

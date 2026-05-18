@@ -777,6 +777,16 @@ class VLMEngine:
         # where it was previously assigned inside _stream_sync.
         _has_detokenizer = hasattr(self._tokenizer, 'detokenizer') if self._tokenizer else False
 
+        # Thread-safe cancel check: wraps asyncio.Event so the executor
+        # thread can read it without asyncio-specific thread-safety issues.
+        # Reading ._value is a simple bool attribute read, GIL-protected.
+        def _is_cancelled():
+            if cancel_event is None:
+                return False
+            if isinstance(cancel_event, asyncio.Event):
+                return cancel_event._value
+            return cancel_event.is_set()
+
         def _stream_sync():
             nonlocal _has_detokenizer
             # Initialize eagerly so the error handler can reference it
@@ -855,7 +865,7 @@ class VLMEngine:
                     max_tokens=max_tokens,
                     sampler=sampler,
                 ):
-                    if cancel_event is not None and cancel_event.is_set():
+                    if _is_cancelled():
                         # Flush remaining detokenizer bytes before cancelling
                         if has_detokenizer:
                             try:

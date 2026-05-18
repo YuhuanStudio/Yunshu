@@ -85,8 +85,16 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
     def _is_auth_enabled(self) -> bool:
         if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
             return False
-        # Auth enabled when token is set
-        return os.environ.get("YUNSHU_AUTH_TOKEN") is not None
+        # Auth enabled when static token OR RBAC keys are configured
+        if os.environ.get("YUNSHU_AUTH_TOKEN") is not None:
+            return True
+        try:
+            rbac = getattr(self.app.state, "rbac_manager", None)
+            if rbac is not None and hasattr(rbac, "is_enabled") and rbac.is_enabled():
+                return True
+        except Exception:
+            pass
+        return False
 
     async def dispatch(self, request: Request, call_next):
         # Public paths never need auth

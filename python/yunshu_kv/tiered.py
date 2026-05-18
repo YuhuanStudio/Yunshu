@@ -323,11 +323,16 @@ class TieredKVCacheManager:
                             # Re-insert to avoid data loss.
                             self.warm.demote(h, kv_data)
                             break
-                        # Write KV data into hot cache tensors
+                        # Write KV data into hot cache tensors.
+                        # Packed format: [2, num_heads, block_size, head_dim]
+                        # where dim 0 has key at [0] and value at [1].
                         if self.hot._key_cache is not None:
-                            self.hot._key_cache[new_block.block_id] = kv_data
-                        if self.hot._value_cache is not None:
-                            self.hot._value_cache[new_block.block_id] = kv_data
+                            if kv_data.ndim == 4 and kv_data.shape[0] == 2:
+                                self.hot._key_cache[new_block.block_id] = kv_data[0]
+                                if self.hot._value_cache is not None:
+                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                            else:
+                                self.hot._key_cache[new_block.block_id] = kv_data
                         # Register in prefix cache for future lookups
                         self.hot.block_pool.cache_block(new_block, h)
                         warm_promoted_blocks.append(new_block)
@@ -341,6 +346,7 @@ class TieredKVCacheManager:
             if warm_loaded > 0:
                 match.num_matched_tokens += warm_loaded * block_size
                 remaining = remaining[warm_loaded * block_size:]
+                match.unmatched_token_ids = remaining
                 logger.debug(
                     f"Warm tier hit: {warm_loaded} blocks "
                     f"({warm_loaded * block_size} tokens)"
@@ -350,13 +356,15 @@ class TieredKVCacheManager:
         ssd_promoted_blocks: list[KVBlock] = []
         if self.ssd and remaining:
             ssd_loaded = 0
-            # Continue the chain hash from the last matched block
-            # (warm-promoted blocks extend the chain; if no warm hits,
-            # fall back to the hot tier's last matched block).
-            parent_hash = None
-            all_matched = match.matched_blocks
-            if all_matched:
-                parent_hash = all_matched[-1].block_hash
+            # Continue the chain hash from the last matched block.
+            # If warm promotion happened, parent_hash already points to
+            # the last warm-promoted block's hash.  Otherwise, fall back
+            # to the hot tier's last matched block.
+            if warm_loaded == 0:
+                parent_hash = None
+                all_matched = match.matched_blocks
+                if all_matched:
+                    parent_hash = all_matched[-1].block_hash
             for i in range(0, len(remaining), block_size):
                 chunk = remaining[i:i + block_size]
                 if len(chunk) < block_size:
@@ -375,15 +383,15 @@ class TieredKVCacheManager:
                                 h,
                             )
                             break
-                        # Write KV data into hot cache tensors if available.
-                        # SSD stores full KV; the loaded array contains both
-                        # key and value data.  For now we write the same data
-                        # to both slots (the Metal kernel path will handle
-                        # proper key/value separation).
+                        # Write KV data into hot cache tensors.
+                        # Packed format: [2, num_heads, block_size, head_dim]
                         if self.hot._key_cache is not None:
-                            self.hot._key_cache[new_block.block_id] = kv_data
-                        if self.hot._value_cache is not None:
-                            self.hot._value_cache[new_block.block_id] = kv_data
+                            if kv_data.ndim == 4 and kv_data.shape[0] == 2:
+                                self.hot._key_cache[new_block.block_id] = kv_data[0]
+                                if self.hot._value_cache is not None:
+                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                            else:
+                                self.hot._key_cache[new_block.block_id] = kv_data
                         # Register in prefix cache for future lookups
                         self.hot.block_pool.cache_block(new_block, h)
                         ssd_promoted_blocks.append(new_block)
