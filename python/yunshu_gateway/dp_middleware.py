@@ -135,17 +135,82 @@ class DPLoadBalancer:
         return node_id
 
     def _check_recoveries(self) -> None:
-        """Proactively check all unhealthy nodes for recovery eligibility."""
+        """Proactively check all unhealthy nodes for recovery eligibility.
+
+        Nodes are only recovered after (a) the recovery timeout has elapsed
+        AND (b) a lightweight health probe confirms the node is reachable.
+        The probe runs outside the lock to avoid blocking other operations.
+        """
+        # Collect candidates while holding the lock, then probe outside
+        candidates: list[str] = []
         with self._lock:
             for node_id, health in self._node_health.items():
                 if health.marked_unhealthy:
                     elapsed = time.monotonic() - health.last_error_time
                     if elapsed > health.recovery_timeout_seconds:
+                        candidates.append(node_id)
+
+        # Probe each candidate without holding the lock
+        for node_id in candidates:
+            if self._probe_node_health(node_id):
+                with self._lock:
+                    health = self._node_health.get(node_id)
+                    if health is not None and health.marked_unhealthy:
                         health.marked_unhealthy = False
                         health.consecutive_errors = 0
                         if self._dp_router is not None:
                             self._dp_router.mark_available(node_id)
-                        logger.info(f"DP node {node_id} recovered after {elapsed:.1f}s")
+                        logger.info(f"DP node {node_id} recovered after health probe succeeded")
+            else:
+                logger.debug(f"DP node {node_id} recovery deferred — health probe failed")
+
+    def _probe_node_health(self, node_id: str) -> bool:
+        """Lightweight health check: try HTTP GET /health on the node.
+
+        Returns True if the node responds 200, False otherwise.
+        Falls back to always-True (time-based recovery) if httpx is
+        unavailable or the node ID does not look like a network address.
+        """
+        try:
+            import httpx
+        except ImportError:
+            # httpx not available — fall back to time-based recovery
+            logger.debug("httpx not available, skipping health probe for %s", node_id)
+            return True
+
+        # Parse host from node_id — formats: "host:port", "host:rank", etc.
+        host = node_id.split(":")[0] if ":" in node_id else node_id
+
+        # Skip probe for local-only or synthetic node IDs that are not
+        # network-reachable.  Synthetic IDs like "node-0", "gpu-1", "alpha"
+        # default to True (time-based recovery) because they have no real
+        # HTTP endpoint to probe.
+        if host in ("local", "localhost", "127.0.0.1", "::1"):
+            return True
+        # Heuristic: if the host looks like a real hostname or IP (contains
+        # dots or is an IP-like pattern), probe it.  Otherwise assume it's
+        # a synthetic ID and return True.
+        import re
+        if not re.match(r'^[\d]+\.[\d]+\.[\d]+\.[\d]+$|^[\w][\w.-]*\.[\w]+$', host):
+            return True
+
+        # Derive a health URL
+        parts = node_id.rsplit(":", 1)
+        if len(parts) == 2:
+            try:
+                port = int(parts[1])
+                url = f"http://{host}:{port}/health"
+            except ValueError:
+                url = f"http://{host}:8000/health"
+        else:
+            url = f"http://{host}:8000/health"
+
+        try:
+            with httpx.Client(timeout=2.0) as client:
+                resp = client.get(url)
+                return resp.status_code == 200
+        except Exception:
+            return False
 
     def record_start(self, node_id: str) -> None:
         """Record that a request started on a node."""

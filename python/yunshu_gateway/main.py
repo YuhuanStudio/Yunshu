@@ -68,6 +68,19 @@ def _validate_env_vars() -> list[str]:
         "YUNSHU_MEM_PRESSURE_THRESHOLD": (float, False),
         "YUNSHU_MAX_REQUEST_SIZE": (int, False),
         "YUNSHU_KEEP_ALIVE_TIMEOUT": (int, False),
+        # Speculative decoding
+        "YUNSHU_NGRAM_MAX_N": (int, False),
+        "YUNSHU_NGRAM_K": (int, False),
+        "YUNSHU_SPEC_PREFILL_KEEP_RATE": (float, False),
+        # LoRA / adapter
+        "YUNSHU_MAX_LORAS": (int, False),
+        # Checkpointing
+        "YUNSHU_CHECKPOINT_INTERVAL": (int, False),
+        # Hybrid / chunked prefill
+        "YUNSHU_HYBRID_CHUNK_SIZE": (int, False),
+        "YUNSHU_PREFILL_CHUNK_SIZE": (int, False),
+        # Data parallelism
+        "YUNSHU_DP_REPLICAS": (int, False),
     }
     for var, (type_fn, required) in numeric_vars.items():
         val = os.environ.get(var)

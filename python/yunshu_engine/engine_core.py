@@ -159,13 +159,28 @@ class EngineCore:
                     # Determine block count
                     num_blocks = self.config.kv_num_blocks
                     if num_blocks <= 0:
-                        # Auto-compute from UMA budget
+                        # Auto-compute from UMA budget minus model weights
                         try:
                             from .utils.hardware import get_hardware_info
                             _hw = get_hardware_info()
                             uma_bytes = _hw.total_memory_bytes
+                            # Compute actual model weight bytes so we don't
+                            # over-allocate KV cache.  On 8GB M1 with a 4GB
+                            # model the old code (model_weight_bytes=0) assumed
+                            # 6.8 GB available when only ~2.8 GB remained.
+                            _model_bytes = 0
+                            try:
+                                if model is not None:
+                                    _model_bytes = sum(
+                                        p.nbytes
+                                        for p in model.parameters()
+                                    )
+                            except Exception:
+                                logger.debug("model parameter scan failed", exc_info=True)
                             if uma_bytes > 0:
-                                num_blocks = compute_num_blocks(kv_config, uma_bytes, 0)
+                                num_blocks = compute_num_blocks(
+                                    kv_config, uma_bytes, _model_bytes,
+                                )
                             else:
                                 num_blocks = 1024  # safe default
                         except Exception:
@@ -607,7 +622,18 @@ class EngineCore:
         from .memory_monitor import MemoryMonitor
         from .memory_guard import MemoryGuard
 
-        monitor = MemoryMonitor()
+        # Compute KV cache budget so MemoryMonitor.get_memory_info()
+        # reports available memory relative to the actual KV budget rather
+        # than the full working set — prevents over-admitting requests.
+        kv_budget = 0
+        try:
+            from .utils.hardware import get_hardware_info
+            _hw = get_hardware_info()
+            kv_budget = int(_hw.max_working_set_bytes * self.config.kv_cache_ratio)
+        except Exception:
+            logger.debug("KV budget computation failed, using default", exc_info=True)
+
+        monitor = MemoryMonitor(max_kv_cache_memory=kv_budget)
         monitor.set_model_info(
             num_layers=num_layers,
             num_kv_heads=num_kv_heads,

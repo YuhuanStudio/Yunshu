@@ -1188,15 +1188,25 @@ async def count_tokens(req: AnthropicMessagesRequest) -> dict:
             content={"type": "error", "error": {"type": "overloaded_error", "message": "No tokenizer available"}},
         )
 
-    text_parts = []
+    # Apply chat template for accurate token counting (plain-text join undercounts
+    # by missing role markers, special tokens, and generation prompt).
+    messages = []
     if req.system:
-        text_parts.append(
+        system_text = (
             _extract_text_from_content(req.system) if isinstance(req.system, list) else req.system
         )
+        messages.append({"role": "system", "content": system_text})
     for m in req.messages:
         content = _extract_text_from_content(m.content)
-        text_parts.append(content)
-    full_text = "\n".join(text_parts)
-    tokens = tokenizer.encode(full_text)
+        messages.append({"role": m.role, "content": content})
+    try:
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+    except Exception:
+        # Fallback: if chat template fails (e.g. missing template), use plain join
+        text_parts = [m["content"] for m in messages]
+        prompt = "\n".join(text_parts)
+    tokens = tokenizer.encode(prompt)
 
     return {"type": "token_count", "input_tokens": len(tokens)}

@@ -1356,7 +1356,9 @@ async def _stream_vlm_response(
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
         async for output in vlm_engine.generate_stream(**stream_kwargs):
-            if hasattr(output, 'token_text') and output.token_text:
+            if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                vlm_completion_tok = output.completion_tokens
+            elif hasattr(output, 'token_text') and output.token_text:
                 vlm_completion_tok += 1
             if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                 vlm_reasoning_tok = output.reasoning_tokens
@@ -1582,7 +1584,9 @@ async def _stream_response_multi(
                     if hasattr(output, 'cached_tokens') and output.cached_tokens:
                         total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = output.new_text
-                    if token_text:
+                    if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                        choice_completion_tok = output.completion_tokens
+                    elif token_text:
                         choice_completion_tok += 1
                     # Only set finish_reason on the final token from engine
                     fr = output.finish_reason
@@ -1676,7 +1680,9 @@ async def _stream_response_multi(
                     if hasattr(output, 'cached_tokens') and output.cached_tokens:
                         total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = getattr(output, 'token_text', '')
-                    if token_text:
+                    if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                        choice_completion_tok = output.completion_tokens
+                    elif token_text:
                         choice_completion_tok += 1
                     # Only set finish_reason on the final token from engine
                     fr = getattr(output, 'finish_reason', None)
@@ -1991,7 +1997,9 @@ async def _stream_response(
                     reasoning_tok = output.reasoning_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
-                if token_text:
+                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                    completion_tok = output.completion_tokens
+                elif token_text:
                     completion_tok += 1
 
                 _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
@@ -2077,7 +2085,9 @@ async def _stream_response(
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'token_text') and output.token_text:
+                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                    completion_tok = output.completion_tokens
+                elif hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                     reasoning_tok = output.reasoning_tokens

@@ -216,6 +216,13 @@ def _worker_main(
     """
     import resource
 
+    logger.error(
+        "Process isolation worker started for model '%s', but real inference "
+        "is NOT implemented. All requests will return errors. "
+        "Do NOT use YUNSHU_PROCESS_ISOLATION=1 in production.",
+        model_id,
+    )
+
     if memory_limit_mb is not None:
         try:
             limit_bytes = memory_limit_mb * 1024 * 1024
@@ -251,16 +258,22 @@ def _worker_main(
                 request_id, payload = msg
                 start = time.monotonic()
                 try:
-                    # In production, this would call the actual model inference
-                    # For now, just echo back
-                    result = {"echo": payload}
+                    # Process isolation worker is NOT production-ready.
+                    # Return an explicit error so callers never silently
+                    # receive echo data masquerading as real inference.
+                    result = None
+                    error_msg = (
+                        "Process isolation is not implemented for production "
+                        "use. The worker subprocess does not perform real "
+                        "inference. Disable YUNSHU_PROCESS_ISOLATION."
+                    )
                     elapsed_ms = (time.monotonic() - start) * 1000
                     result_pipe.send(
                         {
                             "request_id": request_id,
                             "result": result,
                             "latency_ms": elapsed_ms,
-                            "error": None,
+                            "error": error_msg,
                         }
                     )
                 except Exception as exc:
@@ -969,8 +982,20 @@ def reset_supervisor() -> None:
 
 
 def is_isolation_enabled() -> bool:
-    """Check if process isolation is enabled via environment variable."""
-    return os.environ.get("YUNSHU_PROCESS_ISOLATION", "0") == "1"
+    """Check if process isolation is enabled via environment variable.
+
+    NOTE: Process isolation is NOT production-ready.  The worker currently
+    echoes requests instead of performing real inference.  This gate exists
+    only for integration testing.
+    """
+    enabled = os.environ.get("YUNSHU_PROCESS_ISOLATION", "0") == "1"
+    if enabled:
+        logger.warning(
+            "YUNSHU_PROCESS_ISOLATION=1 is set, but process isolation is NOT "
+            "production-ready.  The worker subprocess will return errors for "
+            "all inference requests.  Do NOT enable this in production."
+        )
+    return enabled
 
 
 # ── Integration Hook for BatchedEngine ──

@@ -12,6 +12,7 @@ import platform
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -197,6 +198,7 @@ def detect_hardware() -> HardwareInfo:
 _cached_hw: HardwareInfo | None = None
 _cached_hw_time: float = 0.0
 _HW_CACHE_TTL = 30.0
+_hw_cache_lock = threading.Lock()
 
 
 def get_hardware_info() -> HardwareInfo:
@@ -204,13 +206,16 @@ def get_hardware_info() -> HardwareInfo:
 
     Used by engine_core, scheduler, and kv_offload for memory checks.
     Caching avoids sysctl overhead on every engine loop step.
+    Thread-safe: protects check-and-update with a lock since it is
+    called from both the MLX executor thread and the asyncio loop.
     """
     global _cached_hw, _cached_hw_time
-    now = time.monotonic()
-    if _cached_hw is None or (now - _cached_hw_time) > _HW_CACHE_TTL:
-        _cached_hw = detect_hardware()
-        _cached_hw_time = now
-    return _cached_hw
+    with _hw_cache_lock:
+        now = time.monotonic()
+        if _cached_hw is None or (now - _cached_hw_time) > _HW_CACHE_TTL:
+            _cached_hw = detect_hardware()
+            _cached_hw_time = now
+        return _cached_hw
 
 
 def compute_adaptive_defaults(hw: HardwareInfo | None = None) -> dict:

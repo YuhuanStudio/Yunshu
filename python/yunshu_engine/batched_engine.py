@@ -400,9 +400,15 @@ class BatchedEngine:
             )
 
         # Memory pressure eviction config (vllm-mlx pattern)
+        # Stored as a percentage (0-100) for consistency with
+        # KVPrefixCache.evict_under_pressure().  Converted to a 0-1
+        # fraction when calling KVCacheManager.memory_pressure_evict().
         self._mem_pressure_threshold = float(
             os.environ.get("YUNSHU_MEM_PRESSURE_THRESHOLD", "85.0")
         )
+        # If the value looks like a fraction (<=1.0), convert to percentage
+        if 0 < self._mem_pressure_threshold <= 1.0:
+            self._mem_pressure_threshold *= 100.0
 
         # DeltaNet state inversion for KV cache eviction recovery
         # Enable via YUNSHU_DELTANET_INVERSION=1 — when KV blocks are evicted
@@ -1910,6 +1916,14 @@ class BatchedEngine:
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
+                # Also evict from paged KV manager when enabled
+                if self._kv_manager is not None:
+                    try:
+                        self._kv_manager.memory_pressure_evict(
+                            self._mem_pressure_threshold / 100.0
+                        )
+                    except Exception:
+                        logger.debug("paged KV pressure eviction failed", exc_info=True)
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             if cached_kv is not None:
@@ -2843,15 +2857,28 @@ class BatchedEngine:
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
+        # Cross-thread cancel: set by the async consumer on timeout so the
+        # GPU generation loop in _run_inner stops producing tokens.
+        _timeout_cancel = threading.Event()
 
         def _put(item):
-            # Bounded queue: drop oldest item if full to prevent OOM
-            # from a stalled consumer.
+            # Backpressure-aware queue: slow down producer when queue is
+            # nearly full to avoid silently dropping tokens.  Tokens that
+            # are dropped silently corrupt structured output (JSON, tool
+            # calls) because the SSE client sees a gap with no error.
+            if _q.qsize() > 400:  # 78% of 512
+                time.sleep(0.01)  # backpressure: give consumer 10ms to drain
             if _q.full():
+                # Queue is still full after backpressure — drop oldest as
+                # last resort, but log a warning so operators know data was lost.
                 try:
                     _q.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
+                logger.warning(
+                    "Streaming queue overflow — oldest token dropped. "
+                    "Client may see a gap in output."
+                )
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         # Inflight prefix sharing: defined at _run level so it's accessible
@@ -2914,6 +2941,14 @@ class BatchedEngine:
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
+                # Also evict from paged KV manager when enabled
+                if self._kv_manager is not None:
+                    try:
+                        self._kv_manager.memory_pressure_evict(
+                            self._mem_pressure_threshold / 100.0
+                        )
+                    except Exception:
+                        logger.debug("paged KV pressure eviction failed", exc_info=True)
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -2996,6 +3031,23 @@ class BatchedEngine:
                         except Exception:
                             logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
                         # Emit terminal stop chunk so consumer sees finished=True
+                        _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                        if _pipeline is not None:
+                            _pipeline.finish()
+                        if _prefill_tracker is not None:
+                            _prefill_tracker.remove(_prefill_req_id)
+                        _unregister_inflight()
+                        return
+                    # Check timeout-driven cancel from consumer
+                    if _timeout_cancel.is_set():
+                        mx.synchronize()
+                        mx.clear_cache()
+                        try:
+                            remaining = detokenizer.finalize()
+                            if remaining:
+                                _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                        except Exception:
+                            logger.debug("detokenizer finalize in timeout cancel failed", exc_info=True)
                         _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         if _pipeline is not None:
                             _pipeline.finish()
@@ -3128,6 +3180,8 @@ class BatchedEngine:
                     import mlx.core as _cleanup_mx
                     _cleanup_mx.synchronize()
                     _cleanup_mx.clear_cache()
+                    import gc
+                    gc.collect()  # Force GC of KV cache tensors
                 except Exception:
                     pass
                 if isinstance(e, MemoryError) or "memory" in str(e).lower():
@@ -3164,6 +3218,7 @@ class BatchedEngine:
                     item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except asyncio.TimeoutError:
                     logger.warning(f"Streaming fast path timeout: no token for {timeout_seconds}s")
+                    _timeout_cancel.set()  # Signal GPU loop to stop
                     # Yield terminal output so consumer sees finished=True
                     yield GenerationOutput(
                         text=_clean_special_tokens(accumulated) if accumulated else "",
@@ -4285,6 +4340,14 @@ class BatchedEngine:
             # Prefill with KV prefix cache
             prefix_cache = self._kv_prefix_cache
             prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
+            # Also evict from paged KV manager when enabled
+            if self._kv_manager is not None:
+                try:
+                    self._kv_manager.memory_pressure_evict(
+                        self._mem_pressure_threshold / 100.0
+                    )
+                except Exception:
+                    logger.debug("paged KV pressure eviction failed", exc_info=True)
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -4612,13 +4675,18 @@ class BatchedEngine:
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
-            # Bounded queue: drop oldest item if full to prevent OOM
-            # from a stalled consumer.
+            # Backpressure-aware queue (same logic as main streaming path)
+            if _q.qsize() > 400:  # 78% of 512
+                time.sleep(0.01)
             if _q.full():
                 try:
                     _q.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
+                logger.warning(
+                    "N-gram spec streaming queue overflow — oldest token dropped. "
+                    "Client may see a gap in output."
+                )
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         # Inflight prefix sharing for streaming n-gram spec
@@ -4656,6 +4724,14 @@ class BatchedEngine:
 
             prefix_cache = self._kv_prefix_cache
             prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
+            # Also evict from paged KV manager when enabled
+            if self._kv_manager is not None:
+                try:
+                    self._kv_manager.memory_pressure_evict(
+                        self._mem_pressure_threshold / 100.0
+                    )
+                except Exception:
+                    logger.debug("paged KV pressure eviction failed", exc_info=True)
             cached_kv, _, matched = prefix_cache.get(ids)
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
@@ -4881,7 +4957,7 @@ class BatchedEngine:
                         completion_tokens=n_tok,
                         finished=True,
                         finish_reason="error",
-                        error="N-gram streaming timeout: no token for 120s",
+                        error=f"N-gram streaming timeout: no token for {timeout_seconds}s",
                         ttft_ms=_ng_ttft_ms_val,
                         cached_tokens=0,
                         reasoning_tokens=0,
@@ -5261,13 +5337,18 @@ class BatchedEngine:
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
-            # Bounded queue: drop oldest item if full to prevent OOM
-            # from a stalled consumer.
+            # Backpressure-aware queue (same logic as main streaming path)
+            if _q.qsize() > 400:  # 78% of 512
+                time.sleep(0.01)
             if _q.full():
                 try:
                     _q.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
+                logger.warning(
+                    "MTP streaming queue overflow — oldest token dropped. "
+                    "Client may see a gap in output."
+                )
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         def _run():
@@ -5424,7 +5505,7 @@ class BatchedEngine:
                         completion_tokens=n_tok,
                         finished=True,
                         finish_reason="error",
-                        error="MTP streaming timeout: no token for 120s",
+                        error=f"MTP streaming timeout: no token for {timeout_seconds}s",
                         ttft_ms=_mtp_ttft_ms_val,
                         cached_tokens=0,
                         reasoning_tokens=0,
