@@ -106,6 +106,8 @@ class FreeBlockQueue:
 
     def remove(self, block: KVBlock) -> None:
         """Remove a specific block from the free list."""
+        if block.prev is None and block.next is None and self._head is not block:
+            return  # Not in the free list
         self._remove(block)
         self.num_free_blocks -= 1
 

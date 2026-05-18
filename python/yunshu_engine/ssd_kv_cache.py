@@ -524,6 +524,11 @@ class SSDKVCache:
             # Drain queue synchronously if at capacity to prevent unbounded growth
             if self._writer_queue_size > 0 and len(self._write_queue) >= self._writer_queue_size:
                 self._process_pending_writes()
+            # Remove any existing save for this hash (replace, don't duplicate)
+            self._write_queue = [
+                item for item in self._write_queue
+                if not (item[0] == "save" and item[1] == hex_hash)
+            ]
             self._write_queue.append(("save", hex_hash, tensors_raw, meta, file_path))
 
         # For small caches, write synchronously to avoid thread management overhead

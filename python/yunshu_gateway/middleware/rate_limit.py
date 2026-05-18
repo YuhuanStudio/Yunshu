@@ -133,7 +133,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     PUBLIC_PATHS = {"/health", "/health/ready", "/health/live", "/docs", "/openapi.json", "/redoc", "/metrics"}
     # Prefixes that are exempt from rate limiting (monitoring, admin health)
-    PUBLIC_PREFIXES = ("/api/v1/gw/monitoring/", "/api/v1/admin/hardware", "/api/v1/admin/memory", "/api/v1/admin/metrics")
+    PUBLIC_PREFIXES = ("/api/v1/admin/hardware", "/api/v1/admin/memory", "/api/v1/admin/metrics")
 
     def __init__(self, app, rpm: int | None = None):
         super().__init__(app)

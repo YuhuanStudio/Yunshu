@@ -80,7 +80,7 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
         "/", "/favicon.ico",
     }
     # Prefixes that are always public (e.g., static assets)
-    PUBLIC_PREFIXES = ("/static/", "/assets/", "/api/v1/gw/monitoring/")
+    PUBLIC_PREFIXES = ("/static/", "/assets/")
 
     def _is_auth_enabled(self) -> bool:
         if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):

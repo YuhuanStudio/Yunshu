@@ -449,9 +449,8 @@ class TieredKVCacheManager:
             # were allocated for the same tokens.  Free the surplus.
             surplus = existing[hot_matched_count:hot_matched_count + len(all_promoted)]
             for block in surplus:
-                block.ref_count = 0
-                block.reset_hash()
-                self.hot.block_pool.free_queue.append(block)
+                block.ref_count = 1
+            self.hot.block_pool.free(surplus)
             # Rebuild the internal block list with promoted blocks spliced in.
             table._blocks = (
                 existing[:hot_matched_count]

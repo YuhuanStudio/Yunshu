@@ -2446,7 +2446,7 @@ class Scheduler:
 
             # Detect thinking-start transition (normal → reasoning)
             if is_thinking and not ts['in_thinking']:
-                ts['thinking_start_idx'] = len(req.output_token_ids)
+                ts['thinking_start_idx'] = len(req.output_token_ids) - 1
                 ts['in_thinking'] = True
 
             # Detect thinking-end transition (reasoning → normal):

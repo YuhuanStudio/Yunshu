@@ -1556,8 +1556,18 @@ class VLMEngine:
                     # Emit any remaining held-back text (stop already trimmed from accumulated)
                     _emit_text = accumulated[_emitted_pos:] if accumulated else ""
                 else:
-                    _emit_text = accumulated[_emitted_pos:] if accumulated else ""
-                    _emitted_pos = len(accumulated)
+                    # Compute safe emit boundary — don't emit text that could be
+                    # a partial prefix of a stop sequence.
+                    _safe_end = len(accumulated)
+                    for s2 in stop_suffixes:
+                        _pending = accumulated[_emitted_pos:]
+                        _max_hold = min(len(s2) - 1, len(_pending))
+                        for _hold_len in range(1, _max_hold + 1):
+                            if s2.startswith(_pending[-_hold_len:]):
+                                _safe_end = len(accumulated) - _hold_len
+                                break
+                    _emit_text = accumulated[_emitted_pos:_safe_end] if accumulated else ""
+                    _emitted_pos = _safe_end
 
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
