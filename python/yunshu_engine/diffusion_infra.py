@@ -438,10 +438,6 @@ class DiffusionLoRAOffloader:
                 unloaded.append(lora_id)
         return unloaded
 
-    def get_load_history(self) -> list[tuple[int, str, str]]:
-        """Return the load/unload history as (step, lora_id, action) tuples."""
-        return list(self._load_history)
-
     def _adapters_for_step(self, step: int) -> list[str]:
         """Find adapters assigned to a given step, sorted by priority."""
         result = []

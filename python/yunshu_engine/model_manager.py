@@ -668,10 +668,6 @@ class ModelManager:
             "models_registered": len(self._entries),
         }
 
-    def get_loaded_model_ids(self) -> list[str]:
-        """Get list of currently loaded model IDs."""
-        return [e.model_id for e in self._entries.values() if e.is_loaded]
-
     def get_entry(self, model_id: str) -> Optional[ModelEntry]:
         """Get entry for a specific model."""
         return self._entries.get(model_id)

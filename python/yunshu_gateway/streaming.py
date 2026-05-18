@@ -1095,41 +1095,4 @@ def format_anthropic_chunk(
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-# ── Non-streaming keepalive wrapper ──
-
-async def with_json_keepalive(
-    http_request,
-    coro,
-    interval_s: float = 5.0,
-):
-    """For non-streaming requests, send space keepalive during long prefill.
-
-    JSON parsers ignore leading whitespace, so we send space characters
-    to keep the connection alive during long prefill operations.
-
-    This is oMLX's _with_json_keepalive pattern.
-    """
-    task = asyncio.create_task(coro)
-
-    while not task.done():
-        done, _ = await asyncio.wait({task}, timeout=interval_s)
-        if done:
-            break
-        # Check for client disconnect
-        try:
-            if await http_request.is_disconnected():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                return
-        except Exception:
-            logger.debug("is_disconnected() failed in json keepalive", exc_info=True)
-        yield " "
-
-    if task.done() and not task.cancelled():
-        result = task.result()
-        yield result
-
 

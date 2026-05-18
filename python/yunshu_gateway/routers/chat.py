@@ -1635,8 +1635,8 @@ async def _stream_response_multi(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
                         return
-                    if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
-                        total_prompt_tok = output.prompt_token_count
+                    if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                        total_prompt_tok = output.prompt_tokens
                     if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                         choice_reasoning_tok = output.reasoning_tokens
                     if hasattr(output, 'cached_tokens') and output.cached_tokens:
@@ -2026,8 +2026,8 @@ async def _stream_response(
                 timeout_seconds=req.timeout,
             ):
                 # Track token counts for usage reporting
-                if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
-                    prompt_tok = output.prompt_token_count
+                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                    prompt_tok = output.prompt_tokens
                 if hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:

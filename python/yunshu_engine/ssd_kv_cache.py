@@ -670,51 +670,11 @@ class SSDKVCache:
 
         return count
 
-    def enforce_size_limit(self) -> int:
-        """Evict LRU disk blocks until under budget. Returns count evicted."""
-        evicted = 0
-        to_delete: list[tuple[str, str]] = []  # (hex_hash, file_path)
-        with self._lock:
-            total_size = sum(m.file_size for m in self._index.values())
-            # Sort by last accessed (oldest first)
-            sorted_entries = sorted(
-                self._index.items(), key=lambda x: x[1].last_accessed
-            )
-            for hex_hash, meta in sorted_entries:
-                if total_size <= self._get_effective_max():
-                    break
-                total_size -= meta.file_size
-                self._index.pop(hex_hash, None)
-                self._hot_cache.pop(hex_hash, None)
-                self._sqlite_delete(hex_hash)
-                to_delete.append((hex_hash, meta.file_path))
-                evicted += 1
-
-        # Disk I/O outside the lock to avoid blocking other operations
-        for _hex_hash, file_path in to_delete:
-            try:
-                os.unlink(file_path)
-            except OSError:
-                pass
-
-        self._evictions += evicted
-        return evicted
-
     def _evict_hot_if_full(self) -> None:
         """Evict oldest hot cache entries when over capacity."""
         while len(self._hot_cache) > self._hot_cache_size:
             hex_hash, _ = self._hot_cache.popitem(last=False)
             # Data stays on disk — just evict from RAM
-
-    def _get_effective_max(self) -> int:
-        """Get effective max size considering disk free space."""
-        try:
-            stat = os.statvfs(self._cache_dir)
-            free = stat.f_frsize * stat.f_bavail
-            return min(self._max_size_bytes, int(free * 0.95))
-        except Exception:
-            logger.debug("statvfs for cache dir failed", exc_info=True)
-            return self._max_size_bytes
 
     def get_stats(self) -> SSDCacheStats:
         """Return cache statistics."""

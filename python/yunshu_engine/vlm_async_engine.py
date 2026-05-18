@@ -130,10 +130,6 @@ class VLMAsyncEngineCore:
     def is_running(self) -> bool:
         return self._running
 
-    @property
-    def num_active(self) -> int:
-        return self._stats["active_requests"]
-
     async def start(self) -> None:
         """Start the async engine."""
         if self._running:

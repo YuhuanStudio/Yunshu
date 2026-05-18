@@ -46,9 +46,6 @@ class PipelineStage:
     def num_layers(self) -> int:
         return self.end_layer - self.start_layer
 
-    def is_first(self) -> bool:
-        return self.start_layer == 0
-
     @property
     def is_last(self) -> bool:
         return self._is_last
@@ -150,32 +147,6 @@ class PipelineParallel:
             return mx.zeros(shape, dtype=dtype)
         return self._collective.recv(shape, dtype, src_rank)
 
-    def pipeline_forward_step(
-        self,
-        stage: PipelineStage,
-        hidden_states: mx.array,
-        model_layers: list,
-        cache: Optional[list] = None,
-    ) -> mx.array:
-        """Run forward through one pipeline stage's layers.
-
-        Args:
-            stage: The pipeline stage to execute.
-            hidden_states: Input activations (from previous stage or embedding).
-            model_layers: All model layers (we slice by stage range).
-            cache: Optional KV cache for each layer.
-
-        Returns:
-            Output activations after this stage's layers.
-        """
-        for i in range(stage.start_layer, stage.end_layer):
-            layer = model_layers[i]
-            if cache is not None and i < len(cache):
-                hidden_states = layer(hidden_states, cache[i])
-            else:
-                hidden_states = layer(hidden_states)
-        return hidden_states
-
     def to_dict(self) -> dict:
         return {
             "num_layers": self._num_layers,
@@ -191,25 +162,6 @@ class PipelineParallel:
                 for s in self._stages
             ],
         }
-
-
-def _build_node_profiles(
-    node_memory_gb: list[float],
-) -> list[NodeProfile]:
-    """Convert legacy node_memory_gb list to NodeProfile objects.
-
-    Preserves backward compatibility for callers that only provide memory info.
-    """
-    profiles = []
-    for i, mem_gb in enumerate(node_memory_gb):
-        profiles.append(NodeProfile(
-            node_id=f"node_{i}",
-            memory_bytes=int(mem_gb * (1024 ** 3)),
-            bandwidth_mbps=0.0,
-            latency_ms=0.0,
-            gpu_cores=0,
-        ))
-    return profiles
 
 
 def auto_partition_model(

@@ -34,12 +34,6 @@ def apply_model_patches(model: Any, tokenizer: Any, model_name: str) -> list[str
     return patches
 
 
-def remove_model_patches(model: Any, model_name: str) -> None:
-    """Remove any applied patches. Called during model unload."""
-    # Patches are on the model object — GC handles cleanup
-    pass
-
-
 # ── DeepSeek V4 Patches ────────────────────────────────────────────────────
 
 

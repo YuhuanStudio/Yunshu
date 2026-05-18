@@ -126,14 +126,6 @@ class InferenceCheckpoint:
         self._auto_checkpoints = 0
         self._deletes = 0
 
-    @property
-    def auto_interval(self) -> int:
-        return self._auto_interval
-
-    @property
-    def auto_policy(self) -> AutoCheckpointPolicy:
-        return self._auto_policy
-
     def save(self, request_id: str, state: InferenceState) -> None:
         """Save a checkpoint for the given request.
 

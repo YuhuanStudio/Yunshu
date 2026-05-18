@@ -866,37 +866,6 @@ class BatchStopChecker:
         limits = mx.array(max_tokens_list, dtype=mx.int32)
         return counts >= limits
 
-    @staticmethod
-    def build_stop_trie(
-        stop_strings: list[str],
-        tokenizer: Any,
-    ) -> _AhoCorasickTrie | None:
-        """Build an Aho-Corasick trie from stop strings.
-
-        Encodes each stop string to token IDs, then builds an AC trie
-        for efficient multi-pattern matching during generation.
-
-        Args:
-            stop_strings: List of stop strings to match.
-            tokenizer: Tokenizer with encode() method.
-
-        Returns:
-            _AhoCorasickTrie or None if no stop strings provided.
-        """
-        if not stop_strings:
-            return None
-
-        patterns = []
-        for i, s in enumerate(stop_strings):
-            token_ids = tuple(tokenizer.encode(s, add_special_tokens=False))
-            if token_ids:
-                patterns.append((token_ids, i))
-
-        if not patterns:
-            return None
-
-        return _AhoCorasickTrie(patterns)
-
     def get_stats(self) -> dict[str, int]:
         """Return stop checking statistics."""
         return dict(self._stats)

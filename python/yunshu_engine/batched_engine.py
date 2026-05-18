@@ -71,6 +71,7 @@ class GenerationOutput:
     ttft_ms: float = 0.0
     reasoning_tokens: int = 0
     current_state: Optional[str] = None  # "reasoning" or "normal" — matches RequestOutput
+    error: Optional[str] = None  # Error message if generation failed
 
 
 _PROGRESSIVE_QUANT_INTERVAL = 256
@@ -1656,6 +1657,7 @@ class BatchedEngine:
             cached_tokens=getattr(result, 'cached_tokens', 0),
             logprobs=getattr(result, 'logprobs', None),
             ttft_ms=_ttft_ms,
+            error=getattr(result, 'error', None),
         )
         if _rc_hash is not None and engine_loop_result.finish_reason != "error":
             try:
@@ -2609,6 +2611,7 @@ class BatchedEngine:
                     logprobs=getattr(output, 'logprobs', None),
                     ttft_ms=_ttft_ms,
                     current_state=getattr(output, 'current_state', None),
+                    error=getattr(output, 'error', None),
                 )
                 if output.finished:
                     finished_normally = True
@@ -5362,26 +5365,6 @@ class BatchedEngine:
         if tree is None:
             return {"enabled": False}
         return {"enabled": True, **tree.get_stats()}
-
-    def get_radix_continuations(self, token_ids: list[int], max_results: int = 5) -> list[int]:
-        """Return continuation tokens from the radix tree after prefix match.
-
-        Uses the radix tree's bigram view to suggest possible next tokens
-        based on historical request patterns. Useful for spec decode draft
-        generation context enrichment.
-        """
-        if not self._engine_core:
-            return []
-        scheduler = getattr(self._engine_core, "_scheduler", None)
-        if scheduler is None:
-            return []
-        kv_mgr = getattr(scheduler, "_kv_manager", None)
-        if kv_mgr is None:
-            return []
-        tree = getattr(kv_mgr, "_radix_tree", None)
-        if tree is None:
-            return []
-        return tree.get_continuation_tokens(token_ids, max_results)
 
     def get_metal_kernel_manager(self):
         """Return the MetalKernelManager instance, or None if not enabled.

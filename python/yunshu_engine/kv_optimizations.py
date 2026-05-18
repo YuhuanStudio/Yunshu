@@ -1072,10 +1072,6 @@ class KVBlockCompactor:
         """Add a block to the compactor's tracking."""
         self._blocks[block.block_id] = block
 
-    def remove_block(self, block_id: str) -> KVBlock | None:
-        """Remove and return a block."""
-        return self._blocks.pop(block_id, None)
-
     def compact(
         self,
         cache_blocks: dict[str, KVBlock] | None = None,

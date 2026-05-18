@@ -359,53 +359,6 @@ class TieredKVCacheManager:
 
         return table, match
 
-    def store_completed_blocks(
-        self,
-        table: BlockTable,
-        token_ids: list[int],
-        model_hash: int = 0,
-    ) -> None:
-        """Store completed blocks to hot + warm + SSD cache (oMLX pattern).
-
-        1. Cache in hot tier (FP16 UMA-resident)
-        2. Demote to warm tier if configured (4-bit quantized)
-        3. Persist to SSD tier for cold storage
-        """
-        # Cache in hot tier
-        self.hot.cache_completed_blocks(table, token_ids, model_hash)
-
-        blocks = table.get_blocks()
-        block_size = self.hot.block_size
-        num_full = len(token_ids) // block_size
-
-        for i in range(num_full):
-            if i >= len(blocks):
-                break
-            block = blocks[i]
-            if block.block_hash is None:
-                continue
-
-            chunk = token_ids[i * block_size:(i + 1) * block_size]
-
-            # Demote to warm tier if available and not already there
-            if self.warm and not self.warm.contains(block.block_hash):
-                try:
-                    # Extract KV data from hot cache for this block
-                    kv_data = self._extract_kv_for_block(block)
-                    if kv_data is not None:
-                        self.warm.demote(block.block_hash, kv_data)
-                except Exception as e:
-                    logger.debug(f"Failed to demote block to warm tier: {e}")
-
-            # Persist to SSD if configured and not already stored
-            if self.ssd and not self.ssd.contains(block.block_hash):
-                try:
-                    kv_data = self._extract_kv_for_block(block)
-                    if kv_data is not None:
-                        self.ssd.store(block.block_hash, kv_data, num_tokens=len(chunk))
-                except Exception as e:
-                    logger.debug(f"Failed to persist block to SSD: {e}")
-
     def _extract_kv_for_block(self, block: KVBlock) -> Optional[bytes]:
         """Extract KV tensor data for a block from the hot cache.
 

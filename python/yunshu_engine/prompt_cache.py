@@ -251,13 +251,6 @@ class PromptCacheManager:
         with self._lock:
             return self._stats.total_size_bytes
 
-    def get_hit_rate(self) -> float:
-        """Return cache hit rate (0.0 to 1.0)."""
-        total = self._stats.hits + self._stats.misses
-        if total == 0:
-            return 0.0
-        return self._stats.hits / total
-
     def prune_expired(self) -> int:
         """Remove all expired entries.
 

@@ -179,9 +179,6 @@ class TenantManager:
             return None
         return tenant
 
-    def get_tenant(self, tenant_id: str) -> Optional[Tenant]:
-        return self._tenants.get(tenant_id)
-
     def list_tenants(self) -> list[dict]:
         return [
             {

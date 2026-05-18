@@ -627,8 +627,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
             ):
-                if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
-                    prompt_tok = output.prompt_token_count
+                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                    prompt_tok = output.prompt_tokens
                 if hasattr(output, 'reasoning_tokens') and output.reasoning_tokens:
                     reasoning_tok = output.reasoning_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:

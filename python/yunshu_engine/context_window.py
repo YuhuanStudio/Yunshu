@@ -444,36 +444,6 @@ class ContextWindowManager:
 
     # ── Helpers ──
 
-    def _find_safe_truncate_point(self, non_system: list[dict], start: int = 0) -> int:
-        """Find the next safe truncation point that preserves tool call/response pairs.
-
-        When truncating messages from the beginning, we must not split a tool call
-        group. A tool call group is:
-          - assistant message with tool_calls
-          - followed by one or more tool role messages (the results)
-
-        If removing an assistant+tool_calls message, we must also remove all the
-        following tool messages that respond to those calls.
-
-        Returns the index of the first message to keep after truncation.
-        """
-        if start >= len(non_system):
-            return start
-
-        # Walk past any tool messages at the start (orphaned tool results)
-        idx = start
-        while idx < len(non_system) and non_system[idx].get("role") == "tool":
-            idx += 1
-
-        # Check if the next message is an assistant with tool_calls
-        if idx < len(non_system) and non_system[idx].get("role") == "assistant" and non_system[idx].get("tool_calls"):
-            idx += 1  # skip the assistant message
-            # Skip all following tool result messages
-            while idx < len(non_system) and non_system[idx].get("role") == "tool":
-                idx += 1
-
-        return max(idx, start + 1)  # always remove at least one message
-
     def _count_messages_tokens(self, messages: list[dict]) -> int:
         """Count total tokens in a list of messages.
 

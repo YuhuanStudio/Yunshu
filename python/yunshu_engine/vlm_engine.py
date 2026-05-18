@@ -2227,21 +2227,6 @@ class VLMEngine:
         from .text_utils import get_eos_token_ids
         return get_eos_token_ids(self._tokenizer)
 
-    # ── C21: Multimodal prefix cache ──
-
-    def _mm_prefix_key(self, image_paths: list[str], system_text: str) -> str:
-        """Compute cache key from image hashes + system prompt."""
-        parts = [system_text]
-        for path in image_paths:
-            try:
-                from .vision_feature_cache import compute_image_hash
-                with open(path, "rb") as f:
-                    parts.append(compute_image_hash(f.read()))
-            except Exception:
-                logger.debug("image hash computation failed, using path", exc_info=True)
-                parts.append(path)
-        return "|".join(parts)
-
     # ── Stats ──
 
     def get_stats(self) -> dict:

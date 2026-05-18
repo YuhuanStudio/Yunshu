@@ -134,13 +134,6 @@ class DPLoadBalancer:
 
         return node_id
 
-    def _find_healthy_node(self) -> Optional[str]:
-        """Find the first healthy node by asking the DP router."""
-        if self._dp_router is None:
-            return None
-        # The DP router already filters by availability, try again
-        return self._dp_router.select_node()
-
     def _check_recoveries(self) -> None:
         """Proactively check all unhealthy nodes for recovery eligibility."""
         with self._lock:

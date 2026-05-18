@@ -162,13 +162,6 @@ class OffloadRequest:
             return self.completed_at - self.started_at
         return None
 
-    @property
-    def queue_time_seconds(self) -> float | None:
-        """Time from creation to start of processing."""
-        if self.started_at is not None:
-            return self.started_at - self.created_at
-        return None
-
 
 @dataclass
 class OffloadResult:
@@ -925,10 +918,6 @@ class KVOffloadManager:
             "pending_requests": len(self._pending_requests),
             "completed_history": len(self._completed_results),
         }
-
-    def get_policy(self) -> OffloadPolicy:
-        """Return the current offload policy (for external configuration)."""
-        return self._policy
 
     # ── Internal ───────────────────────────────────────────────────
 

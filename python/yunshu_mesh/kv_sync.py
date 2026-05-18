@@ -849,25 +849,6 @@ class MeshHealthMonitor:
 
             return True
 
-    def get_local_heartbeat_metadata(self) -> NodeHealthMetadata:
-        """Collect heartbeat metadata for the local node.
-
-        Returns a NodeHealthMetadata with best-effort system stats.
-        """
-        metadata = NodeHealthMetadata()
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, timeout=2,
-            )
-            if result.returncode == 0:
-                metadata.memory_total_bytes = int(result.stdout.strip())
-        except Exception:
-            logger.debug("operation failed", exc_info=True)
-            pass
-        return metadata
-
     # ── Health Checking ──────────────────────────────────────────────
 
     def check_node(self, node_id: str) -> NodeHealthStatus:

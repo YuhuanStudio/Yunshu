@@ -301,17 +301,6 @@ class KVCacheManager:
         )
         return table, prefix_match
 
-    def register_request_node(self, request_id: str, node: Any) -> None:
-        """Register a RadixNode for a request (for ref counting)."""
-        self._request_nodes[request_id] = node
-        self._radix_tree.inc_ref(node)
-
-    def release_request_node(self, request_id: str) -> None:
-        """Release a request's RadixNode reference."""
-        node = self._request_nodes.pop(request_id, None)
-        if node is not None:
-            self._radix_tree.dec_ref(node)
-
     def allocate_block_for_decode(self, table: BlockTable) -> KVBlock:
         """Allocate one more block when decode fills the current block.
 

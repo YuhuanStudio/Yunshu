@@ -61,9 +61,6 @@ class PagedScheduler(Scheduler):
         """Set the eviction predictor for prediction-based block retention."""
         self._eviction_predictor = predictor
 
-    def get_block_table(self, request_id: str) -> Any | None:
-        return self._block_tables.get(request_id)
-
     def prefill_progress(self, request_id: str) -> tuple[int, int]:
         """Return (matched_tokens, total_tokens) for a request's prefill."""
         req = self.requests.get(request_id)

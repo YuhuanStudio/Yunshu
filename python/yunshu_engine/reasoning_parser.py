@@ -218,7 +218,3 @@ def _detect_family(model_name: str) -> str:
         if pattern.search(model_name):
             return family
     return "generic"
-
-
-def register_reasoning_parser(family: str, parser_cls: type[ReasoningParser]) -> None:
-    _REGISTRY[family] = parser_cls

@@ -469,8 +469,8 @@ async def _stream_completion(
                 cancel_event=_comp_cancel_evt,
                 timeout_seconds=req.timeout,
             ):
-                if hasattr(output, 'prompt_token_count') and output.prompt_token_count:
-                    prompt_tok = output.prompt_token_count
+                if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
+                    prompt_tok = output.prompt_tokens
                 if hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1
                 if output.finish_reason is not None:

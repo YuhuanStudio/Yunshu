@@ -17,7 +17,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -598,6 +598,16 @@ async def _non_stream_batched(engine, messages, req, stop):
 
     cache_creation = getattr(result, 'prompt_tokens', 0) - getattr(result, 'cached_tokens', 0)
     cache_read = getattr(result, 'cached_tokens', 0)
+    reasoning_tok = getattr(result, 'reasoning_tokens', 0)
+
+    usage: dict[str, Any] = {
+        "input_tokens": result.prompt_tokens,
+        "output_tokens": result.completion_tokens,
+        "cache_creation_input_tokens": max(0, cache_creation),
+        "cache_read_input_tokens": max(0, cache_read),
+    }
+    if reasoning_tok > 0:
+        usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
 
     resp = {
         "id": message_id,
@@ -608,12 +618,7 @@ async def _non_stream_batched(engine, messages, req, stop):
         "stop_reason": stop_reason,
         "stop_sequence": matched_stop,
         "created_at": int(time.time()),
-        "usage": {
-            "input_tokens": result.prompt_tokens,
-            "output_tokens": result.completion_tokens,
-            "cache_creation_input_tokens": max(0, cache_creation),
-            "cache_read_input_tokens": max(0, cache_read),
-        },
+        "usage": usage,
     }
     return JSONResponse(resp)
 
@@ -728,6 +733,16 @@ async def _non_stream_legacy(engine, messages, req, stop):
 
     stop_reason = _map_stop_reason(finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
+    _reasoning_tok = getattr(result, 'reasoning_tokens', 0)
+    _legacy_usage: dict[str, Any] = {
+        "input_tokens": prompt_toks,
+        "output_tokens": completion_toks,
+        "cache_creation_input_tokens": max(0, prompt_toks - cached_toks),
+        "cache_read_input_tokens": max(0, cached_toks),
+    }
+    if _reasoning_tok > 0:
+        _legacy_usage["output_tokens_details"] = {"reasoning_tokens": _reasoning_tok}
+
     return JSONResponse({
         "id": message_id,
         "type": "message",
@@ -737,12 +752,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
         "stop_reason": stop_reason,
         "stop_sequence": matched_stop,
         "created_at": int(time.time()),
-        "usage": {
-            "input_tokens": prompt_toks,
-            "output_tokens": completion_toks,
-            "cache_creation_input_tokens": max(0, prompt_toks - cached_toks),
-            "cache_read_input_tokens": max(0, cached_toks),
-        },
+        "usage": _legacy_usage,
     })
 
 
@@ -963,8 +973,8 @@ async def _stream_anthropic(
                 cancel_event=_anth_gen.cancel_event,
                 timeout_seconds=req.timeout,
             ):
-                if hasattr(output, 'prompt_token_count') and output.prompt_token_count and not input_tokens:
-                    input_tokens = output.prompt_token_count
+                if hasattr(output, 'prompt_tokens') and output.prompt_tokens and not input_tokens:
+                    input_tokens = output.prompt_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 

@@ -216,45 +216,6 @@ class Engine:
 
         return False
 
-    @property
-    def distributed_group(self) -> Optional[mx.distributed.Group]:
-        """Get the distributed group for this engine, if any."""
-        return getattr(self, '_dist_group', None)
-
-    def load_distributed(
-        self,
-        model_name: str,
-        group: mx.distributed.Group,
-        strategy: str = "auto",
-    ) -> None:
-        """Load model with distributed sharding via mx.distributed group.
-
-        Args:
-            model_name: HuggingFace model ID or local path.
-            group: mx.distributed Group from MeshManager.
-            strategy: "auto", "tensor", "pipeline", or "none".
-        """
-        from yunshu_mesh.sharding import load_sharded_model
-
-        self._dist_group = group
-        self._model_name = model_name
-        self._model_display = model_name.rsplit("/", 1)[-1] if "/" in model_name else model_name
-
-        rank = group.rank()
-        logger.info(
-            f"Engine loading distributed: rank={rank}, "
-            f"world_size={group.size()}, strategy={strategy}"
-        )
-
-        self._model, self._tokenizer = load_sharded_model(
-            model_name, group=group, strategy=strategy
-        )
-        self._setup_engine_backend(model_name)
-        logger.info(
-            f"Engine loaded distributed model: {model_name} "
-            f"(rank={rank}, engine_core={self._use_engine_core})"
-        )
-
     def load(self, model_name: str) -> None:
         """Load model and create BatchGenerator or EngineCore."""
         from mlx_lm.utils import load as load_model
@@ -296,6 +257,7 @@ class Engine:
                     max_kv_size=self.config.max_kv_size,
                     deferred_clear_delay=self.config.deferred_clear_delay,
                     cache_cleanup_interval=self.config.cache_cleanup_interval,
+                    step_interval=self.config.step_interval_ms / 1000.0,
                     use_external_prefill=_external_prefill,
                     prefill_chunk_size=_prefill_chunk_size,
                 ),

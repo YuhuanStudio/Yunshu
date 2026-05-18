@@ -307,18 +307,6 @@ class MCPClientManager:
             raise KeyError(f"Tool '{tool_name}' not found in any connected MCP server")
         return await conn.call_tool(tool_name, arguments)
 
-    async def call_tools_parallel(self, calls: list[dict]) -> list[Any]:
-        """Execute multiple tool calls in parallel.
-
-        Args:
-            calls: List of {"name": str, "arguments": dict} dicts.
-
-        Returns:
-            List of results in the same order as input calls.
-        """
-        tasks = [self.call_tool(c["name"], c.get("arguments", {})) for c in calls]
-        return await asyncio.gather(*tasks, return_exceptions=True)
-
     def get_tools_as_openai(self) -> list[dict]:
         """Get all tools in OpenAI function format."""
         result = []

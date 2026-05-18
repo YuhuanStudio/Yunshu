@@ -649,9 +649,3 @@ class SlidingWindowKVManager:
             self._stats.total_evictions += len(evicted_ids)
 
         return evicted_ids
-
-    def _count_system_prompt_blocks(self, request_id: str) -> int:
-        """Count system prompt blocks for a request."""
-        if request_id not in self._request_blocks:
-            return 0
-        return sum(1 for b in self._request_blocks[request_id] if b.is_system_prompt)

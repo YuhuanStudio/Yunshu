@@ -113,6 +113,8 @@ class EngineCore:
             max_kv_size=self.config.max_kv_size,
             deferred_clear_delay=self.config.deferred_clear_delay,
             cache_cleanup_interval=self.config.cache_cleanup_interval,
+            stream_interval=self.config.stream_interval,
+            step_interval=self.config.step_interval,
             ngram_spec_enabled=self.config.ngram_spec_enabled,
             ngram_spec_min_n=self.config.ngram_spec_min_n,
             ngram_spec_max_n=self.config.ngram_spec_max_n,

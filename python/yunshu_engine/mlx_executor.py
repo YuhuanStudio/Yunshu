@@ -65,23 +65,6 @@ def get_mlx_executor() -> ThreadPoolExecutor:
     return _executor
 
 
-def shutdown_mlx_executor(wait: bool = True) -> None:
-    """Shut down the global MLX executor.
-
-    Should be called during graceful server shutdown to ensure all
-    pending GPU work completes before process exit.
-
-    Args:
-        wait: If True, block until all submitted work is done.
-    """
-    global _executor
-    with _executor_lock:
-        if _executor is not None:
-            _executor.shutdown(wait=wait)
-            _executor = None
-            logger.info("MLX executor shut down")
-
-
 def sync_and_clear_cache() -> None:
     """Synchronize in-flight GPU work before clearing the Metal buffer cache.
 

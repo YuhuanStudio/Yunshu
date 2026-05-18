@@ -757,18 +757,6 @@ class LookaheadReasoning:
         self._recent_accepts: list[int] = []
         self._window = 10
 
-    def check_thinking_state(self, last_token: int, tokenizer) -> None:
-        """Track whether we're inside <think/> tags."""
-        try:
-            text = tokenizer.decode([last_token])
-            if "<think" in text:
-                self._in_thinking = True
-                self._thinking_tokens = []
-            elif "</think" in text:
-                self._in_thinking = False
-        except Exception:
-            logger.debug("thinking state tracking failed", exc_info=True)
-
     def check_thinking_state_text(self, text_chunk: str) -> None:
         """Track thinking state from decoded text (avoids re-decoding)."""
         if "<think" in text_chunk:

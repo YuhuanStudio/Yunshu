@@ -887,17 +887,6 @@ class HybridKVCache:
             )
         return self._layer_types[layer_idx]
 
-    def get_pool(self, block_type: CacheBlockType) -> _CachePool | None:
-        """Get the cache pool for a specific block type.
-
-        Args:
-            block_type: The cache type.
-
-        Returns:
-            The _CachePool, or None if no layers of this type are registered.
-        """
-        return self._pools.get(block_type)
-
     def get_stats(self) -> dict[str, Any]:
         """Get per-type and aggregate cache statistics.
 
@@ -1093,10 +1082,6 @@ class BlockAlignedCacheSplitter:
         groups.append(self._groups[gid])
 
         return groups
-
-    def get_group(self, group_id: int) -> LayerGroup | None:
-        """Get a layer group by ID."""
-        return self._groups.get(group_id)
 
     def get_group_for_layer(self, layer_idx: int) -> LayerGroup | None:
         """Get the layer group containing a specific layer."""

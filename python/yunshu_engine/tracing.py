@@ -488,15 +488,6 @@ class MetricsAggregatorV2:
         )
         return f"{{{pairs}}}"
 
-    def _metric_type_for(self, name: str) -> MetricType:
-        if name in self._counters:
-            return MetricType.COUNTER
-        if name in self._gauges:
-            return MetricType.GAUGE
-        if name in self._histograms:
-            return MetricType.HISTOGRAM
-        return MetricType.COUNTER
-
     def get_prometheus_output(self) -> str:
         """Generate Prometheus exposition format output."""
         t0 = time.monotonic()

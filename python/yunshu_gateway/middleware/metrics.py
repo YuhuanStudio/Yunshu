@@ -55,10 +55,6 @@ class _Metrics:
         with self._lock:
             self.inference_count += 1
 
-    def record_error(self) -> None:
-        with self._lock:
-            self.error_count += 1
-
     def to_prometheus(self) -> str:
         """Format metrics in Prometheus exposition format."""
         lines: list[str] = []

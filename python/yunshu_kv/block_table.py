@@ -27,14 +27,6 @@ class BlockTable:
     def num_blocks(self) -> int:
         return len(self._blocks)
 
-    @property
-    def num_tokens_in_last_block(self) -> int:
-        """Number of tokens in the last (possibly partial) block."""
-        if not self._blocks or self.total_tokens == 0:
-            return 0
-        remainder = self.total_tokens % self.block_size
-        return remainder if remainder != 0 else self.block_size
-
     def append_block(self, block: KVBlock) -> None:
         """Add a new physical block at the end."""
         self._blocks.append(block)

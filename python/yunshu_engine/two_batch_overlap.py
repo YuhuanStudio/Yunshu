@@ -450,12 +450,6 @@ class TwoBatchOverlapScheduler:
             return self._batch_a
         return self._batch_b
 
-    def _get_pending_batch(self) -> BatchState:
-        """Get the BatchState for the pending slot."""
-        if self._active_slot == BatchSlot.A:
-            return self._batch_b
-        return self._batch_a
-
     def _should_use_sequential(self, running_count: int) -> bool:
         """Decide whether to fall back to sequential for this step.
 
