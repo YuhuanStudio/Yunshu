@@ -1419,6 +1419,8 @@ class VLMEngine:
         stop_suffixes = stop or []
         token_count = 0
         accumulated = ""  # Accumulate text for multi-token stop suffix matching
+        _in_thinking = False  # Track thinking state for current_state routing
+        _think_scan_pos = 0  # Cursor for scanning thinking tags (avoids re-scanning already-seen text)
         _num_prompt_tokens = 0
         # Estimate prompt tokens for output metadata
         if self._tokenizer is not None:
@@ -1458,11 +1460,35 @@ class VLMEngine:
                         finished=True,
                         completion_tokens=token_count,
                         prompt_tokens=_num_prompt_tokens,
+                        current_state="reasoning" if _in_thinking else "normal",
                     ))
                     return
                 token_count += 1
                 text = result.text if hasattr(result, 'text') else ""
                 accumulated += text
+                # Track thinking state from text markers — scan only the
+                # newly-appended portion to avoid permanent matches on tags
+                # that appeared earlier in the accumulated text.
+                _scan = accumulated[_think_scan_pos:]
+                while _scan:
+                    if _in_thinking:
+                        idx = _scan.find("</think")
+                        if idx >= 0:
+                            _in_thinking = False
+                            _scan = _scan[idx + len("</think"):]
+                            _think_scan_pos = len(accumulated) - len(_scan)
+                        else:
+                            break
+                    else:
+                        idx = _scan.find("<think")
+                        if idx >= 0:
+                            _in_thinking = True
+                            _scan = _scan[idx + len("<think"):]
+                            _think_scan_pos = len(accumulated) - len(_scan)
+                        else:
+                            break
+                _think_scan_pos = len(accumulated) - len(_scan)
+                _cur_state = "reasoning" if _in_thinking else "normal"
                 finish_reason = None
                 if hasattr(result, 'finish_reason') and result.finish_reason:
                     finish_reason = result.finish_reason
@@ -1485,9 +1511,24 @@ class VLMEngine:
                     finished=finish_reason is not None,
                     completion_tokens=token_count,
                     prompt_tokens=_num_prompt_tokens,
+                    current_state=_cur_state,
                 ))
                 if finish_reason:
                     return
+
+            # Generator exhausted without a finish_reason — emit finished output.
+            # This handles the case where vlm_stream_generate stops yielding
+            # without setting result.finish_reason and token_count < max_tokens.
+            # Always emit finished=True so the consumer never hangs waiting for
+            # a final output, even when zero tokens were generated.
+            queue.put_nowait(RequestOutput(
+                request_id=req_id,
+                new_text="",
+                finish_reason="length" if token_count > 0 else "stop",
+                finished=True,
+                completion_tokens=token_count,
+                prompt_tokens=_num_prompt_tokens,
+            ))
 
             # Track vision feature cache stats after streaming completes
             if self._vision_cache is not None:
@@ -1643,7 +1684,11 @@ class VLMEngine:
             token_text = ""
 
         # Track thinking state for gateway routing
-        _state = "reasoning" if (think_start_id is not None and token_id == think_start_id) else "normal"
+        # If the first token is the think-start token, mark _in_thinking so the
+        # loop's thinking budget and state tracking work correctly.
+        if think_start_id is not None and token_id == think_start_id:
+            _in_thinking = True
+        _state = "reasoning" if _in_thinking else "normal"
         queue.put_nowait(RequestOutput(
             request_id=req_id,
             new_text=token_text,
@@ -1794,6 +1839,7 @@ class VLMEngine:
                 return
 
           # Max tokens reached — finalize detokenizer
+          _final_state = "reasoning" if _in_thinking else "normal"
           if has_detokenizer:
               remaining = detokenizer.finalize()
               if remaining:
@@ -1803,6 +1849,7 @@ class VLMEngine:
                       finish_reason=None,
                       finished=False,
                       prompt_tokens=_num_prompt_tokens,
+                      current_state=_final_state,
                   ))
           queue.put_nowait(RequestOutput(
               request_id=req_id,
@@ -1811,9 +1858,11 @@ class VLMEngine:
               finished=True,
               completion_tokens=token_count,
               prompt_tokens=_num_prompt_tokens,
+              current_state=_final_state,
           ))
         except Exception as e:
             logger.error(f"VLM text streaming error: {e}", exc_info=True)
+            _error_state = "reasoning" if _in_thinking else "normal"
             # Flush remaining detokenizer bytes before reporting error
             if has_detokenizer:
                 try:
@@ -1825,6 +1874,7 @@ class VLMEngine:
                             finish_reason=None,
                             finished=False,
                             prompt_tokens=_num_prompt_tokens,
+                            current_state=_error_state,
                         ))
                 except Exception:
                     logger.debug("detokenizer finalize in error handler failed", exc_info=True)
@@ -1835,6 +1885,7 @@ class VLMEngine:
                 finished=True,
                 error=str(e),
                 prompt_tokens=_num_prompt_tokens,
+                current_state=_error_state,
             ))
 
     # ── Prompt Formatting ──
