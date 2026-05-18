@@ -151,9 +151,30 @@ class RequestDeduplicator:
         model: str = "",
         prompt_hash: str = "",
     ) -> DeduplicationEntry:
-        """Register a new request (not deduplicated)."""
+        """Register a new request (not deduplicated).
+
+        If an existing in-flight entry with the same hash exists but its age
+        exceeded the dedup window (causing check() to return None), we do NOT
+        overwrite it — the original primary is still in-flight and overwriting
+        would orphan its shadow requests.  Instead, treat this as a new
+        independent inference (no dedup).
+        """
         with self._lock:
             self._prune_expired()
+
+            # Guard: do not overwrite an in-flight entry whose age simply
+            # exceeded the dedup window.  Only replace completed entries.
+            existing = self._entries.get(content_hash)
+            if existing is not None and not existing.is_completed:
+                # The original primary is still in-flight.  Create a new
+                # entry with a different hash (append a nonce) so both
+                # inferences run independently.
+                import hashlib as _hl
+                nonce = hashlib.sha256(
+                    (content_hash + request_id).encode()
+                ).hexdigest()[:16]
+                content_hash = nonce
+
             # Check capacity
             if len(self._entries) >= self._max_entries:
                 self._evict_oldest()
