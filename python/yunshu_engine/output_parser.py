@@ -72,7 +72,7 @@ class QwenOutputParser(OutputParser):
 
     _THINK_RE = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
     _TOOL_RE = re.compile(r"<tool_call\s*/?\s*>.*?</tool_call\s*/?\s*>", re.DOTALL)
-    _FUNC_RE = re.compile(r"<function\s*=\s*\w+>.*?</function>", re.DOTALL)
+    _FUNC_RE = re.compile(r"<function\s*=\s*[\w.\-]+>.*?</function>", re.DOTALL)
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
