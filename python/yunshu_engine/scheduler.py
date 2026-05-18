@@ -738,6 +738,9 @@ class Scheduler:
         # Drafts are generated after a decode step and verified against the
         # target model's output on the next step (vLLM "verify after" pattern).
         self._spec_drafts: dict[str, list[int]] = {}
+        # Bug 2 fix: track the position in output_token_ids where drafts were proposed,
+        # so verification compares against the correct token range.
+        self._spec_draft_start_pos: dict[str, int] = {}
 
         # Per-request spec decode statistics
         self._spec_stats: dict[str, dict[str, int]] = {}  # req_id → {proposals, accepted, rejected}
@@ -1139,6 +1142,10 @@ class Scheduler:
                 for rid, tokens in batch_drafts.drafts.items():
                     if rid not in self._spec_drafts:
                         self._spec_drafts[rid] = tokens
+                        # Bug 2 fix: record position where drafts start
+                        req = self.running.get(rid)
+                        if req is not None:
+                            self._spec_draft_start_pos[rid] = len(req.output_token_ids or [])
                 # Generate drafts for still-active requests (per-request fallback
                 # for strategies not covered by batch collection, e.g. MTP/cross-model)
                 for req_id in list(self.running.keys()):
@@ -1359,6 +1366,10 @@ class Scheduler:
                 if self.config.use_external_prefill:
                     prefill_ok = self._run_external_prefill(req)
                     if not prefill_ok:
+                        # Bug 6 fix: add to _failed_insert_ids so the engine loop
+                        # generates a synthetic error output and calls _finalize_request.
+                        # Without this, budget/lifecycle/memory registrations leak.
+                        self._failed_insert_ids.append(req.request_id)
                         continue  # request was aborted or errored
 
                 sp = req.sampling_params
@@ -2478,7 +2489,32 @@ class Scheduler:
             self._chunked_prefill_fairness.pop(req_id, None)
             self._chunked_prefill_enqueued_at.pop(req_id, None)
 
+        # Bug 3 fix: save abort IDs before clearing so we can also sweep
+        # the waiting queue for aborted requests that haven't entered running yet.
+        _aborted_ids_snapshot = set(self._pending_abort_ids)
         self._pending_abort_ids.clear()
+
+        # Bug 3 fix: also remove aborted requests from the waiting queue.
+        # If a request was aborted while still waiting (not yet in running),
+        # _process_aborts would miss it because only self.running is checked
+        # above. On the next _schedule_waiting, the cleared _pending_abort_ids
+        # means the request gets scheduled anyway. Fix: sweep the waiting queue.
+        if self.waiting and _aborted_ids_snapshot:
+            try:
+                remaining = []
+                with self.waiting._lock:
+                    for entry in self.waiting._heap:
+                        item = self.waiting._extract_item(entry)
+                        if hasattr(item, 'request_id') and item.request_id in _aborted_ids_snapshot:
+                            item.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
+                        else:
+                            remaining.append(entry)
+                    if len(remaining) != len(self.waiting._heap):
+                        self.waiting._heap = remaining
+                        import heapq
+                        heapq.heapify(self.waiting._heap)
+            except Exception:
+                logger.debug("waiting queue abort sweep failed", exc_info=True)
 
     def _maybe_clear_cache(self) -> None:
         """Deferred Metal cache cleanup (oMLX #435)."""
@@ -2903,6 +2939,8 @@ class Scheduler:
 
             if draft_result is not None and draft_result.token_ids:
                 self._spec_drafts[req.request_id] = draft_result.token_ids
+                # Bug 2 fix: record position where drafts start in output_token_ids
+                self._spec_draft_start_pos[req.request_id] = len(req.output_token_ids or [])
                 rid = req.request_id
                 if rid not in self._spec_stats:
                     self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "cross_model"}
@@ -2978,6 +3016,8 @@ class Scheduler:
             if draft_ids:
                 rid = req.request_id
                 self._spec_drafts[rid] = draft_ids
+                # Bug 2 fix: record position where drafts start in output_token_ids
+                self._spec_draft_start_pos[rid] = len(req.output_token_ids or [])
                 if rid not in self._spec_stats:
                     self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "mtp"}
                 self._spec_stats[rid]["proposals"] += len(draft_ids)
@@ -3011,6 +3051,8 @@ class Scheduler:
             if draft_ids:
                 rid = req.request_id
                 self._spec_drafts[rid] = draft_ids
+                # Bug 2 fix: record position where drafts start in output_token_ids
+                self._spec_draft_start_pos[rid] = len(req.output_token_ids or [])
                 if rid not in self._spec_stats:
                     self._spec_stats[rid] = {"proposals": 0, "accepted": 0, "rejected": 0, "mode": "ngram"}
                 self._spec_stats[rid]["proposals"] += len(draft_ids)
@@ -3082,8 +3124,17 @@ class Scheduler:
                 continue
 
             actual_tokens = req.output_token_ids
-            n_compare = min(len(draft_ids), len(actual_tokens))
-            recent_actual = actual_tokens[-n_compare:]
+            # Bug 2 fix: Use _spec_draft_start_pos to align the comparison
+            # window precisely. Drafts were proposed starting at a specific
+            # position in output_token_ids; compare from that position.
+            # Fallback to [-n_draft:] if start_pos is not tracked.
+            n_draft = len(draft_ids)
+            start_pos = self._spec_draft_start_pos.get(rid)
+            if start_pos is not None and start_pos + n_draft <= len(actual_tokens):
+                recent_actual = actual_tokens[start_pos:start_pos + n_draft]
+            else:
+                recent_actual = actual_tokens[-n_draft:] if n_draft > 0 else []
+            n_compare = min(len(draft_ids), len(recent_actual))
 
             # GPU-accelerated batch comparison: find first mismatch via MLX
             if use_gpu and n_compare > 0:
@@ -3140,6 +3191,7 @@ class Scheduler:
 
         for rid in verified_ids:
             self._spec_drafts.pop(rid, None)
+            self._spec_draft_start_pos.pop(rid, None)
 
     def _cleanup_spec_state(self, req_id: str) -> None:
         """Clean up spec decode state for a finished/aborted request.
@@ -3148,6 +3200,7 @@ class Scheduler:
         _process_aborts() when a request is aborted.
         """
         self._spec_drafts.pop(req_id, None)
+        self._spec_draft_start_pos.pop(req_id, None)
         self._spec_stats.pop(req_id, None)
 
     # ── End speculative decoding batch-path methods ──
@@ -3298,6 +3351,7 @@ class Scheduler:
                 max_model_len=self.config.max_kv_size or 32768,
             ))
         self._spec_drafts.clear()
+        self._spec_draft_start_pos.clear()
         self._spec_stats.clear()
         self._spec_total_proposals = 0
         self._spec_total_accepted = 0

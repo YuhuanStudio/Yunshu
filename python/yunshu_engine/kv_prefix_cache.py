@@ -38,6 +38,21 @@ logger = logging.getLogger(__name__)
 _BLOCK_SIZE = 64
 
 
+def _canonical_block_hash(
+    parent_hash: int | None,
+    token_ids: list[int],
+) -> int:
+    """Compute block hash using the canonical yunshu_kv.hash function.
+
+    Bug 6: Previously this module used its own blake2b-based hash
+    producing bytes digests, while yunshu_kv/hash.py used xxhash
+    producing int digests.  This prevented cross-subsystem cache hits.
+    Now both use the same hash chain.
+    """
+    from yunshu_kv.hash import compute_block_hash
+    return compute_block_hash(parent_hash, token_ids)
+
+
 def get_prefix_length(prompt: mx.array, cached_prompt: mx.array) -> int:
     """Find the length of the common prefix between two token arrays."""
     n = min(int(prompt.shape[0]), int(cached_prompt.shape[0]))
@@ -69,35 +84,20 @@ def np_array(arr: mx.array):
     return np.array(arr)
 
 
-def _compute_block_hash(
-    parent_hash: bytes | None,
-    token_ids,
-) -> bytes:
-    """Compute hash for a block based on content and parent hash chain.
-
-    Following oMLX/vLLM pattern: each block's hash depends on its parent,
-    creating a Merkle-chain that enables O(matched_blocks) prefix lookup.
-    """
-    h = hashlib.blake2b(digest_size=16)
-    if parent_hash is not None:
-        h.update(parent_hash)
-    else:
-        h.update(b"yunshu-root")
-    h.update(bytes(token_ids))
-    return h.digest()
-
-
-def _compute_block_hashes(tokens) -> list[bytes]:
+def _compute_block_hashes(tokens) -> list[int]:
     """Compute the hash chain for all blocks in a token sequence.
 
     Returns a list of block hashes where each hash depends on all
     previous blocks, enabling prefix matching at any block boundary.
+
+    Uses the canonical hash from yunshu_kv.hash for cross-subsystem
+    compatibility (Bug 6 fix).
     """
     hashes = []
-    parent = None
+    parent: int | None = None
     for i in range(0, len(tokens), _BLOCK_SIZE):
         block = tokens[i : i + _BLOCK_SIZE]
-        parent = _compute_block_hash(parent, block)
+        parent = _canonical_block_hash(parent, block)
         hashes.append(parent)
     return hashes
 
@@ -257,7 +257,7 @@ class KVPrefixCache:
     ):
         self._prompts: list[mx.array] = []
         self._caches: list[list] = []
-        self._block_hashes: list[list[bytes]] = []
+        self._block_hashes: list[list[int]] = []
         self._last_used: list[int] = []
         self._access_counter: int = 0
         self._max_entries = max_entries
@@ -267,9 +267,9 @@ class KVPrefixCache:
         self._access_counts: list[int] = []  # For SLRU promotion tracking
         # Hash-chain prefix index: block_hash → (entry_index, block_index)
         self._hash_index: dict[str, int] = {}
-        self._prefix_index: dict[bytes, list[tuple[int, int]]] = {}
+        self._prefix_index: dict[int, list[tuple[int, int]]] = {}
         # Block dedup: block_hash → reference count (vLLM COW pattern)
-        self._block_refcount: dict[bytes, int] = {}
+        self._block_refcount: dict[int, int] = {}
         # SSD-tier cache (lazy init)
         self._ssd_cache: Any | None = None
         self._ssd_model_name: str = ""
@@ -402,13 +402,15 @@ class KVPrefixCache:
         if best_length < self._min_prefix:
             # SSD fallback: try loading first block from SSD if available
             if self._ssd_cache is not None and query_blocks:
-                ssd_data = self.try_ssd_restore(query_blocks[0])
+                bh_bytes = query_blocks[0].to_bytes(8, "little") if isinstance(query_blocks[0], int) else query_blocks[0]
+                ssd_data = self.try_ssd_restore(bh_bytes)
                 if ssd_data is not None:
                     block_len = _BLOCK_SIZE
                     if block_len >= self._min_prefix:
+                        bh_hex = f"{query_blocks[0]:016x}" if isinstance(query_blocks[0], int) else query_blocks[0].hex()[:16]
                         logger.info(
                             f"KV prefix cache SSD restore: {block_len} tokens "
-                            f"from block {query_blocks[0].hex()[:16]}"
+                            f"from block {bh_hex[:16]}"
                         )
                         return ssd_data, len(prompt_tokens) - block_len, block_len
             return None, len(prompt_tokens), 0
@@ -428,7 +430,7 @@ class KVPrefixCache:
         return result, remaining, best_length
 
     def _find_prefix_via_hash_chain(
-        self, query_blocks: list[bytes]
+        self, query_blocks: list[int]
     ) -> tuple[int, int]:
         """Find longest prefix match using hash-chain index.
 
@@ -539,22 +541,24 @@ class KVPrefixCache:
                 evicted_prompt = self._prompts[index] if index < len(self._prompts) else None
                 if evicted_hashes and evicted_cache is not None and evicted_prompt is not None:
                     for bi, bh in enumerate(evicted_hashes):
-                        if not self._ssd_cache.has_block(bh):
+                        bh_bytes = bh.to_bytes(8, "little") if isinstance(bh, int) else bh
+                        if not self._ssd_cache.has_block(bh_bytes):
                             try:
                                 import numpy as np
                                 tokens = np.array(evicted_prompt)
                                 start = bi * _BLOCK_SIZE
                                 end = min(start + _BLOCK_SIZE, len(tokens))
                                 self._ssd_cache.save_block(
-                                    block_hash=bh,
+                                    block_hash=bh_bytes,
                                     cache_data=evicted_cache,
                                     token_count=end - start,
                                     model_name=self._ssd_model_name,
                                 )
                             except Exception:
+                                bh_hex = f"{bh:016x}" if isinstance(bh, int) else bh.hex()[:16]
                                 logger.debug(
                                     "SSD spill save failed for block %s",
-                                    bh.hex()[:16], exc_info=True,
+                                    bh_hex[:16], exc_info=True,
                                 )
             except Exception:
                 logger.debug("SSD spill failed during eviction", exc_info=True)
@@ -770,13 +774,14 @@ class KVPrefixCache:
         for i, (prompt, cache) in enumerate(zip(self._prompts, self._caches)):
             block_hashes = self._block_hashes[i]
             for bi, bh in enumerate(block_hashes):
-                if self._ssd_cache.has_block(bh):
+                bh_bytes = bh.to_bytes(8, "little") if isinstance(bh, int) else bh
+                if self._ssd_cache.has_block(bh_bytes):
                     continue
                 tokens = np_array(prompt)
                 start = bi * _BLOCK_SIZE
                 end = min(start + _BLOCK_SIZE, len(tokens))
                 self._ssd_cache.save_block(
-                    block_hash=bh,
+                    block_hash=bh_bytes,
                     cache_data=cache,
                     token_count=end - start,
                     model_name=self._ssd_model_name,

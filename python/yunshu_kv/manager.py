@@ -146,11 +146,17 @@ class KVCacheManager:
         self,
         token_ids: list[int],
         model_hash: int = 0,
+        request_id: str | None = None,
     ) -> tuple[BlockTable, PrefixMatch]:
         """Allocate blocks for a new request, checking prefix cache first.
 
         Uses RadixTree for O(k) prefix matching (C8), falls back to
         hash-chain lookup for individual blocks.
+
+        Args:
+            token_ids: Token IDs for the request prompt.
+            model_hash: Hash of the model for cache isolation.
+            request_id: Optional request ID for radix tree ref counting.
 
         Returns:
             (BlockTable for the request, PrefixMatch describing cache hit)
@@ -182,6 +188,11 @@ class KVCacheManager:
                 self._total_lookups += len(token_ids) // self.config.block_size
                 for block in matched_blocks:
                     self.block_pool.touch(block)
+                # Bug 2: inc_ref the matched node so eviction won't remove
+                # nodes used by active requests.
+                self._radix_tree.inc_ref(matched_node)
+                if request_id is not None:
+                    self._request_nodes[request_id] = matched_node
                 return self._build_table_from_match(
                     matched_blocks, num_matched_tokens, token_ids,
                 )
@@ -409,8 +420,18 @@ class KVCacheManager:
                 start_node=matched_node if not matched_node.is_root else None,
             )
 
-    def free_request(self, table: BlockTable) -> None:
-        """Free all blocks held by a request."""
+    def free_request(self, table: BlockTable, request_id: str | None = None) -> None:
+        """Free all blocks held by a request.
+
+        Args:
+            table: The request's block table to free.
+            request_id: Optional request ID to release radix tree refs (Bug 2).
+        """
+        # Bug 2: dec_ref radix tree nodes held by this request.
+        if request_id is not None and request_id in self._request_nodes:
+            node = self._request_nodes.pop(request_id)
+            self._radix_tree.dec_ref(node)
+
         blocks = table.clear()
         self.block_pool.free(blocks)
 
@@ -469,6 +490,15 @@ class KVCacheManager:
                 self.block_pool.free([block])
             # else ref_count == 0: already in the free queue; just clearing
             # the stale hash above is sufficient -- no new free block gained.
+
+        freed_block_count = self.block_pool.get_free_block_count() - initial_free
+
+        # Prune stale radix tree nodes (Bug 1: evict() was never called,
+        # causing unbounded memory growth in the tree structure).
+        if freed_block_count > 0:
+            # Evict roughly the number of tree nodes whose blocks were freed.
+            # Use ceiling: each freed block may correspond to one tree node.
+            self._radix_tree.evict(max(1, freed_block_count))
 
         return self.block_pool.get_free_block_count() >= needed_blocks
 
@@ -531,6 +561,11 @@ class KVCacheManager:
                 self.block_pool.free([block])
                 evicted += 1
             # else ref_count == 0: already free; clearing stale hash only
+
+        # Prune stale radix tree nodes (Bug 1: evict() was never called,
+        # causing unbounded memory growth in the tree structure).
+        if evicted > 0:
+            self._radix_tree.evict(max(1, evicted))
 
         if evicted > 0:
             logger.debug(

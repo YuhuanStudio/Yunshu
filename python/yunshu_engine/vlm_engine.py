@@ -607,7 +607,7 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
-                    return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking)
+                    return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking, thinking_budget=thinking_budget)
 
                 input_ids = self._tokenize_with_cache(messages, enable_thinking=_enable_thinking)
 
@@ -1060,6 +1060,7 @@ class VLMEngine:
         stop: list[str] | None = None,
         audio_paths: list[str] | None = None,
         enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
     ) -> str:
         """Vision + text generation using mlx_vlm.generate().
 
@@ -1168,16 +1169,31 @@ class VLMEngine:
             except Exception:
                 logger.warning("KV prefix state management failed", exc_info=True)
 
-        # Check for stop sequence presence BEFORE trimming
-        _raw_text = result.text if hasattr(result, 'text') else str(result)
-        _stop_hit = bool(stop and any(s in _raw_text for s in stop))
-
-        # Trim output at stop sequences if provided
-        if stop and isinstance(result, str):
+        # Extract text from result object and trim at stop sequences
+        _result_text = result.text if hasattr(result, 'text') else str(result)
+        _stop_hit = False
+        if stop:
             for s in stop:
-                idx = result.find(s)
+                idx = _result_text.find(s)
                 if idx >= 0:
-                    result = result[:idx]
+                    _result_text = _result_text[:idx]
+                    _stop_hit = True
+                    break
+
+        # Enforce thinking budget if provided
+        if thinking_budget is not None:
+            think_start = _result_text.find("<think")
+            if think_start >= 0:
+                think_end = _result_text.find("</think", think_start)
+                if think_end >= 0:
+                    think_content = _result_text[think_start:think_end]
+                    if len(think_content) > thinking_budget:
+                        # Truncate thinking content to budget, preserve closing tag
+                        _result_text = (
+                            _result_text[:think_start]
+                            + _result_text[think_start:think_start + thinking_budget]
+                            + _result_text[think_end:]
+                        )
 
         # Capture mRoPE deltas after vision prefill
         if self._mrope_info and self._mrope_info.enabled:
@@ -1187,7 +1203,6 @@ class VLMEngine:
                 logger.debug(f"mRoPE delta captured: {delta:.4f}")
 
         # Return 5-tuple: (text, thinking_tokens, token_count, stop_hit, budget_hit)
-        _result_text = result.text if hasattr(result, 'text') else str(result)
         # vlm_generate doesn't expose raw token list, estimate from text
         _est_tokens = len(self._tokenizer.encode(_result_text)) if _result_text and self._tokenizer else 0
         return _result_text, 0, _est_tokens, _stop_hit, False
@@ -1419,6 +1434,7 @@ class VLMEngine:
         stop_suffixes = stop or []
         token_count = 0
         accumulated = ""  # Accumulate text for multi-token stop suffix matching
+        _emitted_pos = 0  # Track how much of accumulated has been emitted
         _in_thinking = False  # Track thinking state for current_state routing
         _think_scan_pos = 0  # Cursor for scanning thinking tags (avoids re-scanning already-seen text)
         _num_prompt_tokens = 0
@@ -1497,16 +1513,36 @@ class VLMEngine:
                 # Check multi-token stop suffixes against accumulated text
                 if not finish_reason and stop_suffixes:
                     for s in stop_suffixes:
-                        if accumulated.endswith(s):
-                            # Trim the stop suffix from the output
-                            accumulated = accumulated[:-len(s)]
-                            text = ""  # Suffix trimmed; emit nothing for this chunk
+                        if s in accumulated[_emitted_pos:]:
+                            # Full stop sequence found — trim it and everything after
+                            idx = accumulated.find(s, _emitted_pos)
+                            accumulated = accumulated[:idx]
                             finish_reason = "stop"
+                            _emitted_pos = len(accumulated)
                             break
+                        else:
+                            # Check if accumulated tail could be a partial prefix of a stop sequence
+                            # Hold back text that might be part of a stop sequence
+                            _pending = accumulated[_emitted_pos:]
+                            for s2 in stop_suffixes:
+                                _max_hold = min(len(s2) - 1, len(_pending))
+                                for _hold_len in range(1, _max_hold + 1):
+                                    if s2.startswith(_pending[-_hold_len:]):
+                                        # This suffix might be starting — hold back that portion
+                                        _emitted_pos = len(accumulated) - _hold_len
+                                        break
+
+                # Compute the safe-to-emit text: everything up to _emitted_pos
+                if finish_reason == "stop":
+                    # Emit any remaining held-back text (stop already trimmed from accumulated)
+                    _emit_text = accumulated[_emitted_pos:] if accumulated else ""
+                else:
+                    _emit_text = accumulated[_emitted_pos:] if accumulated else ""
+                    _emitted_pos = len(accumulated)
 
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
-                    new_text=text,
+                    new_text=_emit_text,
                     finish_reason=finish_reason,
                     finished=finish_reason is not None,
                     completion_tokens=token_count,

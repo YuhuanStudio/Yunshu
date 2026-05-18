@@ -26,6 +26,7 @@ import gc
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -113,6 +114,8 @@ class ThinkingSegmentSubstore:
             self._ssd_dir = None
         # TTL cleanup tracking
         self._last_ttl_cleanup: float = time.monotonic()
+        # Thread safety (Bug 3): RLock for reentrant calls (e.g., store → _maybe_evict → _remove_segment)
+        self._lock = threading.RLock()
 
     def compute_step_hash(self, thinking_tokens: list[int], context_tokens: list[int]) -> str:
         """Compute a hash for a thinking step.
@@ -151,56 +154,57 @@ class ThinkingSegmentSubstore:
         Returns:
             The step_hash if stored, None if skipped (too short, etc.)
         """
-        if len(thinking_tokens) < self.config.min_tokens_to_cache:
-            return None
+        with self._lock:
+            if len(thinking_tokens) < self.config.min_tokens_to_cache:
+                return None
 
-        step_hash = self.compute_step_hash(thinking_tokens, context_tokens)
+            step_hash = self.compute_step_hash(thinking_tokens, context_tokens)
 
-        # Check if already stored
-        if step_hash in self._hash_index:
-            existing = self._hash_index[step_hash]
-            existing.last_accessed = time.monotonic()
-            existing.access_count += 1
+            # Check if already stored
+            if step_hash in self._hash_index:
+                existing = self._hash_index[step_hash]
+                existing.last_accessed = time.monotonic()
+                existing.access_count += 1
+                return step_hash
+
+            # Evict if at capacity
+            self._maybe_evict(conversation_id)
+
+            # Compress KV data if enabled
+            compressed_kv = kv_data
+            if self.config.enable_compression and kv_data is not None:
+                compressed_kv = self._compress_kv(kv_data)
+
+            # Hash of thinking text for deduplication
+            text_hash = hashlib.sha256()
+            for t in thinking_tokens:
+                text_hash.update(t.to_bytes(4, "little"))
+
+            segment = ThinkingSegment(
+                conversation_id=conversation_id,
+                step_hash=step_hash,
+                kv_data=compressed_kv,
+                num_tokens=len(thinking_tokens),
+                thinking_text_hash=text_hash.hexdigest()[:16],
+            )
+
+            self._segments.setdefault(conversation_id, []).append(segment)
+            self._hash_index[step_hash] = segment
+            self._total_segments += 1
+            self._stats["stored"] += 1
+
+            # SSD persistence
+            if self.config.enable_ssd and self._ssd_dir is not None:
+                self._save_to_ssd(segment)
+
+            # Periodic TTL cleanup
+            self._maybe_ttl_cleanup()
+
+            logger.debug(
+                f"Stored thinking segment: conv={conversation_id[:8]}... "
+                f"hash={step_hash}, tokens={len(thinking_tokens)}"
+            )
             return step_hash
-
-        # Evict if at capacity
-        self._maybe_evict(conversation_id)
-
-        # Compress KV data if enabled
-        compressed_kv = kv_data
-        if self.config.enable_compression and kv_data is not None:
-            compressed_kv = self._compress_kv(kv_data)
-
-        # Hash of thinking text for deduplication
-        text_hash = hashlib.sha256()
-        for t in thinking_tokens:
-            text_hash.update(t.to_bytes(4, "little"))
-
-        segment = ThinkingSegment(
-            conversation_id=conversation_id,
-            step_hash=step_hash,
-            kv_data=compressed_kv,
-            num_tokens=len(thinking_tokens),
-            thinking_text_hash=text_hash.hexdigest()[:16],
-        )
-
-        self._segments.setdefault(conversation_id, []).append(segment)
-        self._hash_index[step_hash] = segment
-        self._total_segments += 1
-        self._stats["stored"] += 1
-
-        # SSD persistence
-        if self.config.enable_ssd and self._ssd_dir is not None:
-            self._save_to_ssd(segment)
-
-        # Periodic TTL cleanup
-        self._maybe_ttl_cleanup()
-
-        logger.debug(
-            f"Stored thinking segment: conv={conversation_id[:8]}... "
-            f"hash={step_hash}, tokens={len(thinking_tokens)}"
-        )
-        return step_hash
 
     def lookup(
         self,
@@ -219,40 +223,41 @@ class ThinkingSegmentSubstore:
         Returns:
             The ThinkingSegment if found and not expired, None otherwise.
         """
-        segment = self._hash_index.get(step_hash)
-        if segment is None:
-            # Try SSD if enabled
-            if self.config.enable_ssd and self._ssd_dir is not None:
-                segment = self._load_from_ssd(conversation_id, step_hash)
-                if segment is not None:
-                    self._segments.setdefault(conversation_id, []).append(segment)
-                    self._hash_index[step_hash] = segment
-                    self._total_segments += 1
+        with self._lock:
+            segment = self._hash_index.get(step_hash)
+            if segment is None:
+                # Try SSD if enabled
+                if self.config.enable_ssd and self._ssd_dir is not None:
+                    segment = self._load_from_ssd(conversation_id, step_hash)
+                    if segment is not None:
+                        self._segments.setdefault(conversation_id, []).append(segment)
+                        self._hash_index[step_hash] = segment
+                        self._total_segments += 1
+                    else:
+                        self._stats["misses"] += 1
+                        return None
                 else:
                     self._stats["misses"] += 1
                     return None
-            else:
+
+            # Check TTL
+            age = time.monotonic() - segment.created_at
+            if age > self.config.ttl_seconds:
+                self._remove_segment(segment)
                 self._stats["misses"] += 1
                 return None
 
-        # Check TTL
-        age = time.monotonic() - segment.created_at
-        if age > self.config.ttl_seconds:
-            self._remove_segment(segment)
-            self._stats["misses"] += 1
-            return None
+            # Decompress KV data if needed (lazy decompression)
+            if self.config.enable_compression and segment.kv_data is not None:
+                if isinstance(segment.kv_data, dict) and segment.kv_data.get("_compressed"):
+                    segment.kv_data = self._decompress_kv(segment.kv_data)
 
-        # Decompress KV data if needed (lazy decompression)
-        if self.config.enable_compression and segment.kv_data is not None:
-            if isinstance(segment.kv_data, dict) and segment.kv_data.get("_compressed"):
-                segment.kv_data = self._decompress_kv(segment.kv_data)
+            segment.last_accessed = time.monotonic()
+            segment.access_count += 1
+            self._stats["hits"] += 1
+            self._stats["tokens_saved"] += segment.num_tokens
 
-        segment.last_accessed = time.monotonic()
-        segment.access_count += 1
-        self._stats["hits"] += 1
-        self._stats["tokens_saved"] += segment.num_tokens
-
-        return segment
+            return segment
 
     def lookup_by_context(
         self,
@@ -266,39 +271,42 @@ class ThinkingSegmentSubstore:
         isn't known. Matches on conversation_id prefix match and
         thinking prefix similarity.
         """
-        conv_segments = self._segments.get(conversation_id, [])
-        if not conv_segments:
+        with self._lock:
+            conv_segments = self._segments.get(conversation_id, [])
+            if not conv_segments:
+                return None
+
+            # Try exact prefix hash first
+            prefix_hash = self.compute_step_hash(thinking_prefix, context_tokens)
+            for seg in conv_segments:
+                if seg.step_hash == prefix_hash:
+                    seg.last_accessed = time.monotonic()
+                    seg.access_count += 1
+                    self._stats["hits"] += 1
+                    return seg
+
             return None
-
-        # Try exact prefix hash first
-        prefix_hash = self.compute_step_hash(thinking_prefix, context_tokens)
-        for seg in conv_segments:
-            if seg.step_hash == prefix_hash:
-                seg.last_accessed = time.monotonic()
-                seg.access_count += 1
-                self._stats["hits"] += 1
-                return seg
-
-        return None
 
     def get_conversation_segments(self, conversation_id: str) -> list[ThinkingSegment]:
         """Get all cached segments for a conversation."""
-        return list(self._segments.get(conversation_id, []))
+        with self._lock:
+            return list(self._segments.get(conversation_id, []))
 
     def clear_conversation(self, conversation_id: str) -> int:
         """Remove all segments for a conversation. Returns count removed."""
-        segments = self._segments.pop(conversation_id, [])
-        count = 0
-        for seg in segments:
-            self._hash_index.pop(seg.step_hash, None)
-            # Reclaim memory from KV data
-            seg.kv_data = None
-            # Remove SSD file if persisted
-            if self.config.enable_ssd and self._ssd_dir is not None:
-                self._remove_ssd_file(seg)
-            count += 1
-        self._total_segments -= count
-        return count
+        with self._lock:
+            segments = self._segments.pop(conversation_id, [])
+            count = 0
+            for seg in segments:
+                self._hash_index.pop(seg.step_hash, None)
+                # Reclaim memory from KV data
+                seg.kv_data = None
+                # Remove SSD file if persisted
+                if self.config.enable_ssd and self._ssd_dir is not None:
+                    self._remove_ssd_file(seg)
+                count += 1
+            self._total_segments -= count
+            return count
 
     def _maybe_evict(self, conversation_id: str) -> None:
         """Evict segments if at capacity."""
@@ -571,21 +579,22 @@ class ThinkingSegmentSubstore:
         )
 
     def get_stats(self) -> dict:
-        return {
-            "total_segments": self._total_segments,
-            "conversations_tracked": len(self._segments),
-            "stored": self._stats["stored"],
-            "hits": self._stats["hits"],
-            "misses": self._stats["misses"],
-            "evictions": self._stats["evictions"],
-            "tokens_saved": self._stats["tokens_saved"],
-            "compressions": self._stats["compressions"],
-            "ssd_saves": self._stats["ssd_saves"],
-            "ssd_loads": self._stats["ssd_loads"],
-            "ttl_cleanups": self._stats["ttl_cleanups"],
-            "hit_rate": (
-                self._stats["hits"] / (self._stats["hits"] + self._stats["misses"])
-                if (self._stats["hits"] + self._stats["misses"]) > 0
-                else 0.0
-            ),
-        }
+        with self._lock:
+            return {
+                "total_segments": self._total_segments,
+                "conversations_tracked": len(self._segments),
+                "stored": self._stats["stored"],
+                "hits": self._stats["hits"],
+                "misses": self._stats["misses"],
+                "evictions": self._stats["evictions"],
+                "tokens_saved": self._stats["tokens_saved"],
+                "compressions": self._stats["compressions"],
+                "ssd_saves": self._stats["ssd_saves"],
+                "ssd_loads": self._stats["ssd_loads"],
+                "ttl_cleanups": self._stats["ttl_cleanups"],
+                "hit_rate": (
+                    self._stats["hits"] / (self._stats["hits"] + self._stats["misses"])
+                    if (self._stats["hits"] + self._stats["misses"]) > 0
+                    else 0.0
+                ),
+            }

@@ -367,7 +367,7 @@ class TestMTPDecoderGenerateRouting:
         captured_kwargs = {}
         original_generate = engine._mtp_decoder.generate
 
-        def fake_generate(ids, max_tokens=None, cancel_event=None):
+        def fake_generate(ids, max_tokens=None, cancel_event=None, sampler=None):
             captured_kwargs["cancel_event"] = cancel_event
             return [100, 101]  # fake tokens
 
@@ -403,7 +403,7 @@ class TestMTPDecoderGenerateRouting:
         engine._tokenizer.encode = MagicMock(return_value=[1, 2, 3])
         engine._tokenizer.eos_token_id = 2
 
-        def oom_generate(ids, max_tokens=None, cancel_event=None):
+        def oom_generate(ids, max_tokens=None, cancel_event=None, sampler=None):
             raise MemoryError("out of GPU memory")
 
         engine._mtp_decoder.generate = oom_generate
@@ -431,7 +431,7 @@ class TestMTPDecoderGenerateRouting:
         engine._tokenizer.encode = MagicMock(return_value=[1, 2, 3])
         engine._tokenizer.eos_token_id = 2
 
-        def oom_generate(ids, max_tokens=None, cancel_event=None):
+        def oom_generate(ids, max_tokens=None, cancel_event=None, sampler=None):
             raise RuntimeError("Out of memory allocating buffer")
 
         engine._mtp_decoder.generate = oom_generate

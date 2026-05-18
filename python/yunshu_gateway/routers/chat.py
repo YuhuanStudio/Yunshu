@@ -743,7 +743,7 @@ async def _build_multi_choice(
             )
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": str(exc), "type": type(exc).__name__}},
+            content={"error": {"message": "Internal server error", "type": "internal_error"}},
         )
 
     # Record metrics once for the entire n>1 request (not per-choice)
@@ -1011,7 +1011,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 logger.error("engine inference failed", exc_info=True)
                 return JSONResponse(
                     status_code=500,
-                    content={"error": {"message": str(e), "type": type(e).__name__}},
+                    content={"error": {"message": "Internal server error", "type": "internal_error"}},
                 )
 
             # Extract thinking (oMLX pattern)

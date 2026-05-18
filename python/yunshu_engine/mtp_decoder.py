@@ -121,6 +121,7 @@ class MTPDecoder:
         prompt: str | list[int],
         max_tokens: int | None = None,
         cancel_event: Optional["asyncio.Event"] = None,
+        sampler=None,
     ) -> list[int]:
         """Generate tokens using MTP always-advance with n_confirmed.
 
@@ -128,6 +129,9 @@ class MTPDecoder:
             prompt: Text string or pre-tokenized ID list.
             max_tokens: Override config max_tokens.
             cancel_event: Optional asyncio.Event — checked each cycle for early abort.
+            sampler: Optional sampler (from make_sampler). Applied to bonus tokens
+                     and rejection corrections — NOT to the draft/verify comparison
+                     which must remain greedy for correct spec decode semantics.
 
         Returns:
             List of generated token IDs.
@@ -147,7 +151,11 @@ class MTPDecoder:
         prompt_t = mx.array(ids).reshape(1, -1)
         out, hidden = self.model(prompt_t, cache=cache, return_hidden=True)
         mx.synchronize()
-        first = _greedy(out[0, -1, :])
+        # Apply sampler to first token if provided
+        if sampler is not None:
+            first = int(sampler(out[0, -1:, :]).item())
+        else:
+            first = _greedy(out[0, -1, :])
 
         generated = [first]
         primary = first
@@ -174,7 +182,10 @@ class MTPDecoder:
                     mx.array([[primary]]), cache=cache, return_hidden=True,
                 )
                 mx.synchronize()
-                correction = _greedy(out2[0, -1, :])
+                if sampler is not None:
+                    correction = int(sampler(out2[0, -1:, :]).item())
+                else:
+                    correction = _greedy(out2[0, -1, :])
                 generated.append(correction)
                 if correction in eos_ids or len(generated) >= max_tokens:
                     break
@@ -186,7 +197,7 @@ class MTPDecoder:
             if not self.config.use_n_confirmed:
                 snap = _snapshot_cache(cache)
 
-            # MTP draft
+            # MTP draft — always greedy (spec decode requires deterministic draft)
             draft = self._mtp_draft(primary_h, primary)
 
             # Verify: backbone forward [primary, draft]
@@ -200,8 +211,13 @@ class MTPDecoder:
                 return_hidden=True, **verify_kwargs,
             )
             mx.synchronize()
+            # v0 MUST be greedy for spec decode acceptance check
             v0 = _greedy(verify_out[0, 0, :])
-            v1 = _greedy(verify_out[0, 1, :])
+            # v1 (bonus) can use sampler for non-greedy output
+            if sampler is not None:
+                v1 = int(sampler(verify_out[0, 1:2, :]).item())
+            else:
+                v1 = _greedy(verify_out[0, 1, :])
 
             stats.total_cycles += 1
 
@@ -240,8 +256,11 @@ class MTPDecoder:
                     mx.synchronize()
                     primary_h = hid2[:, -1:, :]
 
-                # In both paths, v0 is the correct token at position 0
-                # (backbone's greedy choice at primary position)
+                # On reject, apply sampler to correction token if available
+                if sampler is not None:
+                    # Re-sample from position 0 logits for non-greedy output
+                    v0 = int(sampler(verify_out[0, 0:1, :]).item())
+
                 generated.append(v0)
                 if v0 in eos_ids or len(generated) >= max_tokens:
                     break

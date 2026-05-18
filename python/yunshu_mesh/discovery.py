@@ -229,15 +229,23 @@ class NodeDiscovery:
             if now - t > self._stale_timeout
         ]
         stale_nodes = []
+        callbacks = list(self._on_lost_callbacks)
         for nid in stale_ids:
             node = self._discovered_nodes.pop(nid, None)
             self._discovered_times.pop(nid, None)
             if node:
                 stale_nodes.append(node)
-        # Note: callbacks are NOT fired here because this method is called
-        # from _add_discovered which already holds the lock and fires its
-        # own callbacks. Stale cleanup is silent to avoid callback
-        # re-entrancy issues.
+                logger.info(f"Pruning stale node: {node.hostname} ({node.ip}:{node.port})")
+        # Fire on_lost callbacks for each stale node (outside lock context
+        # since this method is called from _add_discovered which holds the
+        # lock — we fire them synchronously here because the lock is held
+        # by our caller and callbacks should not re-enter discovery).
+        for node in stale_nodes:
+            for cb in callbacks:
+                try:
+                    cb(node)
+                except Exception:
+                    logger.debug("on_lost callback failed for stale node", exc_info=True)
 
     def stop(self) -> None:
         self._running = False

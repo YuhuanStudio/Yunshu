@@ -1137,6 +1137,15 @@ class EngineCore:
         if budget.is_exhausted:
             budget_reason = budget.exhaustion_reason or "budget_exceeded"
             self._budget_manager.remove(req_id)
+            # Bug 5 fix: release LoRA adapter on early return
+            if loaded_lora and lora_adapter:
+                try:
+                    from .lora_manager import get_lora_manager
+                    lora_mgr = get_lora_manager()
+                    if lora_mgr is not None:
+                        lora_mgr.release_adapter(lora_adapter)
+                except Exception:
+                    logger.debug(f"LoRA release failed in budget rejection for {req_id}", exc_info=True)
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
                 get_inflight_tracker().unregister(req_id)
@@ -1180,6 +1189,15 @@ class EngineCore:
                 self._dedup_hashes[req_id] = content_hash
                 # Clean up registrations that won't be used by shadow path
                 self._budget_manager.remove(req_id)
+                # Bug 5 fix: release LoRA adapter on early return
+                if loaded_lora and lora_adapter:
+                    try:
+                        from .lora_manager import get_lora_manager
+                        lora_mgr = get_lora_manager()
+                        if lora_mgr is not None:
+                            lora_mgr.release_adapter(lora_adapter)
+                    except Exception:
+                        logger.debug(f"LoRA release failed in dedup shadow for {req_id}", exc_info=True)
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
                     get_inflight_tracker().unregister(req_id)
@@ -1252,6 +1270,15 @@ class EngineCore:
                     logger.debug(f"inflight unregister failed in memguard rejection for {req_id}", exc_info=True)
                 self._memory_aware_scheduler.release_memory(req_id)
                 self._budget_manager.remove(req_id)
+                # Bug 5 fix: release LoRA adapter on early return
+                if loaded_lora and lora_adapter:
+                    try:
+                        from .lora_manager import get_lora_manager
+                        lora_mgr = get_lora_manager()
+                        if lora_mgr is not None:
+                            lora_mgr.release_adapter(lora_adapter)
+                    except Exception:
+                        logger.debug(f"LoRA release failed in memguard rejection for {req_id}", exc_info=True)
                 try:
                     self._lifecycle_orchestrator.on_request_failed(
                         req_id, error=f"Memory guard rejected: {reason}", retryable=False,
@@ -1544,6 +1571,7 @@ class EngineCore:
                 continue
 
             _step_start = time.monotonic()
+            scheduler_output = None  # Bug 1 fix: initialize before try block
 
             try:
                 # Cache hardware info once per step (avoid 3+ repeated syscalls per step)
@@ -1715,6 +1743,10 @@ class EngineCore:
                 await asyncio.sleep(0.1)
                 continue
 
+            # Bug 1 fix: guard against stale/uninitialized scheduler_output
+            if scheduler_output is None:
+                continue
+
             # Distribute outputs to per-request collectors
             for req_output in scheduler_output.outputs:
                 try:
@@ -1825,8 +1857,9 @@ class EngineCore:
                         state = self._lifecycle_orchestrator.get_state(rid)
                         if state is not None and state.phase.name in ("PREFILLING",):
                             self._lifecycle_orchestrator.on_decode_start(rid)
-                        # Budget consumption
-                        self._budget_manager.consume(rid, tokens=1)
+                        # Bug 4 fix: use actual completion_tokens (not hardcoded 1)
+                        # During chunked prefill, multiple tokens are produced per step.
+                        self._budget_manager.consume(rid, tokens=req_output.completion_tokens)
                         # Sliding window tracking
                         if self._sliding_window_mgr is not None:
                             try:

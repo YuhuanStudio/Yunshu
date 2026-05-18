@@ -341,22 +341,38 @@ class TTSEngine:
                     if hasattr(model, 'stream_generate') and callable(model.stream_generate)
                     else model.generate
                 )
+                _first_chunk = True
                 for result in gen_fn(**gen_kwargs):
                     # Check cancel flag between chunks (thread-safe)
                     if _cancel.is_set():
                         logger.info("TTS stream cancelled mid-generation")
                         break
-                    audio = np.array(result.audio)
-                    wav = _audio_to_wav_bytes(audio, int(sample_rate))
-                    segment_text = getattr(result, "text", "")
-                    try:
+                    audio = np.array(result.audio).flatten()
+                    audio = np.clip(audio, -1.0, 1.0)
+                    pcm = (audio * 32767).astype(np.int16)
+                    raw_bytes = pcm.tobytes()
+                    if _first_chunk:
+                        # Send a single WAV header in the first chunk, then raw PCM afterward
+                        wav_header = make_wav_header(
+                            data_size=0,  # Unknown total; most players handle this
+                            sample_rate=int(sample_rate),
+                            num_channels=1,
+                        )
                         _thread_queue.put_nowait({
-                            "audio": wav,
-                            "text": segment_text,
+                            "audio": wav_header + raw_bytes,
+                            "text": getattr(result, "text", ""),
                             "is_final": False,
                         })
-                    except _queue_mod.Full:
-                        logger.warning("TTS stream queue full, dropping chunk")
+                        _first_chunk = False
+                    else:
+                        try:
+                            _thread_queue.put_nowait({
+                                "audio": raw_bytes,
+                                "text": getattr(result, "text", ""),
+                                "is_final": False,
+                            })
+                        except _queue_mod.Full:
+                            logger.warning("TTS stream queue full, dropping chunk")
                 # Send is_final sentinel — drain one item if full so the client
                 # always receives the completion marker and doesn't hang.
                 try:

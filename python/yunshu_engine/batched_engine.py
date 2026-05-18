@@ -2497,6 +2497,7 @@ class BatchedEngine:
                     seed=seed, cancel_event=_cancel_event,
                     enable_thinking=enable_thinking,
                     thinking_budget=thinking_budget,
+                    timeout_seconds=timeout_seconds or 300.0,
                 ):
                     yield output
             finally:
@@ -2523,6 +2524,7 @@ class BatchedEngine:
                     xtc_probability=xtc_probability,
                     xtc_threshold=xtc_threshold,
                     cancel_event=_cancel_event,
+                    timeout_seconds=timeout_seconds or 300.0,
                 ):
                     yield output
             finally:
@@ -3569,7 +3571,7 @@ class BatchedEngine:
 
     async def _generate_speculative(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 1.0,
@@ -3622,8 +3624,16 @@ class BatchedEngine:
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
-        # Tokenize prompt
-        input_ids = self._tokenizer.encode(prompt)
+        # Tokenize prompt — handle messages-format (list of dicts) like _generate_fast
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
+            text = self._tokenizer.apply_chat_template(prompt, **tpl_kwargs)
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+
+        input_ids = self._tokenizer.encode(text)
         import mlx.core as mx
 
         if seed is not None:
@@ -3715,17 +3725,12 @@ class BatchedEngine:
 
         text = _clean_special_tokens(detokenizer.text)
 
-        # Build logprobs from individual tokens
+        # Build logprobs from individual tokens — speculative decode black-box
+        # generate() does not expose logits, so we cannot compute real logprobs.
+        # Return None instead of fake 0.0 to avoid misleading consumers.
         _logprobs = None
         if logprobs and token_ids:
-            _logprobs = []
-            for tid in token_ids:
-                tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
-                _logprobs.append({
-                    "token": tok_text,
-                    "logprob": 0.0,
-                    "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
-                })
+            _logprobs = None  # Real logprobs unavailable from spec decode black-box
 
         # Record TTFT in Prometheus for spec decode path
         if _spec_ttft_s > 0:
@@ -3762,7 +3767,7 @@ class BatchedEngine:
 
     async def _stream_generate_speculative(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 1.0,
@@ -3816,8 +3821,16 @@ class BatchedEngine:
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
 
-        # Tokenize prompt
-        input_ids = self._tokenizer.encode(prompt)
+        # Tokenize prompt — handle messages-format (list of dicts) like _generate_fast
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
+            text = self._tokenizer.apply_chat_template(prompt, **tpl_kwargs)
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+
+        input_ids = self._tokenizer.encode(text)
         import mlx.core as mx
 
         if seed is not None:
@@ -4073,7 +4086,7 @@ class BatchedEngine:
 
     async def _generate_ngram_spec(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 1.0,
@@ -4111,7 +4124,16 @@ class BatchedEngine:
         model = self._model
         proposer = self._ngram_proposer
 
-        input_ids = tokenizer.encode(prompt if isinstance(prompt, str) else str(prompt))
+        # Handle messages-format prompts (list of dicts) — apply chat template
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
+            text = tokenizer.apply_chat_template(prompt, **tpl_kwargs)
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+
+        input_ids = tokenizer.encode(text)
         prompt_tokens = len(input_ids)
 
         # Build stop token sets
@@ -4433,17 +4455,12 @@ class BatchedEngine:
                     output_text = output_text[:-len(s)]
                     break
 
-        # Build logprobs from generated tokens
+        # Build logprobs from generated tokens — n-gram spec decode does not
+        # expose per-token logits from the verify step, so we cannot compute
+        # real logprobs. Return None instead of fake 0.0 to avoid misleading.
         _ngram_logprobs = None
         if logprobs and tokens:
-            _ngram_logprobs = []
-            for tid in tokens:
-                tok_text = _clean_special_tokens(tokenizer.decode([tid]))
-                _ngram_logprobs.append({
-                    "token": tok_text,
-                    "logprob": 0.0,
-                    "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
-                })
+            _ngram_logprobs = None  # Real logprobs unavailable from n-gram spec path
 
         # Record TTFT in Prometheus for n-gram spec path
         if ttft_s > 0:
@@ -4469,7 +4486,7 @@ class BatchedEngine:
 
     async def _stream_generate_ngram_spec(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 1.0,
@@ -4488,6 +4505,7 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
+        timeout_seconds: float = 300.0,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -4500,7 +4518,14 @@ class BatchedEngine:
         model = self._model
         proposer = self._ngram_proposer
 
-        input_ids = tokenizer.encode(prompt if isinstance(prompt, str) else str(prompt))
+        # Handle messages-format prompts (list of dicts) — apply chat template
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            text = tokenizer.apply_chat_template(prompt, **tpl_kwargs)
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt)
+
+        input_ids = tokenizer.encode(text)
         prompt_tokens = len(input_ids)
 
         stop_ids = set()
@@ -4790,9 +4815,9 @@ class BatchedEngine:
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(_q.get(), timeout=120)
+                    item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except asyncio.TimeoutError:
-                    logger.warning("N-gram streaming timeout: no token for 120s")
+                    logger.warning(f"N-gram streaming timeout: no token for {timeout_seconds}s")
                     # Yield terminal output so consumer sees finished=True
                     yield GenerationOutput(
                         text=_clean_special_tokens(accumulated) if accumulated else "",
@@ -4854,15 +4879,11 @@ class BatchedEngine:
                     except Exception:
                         logger.debug("N-gram streaming TTFT prometheus recording failed", exc_info=True)
 
-                # Build logprobs for this token
+                # Build logprobs for this token — n-gram spec decode does not
+                # expose per-token logits, so we cannot compute real logprobs.
+                # Return None instead of fake 0.0 to avoid misleading consumers.
                 _chunk_logprobs = None
-                if logprobs and token_id:
-                    tok_text = _clean_special_tokens(tokenizer.decode([token_id]))
-                    _chunk_logprobs = [{
-                        "token": tok_text,
-                        "logprob": 0.0,
-                        "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
-                    }]
+                # Real logprobs unavailable from n-gram spec path
 
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
@@ -4884,7 +4905,7 @@ class BatchedEngine:
 
     async def _generate_mtp(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 1.0,
@@ -4953,12 +4974,24 @@ class BatchedEngine:
         if seed is not None:
             mx.random.seed(seed)
 
+        # Build sampler for MTP path — applied to bonus tokens and rejection
+        # corrections while the draft/verify comparison stays greedy.
+        from mlx_lm.sample_utils import make_sampler
+        _mtp_sampler = make_sampler(
+            temp=temperature, top_p=top_p,
+            top_k=top_k if top_k > 0 else 0, min_p=min_p,
+        ) if temperature > 0 or top_p < 1.0 or top_k > 0 or min_p > 0 else None
+
         # Use incremental detokenizer for correct multi-byte UTF-8
         detokenizer = tokenizer.detokenizer
         detokenizer.reset()
 
         def _run():
-            return mtp_decoder.generate(input_ids, max_tokens=max_tokens, cancel_event=cancel_event)
+            return mtp_decoder.generate(
+                input_ids, max_tokens=max_tokens,
+                cancel_event=cancel_event,
+                sampler=_mtp_sampler,
+            )
 
         _mtp_gen_t0 = time.perf_counter()
         try:
@@ -5053,17 +5086,12 @@ class BatchedEngine:
         except Exception:
             logger.debug("MTP metrics export failed", exc_info=True)
 
-        # Build logprobs from MTP output tokens
+        # Build logprobs from MTP output tokens — MTP decoder uses greedy
+        # decoding internally and does not expose per-token logits.
+        # Return None instead of fake 0.0 to avoid misleading consumers.
         _mtp_logprobs = None
         if logprobs and token_ids:
-            _mtp_logprobs = []
-            for tid in token_ids:
-                tok_text = _clean_special_tokens(tokenizer.decode([tid]))
-                _mtp_logprobs.append({
-                    "token": tok_text,
-                    "logprob": 0.0,
-                    "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
-                })
+            _mtp_logprobs = None  # Real logprobs unavailable from MTP path
 
         return GenerationOutput(
             text=output_text,
@@ -5080,7 +5108,7 @@ class BatchedEngine:
 
     async def _stream_generate_mtp(
         self,
-        prompt: str,
+        prompt: str | list[dict],
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 1.0,
@@ -5097,6 +5125,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
+        timeout_seconds: float = 300.0,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 
@@ -5143,6 +5172,14 @@ class BatchedEngine:
         if seed is not None:
             mx.random.seed(seed)
 
+        # Build sampler for MTP streaming path — applied to bonus tokens,
+        # rejection corrections, and first token (NOT draft/verify comparison).
+        from mlx_lm.sample_utils import make_sampler
+        _mtp_sampler = make_sampler(
+            temp=temperature, top_p=top_p,
+            top_k=top_k if top_k > 0 else 0, min_p=min_p,
+        ) if temperature > 0 or top_p < 1.0 or top_k > 0 or min_p > 0 else None
+
         # Inflight prefix sharing: register for concurrent KV block sharing
         _inflight_req_id = f"mtp-s-{id(self)}-{int(time.monotonic()*1e6)}"
         try:
@@ -5181,7 +5218,11 @@ class BatchedEngine:
                 # Prefill
                 out, hidden = model(ids.reshape(1, -1), cache=cache, return_hidden=True)
                 mx.synchronize()
-                first = int(mx.argmax(out[0, -1, :]).item())
+                # Apply sampler to first token if available
+                if _mtp_sampler is not None:
+                    first = int(_mtp_sampler(out[0, -1:, :]).item())
+                else:
+                    first = int(mx.argmax(out[0, -1, :]).item())
 
                 generated = [first]
                 primary = first
@@ -5212,7 +5253,7 @@ class BatchedEngine:
                         _put(("", len(generated), "stop", None))
                         break
 
-                    # MTP draft
+                    # MTP draft — always greedy
                     draft = mtp_decoder._mtp_draft(primary_h, primary)
 
                     # Verify: backbone forward [primary, draft] with n_confirmed=1
@@ -5221,8 +5262,13 @@ class BatchedEngine:
                         return_hidden=True, n_confirmed=1,
                     )
                     mx.synchronize()
+                    # v0 MUST be greedy for spec decode acceptance check
                     v0 = int(mx.argmax(verify_out[0, 0, :]).item())
-                    v1 = int(mx.argmax(verify_out[0, 1, :]).item())
+                    # v1 (bonus) can use sampler for non-greedy output
+                    if _mtp_sampler is not None:
+                        v1 = int(_mtp_sampler(verify_out[0, 1:2, :]).item())
+                    else:
+                        v1 = int(mx.argmax(verify_out[0, 1, :]).item())
 
                     if v0 == draft:
                         # Accept
@@ -5252,6 +5298,9 @@ class BatchedEngine:
                     else:
                         # Reject: restore rollback (zero-cost)
                         restore_rollback(cache)
+                        # Apply sampler to rejection correction token
+                        if _mtp_sampler is not None:
+                            v0 = int(_mtp_sampler(verify_out[0, 0:1, :]).item())
                         generated.append(v0)
                         if v0 in eos_ids:
                             # Stop token — don't add to detokenizer
@@ -5302,9 +5351,9 @@ class BatchedEngine:
                     )
                     break
                 try:
-                    item = await asyncio.wait_for(_q.get(), timeout=120)
+                    item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except asyncio.TimeoutError:
-                    logger.warning("MTP streaming timeout")
+                    logger.warning(f"MTP streaming timeout: no token for {timeout_seconds}s")
                     # Yield terminal output so consumer sees finished=True
                     yield GenerationOutput(
                         text=_clean_special_tokens(accumulated) if accumulated else "",
@@ -5366,15 +5415,11 @@ class BatchedEngine:
                     except Exception:
                         logger.debug("MTP streaming TTFT prometheus recording failed", exc_info=True)
 
-                # Build logprobs for this token
+                # Build logprobs for this token — MTP uses greedy decoding
+                # internally and does not expose per-token logits.
+                # Return None instead of fake 0.0 to avoid misleading.
                 _chunk_logprobs = None
-                if logprobs and token_id is not None:
-                    tok_text = _clean_special_tokens(tokenizer.decode([token_id]))
-                    _chunk_logprobs = [{
-                        "token": tok_text,
-                        "logprob": 0.0,
-                        "top_logprobs": [{"token": tok_text, "logprob": 0.0}],
-                    }]
+                # Real logprobs unavailable from MTP path
 
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),

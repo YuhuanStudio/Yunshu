@@ -661,13 +661,20 @@ class ModelManager:
 
         unloaded = []
         now = time.monotonic()
+        cutoff = now - self.ttl_seconds
         async with self._lock:
             candidates = [
                 e for e in self._entries.values()
-                if e.is_loaded and not e.is_pinned and now - e.last_access > self.ttl_seconds
+                if e.is_loaded and not e.is_pinned and e.last_access <= cutoff
             ]
         for entry in candidates:
-            await self.unload_model(entry.model_id)
+            # Re-check last_access inside the unload lock to avoid TOCTOU race:
+            # a concurrent access between candidate collection and unload could
+            # have made this entry freshly active.
+            async with self._lock:
+                if entry.last_access > cutoff:
+                    continue  # Recently accessed, skip
+                await self._unload_model_locked(entry.model_id)
             unloaded.append(entry.model_id)
         return unloaded
 

@@ -34,6 +34,7 @@ import os
 import struct
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -145,7 +146,7 @@ def _write_safetensors(path: str, tensors: dict[str, tuple[bytes, str, list[int]
     header_size = len(header_json)
     total_size = 8 + header_size + offset
 
-    tmp_path = path + ".tmp"
+    tmp_path = f"{path}.{uuid.uuid4().hex[:8]}.tmp"
     try:
         with open(tmp_path, "wb") as f:
             f.write(struct.pack("<Q", header_size))
@@ -292,33 +293,40 @@ class SSDKVCache:
                 logger.debug("SSD writer error", exc_info=True)
 
     def _flush_writer(self) -> None:
-        """Flush all pending writes."""
+        """Flush all pending writes.
+
+        Holds _writer_lock for the entire drain to prevent concurrent
+        save_block calls from appending to the queue while we process it
+        (Bug 5: race between _flush_writer and concurrent save_block).
+        """
         # Signal writer to stop and wait for it
         self._writer_stop.set()
         if self._writer_thread is not None:
             self._writer_thread.join(timeout=5.0)
         self._writer_thread = None
         self._writer_stop.clear()
-        # Process remaining items synchronously (no locks needed — writer is stopped)
-        for item in self._write_queue:
-            try:
-                op = item[0]
-                if op == "save":
-                    _, block_hash_hex, tensors_raw, meta_dict, file_path = item
-                    file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
-                    with self._lock:
-                        if block_hash_hex in self._index:
-                            self._index[block_hash_hex].file_size = file_size
-                            self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
-                        self._writes_completed += 1
-                elif op == "delete":
-                    try:
-                        os.unlink(item[1])
-                    except OSError:
-                        pass
-            except Exception:
-                logger.debug("SSD writer flush failed", exc_info=True)
-        self._write_queue.clear()
+        # Process remaining items under writer lock to prevent
+        # concurrent save_block from appending while we drain.
+        with self._writer_lock:
+            for item in list(self._write_queue):
+                try:
+                    op = item[0]
+                    if op == "save":
+                        _, block_hash_hex, tensors_raw, meta_dict, file_path = item
+                        file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
+                        with self._lock:
+                            if block_hash_hex in self._index:
+                                self._index[block_hash_hex].file_size = file_size
+                                self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
+                            self._writes_completed += 1
+                    elif op == "delete":
+                        try:
+                            os.unlink(item[1])
+                        except OSError:
+                            pass
+                except Exception:
+                    logger.debug("SSD writer flush failed", exc_info=True)
+            self._write_queue.clear()
 
     def _recover_index(self) -> None:
         """Recover block index from SQLite store, or scan cache directory."""
@@ -341,7 +349,7 @@ class SSDKVCache:
                 continue
             for f in bucket.iterdir():
                 # Clean up leftover .tmp files from interrupted writes
-                if f.name.endswith(".safetensors.tmp"):
+                if f.name.endswith(".tmp"):
                     try:
                         os.unlink(f)
                         logger.debug("Cleaned up leftover .tmp file: %s", f.name)

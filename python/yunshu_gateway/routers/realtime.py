@@ -319,7 +319,7 @@ class RealtimeSession:
             logger.error(f"Handler error for {event_type}: {e}", exc_info=True)
             await self.send_event(_event(
                 RealtimeEvent.ERROR,
-                error={"message": str(e), "type": "server_error"},
+                error={"message": "Internal server error", "type": "server_error"},
             ))
 
     async def _handle_session_update(self, event: dict) -> None:
@@ -656,7 +656,7 @@ class RealtimeSession:
             logger.error(f"Realtime generation error: {e}", exc_info=True)
             await self.send_event(_event(
                 RealtimeEvent.ERROR,
-                error={"message": str(e), "type": "server_error"},
+                error={"message": "Internal server error", "type": "server_error"},
             ))
             await self.send_event(_event(
                 RealtimeEvent.RESPONSE_DONE,
@@ -664,7 +664,7 @@ class RealtimeSession:
                     "id": response_id,
                     "object": "realtime.response",
                     "status": "failed",
-                    "error": str(e),
+                    "error": "Generation failed",
                 },
             ))
         finally:
@@ -984,6 +984,13 @@ class RealtimeSession:
         # Try multi-model
         manager = get_model_manager()
         if manager is not None:
+            # If session has a specific model set, prefer matching engine
+            if self.session.model and self.session.model != "default":
+                for entry in manager.list_entries():
+                    if entry.is_loaded and entry.engine is not None:
+                        if getattr(entry, 'model_id', None) == self.session.model:
+                            return entry.engine
+            # Fall back to first loaded engine
             for entry in manager.list_entries():
                 if entry.is_loaded and entry.engine is not None:
                     return entry.engine

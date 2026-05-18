@@ -175,9 +175,10 @@ async def create_speech(req: TTSRequest) -> Response:
         try:
             tts_engine = await manager.get_engine(req.model)
         except (KeyError, Exception) as e:
+            logger.error(f"TTS model '{req.model}' load failed: {e}", exc_info=True)
             raise HTTPException(
                 status_code=404,
-                detail=f"TTS model '{req.model}' not found. Error: {e}",
+                detail=f"TTS model '{req.model}' not found.",
             )
 
     from yunshu_engine.audio_engine import TTSEngine
@@ -391,9 +392,10 @@ async def create_transcription(
         try:
             asr_engine = await manager.get_engine(model)
         except (KeyError, Exception) as e:
+            logger.error(f"ASR model '{model}' load failed: {e}", exc_info=True)
             raise HTTPException(
                 status_code=404,
-                detail=f"ASR model '{model}' not found. Error: {e}",
+                detail=f"ASR model '{model}' not found.",
             )
 
     if not isinstance(asr_engine, ASREngine):
