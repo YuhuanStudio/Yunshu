@@ -318,26 +318,28 @@ async def update_engine_config(
     if not updates:
         return {"status": "no_changes", "fields": []}
 
+    # Validate ALL fields before applying any changes (atomicity: either
+    # all updates apply or none do, preventing partial config updates).
+    for field, value in updates.items():
+        if hasattr(cfg, field):
+            if field == "max_kv_size":
+                pass  # 0 and None are valid for max_kv_size
+            elif isinstance(value, (int, float)) and value <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Config field '{field}' must be positive, got {value}",
+                )
+        else:
+            logger.warning("Ignored unknown config field: %s", field)
+
     updated = []
     with _config_lock:
         for field, value in updates.items():
             if hasattr(cfg, field):
-                # Validate numeric config fields.
-                # max_kv_size allows 0 (meaning "no limit" / auto), all others
-                # must be strictly positive.
-                if field == "max_kv_size":
-                    pass  # 0 and None are valid for max_kv_size
-                elif isinstance(value, (int, float)) and value <= 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Config field '{field}' must be positive, got {value}",
-                    )
                 old_val = getattr(cfg, field)
                 if old_val != value:
                     setattr(cfg, field, value)
                     updated.append(field)
-            else:
-                logger.warning("Ignored unknown config field: %s", field)
 
         if updated:
             logger.info("Engine config updated: %s", updated)
@@ -409,19 +411,11 @@ async def update_model_settings(
 @router.post("/tokens", response_model=AuthTokenResponse)
 async def create_token(req: AuthTokenCreate, request: Request, _=Depends(require_permission("can_manage_tokens"))):
     """Create a new API auth token (simple)."""
-    import secrets
-
-    token = f"ys_{secrets.token_hex(24)}"
     now = datetime.now(tz=None)
     expires = now + timedelta(days=req.expires_days) if req.expires_days else None
 
     manager = _get_rbac_manager(request)
-    import time as _time
     from yunshu_control.role_manager import Role
-
-    expires_at = None
-    if req.expires_days:
-        expires_at = _time.time() + req.expires_days * 86400
 
     raw_key, api_key = manager.create_key(
         name=req.name,

@@ -749,7 +749,8 @@ async def mcp_sse_endpoint(request: Request):
     async def _event_stream():
         # Send initial connection event
         yield f"event: endpoint\ndata: /v1/mcp\n\n"
-        last_ping = asyncio.get_event_loop().time()
+        loop = asyncio.get_running_loop()
+        last_ping = loop.time()
         while True:
             # Poll for disconnect every 5s
             await asyncio.sleep(5)
@@ -760,7 +761,7 @@ async def mcp_sse_endpoint(request: Request):
                 logger.debug("SSE disconnect check failed", exc_info=True)
                 break
             # Send keepalive ping every 15s
-            now = asyncio.get_event_loop().time()
+            now = loop.time()
             if now - last_ping >= 15:
                 last_ping = now
                 yield f"event: ping\ndata: {{}}\n\n"
