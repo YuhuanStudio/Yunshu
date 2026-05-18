@@ -431,14 +431,31 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             headers={"Cache-Control": "no-cache"},
         )
 
-    # Non-streaming
+    # Non-streaming: register with request tracker for cancellation support
+    message_id = f"msg_{uuid.uuid4().hex[:24]}"
+    _ns_tracker = None
+    _ns_gen = None
+    _ns_cancel_event = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _ns_tracker = get_request_tracker()
+        _ns_gen = _ns_tracker.register(message_id, req.model)
+        _ns_cancel_event = _ns_gen.cancel_event
+    except Exception:
+        _ns_tracker = None
+
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     try:
         if is_batched:
-            return await _non_stream_batched(engine, messages, req, stop)
-        return await _non_stream_legacy(engine, messages, req, stop)
+            return await _non_stream_batched(engine, messages, req, stop, cancel_event=_ns_cancel_event)
+        return await _non_stream_legacy(engine, messages, req, stop, cancel_event=_ns_cancel_event)
     finally:
         _release_lora_adapter(engine, loaded_adapter)
+        if _ns_tracker is not None:
+            try:
+                _ns_tracker.unregister(message_id)
+            except Exception:
+                pass
         # Clean up temp files created for image blocks
         import os as _os
         for _tf_path in _temp_files:
@@ -487,7 +504,7 @@ def _convert_logit_bias(req):
     return None
 
 
-async def _non_stream_batched(engine, messages, req, stop):
+async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
@@ -520,6 +537,7 @@ async def _non_stream_batched(engine, messages, req, stop):
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             logits_processors=req.logits_processors,
+            cancel_event=cancel_event,
             timeout_seconds=req.timeout,
         )
     except MemoryError:
@@ -623,7 +641,7 @@ async def _non_stream_batched(engine, messages, req, stop):
     return JSONResponse(resp)
 
 
-async def _non_stream_legacy(engine, messages, req, stop):
+async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
     """Non-streaming response via Engine or BatchedEngine."""
     from fastapi.responses import JSONResponse
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -656,6 +674,7 @@ async def _non_stream_legacy(engine, messages, req, stop):
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             logits_processors=req.logits_processors,
+            cancel_event=cancel_event,
             timeout_seconds=req.timeout,
         )
     except MemoryError:
