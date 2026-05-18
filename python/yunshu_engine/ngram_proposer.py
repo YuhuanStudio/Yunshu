@@ -306,7 +306,7 @@ class LCGHashPool:
             result = self._lookup(h)
             if result is not None:
                 self._total_hits += 1
-                k = min(self._k, self._max_model_len - total) if hasattr(self, '_max_model_len') else self._k
+                k = min(self._k, self._max_model_len - total)
                 if k <= 0:
                     return []
                 return list(result[:k])
