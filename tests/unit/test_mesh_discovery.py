@@ -106,7 +106,7 @@ class TestHeartbeatMonitor:
         m = HeartbeatMonitor(interval=1.0, timeout=5.0)
         peer = _make_node("peer-1")
         m._nodes["peer-1"] = peer
-        m._last_heartbeat["peer-1"] = time.time()
+        m._last_heartbeat["peer-1"] = time.monotonic()
         health = m.check_health()
         assert health["peer-1"] is True
 
@@ -114,7 +114,7 @@ class TestHeartbeatMonitor:
         m = HeartbeatMonitor(interval=1.0, timeout=5.0)
         peer = _make_node("peer-1")
         m._nodes["peer-1"] = peer
-        m._last_heartbeat["peer-1"] = time.time() - 100  # Long ago
+        m._last_heartbeat["peer-1"] = time.monotonic() - 100  # Long ago
         health = m.check_health()
         assert health["peer-1"] is False
 

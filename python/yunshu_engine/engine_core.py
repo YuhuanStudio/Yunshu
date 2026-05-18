@@ -345,6 +345,7 @@ class EngineCore:
         self._request_dedup: RequestDeduplicator | None = None
         self._dedup_hashes: dict[str, str] = {}  # req_id → content_hash
         self._dedup_shadows: dict[str, str] = {}  # shadow_req_id → primary_req_id
+        self._finalized_ids: set[str] = set()  # idempotency guard for _finalize_request
         if os.environ.get("YUNSHU_REQUEST_DEDUP", "").strip() in ("1", "true", "yes"):
             self._request_dedup = RequestDeduplicator.from_env()
             logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
@@ -941,6 +942,7 @@ class EngineCore:
         if self._request_dedup is not None:
             self._dedup_hashes.clear()
             self._dedup_shadows.clear()
+        self._finalized_ids.clear()
 
         self.scheduler.shutdown()
 
@@ -2159,6 +2161,11 @@ class EngineCore:
         is only removed by _cleanup_request() to ensure generate() and
         stream_outputs() can drain the collector after this call.
         """
+        if not hasattr(self, '_finalized_ids'):
+            self._finalized_ids = set()
+        if request_id in self._finalized_ids:
+            return
+        self._finalized_ids.add(request_id)
         _block_id = hash(request_id) % (10**9)
         # Inflight prefix sharing
         try:

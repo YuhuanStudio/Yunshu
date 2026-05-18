@@ -266,12 +266,12 @@ class SSDKVCache:
         while not self._writer_stop.is_set():
             item = None
             with self._writer_lock:
-                if not self._write_queue:
-                    break
-                item = self._write_queue.pop(0)
+                if self._write_queue:
+                    item = self._write_queue.pop(0)
 
             if item is None:
-                break
+                self._writer_stop.wait(timeout=0.5)
+                continue
 
             try:
                 op = item[0]
@@ -651,7 +651,11 @@ class SSDKVCache:
         """Check if a block exists in hot cache or on disk."""
         hex_hash = block_hash.hex()
         with self._lock:
-            return hex_hash in self._hot_cache or hex_hash in self._index
+            if hex_hash in self._hot_cache:
+                return True
+            meta = self._index.get(hex_hash)
+            # Phantom entries (file_size == 0) mean the writer hasn't finished
+            return meta is not None and meta.file_size > 0
 
     def delete_block(self, block_hash: bytes) -> None:
         """Delete a block from both hot cache and disk."""
@@ -663,6 +667,11 @@ class SSDKVCache:
 
         if meta is not None and meta.file_path:
             with self._writer_lock:
+                # Cancel any pending save for this hash to prevent orphaned files
+                self._write_queue = [
+                    item for item in self._write_queue
+                    if not (item[0] == "save" and item[1] == hex_hash)
+                ]
                 self._write_queue.append(("delete", meta.file_path))
             self._process_pending_writes()
 

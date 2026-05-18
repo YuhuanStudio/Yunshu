@@ -63,24 +63,23 @@ class _LRUBucketCache:
         self._max_buckets = max_buckets
         self._ttl = ttl
         self._buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
+        self._lock = threading.Lock()
 
     def get_or_create(self, key: str) -> _TokenBucket:
-        if key in self._buckets:
-            # Move to end (most recently used)
-            self._buckets.move_to_end(key)
-            return self._buckets[key]
+        with self._lock:
+            if key in self._buckets:
+                self._buckets.move_to_end(key)
+                return self._buckets[key]
 
-        # Evict if at capacity: remove expired first, then LRU
-        if len(self._buckets) >= self._max_buckets:
-            self._evict()
+            if len(self._buckets) >= self._max_buckets:
+                self._evict()
 
-        bucket = _TokenBucket(rate=self._rate, capacity=self._capacity)
-        self._buckets[key] = bucket
-        return bucket
+            bucket = _TokenBucket(rate=self._rate, capacity=self._capacity)
+            self._buckets[key] = bucket
+            return bucket
 
     def _evict(self) -> None:
         """Evict expired buckets first, then LRU until under max."""
-        # First pass: remove expired
         expired = [
             k for k, b in self._buckets.items()
             if b.is_expired(self._ttl)
@@ -88,19 +87,19 @@ class _LRUBucketCache:
         for k in expired:
             del self._buckets[k]
 
-        # Second pass: remove LRU until under limit
         while len(self._buckets) >= self._max_buckets:
             self._buckets.popitem(last=False)
 
     def cleanup_expired(self) -> int:
         """Remove all expired buckets. Returns count removed."""
-        expired = [
-            k for k, b in self._buckets.items()
-            if b.is_expired(self._ttl)
-        ]
-        for k in expired:
-            del self._buckets[k]
-        return len(expired)
+        with self._lock:
+            expired = [
+                k for k, b in self._buckets.items()
+                if b.is_expired(self._ttl)
+            ]
+            for k in expired:
+                del self._buckets[k]
+            return len(expired)
 
     def __len__(self) -> int:
         return len(self._buckets)
@@ -231,7 +230,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._trusted_proxies and direct_ip in self._trusted_proxies:
             forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
-                client_ip = forwarded.split(",")[0].strip()
+                # Take the LAST entry (appended by the trusted proxy), not
+                # the first (which could be spoofed by the client).
+                client_ip = forwarded.split(",")[-1].strip()
         bucket = self._bucket_cache.get_or_create(client_ip)
 
         if not bucket.consume():

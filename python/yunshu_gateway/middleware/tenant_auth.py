@@ -133,6 +133,8 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
                 request.state.role = api_key.role
                 request.state.slo_class = api_key.slo_class
                 return await call_next(request)
+            # ys_ prefixed tokens MUST go through RBAC — reject if unavailable
+            return _ErrorFormatter.auth_error(request, "Invalid or expired API key")
 
         # ── Static token auth (constant-time comparison) ──
         if auth_token and hmac.compare_digest(token, auth_token):

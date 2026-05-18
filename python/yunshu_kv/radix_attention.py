@@ -404,6 +404,12 @@ class RadixTree:
 
                 # Compact: merge parent with single remaining child
                 self._try_merge(parent)
+
+            # Clear stale references from the evicted leaf so future
+            # path_blocks() / match() calls cannot return freed blocks.
+            leaf.blocks = []
+            leaf.block_hashes = []
+            leaf.token_ids = []
             self._total_nodes -= 1
             evicted += 1
 

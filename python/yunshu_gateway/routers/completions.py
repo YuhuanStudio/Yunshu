@@ -362,10 +362,16 @@ async def create_completion(req: CompletionRequest, request: Request):
             "usage": usage,
         })
     except MemoryError:
-        raise HTTPException(status_code=507, detail="Insufficient GPU memory")
+        return JSONResponse(
+            status_code=507,
+            content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
+        )
     except Exception as e:
         logger.error(f"Completions generation error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": "Internal server error", "type": "internal_error"}},
+        )
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _ns_tracker is not None:

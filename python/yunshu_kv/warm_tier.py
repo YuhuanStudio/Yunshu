@@ -145,8 +145,10 @@ class KVWarmTier:
                 "Failed to promote block 0x%x from warm tier — re-inserting for retry",
                 block_hash, exc_info=True,
             )
-            self._store[block_hash] = (packed, scales, head_dim)
-            self._store.move_to_end(block_hash)
+            # Only re-insert if a concurrent demote hasn't replaced the entry
+            if block_hash not in self._store:
+                self._store[block_hash] = (packed, scales, head_dim)
+                self._store.move_to_end(block_hash)
             while len(self._store) > self.config.max_blocks:
                 self.evict(1)
             # Re-add memory accounting since we re-inserted

@@ -199,6 +199,7 @@ class SSDCacheStore:
 
         path = self._block_path(entry.block_index)
         if not path.exists():
+            self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
             del self._index[block_hash]
             return None
 
@@ -215,6 +216,7 @@ class SSDCacheStore:
                     "CRC mismatch for SSD block 0x%x (stored=%08x actual=%08x), discarding",
                     block_hash, stored_crc, actual_crc,
                 )
+                self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
                 del self._index[block_hash]
                 return None
             import numpy as np
@@ -315,18 +317,19 @@ class TieredKVCacheManager:
         block_size = self.hot.block_size
         remaining = match.unmatched_token_ids
 
+        # Initialize parent hash from hot tier's last matched block.
+        # Must be computed before the warm/SSD branches so it's always defined.
+        parent_hash = None
+        if match.matched_blocks:
+            parent_hash = match.matched_blocks[-1].block_hash
+
         # Check warm tier for each block-sized chunk.
         # Chain hashing: each block's hash depends on the parent hash,
         # so we must continue the chain from the hot tier's last matched
         # block (or None if there was no match).
         warm_promoted_blocks: list[KVBlock] = []
+        warm_loaded = 0
         if self.warm:
-            warm_loaded = 0
-            # Derive parent hash from the last hot-tier matched block
-            parent_hash = None
-            if match.matched_blocks:
-                last_hot = match.matched_blocks[-1]
-                parent_hash = last_hot.block_hash
             for i in range(0, len(remaining), block_size):
                 chunk = remaining[i:i + block_size]
                 if len(chunk) < block_size:
@@ -381,15 +384,9 @@ class TieredKVCacheManager:
         ssd_promoted_blocks: list[KVBlock] = []
         if self.ssd and remaining:
             ssd_loaded = 0
-            # Continue the chain hash from the last matched block.
-            # If warm promotion happened, parent_hash already points to
-            # the last warm-promoted block's hash.  Otherwise, fall back
-            # to the hot tier's last matched block.
-            if warm_loaded == 0:
-                parent_hash = None
-                all_matched = match.matched_blocks
-                if all_matched:
-                    parent_hash = all_matched[-1].block_hash
+            # parent_hash is already set: if warm promotion happened it points
+            # to the last warm-promoted block; otherwise to the hot tier's
+            # last matched block (or None).
             for i in range(0, len(remaining), block_size):
                 chunk = remaining[i:i + block_size]
                 if len(chunk) < block_size:
@@ -567,6 +564,8 @@ class BackgroundSSDFlush:
         for block_hash, entry in list(self._warm._store.items()):
             packed, scales = entry[0], entry[1]
             head_dim = entry[2] if len(entry) > 2 else 0
+            if head_dim == 0:
+                continue
             if not self._ssd.contains(block_hash):
                 try:
                     import numpy as np

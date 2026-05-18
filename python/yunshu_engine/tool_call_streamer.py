@@ -341,10 +341,20 @@ class ToolCallStreamer:
             name_match = re.search(r'"name"\s*:\s*"([^"]+)"', json_text)
             if name_match:
                 name = name_match.group(1)
-                # Try to extract arguments object
-                args_match = re.search(r'"arguments"\s*:\s*(\{.*\})', json_text, re.DOTALL)
+                # Extract arguments using brace-counting to handle nested JSON
+                args_match = re.search(r'"arguments"\s*:\s*\{', json_text, re.DOTALL)
                 if args_match:
-                    args_str = args_match.group(1)
+                    brace_start = args_match.end() - 1
+                    depth = 0
+                    args_str = "{}"
+                    for ci in range(brace_start, len(json_text)):
+                        if json_text[ci] == '{':
+                            depth += 1
+                        elif json_text[ci] == '}':
+                            depth -= 1
+                            if depth == 0:
+                                args_str = json_text[brace_start:ci + 1]
+                                break
                 else:
                     args_str = "{}"
                 return ToolCallResult(

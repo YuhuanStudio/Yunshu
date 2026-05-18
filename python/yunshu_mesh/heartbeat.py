@@ -55,7 +55,7 @@ class HeartbeatMonitor:
         with self._nodes_lock:
             for peer in peers:
                 self._nodes[peer.node_id] = peer
-                self._last_heartbeat[peer.node_id] = time.time()
+                self._last_heartbeat[peer.node_id] = time.monotonic()
 
         self._running = True
         self._setup_socket()
@@ -116,7 +116,7 @@ class HeartbeatMonitor:
                 recovered_node = None
                 with self._nodes_lock:
                     if node_id and node_id in self._nodes:
-                        self._last_heartbeat[node_id] = time.time()
+                        self._last_heartbeat[node_id] = time.monotonic()
                         node = self._nodes[node_id]
                         node.heartbeat()
                         try:
@@ -144,7 +144,7 @@ class HeartbeatMonitor:
 
     def _check_loop(self) -> None:
         while self._running:
-            now = time.time()
+            now = time.monotonic()
             timed_out_nodes = []
             with self._nodes_lock:
                 for node_id, last_hb in list(self._last_heartbeat.items()):
@@ -165,7 +165,7 @@ class HeartbeatMonitor:
             time.sleep(self.interval)
 
     def check_health(self) -> dict[str, bool]:
-        now = time.time()
+        now = time.monotonic()
         with self._nodes_lock:
             return {
                 node_id: (now - self._last_heartbeat.get(node_id, 0)) < self.timeout
