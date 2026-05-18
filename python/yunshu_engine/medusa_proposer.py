@@ -381,10 +381,10 @@ class MedusaProposer:
             log_probs = mx.log(mx.softmax(logits, axis=-1) + 1e-10)
 
             # Take top-K from this head's logits
-            # logits shape: (1, vocab) or (vocab,) after squeezing
+            # logits shape: (batch, vocab) — select batch 0
             if logits.ndim > 1:
-                logits_1d = logits.reshape(-1)
-                log_probs_1d = log_probs.reshape(-1)
+                logits_1d = logits[0]
+                log_probs_1d = log_probs[0]
             else:
                 logits_1d = logits
                 log_probs_1d = log_probs

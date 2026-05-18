@@ -685,16 +685,28 @@ class ResponseCache:
                 net_increase = size - old.size_bytes
                 if net_increase > 0:
                     await self._evict_if_needed(net_increase)
-                # Update existing entry
-                old = self._entries[request_hash]
-                self._total_memory -= old.size_bytes
-                old.response = response
-                old.created_at = time.monotonic()
-                old.last_accessed = time.monotonic()
-                old.size_bytes = size
-                self._total_memory += size
-                # Promote in LRU
-                self._lru.move_to_end(request_hash)
+                # Re-fetch after eviction — the entry may have been evicted
+                # as expired during _evict_if_needed (which yields control).
+                old = self._entries.get(request_hash)
+                if old is None:
+                    # Evicted — treat as new entry
+                    entry = _CacheEntry(
+                        key=request_hash,
+                        response=response,
+                        size_bytes=size,
+                    )
+                    self._entries[request_hash] = entry
+                    self._lru[request_hash] = None
+                    self._total_memory += size
+                else:
+                    self._total_memory -= old.size_bytes
+                    old.response = response
+                    old.created_at = time.monotonic()
+                    old.last_accessed = time.monotonic()
+                    old.size_bytes = size
+                    self._total_memory += size
+                    # Promote in LRU
+                    self._lru.move_to_end(request_hash)
             else:
                 # New entry — evict if necessary for full size
                 await self._evict_if_needed(size)

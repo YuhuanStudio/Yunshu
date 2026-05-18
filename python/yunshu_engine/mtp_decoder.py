@@ -242,11 +242,17 @@ class MTPDecoder:
                 stats.rejects += 1
 
                 if self.config.use_n_confirmed:
-                    # n_confirmed path: restore rollback (no extra forward!)
                     restore_rollback(cache)
-                    # Use hidden at pos 0 (confirmed/primary position)
-                    # for next MTP draft — same as oMLX pattern
-                    primary_h = verify_h[:, 0:1, :]
+                    # On reject, v0 is the correction token (line 262).
+                    # Re-feed v0 through the rolled-back cache to get a
+                    # hidden state consistent with the new primary token.
+                    # Using verify_h[:, 0:1, :] is stale — it's the hidden
+                    # state from the old primary, not v0.
+                    _out_corr, hid_corr = self.model(
+                        mx.array([[v0]]), cache=cache, return_hidden=True,
+                    )
+                    mx.synchronize()
+                    primary_h = hid_corr[:, -1:, :]
                 else:
                     # Old path: restore cache + refeed primary (expensive)
                     _restore_cache(cache, snap)

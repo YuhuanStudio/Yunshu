@@ -280,6 +280,12 @@ class ThinkingSegmentSubstore:
             prefix_hash = self.compute_step_hash(thinking_prefix, context_tokens)
             for seg in conv_segments:
                 if seg.step_hash == prefix_hash:
+                    # Check TTL before returning
+                    age = time.monotonic() - seg.created_at
+                    if age > self.config.ttl_seconds:
+                        self._remove_segment(seg)
+                        self._stats["misses"] += 1
+                        return None
                     seg.last_accessed = time.monotonic()
                     seg.access_count += 1
                     self._stats["hits"] += 1

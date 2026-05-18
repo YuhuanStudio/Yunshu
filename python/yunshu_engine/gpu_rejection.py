@@ -44,12 +44,14 @@ class BatchRejectionResult:
         rejection_position: Index of first rejected draft token, or None if all accepted.
         verification_method: How verification was performed ("gpu_batch" or "cpu_sequential").
         latency_us: Verification latency in microseconds.
+        resampled_token_id: Token resampled from residual distribution on rejection (stochastic only).
     """
 
     accepted_count: int
     rejection_position: Optional[int]
     verification_method: str  # "gpu_batch" | "cpu_sequential"
     latency_us: float
+    resampled_token_id: Optional[int] = None
 
 
 def should_enable_gpu_rejection() -> bool:
@@ -238,12 +240,28 @@ class GPURejectionSampler:
         # but we need the first failure for the spec decode contract)
         accepted_count = 0
         rejection_position = None
+        resampled_token_id = None
         for i in range(K):
             if bool(per_position_accept[i].item()):
                 accepted_count += 1
             else:
                 rejection_position = i
                 break
+
+        # Step 6: Resample from residual distribution on rejection
+        # Speculative sampling algorithm: on reject at position i,
+        # sample from max(0, P_target(x) - P_draft(x)) (residual).
+        if rejection_position is not None:
+            i = rejection_position
+            target_probs = mx.exp(target_logprobs_full[i])
+            draft_prob_i = mx.exp(draft_lps[i])
+            residual = mx.maximum(mx.zeros_like(target_probs), target_probs - draft_prob_i)
+            residual_sum = mx.sum(residual)
+            if float(residual_sum.item()) > 1e-10:
+                residual = residual / residual_sum
+                resampled_token_id = int(mx.random.categorical(mx.log(residual + 1e-10)).item())
+            else:
+                resampled_token_id = int(mx.argmax(target_logprobs_full[i]).item())
 
         mx.synchronize()
         elapsed = (time.perf_counter() - t0) * 1e6
@@ -253,6 +271,7 @@ class GPURejectionSampler:
             rejection_position=rejection_position,
             verification_method="gpu_batch",
             latency_us=elapsed,
+            resampled_token_id=resampled_token_id,
         )
 
     # ── Batch Verification (Multiple Requests) ──

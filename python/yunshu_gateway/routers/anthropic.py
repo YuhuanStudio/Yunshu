@@ -466,6 +466,9 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     Returns a list of {"name": str, "arguments": str} dicts if a tool call
     is detected, or None if the text doesn't contain a recognisable tool call.
     """
+    # Fast rejection: skip regex entirely if no tool-call trigger chars present
+    if '<' not in text and '{' not in text:
+        return None
     # Try XML-wrapped tool calls first
     for m in _TOOL_CALL_XML_RE.finditer(text):
         inner = m.group(1).strip()
@@ -932,6 +935,7 @@ async def _stream_anthropic(
     tool_use_block_started = False
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
+    _streaming_finish_reason: str | None = None
 
     # Register with request tracker for cancellation support
     from yunshu_engine.request_tracker import get_request_tracker
@@ -1022,6 +1026,10 @@ async def _stream_anthropic(
                     input_tokens = output.prompt_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
+
+                # Capture finish_reason from the last streaming output
+                if output.finished and output.finish_reason:
+                    _streaming_finish_reason = output.finish_reason
 
                 # Emit message_start on first output with prompt_tokens.
                 # Deferred from the initial yield so that cache token counts
@@ -1137,6 +1145,10 @@ async def _stream_anthropic(
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 
+                # Capture finish_reason from the last streaming output
+                if hasattr(output, 'finished') and output.finished and hasattr(output, 'finish_reason') and output.finish_reason:
+                    _streaming_finish_reason = output.finish_reason
+
                 # Emit message_start on first output with prompt_tokens
                 # (deferred from the initial yield for accurate cache tokens).
                 # NOTE: Do NOT eagerly open the thinking block here — only
@@ -1234,7 +1246,9 @@ async def _stream_anthropic(
         # Per Anthropic streaming spec, message_delta usage ONLY contains output_tokens.
         # cache_creation_input_tokens / cache_read_input_tokens are in message_start
         # (emitted deferred above when the first engine output arrives).
-        stop_reason = _map_stop_reason(None, matched_stop, has_tool_calls=tool_use_block_started)
+        stop_reason = _map_stop_reason(
+            _streaming_finish_reason, matched_stop, has_tool_calls=tool_use_block_started
+        )
         delta_data = {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": matched_stop},

@@ -158,7 +158,7 @@ def _progressive_quantize_kv_cache(
     _maybe_quantize_kv_cache(prompt_cache, quantized_kv_start, kv_group_size, kv_bits)
 
 
-def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store) -> None:
+def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store, kv_cache=None) -> None:
     """Store a thinking segment KV for future reuse."""
     try:
         import hashlib as _hl
@@ -167,7 +167,7 @@ def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store) -> 
             conversation_id=conv_id,
             thinking_tokens=thinking_tokens,
             context_tokens=[int(t) for t in ids],
-            kv_data=None,
+            kv_data=kv_cache,
         )
     except Exception:
         logger.debug("thinking segment store failed", exc_info=True)
@@ -3089,7 +3089,7 @@ class BatchedEngine:
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
-                                _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
+                                _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
                             # Emit text before finalizing so consumer reads it
                             # before the stop chunk (consumer breaks on done=True).
                             if new_text:
@@ -3132,7 +3132,7 @@ class BatchedEngine:
                     if _is_stopping:
                         # Store thinking segment on stop
                         if _thinking_tokens and self._thinking_store is not None:
-                            _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
+                            _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
                         if _remaining:
@@ -3148,7 +3148,7 @@ class BatchedEngine:
                         return
                 # Store thinking segment at end of generation
                 if _thinking_tokens and self._thinking_store is not None:
-                    _store_thinking_segment(ids, _thinking_tokens, self._thinking_store)
+                    _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
                 prefix_cache.add(ids, cache)
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment
