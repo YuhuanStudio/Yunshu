@@ -343,6 +343,7 @@ class VLMAsyncEngineCore:
         """Stream output chunks for a request."""
         state = self._requests.get(request_id)
         if state is None:
+            yield VLMStreamChunk(finish_reason="error")
             return
 
         try:

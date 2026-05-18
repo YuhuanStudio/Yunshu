@@ -354,13 +354,12 @@ class RequestLifecycleOrchestrator:
         # Report to concurrency controller
         self._concurrency.report_success(state)
 
-        # Try to promote a pending request BEFORE deleting the finished state,
-        # so the pending request can look up its own state.
-        if self._pending_queue:
-            next_id = self._pending_queue.pop(0)
-            next_state = self._states.get(next_id)
-            if next_state:
-                self.on_prefill_start(next_id)
+        # Do NOT auto-promote pending requests here. Promotion via
+        # on_prefill_start() increments _active_count, but the promoted
+        # request hasn't been inserted into the scheduler yet. If the
+        # engine shuts down before the next scheduler step, _active_count
+        # is permanently inflated. Let EngineCore handle promotion when it
+        # actually schedules the request.
 
         # Remove from tracking (keep stats)
         del self._states[request_id]

@@ -677,6 +677,9 @@ class VLMEngine:
                         break
                     # Thinking budget enforcement — cap thinking tokens, not total tokens
                     if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
+                        # Append closing tag to keep output well-formed
+                        if think_end_id is not None:
+                            tokens.append(think_end_id)
                         _budget_hit = True
                         break
 
@@ -1382,6 +1385,9 @@ class VLMEngine:
                             _in_thinking = False
                 # Thinking budget enforcement — cap thinking tokens
                 if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
+                    # Append closing tag to keep output well-formed
+                    if think_end_id is not None:
+                        tokens.append(think_end_id)
                     _budget_hit = True
                     break
                 if tok_id in stop_ids:
@@ -1769,7 +1775,7 @@ class VLMEngine:
         if finish_reason:
             return
 
-        tokens_list = []
+        tokens_list = [token_id]  # Include the first prefill token for JSON constraint
         try:
           for _ in range(max_tokens - 1):
             if cancel_event is not None and cancel_event.is_set():

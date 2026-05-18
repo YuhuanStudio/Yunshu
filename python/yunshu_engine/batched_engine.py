@@ -1242,6 +1242,10 @@ class BatchedEngine:
             return use_engine_loop
         if getattr(self, '_engine_loop_default', False):
             return True
+        # If a fast-path request is already in-flight, route to engine loop
+        # for continuous batching instead of serializing on the MLX executor.
+        if getattr(self, '_active_fast_path_count', 0) > 0:
+            return True
         # Auto-detect: switch to batch path when concurrency is detected
         if self._engine_core is not None and self._engine_core.has_active_requests:
             return True

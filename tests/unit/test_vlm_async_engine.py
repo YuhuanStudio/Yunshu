@@ -323,7 +323,10 @@ class TestStreaming:
         chunks = []
         async for chunk in core.stream_outputs("nonexistent-id"):
             chunks.append(chunk)
-        assert chunks == []
+        # Unknown request yields an error sentinel instead of silently
+        # returning empty, so callers can distinguish "no data" from "error".
+        assert len(chunks) == 1
+        assert chunks[0].finish_reason == "error"
 
         await core.stop()
 

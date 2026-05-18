@@ -234,8 +234,11 @@ class TestRequestLifecycleOrchestrator:
         orch.on_request_added("r2")  # goes to pending (limit=1)
         assert orch.pending_count == 1
         orch.on_request_finished("r1")
-        # r2 should be promoted from pending
-        assert orch.active_count == 1
+        # r2 stays in pending — promotion is handled by the scheduler,
+        # not the lifecycle manager (avoids inflating _active_count
+        # before the request is actually scheduled).
+        assert orch.pending_count == 1
+        assert orch.active_count == 0
 
     def test_retry_on_failure(self):
         orch = RequestLifecycleOrchestrator()

@@ -1726,21 +1726,29 @@ class Scheduler:
             if not self.running:
                 break
 
-            # Find lowest-priority running request (vLLM: max() with
-            # (priority, arrival_time) key — lowest priority = highest
-            # value when we sort descending by priority for scheduling)
-            # In Yunshu: higher priority number = higher priority, so
-            # we evict the minimum priority (least important).
-            # Ties broken by latest arrival_time (newest first).
-            # Note: use sampling_params.priority, not Request.priority
-            # (which is always the default 0).
-            victim_id = min(
-                self.running.keys(),
-                key=lambda rid: (
-                    self.running[rid].sampling_params.priority,
-                    -self.running[rid].arrival_time,
-                ),
-            )
+            # Find lowest-priority running request, preferring prefill-stage
+            # requests over decode-stage to avoid discarding generated tokens.
+            prefill_candidates = [
+                rid for rid in self.running
+                if not self.running[rid].output_token_ids
+            ]
+            if prefill_candidates:
+                victim_id = min(
+                    prefill_candidates,
+                    key=lambda rid: (
+                        self.running[rid].sampling_params.priority,
+                        -self.running[rid].arrival_time,
+                    ),
+                )
+            else:
+                # All running requests are in decode stage — last resort
+                victim_id = min(
+                    self.running.keys(),
+                    key=lambda rid: (
+                        self.running[rid].sampling_params.priority,
+                        -self.running[rid].arrival_time,
+                    ),
+                )
             victim = self.running.pop(victim_id)
             self._preempt_request(victim)
             preempted += 1
