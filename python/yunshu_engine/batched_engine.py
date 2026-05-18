@@ -3898,6 +3898,21 @@ class BatchedEngine:
           while len(generated_tokens) < max_tokens:
             if cancel_event is not None and cancel_event.is_set():
                 logger.debug("Cancel event triggered during spec decode streaming")
+                # Yield terminal stop chunk so consumer sees finished=True
+                if generated_tokens:
+                    detokenizer.finalize()
+                    _final_text = _clean_special_tokens(detokenizer.text)
+                else:
+                    _final_text = ""
+                yield GenerationOutput(
+                    text=_final_text,
+                    new_text="",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=len(generated_tokens),
+                    finished=True,
+                    finish_reason="stop",
+                    ttft_ms=_spec_ttft_ms_val,
+                )
                 break
 
             # Snapshot draft cache for rollback on rejection
@@ -4771,11 +4786,37 @@ class BatchedEngine:
                     item = await asyncio.wait_for(_q.get(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("N-gram streaming timeout: no token for 120s")
+                    # Yield terminal output so consumer sees finished=True
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="error",
+                        error="N-gram streaming timeout: no token for 120s",
+                        ttft_ms=_ng_ttft_ms_val,
+                        cached_tokens=0,
+                        reasoning_tokens=0,
+                    )
                     break
                 if item is _sentinel:
                     break
                 if isinstance(item, BaseException):
                     logger.warning(f"N-gram streaming error: {item}")
+                    # Yield terminal error output so consumer sees finished=True
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="error",
+                        error=str(item),
+                        ttft_ms=_ng_ttft_ms_val,
+                        cached_tokens=0,
+                        reasoning_tokens=0,
+                    )
                     break
                 new_text, tok_count, _fr_val, token_id = item
                 # Backward compat: _fr_val may be bool or str or None
@@ -5156,6 +5197,12 @@ class BatchedEngine:
                 while len(generated) < max_tokens:
                     # Check cancel_event
                     if cancel_event is not None and cancel_event.is_set():
+                        # Emit stop chunk before breaking so consumer sees finished=True
+                        detokenizer.finalize()
+                        _remaining = detokenizer.last_segment
+                        if _remaining:
+                            _put((_remaining, len(generated), None, None))
+                        _put(("", len(generated), "stop", None))
                         break
 
                     # MTP draft
@@ -5234,16 +5281,54 @@ class BatchedEngine:
             while True:
                 # Check cancel_event from consumer side
                 if cancel_event is not None and cancel_event.is_set():
+                    # Yield terminal stop chunk so consumer sees finished=True
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="stop",
+                        ttft_ms=_mtp_ttft_ms_val,
+                        cached_tokens=0,
+                        reasoning_tokens=0,
+                    )
                     break
                 try:
                     item = await asyncio.wait_for(_q.get(), timeout=120)
                 except asyncio.TimeoutError:
                     logger.warning("MTP streaming timeout")
+                    # Yield terminal output so consumer sees finished=True
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="error",
+                        error="MTP streaming timeout: no token for 120s",
+                        ttft_ms=_mtp_ttft_ms_val,
+                        cached_tokens=0,
+                        reasoning_tokens=0,
+                    )
                     break
                 if item is _sentinel:
                     break
                 if isinstance(item, BaseException):
                     logger.warning(f"MTP streaming error: {item}")
+                    # Yield terminal error output so consumer sees finished=True
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="error",
+                        error=str(item),
+                        ttft_ms=_mtp_ttft_ms_val,
+                        cached_tokens=0,
+                        reasoning_tokens=0,
+                    )
                     break
                 new_text, tok_count, _fr_val, token_id = item
                 # Backward compat: _fr_val may be bool or str or None
