@@ -301,6 +301,8 @@ class RealtimeSession:
                 self._cancel_event.set()
             if self._active_response and not self._active_response.done():
                 self._active_response.cancel()
+            # Release audio buffer to free memory on disconnect
+            self._audio_buffer = bytearray()
 
     async def _handle_event(self, event: dict) -> None:
         """Dispatch incoming events to handlers."""
