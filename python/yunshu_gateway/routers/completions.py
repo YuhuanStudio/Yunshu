@@ -425,8 +425,8 @@ async def _stream_completion(
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if output.new_text:
-                    completion_tok += 1
+                if hasattr(output, 'completion_tokens') and output.completion_tokens:
+                    completion_tok = output.completion_tokens
                 _choice_reasoning = getattr(output, 'reasoning_tokens', 0)
                 reasoning_tok_per_choice[choice_idx] = _choice_reasoning
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
@@ -479,8 +479,8 @@ async def _stream_completion(
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'token_text') and output.token_text:
-                    completion_tok += 1
+                if hasattr(output, 'completion_token_count') and output.completion_token_count:
+                    completion_tok = output.completion_token_count
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
                 _chunk_lp = None

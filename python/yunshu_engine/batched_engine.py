@@ -3291,11 +3291,7 @@ class BatchedEngine:
                 n_tok = tok_count
 
                 # TokenPipeline: run stage 3 overlap for stats tracking
-                if _pipeline is not None and _pipeline.is_running:
-                    await _pipeline.run_stage3_overlap(
-                        _pipeline._current,
-                        detokenize_fn=lambda _tid, _t=new_text: _t,
-                    )
+                if _pipeline is not None and _pipeline.is_running and _pipeline._current is not None:
                     await _pipeline.next_token(
                         detokenize_fn=lambda _tid, _t=new_text: _t,
                     )

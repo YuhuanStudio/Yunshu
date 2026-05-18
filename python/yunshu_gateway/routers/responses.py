@@ -582,8 +582,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     reasoning_tok = output.reasoning_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
+                if hasattr(output, 'completion_tokens') and output.completion_tokens:
+                    completion_tok = output.completion_tokens
                 if output.new_text:
-                    completion_tok += 1
                     accumulated_text += output.new_text
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
@@ -633,8 +634,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
                 token_text = getattr(output, 'token_text', '')
+                if hasattr(output, 'completion_token_count') and output.completion_token_count:
+                    completion_tok = output.completion_token_count
                 if token_text:
-                    completion_tok += 1
                     accumulated_text += token_text
                 if getattr(output, 'finish_reason', None) is not None:
                     last_finish_reason = output.finish_reason
