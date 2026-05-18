@@ -207,17 +207,20 @@ class BlockPool:
         """Remove a block from the prefix cache."""
         if block.block_hash is None:
             return False
-        cached = self._hash_to_block.pop(block.block_hash, None)
-        if cached is not None:
-            cached.reset_hash()
+        # Only pop from the hash map if this block is still the current
+        # entry for its hash.  If a different block has taken over the
+        # hash (via cache_block), evicting would incorrectly remove the
+        # newer block's cache entry.
+        current = self._hash_to_block.get(block.block_hash)
+        if current is block:
+            self._hash_to_block.pop(block.block_hash, None)
         # Always clear the requesting block's hash, even if the hash
-        # map pointed to a different block (e.g. hash was reassigned
-        # via cache_block after this block was freed).  Leaving a
-        # stale block_hash on an allocated block causes _evict_cached_block
-        # to do redundant work on the next allocation and can mislead
-        # callers that check block_hash for cache membership.
+        # map pointed to a different block.  Leaving a stale block_hash
+        # on an allocated block causes _evict_cached_block to do
+        # redundant work on the next allocation and can mislead callers
+        # that check block_hash for cache membership.
         block.reset_hash()
-        return cached is not None
+        return current is block
 
     def get_cached_blocks(self) -> list[KVBlock]:
         """Return all blocks currently in the prefix cache."""
