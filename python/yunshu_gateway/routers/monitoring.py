@@ -266,7 +266,7 @@ async def prometheus_export() -> str:
     pm = get_prometheus_metrics()
 
     # Refresh spec decode stats into Prometheus gauges
-    from ..engine import get_model_manager
+    from ..engine import get_model_manager, get_engine
     from yunshu_engine.batched_engine import BatchedEngine
     manager = get_model_manager()
     if manager is not None:
@@ -374,6 +374,25 @@ async def prometheus_export() -> str:
                             pm.set_gauge("attention_eviction_total_blocks", at_stats.get("total_blocks", 0))
                 except Exception:
                     logger.debug("attention eviction gauge population failed", exc_info=True)
+    else:
+        # Single-model mode: refresh gauges from the default engine
+        engine = get_engine()
+        if isinstance(engine, BatchedEngine):
+            try:
+                spec_decoder = getattr(engine, '_spec_decoder', None)
+                if spec_decoder is not None:
+                    sd_stats = spec_decoder.get_stats()
+                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0))
+                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0))
+                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0))
+                core = getattr(engine, '_engine_core', None)
+                if core is not None:
+                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
+                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
+                    pm.set_gauge("compute_utilization_pct",
+                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0)
+            except Exception:
+                logger.debug("single-engine gauge population failed", exc_info=True)
 
     return pm.generate()
 

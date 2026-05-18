@@ -354,7 +354,7 @@ class TTSEngine:
                     if _first_chunk:
                         # Send a single WAV header in the first chunk, then raw PCM afterward
                         wav_header = make_wav_header(
-                            data_size=0,  # Unknown total; most players handle this
+                            data_size=0xFFFFFFFF,  # Unknown length sentinel
                             sample_rate=int(sample_rate),
                             num_channels=1,
                         )

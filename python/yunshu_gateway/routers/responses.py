@@ -382,6 +382,12 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _reasoning_tokens = getattr(state, 'reasoning_tokens', 0)
                 _cached_tokens = getattr(state, 'cached_tokens', 0)
 
+            # Extract thinking content for reasoning models
+            from ..streaming import extract_thinking
+            _thinking, text = extract_thinking(text, req.model)
+            if _thinking and _reasoning_tokens == 0:
+                _reasoning_tokens = len(engine._tokenizer.encode(_thinking)) if hasattr(engine, '_tokenizer') and engine._tokenizer else 0
+
             # Accumulate usage across all choices
             total_pt = pt  # prompt tokens are the same for every choice
             total_ct += ct

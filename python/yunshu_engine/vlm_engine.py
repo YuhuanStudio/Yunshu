@@ -1345,16 +1345,16 @@ class VLMEngine:
 
                 if has_penalty:
                     if repetition_penalty != 1.0:
-                        ctx = tokens[-20:]
+                        ctx = list(set(tokens[-20:]))
                         sel = logits[..., ctx]
                         sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
                         logits[..., ctx] = sel
                     if frequency_penalty != 0.0:
-                        tid = tokens[-1]
-                        logits[..., tid] -= frequency_penalty
+                        for tid in set(tokens):
+                            logits[..., tid] -= frequency_penalty * tokens.count(tid)
                     if presence_penalty != 0.0:
-                        tid = tokens[-1]
-                        logits[..., tid] -= presence_penalty
+                        for tid in set(tokens):
+                            logits[..., tid] -= presence_penalty
                     if logit_bias:
                         for tid, bias in logit_bias.items():
                             logits[..., tid] += bias

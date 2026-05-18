@@ -400,7 +400,7 @@ def extract_tool_calls(text: str) -> list[dict]:
     # Pattern 2: Qwen/Llama XML format <function=name>...</function>
     if not tool_calls:
         qwen_pattern = re.compile(
-            r"<function\s*=\s*(\w+)>(.*?)</function>",
+            r"<function\s*=\s*([\w.-]+)>(.*?)</function>",
             re.DOTALL,
         )
         for match in qwen_pattern.finditer(text):

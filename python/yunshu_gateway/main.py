@@ -745,6 +745,14 @@ def create_app() -> FastAPI:
     except ImportError:
         pass
 
+    def _safe_memory_usage(manager):
+        if manager is None:
+            return None
+        mu = getattr(manager, 'memory_usage', None)
+        if callable(mu):
+            return mu()
+        return mu
+
     @app.get("/health")
     async def health() -> dict:
         from .engine import get_engine, get_model_manager
@@ -759,7 +767,7 @@ def create_app() -> FastAPI:
         result = {
             "status": "ok",
             "engine": engine_info,
-            "model_manager": getattr(manager, 'memory_usage', None) if manager else None,
+            "model_manager": _safe_memory_usage(manager),
             "server_state": _server_state,
             "active_requests": _active_requests,
             "uptime_seconds": round(time.time() - _startup_time, 1) if _startup_time > 0 else 0,
