@@ -1766,6 +1766,7 @@ class EngineCore:
                 # Back-off to avoid tight loop if scheduler is persistently broken.
                 # If no requests remain after failing, the loop will idle-wait
                 # on _wake_event instead of spinning.
+                self._total_idle_time_ms += (time.monotonic() - _step_start) * 1000
                 await asyncio.sleep(0.1)
                 continue
 
@@ -2015,13 +2016,33 @@ class EngineCore:
                                 collector = self._output_collectors.get(rid)
                                 if collector is not None:
                                     from .request import RequestOutput
-                                    collector.put(RequestOutput(
+                                    timeout_output = RequestOutput(
                                         request_id=rid,
                                         finished=True,
                                         finish_reason="timeout",
                                         error=f"Request exceeded timeout ({timeout_s}s)",
-                                    ))
+                                    )
+                                    collector.put(timeout_output)
                                     collector.put(None)
+                                # Dedup fan-out: deliver timeout to shadow requests
+                                if self._request_dedup is not None:
+                                    shadow_ids = [
+                                        sid for sid, pid in self._dedup_shadows.items()
+                                        if pid == rid
+                                    ]
+                                    for sid in shadow_ids:
+                                        s_collector = self._output_collectors.get(sid)
+                                        if s_collector is not None:
+                                            from .request import RequestOutput
+                                            s_collector.put(RequestOutput(
+                                                request_id=sid,
+                                                finished=True,
+                                                finish_reason="timeout",
+                                                error=f"Primary request {rid} timed out",
+                                            ))
+                                            s_collector.put(None)
+                                        self._signal_finished(sid)
+                                        self._finalize_request(sid)
                                 self._signal_finished(rid)
                                 self._finalize_request(rid)
                 except Exception:

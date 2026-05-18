@@ -443,21 +443,22 @@ class TieredKVCacheManager:
         # the boundary between matched and new blocks.
         all_promoted = warm_promoted_blocks + ssd_promoted_blocks
         if all_promoted:
-            # The hot manager already placed matched blocks first, then
-            # new blocks.  The new blocks start at index
-            # len(match.matched_blocks).  Insert promoted blocks between.
             hot_matched_count = len(match.matched_blocks)
-            new_count = len(all_promoted)
-            # Rebuild the internal block list with promoted blocks spliced in.
             existing = table._blocks
+            # Promoted blocks replace an equal number of new blocks that
+            # were allocated for the same tokens.  Free the surplus.
+            surplus = existing[hot_matched_count:hot_matched_count + len(all_promoted)]
+            for block in surplus:
+                block.ref_count = 0
+                block.reset_hash()
+                self.hot.block_pool.free_queue.append(block)
+            # Rebuild the internal block list with promoted blocks spliced in.
             table._blocks = (
                 existing[:hot_matched_count]
                 + all_promoted
-                + existing[hot_matched_count:]
+                + existing[hot_matched_count + len(all_promoted):]
             )
             table.total_tokens = len(table._blocks) * block_size
-            # Also update the match to include promoted blocks so callers
-            # know the full set of reused blocks.
             match.matched_blocks = match.matched_blocks + all_promoted
 
         return table, match

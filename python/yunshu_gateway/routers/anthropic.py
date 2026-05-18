@@ -1109,6 +1109,9 @@ async def _stream_anthropic(
                                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
                                             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                             block_index += 1
+                                    # Signal engine to stop producing tokens
+                                    if _anth_gen.cancel_event is not None:
+                                        _anth_gen.cancel_event.set()
                                     break  # tool calls emitted; stop normal text streaming
 
                             # Normal text delta
@@ -1221,9 +1224,9 @@ async def _stream_anthropic(
                                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
                                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                         block_index += 1
+                                    if _anth_gen.cancel_event is not None:
+                                        _anth_gen.cancel_event.set()
                                     break
-
-                            # Normal text delta
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
 
         # If message_start was never emitted (engine produced zero outputs or

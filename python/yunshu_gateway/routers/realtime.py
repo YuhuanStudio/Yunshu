@@ -297,6 +297,9 @@ class RealtimeSession:
                 await self._handle_event(event)
         except WebSocketDisconnect:
             logger.info("Realtime client disconnected")
+            # Signal cancellation immediately so GPU work stops promptly
+            if self._cancel_event is not None:
+                self._cancel_event.set()
         except Exception as e:
             logger.error(f"Realtime session error: {e}", exc_info=True)
         finally:
@@ -852,15 +855,18 @@ class RealtimeSession:
 
         now = time.monotonic()
 
+        # Offset before this chunk was appended (buffer was extended in caller)
+        _pre_offset = len(self._audio_buffer) - len(audio_chunk)
+
         if rms_normalized >= threshold:
             # Speech detected
             if not self._vad_speaking:
                 self._vad_speaking = True
-                self._vad_speech_start_offset = len(self._audio_buffer)
+                self._vad_speech_start_offset = _pre_offset
                 self._vad_silence_start = None
                 await self.send_event(_event(
                     RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STARTED,
-                    audio_start_ms=len(self._audio_buffer) // 48,  # approximate: 24kHz*2 bytes per ms
+                    audio_start_ms=_pre_offset // 48,
                 ))
         else:
             # Silence detected
@@ -873,7 +879,7 @@ class RealtimeSession:
                     self._vad_silence_start = None
                     await self.send_event(_event(
                         RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STOPPED,
-                        audio_end_ms=len(self._audio_buffer) // 48,
+                        audio_end_ms=_pre_offset // 48,
                     ))
                     # Auto-commit and trigger response (OpenAI behavior with server_vad)
                     await self._auto_commit_and_respond()
@@ -886,13 +892,13 @@ class RealtimeSession:
         Sends the accumulated audio buffer through ASR, then adds the
         transcribed text as a user conversation item.
         """
-        await self.send_event(_event(
-            RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED,
-        ))
-
         audio_data = getattr(self, '_audio_buffer', bytearray())
         if not audio_data:
             return
+
+        await self.send_event(_event(
+            RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED,
+        ))
 
         # Transcribe via ASR engine
         tmp_path = None

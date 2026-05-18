@@ -1245,7 +1245,9 @@ class Scheduler:
         # their effective priority, eventually overtaking newer high-priority requests.
         # The age bonus is: age_seconds * aging_weight, added to the request's
         # original priority for scheduling purposes.
-        if self.config.aging_enabled and len(to_insert) > 1:
+        if (self.config.aging_enabled
+            and self.config.policy == SchedulingPolicy.PRIORITY
+            and len(to_insert) > 1):
             aging_weight = self.config.aging_weight
             _aged_insert = []
             for _req in to_insert:
