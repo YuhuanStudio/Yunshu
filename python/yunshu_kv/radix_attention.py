@@ -443,6 +443,15 @@ class RadixTree:
         node.blocks.extend(child.blocks)
         node.block_hashes.extend(child.block_hashes)
 
+        # Clear child's data to prevent double-free if the child node
+        # object is later popped from an eviction heap (the heap may
+        # still hold a stale reference to this child).
+        child.token_ids = []
+        child.blocks = []
+        child.block_hashes = []
+        child.parent = None
+        child.children = {}
+
         # Adopt child's children
         node.children = child.children
         for grandchild in node.children.values():
@@ -450,7 +459,7 @@ class RadixTree:
 
         # Inherit child's ref_count and access metadata.  This is safe
         # even when child.ref_count > 0: any request that previously
-        # traversed …→ node → child → … now traverses …→ node → …
+        # traversed ...-> node -> child -> ... now traverses ...-> node -> ...
         # because node absorbed child's children.  The ref_count is
         # preserved on node so eviction accounting stays correct.
         node.ref_count = child.ref_count
