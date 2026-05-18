@@ -437,6 +437,10 @@ class AttentionOptimizer:
         if hidden_size and num_heads:
             head_dim = hidden_size // num_heads
 
+        # Treat missing num_kv_heads as MHA (kv_heads == num_heads)
+        if num_kv_heads == 0:
+            num_kv_heads = num_heads
+
         # Determine type
         if getattr(config, "kv_lora_rank", None) is not None:
             atype = AttentionType.MLA
