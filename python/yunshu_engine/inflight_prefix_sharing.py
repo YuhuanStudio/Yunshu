@@ -110,8 +110,8 @@ class InflightPrefixTracker:
             # only cleaned up at checkpoints.
             self._index_checkpoints(entry, start_offset=old_len)
 
-    # Checkpoint lengths used for prefix indexing (must match _index_checkpoints)
-    _CHECKPOINTS = sorted({1, 4, 16, 64, 256, 1024, 4096})
+    # Checkpoint lengths used for prefix indexing — power-of-2 for dense coverage
+    _CHECKPOINTS = sorted(set(2 ** i for i in range(0, 14)))
 
     def find_prefix(self, token_ids: list[int], model_name: str = "") -> InflightEntry | None:
         """Find the longest matching in-flight prefix.
@@ -214,7 +214,7 @@ class InflightPrefixTracker:
             return
         tids = token_ids if token_ids is not None else entry.token_ids
         rid = entry.request_id
-        checkpoints = {1, 4, 16, 64, 256, 1024, 4096}
+        checkpoints = set(2 ** i for i in range(0, 14))
         for cp in sorted(checkpoints):
             if cp <= len(tids) and cp > start_offset:
                 prefix = tuple(tids[:cp])

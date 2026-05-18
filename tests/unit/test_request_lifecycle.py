@@ -196,12 +196,15 @@ class TestRequestLifecycleOrchestrator:
         orch = RequestLifecycleOrchestrator()
         state = orch.on_request_added("r1", prompt_tokens=10)
         assert state.request_id == "r1"
-        assert state.phase == RequestPhase.PREFILLING  # auto-starts
+        assert state.phase == RequestPhase.QUEUED  # added but not yet prefilling
+        assert orch.active_count == 0
+        orch.on_prefill_start("r1")  # scheduler starts prefill
         assert orch.active_count == 1
 
     def test_full_lifecycle(self):
         orch = RequestLifecycleOrchestrator()
-        orch.on_request_added("r1")  # auto-starts prefill
+        orch.on_request_added("r1")
+        orch.on_prefill_start("r1")  # scheduler starts prefill
         assert orch.get_state("r1") is not None
         assert orch.active_count == 1
         assert orch.on_decode_start("r1")
@@ -215,7 +218,8 @@ class TestRequestLifecycleOrchestrator:
             concurrency_controller=AdaptiveConcurrencyController(initial=1),
             max_pending=0,
         )
-        orch.on_request_added("r1")  # auto-starts prefill, active=1
+        orch.on_request_added("r1")
+        orch.on_prefill_start("r1")  # active=1, fills concurrency
         state = orch.on_request_added("r2")  # limit=1, pending=0 → rejected
         assert state.phase == RequestPhase.REJECTED
 
@@ -224,7 +228,8 @@ class TestRequestLifecycleOrchestrator:
             concurrency_controller=AdaptiveConcurrencyController(initial=1),
             max_pending=5,
         )
-        orch.on_request_added("r1")  # auto-starts prefill
+        orch.on_request_added("r1")
+        orch.on_prefill_start("r1")  # fills concurrency slot
         assert orch.active_count == 1
         orch.on_request_added("r2")  # goes to pending (limit=1)
         assert orch.pending_count == 1
@@ -234,7 +239,8 @@ class TestRequestLifecycleOrchestrator:
 
     def test_retry_on_failure(self):
         orch = RequestLifecycleOrchestrator()
-        orch.on_request_added("r1", max_retries=3)  # auto-starts prefill
+        orch.on_request_added("r1", max_retries=3)
+        orch.on_prefill_start("r1")  # scheduler starts prefill
         assert orch.get_state("r1").phase == RequestPhase.PREFILLING
         result = orch.on_request_failed("r1", error="timeout", retryable=True)
         assert result.phase == RequestPhase.QUEUED
@@ -242,13 +248,15 @@ class TestRequestLifecycleOrchestrator:
 
     def test_no_retry_when_exhausted(self):
         orch = RequestLifecycleOrchestrator()
-        orch.on_request_added("r1", max_retries=0)  # auto-starts prefill
+        orch.on_request_added("r1", max_retries=0)
+        orch.on_prefill_start("r1")  # scheduler starts prefill
         result = orch.on_request_failed("r1", error="fatal", retryable=True)
         assert result.phase == RequestPhase.FINISHED
 
     def test_abort(self):
         orch = RequestLifecycleOrchestrator()
-        orch.on_request_added("r1")  # auto-starts prefill
+        orch.on_request_added("r1")
+        orch.on_prefill_start("r1")  # scheduler starts prefill
         assert orch.active_count == 1
         orch.on_request_aborted("r1")
         assert orch.active_count == 0
@@ -269,7 +277,8 @@ class TestRequestLifecycleOrchestrator:
 
     def test_stats(self):
         orch = RequestLifecycleOrchestrator()
-        orch.on_request_added("r1", model="test-model")  # auto-starts prefill
+        orch.on_request_added("r1", model="test-model")
+        orch.on_prefill_start("r1")  # scheduler starts prefill
         orch.on_request_finished("r1", completion_tokens=10)
         stats = orch.get_stats()
         assert stats["total_requests"] == 1
@@ -303,7 +312,8 @@ class TestRequestLifecycleOrchestrator:
 
     def test_double_prefill_start(self):
         orch = RequestLifecycleOrchestrator()
-        orch.on_request_added("r1")  # auto-starts prefill
+        orch.on_request_added("r1")
+        orch.on_prefill_start("r1")  # first start succeeds
         # Second prefill start should fail (already in PREFILLING)
         assert not orch.on_prefill_start("r1")
 
@@ -311,8 +321,10 @@ class TestRequestLifecycleOrchestrator:
         orch = RequestLifecycleOrchestrator(
             concurrency_controller=AdaptiveConcurrencyController(initial=2),
         )
-        orch.on_request_added("r1")  # auto-starts prefill
-        orch.on_request_added("r2")  # auto-starts prefill
+        orch.on_request_added("r1")
+        orch.on_prefill_start("r1")  # scheduler starts prefill
+        orch.on_request_added("r2")
+        orch.on_prefill_start("r2")  # scheduler starts prefill
         stats = orch.get_stats()
         phases = stats["phase_distribution"]
         assert phases.get("PREFILLING", 0) == 2

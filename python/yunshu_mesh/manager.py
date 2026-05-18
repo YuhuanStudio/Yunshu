@@ -15,6 +15,7 @@ Lifecycle:
 import asyncio
 import logging
 import os
+import threading
 from typing import Any, Optional
 
 import mlx.core as mx
@@ -49,6 +50,8 @@ class MeshManager:
         # Wave 43: RTT-aware routing (Parallax pattern)
         from .rtt_routing import RTTAwareRouter
         self._rtt_router = RTTAwareRouter.from_env()
+        # Lock for thread-safe node state mutations (discovery, heartbeat, timeout)
+        self._node_lock = threading.Lock()
 
     @property
     def is_distributed(self) -> bool:
@@ -345,73 +348,73 @@ class MeshManager:
 
     def _on_peer_discovered(self, node: MeshNode) -> None:
         """Callback: new peer discovered."""
-        rank = self._topology.add_node(node)
-        if self._dp_router:
-            self._dp_router.add_node(node.node_id, rank)
-            if hasattr(node, 'capabilities') and node.capabilities:
-                self._dp_router.set_node_capacity(
+        with self._node_lock:
+            rank = self._topology.add_node(node)
+            if self._dp_router:
+                self._dp_router.add_node(node.node_id, rank)
+                if hasattr(node, 'capabilities') and node.capabilities:
+                    self._dp_router.set_node_capacity(
+                        node.node_id,
+                        int(node.capabilities.total_memory_gb * 1024**3),
+                        gpu_cores=node.capabilities.gpu_cores,
+                    )
+            if self._disagg_router:
+                caps = node.capabilities if hasattr(node, 'capabilities') else None
+                self._disagg_router.add_node(
                     node.node_id,
-                    int(node.capabilities.total_memory_gb * 1024**3),
-                    gpu_cores=node.capabilities.gpu_cores,
+                    memory_gb=caps.total_memory_gb if caps else 0.0,
+                    gpu_cores=caps.gpu_cores if caps else 0,
                 )
-        if self._disagg_router:
-            caps = node.capabilities if hasattr(node, 'capabilities') else None
-            self._disagg_router.add_node(
-                node.node_id,
-                memory_gb=caps.total_memory_gb if caps else 0.0,
-                gpu_cores=caps.gpu_cores if caps else 0,
-            )
-        self._publish_event("node_join", node.node_id, {
-            "hostname": node.hostname,
-            "rank": rank,
-            "capabilities": node.capabilities.__dict__ if hasattr(node.capabilities, '__dict__') else {},
-        })
-        logger.info(f"Peer discovered: {node.hostname} rank={rank}")
+            self._publish_event("node_join", node.node_id, {
+                "hostname": node.hostname,
+                "rank": rank,
+                "capabilities": node.capabilities.__dict__ if hasattr(node.capabilities, '__dict__') else {},
+            })
+            logger.info(f"Peer discovered: {node.hostname} rank={rank}")
 
     def _on_peer_lost(self, node: MeshNode) -> None:
         """Callback: peer disappeared."""
-        # Skip if node already processed by heartbeat timeout
-        if node.state == MeshNodeState.OFFLINE:
-            return
-        # Mark node offline instead of removing from topology.
-        # Removing would re-rank remaining nodes and invalidate
-        # pipeline stage assignments that reference the original ranks.
-        node.state = MeshNodeState.OFFLINE
-        if self._dp_router:
-            self._dp_router.remove_node(node.node_id)
-        if self._disagg_router:
-            self._disagg_router.remove_node(node.node_id)
-        self._publish_event("node_leave", node.node_id, {
-            "hostname": node.hostname,
-        })
-        logger.info(f"Peer lost: {node.hostname}")
+        with self._node_lock:
+            if node.state == MeshNodeState.OFFLINE:
+                return
+            node.state = MeshNodeState.OFFLINE
+            if self._dp_router:
+                self._dp_router.mark_unavailable(node.node_id)
+            if self._disagg_router:
+                self._disagg_router.remove_node(node.node_id)
+            self._publish_event("node_leave", node.node_id, {
+                "hostname": node.hostname,
+            })
+            logger.info(f"Peer lost: {node.hostname}")
 
     def _on_node_timeout(self, node: MeshNode) -> None:
         """Callback: heartbeat timeout."""
-        self.handle_node_failure(node.node_id)
-        if self._dp_router:
-            self._dp_router.mark_unavailable(node.node_id)
-        if self._disagg_router:
-            self._disagg_router.remove_node(node.node_id)
+        with self._node_lock:
+            self.handle_node_failure(node.node_id)
+            if self._dp_router:
+                self._dp_router.mark_unavailable(node.node_id)
+            if self._disagg_router:
+                self._disagg_router.remove_node(node.node_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
-        node.state = MeshNodeState.READY
-        if self._dp_router:
-            self._dp_router.mark_available(node.node_id)
-        if self._disagg_router:
-            caps = getattr(node, 'capabilities', None)
-            self._disagg_router.add_node(
-                node.node_id,
-                memory_gb=caps.total_memory_gb if caps and hasattr(caps, 'total_memory_gb') else 0.0,
-                gpu_cores=caps.gpu_cores if caps and hasattr(caps, 'gpu_cores') else 0,
-            )
-            self._disagg_router.mark_available(node.node_id)
-        self._publish_event("node_state_change", node.node_id, {
-            "new_state": "ready",
-            "reason": "heartbeat_recovered",
-        })
-        logger.info(f"Node recovered: {node.hostname}")
+        with self._node_lock:
+            node.state = MeshNodeState.READY
+            if self._dp_router:
+                self._dp_router.mark_available(node.node_id)
+            if self._disagg_router:
+                caps = getattr(node, 'capabilities', None)
+                self._disagg_router.add_node(
+                    node.node_id,
+                    memory_gb=caps.total_memory_gb if caps and hasattr(caps, 'total_memory_gb') else 0.0,
+                    gpu_cores=caps.gpu_cores if caps and hasattr(caps, 'gpu_cores') else 0,
+                )
+                self._disagg_router.mark_available(node.node_id)
+            self._publish_event("node_state_change", node.node_id, {
+                "new_state": "ready",
+                "reason": "heartbeat_recovered",
+            })
+            logger.info(f"Node recovered: {node.hostname}")
 
     # ── C22: Event Sourcing Helpers ──
 

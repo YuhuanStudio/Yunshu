@@ -264,7 +264,9 @@ class RBACManager:
         with self._lock:
             revoked = 0
             for key_hash, api_key in list(self._keys.items()):
-                if api_key.name == key_prefix or api_key.key_prefix.startswith(key_prefix):
+                if api_key.name == key_prefix or (
+                    len(key_prefix) >= 8 and api_key.key_prefix.startswith(key_prefix)
+                ) or api_key.key_prefix == key_prefix:
                     api_key.is_active = False
                     revoked += 1
             if revoked:
@@ -276,7 +278,9 @@ class RBACManager:
         with self._lock:
             to_delete = [
                 h for h, k in self._keys.items()
-                if k.name == key_prefix or k.key_prefix.startswith(key_prefix)
+                if k.name == key_prefix or (
+                    len(key_prefix) >= 8 and k.key_prefix.startswith(key_prefix)
+                ) or k.key_prefix == key_prefix
             ]
             for h in to_delete:
                 del self._keys[h]

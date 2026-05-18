@@ -113,6 +113,7 @@ class HeartbeatMonitor:
                 data, addr = self._socket.recvfrom(4096)
                 msg = json.loads(data.decode())
                 node_id = msg.get("node_id")
+                recovered_node = None
                 with self._nodes_lock:
                     if node_id and node_id in self._nodes:
                         self._last_heartbeat[node_id] = time.time()
@@ -123,15 +124,18 @@ class HeartbeatMonitor:
                         except (KeyError, ValueError):
                             pass
                         node._active_requests = msg.get("active_requests", 0)
-                        # Recovery check
+                        # Recovery check — capture callback data, fire outside lock
                         if node_id in self._timed_out:
                             self._timed_out.discard(node_id)
                             logger.info(f"Node recovered: {node.hostname} ({node_id})")
-                            for cb in self._on_recovery_callbacks:
-                                try:
-                                    cb(node)
-                                except Exception:
-                                    logger.debug("on_recovery callback failed", exc_info=True)
+                            recovered_node = node
+                # Fire recovery callbacks outside lock to prevent deadlock
+                if recovered_node is not None:
+                    for cb in self._on_recovery_callbacks:
+                        try:
+                            cb(recovered_node)
+                        except Exception:
+                            logger.debug("on_recovery callback failed", exc_info=True)
             except socket.timeout:
                 continue
             except Exception:
@@ -141,6 +145,7 @@ class HeartbeatMonitor:
     def _check_loop(self) -> None:
         while self._running:
             now = time.time()
+            timed_out_nodes = []
             with self._nodes_lock:
                 for node_id, last_hb in list(self._last_heartbeat.items()):
                     if now - last_hb > self.timeout and node_id not in self._timed_out:
@@ -149,11 +154,14 @@ class HeartbeatMonitor:
                         if node:
                             node.state = MeshNodeState.OFFLINE
                             logger.warning(f"Node timeout: {node.hostname} ({node_id})")
-                            for cb in self._on_timeout_callbacks:
-                                try:
-                                    cb(node)
-                                except Exception:
-                                    logger.debug("on_timeout callback failed", exc_info=True)
+                            timed_out_nodes.append(node)
+            # Fire timeout callbacks outside lock to prevent deadlock
+            for node in timed_out_nodes:
+                for cb in self._on_timeout_callbacks:
+                    try:
+                        cb(node)
+                    except Exception:
+                        logger.debug("on_timeout callback failed", exc_info=True)
             time.sleep(self.interval)
 
     def check_health(self) -> dict[str, bool]:

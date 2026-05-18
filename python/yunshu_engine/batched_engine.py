@@ -1396,6 +1396,7 @@ class BatchedEngine:
         priority: int = 0,
         logits_processors: list | None = None,
         timeout_seconds: float | None = None,
+        images: list | None = None,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -2462,6 +2463,7 @@ class BatchedEngine:
         logits_processors: list | None = None,
         cancel_event: asyncio.Event | None = None,
         timeout_seconds: float | None = None,
+        images: list | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -2650,6 +2652,7 @@ class BatchedEngine:
             xtc_threshold=xtc_threshold,
             reasoning_effort=reasoning_effort,
             logits_processors=logits_processors,
+            images=images,
         )
 
         finished_normally = False

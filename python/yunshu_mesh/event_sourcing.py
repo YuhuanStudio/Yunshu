@@ -336,6 +336,7 @@ class EventLog:
                         last_health_check=ns_data.get("last_health_check", 0.0),
                         last_health_status=ns_data.get("last_health_status", "unknown"),
                         join_time=ns_data.get("join_time", 0.0),
+                        leave_time=ns_data.get("leave_time", 0.0),
                     )
 
         # Replay events after snapshot

@@ -180,34 +180,37 @@ class TenantManager:
         return tenant
 
     def list_tenants(self) -> list[dict]:
-        return [
-            {
-                "id": t.tenant_id,
-                "name": t.name,
-                "tier": t.tier.name,
-                "active": t.is_active,
-                "quota_rpm": t.quota.requests_per_minute,
-            }
-            for t in self._tenants.values()
-        ]
+        with self._lock:
+            return [
+                {
+                    "id": t.tenant_id,
+                    "name": t.name,
+                    "tier": t.tier.name,
+                    "active": t.is_active,
+                    "quota_rpm": t.quota.requests_per_minute,
+                }
+                for t in self._tenants.values()
+            ]
 
     def deactivate_tenant(self, tenant_id: str) -> bool:
         """Deactivate a tenant (key stops working but record kept)."""
-        tenant = self._tenants.get(tenant_id)
-        if tenant is None:
-            return False
-        tenant.is_active = False
-        self._persist()
-        return True
+        with self._lock:
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None:
+                return False
+            tenant.is_active = False
+            self._persist()
+            return True
 
     def delete_tenant(self, tenant_id: str) -> bool:
         """Permanently delete a tenant."""
-        tenant = self._tenants.pop(tenant_id, None)
-        if tenant is None:
-            return False
-        self._key_to_tenant.pop(tenant.api_key_hash, None)
-        self._persist()
-        return True
+        with self._lock:
+            tenant = self._tenants.pop(tenant_id, None)
+            if tenant is None:
+                return False
+            self._key_to_tenant.pop(tenant.api_key_hash, None)
+            self._persist()
+            return True
 
     def _persist(self) -> None:
         """Save tenants to JSON file."""

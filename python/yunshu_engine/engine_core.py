@@ -1379,6 +1379,7 @@ class EngineCore:
             prompt_token_ids=token_ids,
             num_prompt_tokens=num_prompt_tokens,
             enable_thinking=enable_thinking,
+            images=_mm_images if _mm_images else None,
         )
 
         # Set up per-request output management (oMLX EngineCore pattern)

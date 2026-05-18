@@ -473,6 +473,17 @@ class KVSynchronizationService:
                 entries = [e for e in entries if e.source_node_id != source_node_id]
                 entries.append(entry)
                 self._remote_hash_index[block_hash] = entries
+            # Cap remote hashes to prevent unbounded growth.
+            # Evict from _remote_hashes (which has proper entries with last_verified),
+            # then clean up corresponding _remote_hash_index entries.
+            if len(self._remote_hashes) > self._max_entries:
+                self._evict_oldest(self._remote_hashes)
+                # Rebuild index from remaining remote hashes
+                self._remote_hash_index.clear()
+                for (nid, bh), entry in self._remote_hashes.items():
+                    if bh not in self._remote_hash_index:
+                        self._remote_hash_index[bh] = []
+                    self._remote_hash_index[bh].append(entry)
             return new_count
 
     def get_last_broadcast(self) -> dict | None:
@@ -636,6 +647,18 @@ class KVSynchronizationService:
             except Exception as e:
                 logger.debug("Block consumer failed: %s", e, exc_info=True)
 
+        # Register received blocks as local so future lookups find them here
+        if loaded > 0 and blocks:
+            try:
+                for b in blocks:
+                    if b.data_size > 0:
+                        self.register_local_prefix(
+                            block_hash=b.block_hash,
+                            model_name=model_name,
+                        )
+            except Exception:
+                logger.debug("Failed to register received blocks as local", exc_info=True)
+
         return loaded
 
     # ── Async Lifecycle ──────────────────────────────────────────────
@@ -675,8 +698,8 @@ class KVSynchronizationService:
 
     def get_stats(self) -> dict:
         """Return sync statistics."""
-        stats = self._stats.to_dict()
         with self._lock:
+            stats = self._stats.to_dict()
             stats["local_hash_count"] = len(self._local_hashes)
             stats["remote_hash_count"] = len(self._remote_hashes)
             stats["peer_count"] = len(self._peers)

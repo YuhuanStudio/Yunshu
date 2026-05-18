@@ -62,10 +62,11 @@ async def list_models() -> dict:
     # Single-engine mode
     engine = get_engine()
     if engine and engine.is_loaded:
+        _load_time = getattr(engine, '_load_time', None) or getattr(engine, 'load_time', None)
         models.append({
             "id": engine.model_name,
             "object": "model",
-            "created": int(time.time()),
+            "created": int(_load_time) if _load_time else int(time.time()),
             "owned_by": "yunshu",
         })
     return {"object": "list", "data": models}
@@ -130,6 +131,9 @@ async def load_model(req: LoadModelRequest) -> dict:
         if engine is None:
             raise HTTPException(status_code=503, detail="Engine not initialized")
 
+        from yunshu_engine.batched_engine import BatchedEngine
+        if isinstance(engine, BatchedEngine):
+            raise HTTPException(status_code=400, detail="Single-engine load not supported in batched mode — use model manager")
         from yunshu_engine.mlx_executor import get_mlx_executor
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(get_mlx_executor(), engine.load, req.model)

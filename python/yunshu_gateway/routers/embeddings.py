@@ -217,7 +217,9 @@ async def _generate_embeddings(engine, texts: list[str], model_id: str = "") -> 
             proc = get_ane_processor()
             if proc is not None:
                 logger.debug("Using ANE for embedding inference (model_id=%s)", model_id)
-                return proc.embed(texts)
+                import asyncio
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(None, proc.embed, texts)
         except Exception as exc:
             logger.warning(
                 "ANE embedding failed, falling back to GPU: %s", exc, exc_info=True,

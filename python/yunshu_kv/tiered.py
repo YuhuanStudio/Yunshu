@@ -232,9 +232,10 @@ class SSDCacheStore:
         if not self._index:
             return
 
-        # Sort by access time, evict oldest 10%
+        # Sort by access time, evict oldest 10%. Skip blocks with active refs.
         sorted_entries = sorted(
-            self._index.values(), key=lambda e: e.last_access
+            [e for e in self._index.values() if e.ref_count == 0],
+            key=lambda e: e.last_access,
         )
         to_evict = max(1, len(sorted_entries) // 10)
 
@@ -486,9 +487,9 @@ class TieredKVCacheManager:
             logger.debug("KV block extraction from hot cache failed", exc_info=True)
             return None
 
-    def free_request(self, table: BlockTable) -> None:
+    def free_request(self, table: BlockTable, request_id: str | None = None) -> None:
         """Free blocks from a completed request."""
-        self.hot.free_request(table)
+        self.hot.free_request(table, request_id=request_id)
 
     def get_stats(self) -> dict:
         """Return combined stats from all tiers."""

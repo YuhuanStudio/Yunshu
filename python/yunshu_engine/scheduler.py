@@ -1639,7 +1639,7 @@ class Scheduler:
                 # but never added to self.running (which _cleanup_finished skips).
                 if should_chunk:
                     self._pending_prefill.pop(req.request_id, None)
-                    self._active_partial_prefills -= 1
+                    self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
     def _run_external_prefill(self, req: Request) -> bool:
         """Run external prefill for a request.

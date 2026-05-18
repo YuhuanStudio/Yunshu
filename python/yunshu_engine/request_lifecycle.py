@@ -303,8 +303,9 @@ class RequestLifecycleOrchestrator:
             self._pending_queue.append(request_id)
             return state
 
-        # Auto-start prefill for immediate requests
-        self.on_prefill_start(request_id)
+        # Do NOT auto-start prefill here — the request is still WAITING in
+        # the scheduler queue. The scheduler will call on_prefill_start when
+        # it actually begins prefilling the request.
         return state
 
     def on_prefill_start(self, request_id: str) -> bool:
@@ -353,15 +354,16 @@ class RequestLifecycleOrchestrator:
         # Report to concurrency controller
         self._concurrency.report_success(state)
 
-        # Remove from tracking (keep stats)
-        del self._states[request_id]
-
-        # Try to promote a pending request
+        # Try to promote a pending request BEFORE deleting the finished state,
+        # so the pending request can look up its own state.
         if self._pending_queue:
             next_id = self._pending_queue.pop(0)
             next_state = self._states.get(next_id)
             if next_state:
                 self.on_prefill_start(next_id)
+
+        # Remove from tracking (keep stats)
+        del self._states[request_id]
 
         return state
 
