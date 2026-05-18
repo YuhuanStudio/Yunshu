@@ -375,7 +375,7 @@ class TestAdaptiveBatchSizer:
 
     def test_batch_sizer_stats(self):
         s = AdaptiveBatchSizer(min_batch=1, max_batch=64)
-        s.compute_optimal_batch(32, 0.5, 200.0)
+        s.compute_optimal_batch(32, 0.5, 200.0, current_latency_ms=100.0)
         stats = s.get_stats()
         assert stats["slo_checks"] == 1
         assert "current_batch_size" in stats

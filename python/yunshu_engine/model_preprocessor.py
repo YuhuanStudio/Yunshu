@@ -87,6 +87,18 @@ class QwenOmniAudioPreprocessor(ModelPreprocessor):
     model_family = "qwen3_omni"
     input_type = PreprocessorType.AUDIO
 
+    def __init__(self) -> None:
+        self._audio_start_id: int | None = None
+        self._audio_end_id: int | None = None
+        self._audio_token_id: int | None = None
+
+    def configure_from_model_config(self, model_config: dict) -> None:
+        thinker = model_config.get("thinker_config", {})
+        if isinstance(thinker, dict):
+            self._audio_start_id = thinker.get("audio_start_token_id", self._audio_start_id)
+            self._audio_end_id = thinker.get("audio_end_token_id", self._audio_end_id)
+            self._audio_token_id = thinker.get("audio_token_id", self._audio_token_id)
+
     # Qwen3-Omni special tokens
     AUDIO_START = "<|audio_bos|>"
     AUDIO_END = "<|audio_eos|>"
@@ -128,8 +140,9 @@ class QwenOmniAudioPreprocessor(ModelPreprocessor):
         )
 
     def detect_model(self, model_config: dict) -> bool:
+        model_type = model_config.get("model_type", "").lower()
         return any(
-            x in model_config.get("model_type", "").lower()
+            x in model_type
             for x in ("qwen3_omni", "qwen2_5_omni")
         )
 
@@ -165,6 +178,163 @@ class CosyVoicePhonemePreprocessor(ModelPreprocessor):
 
     def detect_model(self, model_config: dict) -> bool:
         return "cosyvoice" in model_config.get("model_type", "").lower()
+
+
+class Qwen3TTSPreprocessor(ModelPreprocessor):
+    """Handles Qwen3-TTS audio token encoding for text-to-speech.
+
+    Qwen3-TTS uses dedicated TTS tokens: tts_bos_token_id, tts_eos_token_id,
+    tts_pad_token_id. Config-driven token IDs from model config.
+    """
+
+    model_family = "qwen3_tts"
+    input_type = PreprocessorType.SPEECH
+
+    DEFAULT_TTS_BOS_ID = 151672
+    DEFAULT_TTS_EOS_ID = 151673
+    DEFAULT_TTS_PAD_ID = 151671
+
+    def __init__(self) -> None:
+        self._tts_bos_id = self.DEFAULT_TTS_BOS_ID
+        self._tts_eos_id = self.DEFAULT_TTS_EOS_ID
+        self._tts_pad_id = self.DEFAULT_TTS_PAD_ID
+
+    def configure_from_model_config(self, model_config: dict) -> None:
+        self._tts_bos_id = model_config.get("tts_bos_token_id", self._tts_bos_id)
+        self._tts_eos_id = model_config.get("tts_eos_token_id", self._tts_eos_id)
+        self._tts_pad_id = model_config.get("tts_pad_token_id", self._tts_pad_id)
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        warnings = []
+        token_ids: list[int] = []
+
+        if isinstance(raw_input, list) and raw_input and isinstance(raw_input[0], int):
+            token_ids = [self._tts_bos_id] + raw_input + [self._tts_eos_id]
+        elif isinstance(raw_input, dict):
+            if "token_ids" in raw_input:
+                token_ids = [self._tts_bos_id] + raw_input["token_ids"] + [self._tts_eos_id]
+            else:
+                text = raw_input.get("text", "")
+                estimated_tokens = len(text) * 3
+                warnings.append("Qwen3-TTS codec not yet integrated — pass pre-tokenized input")
+                return PreprocessedInput(
+                    input_type=PreprocessorType.SPEECH,
+                    model_family=self.model_family,
+                    token_ids=[],
+                    original_tokens=len(text.split()),
+                    processed_tokens=estimated_tokens,
+                    features={"codec": "qwen3_tts_12hz", "estimated_tokens": estimated_tokens},
+                    warnings=warnings,
+                )
+        elif isinstance(raw_input, str):
+            estimated_tokens = len(raw_input) * 3
+            warnings.append("Qwen3-TTS codec not yet integrated — pass pre-tokenized input")
+            return PreprocessedInput(
+                input_type=PreprocessorType.SPEECH,
+                model_family=self.model_family,
+                token_ids=[],
+                original_tokens=len(raw_input.split()),
+                processed_tokens=estimated_tokens,
+                features={"codec": "qwen3_tts_12hz", "estimated_tokens": estimated_tokens},
+                warnings=warnings,
+            )
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.SPEECH,
+            model_family=self.model_family,
+            token_ids=token_ids,
+            original_tokens=max(0, len(token_ids) - 2),
+            processed_tokens=len(token_ids),
+            features={
+                "codec": "qwen3_tts_12hz",
+                "tts_bos_id": self._tts_bos_id,
+                "tts_eos_id": self._tts_eos_id,
+                "tts_pad_id": self._tts_pad_id,
+            },
+            warnings=warnings,
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        return model_config.get("model_type", "").lower() == "qwen3_tts"
+
+
+class Qwen3ASRPreprocessor(ModelPreprocessor):
+    """Handles Qwen3-ASR audio token encoding for speech recognition.
+
+    Uses same audio token framework as Qwen3-Omni with different audio_token_id.
+    Reads token IDs from thinker_config in model config.
+    """
+
+    model_family = "qwen3_asr"
+    input_type = PreprocessorType.AUDIO
+
+    DEFAULT_AUDIO_START_ID = 151669
+    DEFAULT_AUDIO_END_ID = 151670
+    DEFAULT_AUDIO_TOKEN_ID = 151676
+
+    def __init__(self) -> None:
+        self._audio_start_id = self.DEFAULT_AUDIO_START_ID
+        self._audio_end_id = self.DEFAULT_AUDIO_END_ID
+        self._audio_token_id = self.DEFAULT_AUDIO_TOKEN_ID
+
+    def configure_from_model_config(self, model_config: dict) -> None:
+        thinker = model_config.get("thinker_config", {})
+        if isinstance(thinker, dict):
+            self._audio_start_id = thinker.get("audio_start_token_id", self._audio_start_id)
+            self._audio_end_id = thinker.get("audio_end_token_id", self._audio_end_id)
+            self._audio_token_id = thinker.get("audio_token_id", self._audio_token_id)
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        warnings = []
+        token_ids: list[int] = []
+
+        if isinstance(raw_input, list) and raw_input and isinstance(raw_input[0], int):
+            token_ids = [self._audio_start_id] + raw_input + [self._audio_end_id]
+        elif isinstance(raw_input, dict):
+            if "token_ids" in raw_input:
+                token_ids = [self._audio_start_id] + raw_input["token_ids"] + [self._audio_end_id]
+            else:
+                estimated_tokens = raw_input.get("audio_length", 0) // 320
+                warnings.append("Qwen3-ASR audio codec not yet integrated — pass pre-tokenized input")
+                return PreprocessedInput(
+                    input_type=PreprocessorType.AUDIO,
+                    model_family=self.model_family,
+                    token_ids=[],
+                    original_tokens=estimated_tokens,
+                    processed_tokens=0,
+                    features={"codec": "qwen3_asr", "estimated_tokens": estimated_tokens},
+                    warnings=warnings,
+                )
+        elif isinstance(raw_input, (bytes, bytearray)):
+            estimated_tokens = len(raw_input) // 320
+            warnings.append("Qwen3-ASR audio codec not yet integrated — pass pre-tokenized input")
+            return PreprocessedInput(
+                input_type=PreprocessorType.AUDIO,
+                model_family=self.model_family,
+                token_ids=[],
+                original_tokens=estimated_tokens,
+                processed_tokens=0,
+                features={"codec": "qwen3_asr", "estimated_tokens": estimated_tokens},
+                warnings=warnings,
+            )
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.AUDIO,
+            model_family=self.model_family,
+            token_ids=token_ids,
+            original_tokens=max(0, len(token_ids) - 2),
+            processed_tokens=len(token_ids),
+            features={
+                "codec": "qwen3_asr",
+                "audio_start_id": self._audio_start_id,
+                "audio_end_id": self._audio_end_id,
+                "audio_token_id": self._audio_token_id,
+            },
+            warnings=warnings,
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        return model_config.get("model_type", "").lower() == "qwen3_asr"
 
 
 class LLaVAImagePreprocessor(ModelPreprocessor):
@@ -602,6 +772,8 @@ class PreprocessorRegistry:
         for cls in [
             QwenOmniAudioPreprocessor,
             CosyVoicePhonemePreprocessor,
+            Qwen3TTSPreprocessor,
+            Qwen3ASRPreprocessor,
             LLaVAImagePreprocessor,
             QwenVLImagePreprocessor,
             WanVideoPreprocessor,

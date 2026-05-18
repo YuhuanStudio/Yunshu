@@ -215,7 +215,14 @@ class RequestDeduplicator:
     def _evict_oldest(self) -> None:
         if not self._entries:
             return
-        oldest_hash = min(self._entries, key=lambda h: self._entries[h].created_at)
+        # Prefer evicting completed entries to avoid orphaning in-flight shadows
+        completed = [
+            h for h, e in self._entries.items() if e.completed_at is not None
+        ]
+        if completed:
+            oldest_hash = min(completed, key=lambda h: self._entries[h].created_at)
+        else:
+            oldest_hash = min(self._entries, key=lambda h: self._entries[h].created_at)
         del self._entries[oldest_hash]
 
     def get_entry(self, content_hash: str) -> DeduplicationEntry | None:

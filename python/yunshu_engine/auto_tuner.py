@@ -578,10 +578,11 @@ class AdaptiveBatchSizer:
             batch = max(self._min_batch, min(batch, queue_depth))
             batch = max(self._min_batch, min(batch, self._max_batch))
 
-            # Track SLO compliance (missing latency is NOT counted as SLO-met)
-            self._slo_total_count += 1
-            if current_latency_ms > 0 and current_latency_ms <= slo_latency_ms:
-                self._slo_met_count += 1
+            # Track SLO compliance (only when latency data is available)
+            if current_latency_ms > 0:
+                self._slo_total_count += 1
+                if current_latency_ms <= slo_latency_ms:
+                    self._slo_met_count += 1
 
             if batch != old_batch:
                 self._adjustment_count += 1

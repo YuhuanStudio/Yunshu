@@ -1984,6 +1984,11 @@ class EngineCore:
                     self._profiler.record_step(step_metrics)
                     # Auto-tune every 100 steps
                     if self._profiler._total_steps % 100 == 0:
+                        # Evaluate previous tuning decisions for regression
+                        for prev in self._auto_tuner._history[-1:]:
+                            if getattr(prev, 'after_metrics', None) is None and prev.before_metrics is not None:
+                                self._auto_tuner.evaluate_tuning(prev, step_metrics)
+                                break
                         tuning_decisions = self._auto_tuner.auto_tune()
                         if tuning_decisions:
                             self._apply_tuning_to_config(tuning_decisions)

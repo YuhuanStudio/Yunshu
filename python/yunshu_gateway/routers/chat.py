@@ -409,6 +409,22 @@ def _has_images(messages: list[dict]) -> bool:
     return False
 
 
+def _extract_image_refs(messages: list[dict]) -> list[dict] | None:
+    """Extract lightweight image references from messages.
+
+    Returns raw image reference dicts (URLs or base64 data) without
+    downloading, so the scheduler and dedup layers can hash them.
+    """
+    refs = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in ("image_url", "image", "image_data"):
+                    refs.append(part)
+    return refs if refs else None
+
+
 def _has_audio(messages: list[dict]) -> bool:
     """Check if any message contains audio content."""
     for msg in messages:
