@@ -679,7 +679,9 @@ class MoEEfficiencyOptimizer:
             # Apply load-balancing penalty
             penalised = list(probs)
             if self._stats.total_tokens > 0:
-                avg_count = self._stats.total_tokens / self._num_experts
+                # Each token activates top_k experts, so the average per-expert
+                # count is total_tokens * top_k / num_experts.
+                avg_count = self._stats.total_tokens * self._top_k / self._num_experts
                 for i in range(self._num_experts):
                     expert_count = self._stats.expert_counts.get(i, 0)
                     if expert_count > avg_count * 1.5:

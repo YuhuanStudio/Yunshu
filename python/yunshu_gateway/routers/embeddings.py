@@ -51,8 +51,11 @@ class EmbeddingRequest(BaseModel):
         if isinstance(self.input, list) and not self.input:
             raise ValueError("input: cannot be an empty list")
         # Validate dimensions
-        if self.dimensions is not None and self.dimensions <= 0:
-            raise ValueError("dimensions must be a positive integer")
+        if self.dimensions is not None:
+            if self.dimensions <= 0:
+                raise ValueError("dimensions must be a positive integer")
+            if self.dimensions > 8192:
+                raise ValueError("dimensions must not exceed 8192")
         return self
 
 

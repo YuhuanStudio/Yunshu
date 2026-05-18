@@ -292,14 +292,19 @@ class STSEngine:
             offset = 12
             fmt_data = None
             audio_data = None
-            while offset < len(audio_input):
+            while offset + 8 <= len(audio_input):
                 chunk_id = audio_input[offset:offset + 4]
                 chunk_size = struct.unpack_from("<I", audio_input, offset + 4)[0]
+                chunk_end = offset + 8 + chunk_size
                 if chunk_id == b"fmt ":
-                    fmt_data = audio_input[offset + 8:offset + 8 + chunk_size]
+                    fmt_data = audio_input[offset + 8:chunk_end]
                 elif chunk_id == b"data":
-                    audio_data = audio_input[offset + 8:offset + 8 + chunk_size]
-                offset += 8 + chunk_size
+                    # Clamp to available bytes to avoid over-reading
+                    audio_data = audio_input[offset + 8:min(chunk_end, len(audio_input))]
+                offset = chunk_end
+                # WAV chunks are word-aligned
+                if chunk_size % 2 != 0:
+                    offset += 1
 
             if fmt_data is None or audio_data is None:
                 raise ValueError("Invalid WAV file: missing fmt or data chunk")
@@ -308,12 +313,30 @@ class STSEngine:
             sample_rate = struct.unpack_from("<I", fmt_data, 4)[0]
             bits_per_sample = struct.unpack_from("<H", fmt_data, 14)[0]
 
+            if bits_per_sample not in (8, 16, 24, 32):
+                raise ValueError(f"Unsupported bits_per_sample: {bits_per_sample}")
+
             # Convert to mono float samples
-            arr = np.frombuffer(audio_data, dtype=f"int{bits_per_sample}").astype(np.float32)
-            if bits_per_sample == 16:
-                arr = arr / 32768.0
-            elif bits_per_sample == 32:
-                arr = arr / 2147483648.0
+            if bits_per_sample == 8:
+                # 8-bit WAV is unsigned
+                arr = np.frombuffer(audio_data, dtype=np.uint8).astype(np.float32)
+                arr = (arr - 128.0) / 128.0
+            elif bits_per_sample == 24:
+                # 24-bit: manual unpacking
+                n_samples = len(audio_data) // 3
+                arr = np.zeros(n_samples, dtype=np.float32)
+                for j in range(n_samples):
+                    b0, b1, b2 = audio_data[j*3], audio_data[j*3+1], audio_data[j*3+2]
+                    val = b0 | (b1 << 8) | (b2 << 16)
+                    if val >= 0x800000:
+                        val -= 0x1000000
+                    arr[j] = val / 8388608.0
+            else:
+                arr = np.frombuffer(audio_data, dtype=f"int{bits_per_sample}").astype(np.float32)
+                if bits_per_sample == 16:
+                    arr = arr / 32768.0
+                elif bits_per_sample == 32:
+                    arr = arr / 2147483648.0
             if channels > 1:
                 arr = arr.reshape(-1, channels).mean(axis=1)
 
@@ -458,10 +481,13 @@ class STSEngine:
         import numpy as np
 
         arr = np.array(samples, dtype=np.float32)
+        if len(arr) < 2:
+            return arr.tolist()
+
         factor = 2 ** (semitones / 12.0)
 
         # Resample to shift pitch
-        new_length = int(len(arr) / factor)
+        new_length = max(2, int(len(arr) / factor))
         indices = np.linspace(0, len(arr) - 1, new_length)
         shifted = np.interp(indices, np.arange(len(arr)), arr)
 
