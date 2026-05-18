@@ -67,7 +67,7 @@ async def dashboard_summary(request: Request):
     # Models
     manager = get_model_manager()
     if manager:
-        for mid, entry in manager._entries.items():
+        for mid, entry in manager.list_entries().items():
             model_info = {
                 "id": mid,
                 "type": str(entry.model_type.name if hasattr(entry.model_type, 'name') else entry.model_type),
@@ -105,7 +105,7 @@ async def dashboard_summary(request: Request):
     rbac_manager = getattr(request.app.state, "rbac_manager", None)
     result["auth"] = {
         "rbac_enabled": rbac_manager is not None,
-        "key_count": len(rbac_manager._keys) if rbac_manager else 0,
+        "key_count": len(rbac_manager.list_keys()) if rbac_manager else 0,
     }
 
     return result

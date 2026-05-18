@@ -80,18 +80,33 @@ class RegexConstraint:
             return self._valid_chars_cache[cache_key]
 
         # Try extending with each printable ASCII char + common whitespace
-        # + common Unicode ranges (CJK, Hangul, Hiragana/Katakana)
+        # + common Unicode ranges (CJK, Hangul, Arabic, Thai, Emoji)
         valid = set()
         test_chars = [chr(i) for i in range(32, 127)]
         test_chars.extend(['\n', '\t', '\r'])
-        # CJK Unified Ideographs sample (common Chinese/Japanese characters)
-        for cp in range(0x4E00, 0x4E00 + 100):
+        # CJK Unified Ideographs (broader sample)
+        for cp in range(0x4E00, 0x4E00 + 500):
             test_chars.append(chr(cp))
-        # Hangul Syllables sample (Korean)
-        for cp in range(0xAC00, 0xAC00 + 50):
+        # Hangul Syllables (Korean)
+        for cp in range(0xAC00, 0xAC00 + 100):
             test_chars.append(chr(cp))
-        # Hiragana + Katakana sample (Japanese)
-        for cp in range(0x3040, 0x3040 + 30):
+        # Hiragana + Katakana (Japanese)
+        for cp in range(0x3040, 0x30FF):
+            test_chars.append(chr(cp))
+        # Arabic
+        for cp in range(0x0600, 0x0660):
+            test_chars.append(chr(cp))
+        # Thai
+        for cp in range(0x0E00, 0x0E50):
+            test_chars.append(chr(cp))
+        # Devanagari (Hindi)
+        for cp in range(0x0900, 0x0970):
+            test_chars.append(chr(cp))
+        # Common Emoji (first 200)
+        for cp in range(0x1F600, 0x1F6C8):
+            test_chars.append(chr(cp))
+        # Latin Extended
+        for cp in range(0x00C0, 0x0250):
             test_chars.append(chr(cp))
         total_tested = len(test_chars)
 

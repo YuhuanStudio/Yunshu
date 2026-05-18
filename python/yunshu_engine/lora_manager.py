@@ -95,6 +95,16 @@ class LoRAAdapterManager:
             self._base_model_copy = None
             self._base_model = None
             self._active_adapter_id = None
+        # Force GC and clear Metal buffer pool to release GPU memory
+        # held by the dropped model weight references.
+        try:
+            import gc
+            import mlx.core as mx
+            gc.collect()
+            mx.synchronize()
+            mx.clear_cache()
+        except Exception:
+            logger.debug("post-shutdown GC/cache clear failed", exc_info=True)
         logger.info("LoRA manager shut down, all adapters and base model released")
 
     def save_base_weights(self) -> None:
