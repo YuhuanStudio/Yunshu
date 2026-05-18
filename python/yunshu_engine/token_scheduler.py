@@ -303,7 +303,10 @@ class TokenLevelScheduler:
                     )
                 )
 
-        # Enforce total budget: scale down if over budget
+        # Enforce total budget: scale down if over budget.
+        # After scaling, each allocation is clamped to min_prefill_tokens.
+        # If the min clamp causes total to still exceed budget, do a second
+        # pass that proportionally reduces only the allocations above the min.
         total_alloc = sum(a.prefill_tokens for a in allocations)
         if total_alloc > prefill_budget and len(allocations) > 0:
             scale = prefill_budget / total_alloc
@@ -312,6 +315,22 @@ class TokenLevelScheduler:
                     self.min_prefill_tokens,
                     int(alloc.prefill_tokens * scale),
                 )
+            # Second pass: if min_prefill_tokens floor pushed us back over budget,
+            # reduce the allocations that are above the minimum proportionally.
+            total_alloc = sum(a.prefill_tokens for a in allocations)
+            if total_alloc > prefill_budget:
+                overage = total_alloc - prefill_budget
+                above_min = [(i, a) for i, a in enumerate(allocations)
+                             if a.prefill_tokens > self.min_prefill_tokens]
+                if above_min:
+                    reducible = sum(a.prefill_tokens - self.min_prefill_tokens
+                                    for _, a in above_min)
+                    if reducible > 0:
+                        to_reduce = min(overage, reducible)
+                        for i, alloc in above_min:
+                            share = int(to_reduce * (alloc.prefill_tokens - self.min_prefill_tokens) / reducible)
+                            alloc.prefill_tokens = max(self.min_prefill_tokens,
+                                                       alloc.prefill_tokens - share)
 
         return allocations
 

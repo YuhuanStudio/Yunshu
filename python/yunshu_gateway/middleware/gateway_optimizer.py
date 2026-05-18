@@ -53,7 +53,11 @@ class ResponseCacheMiddleware:
             body_json = json.loads(body)
             stream = body_json.get("stream", False)
             if stream:
-                await self.app(scope, receive, send)
+                # Must provide the cached body back to downstream via a
+                # synthetic receive — the original receive was consumed.
+                async def _cached_receive():
+                    return {"type": "http.request", "body": body, "more_body": False}
+                await self.app(scope, _cached_receive, send)
                 return
 
             cache_key = hashlib.sha256(body).hexdigest()
@@ -66,10 +70,17 @@ class ResponseCacheMiddleware:
                 return
         except Exception:
             logger.debug("cache lookup failed", exc_info=True)
-            await self.app(scope, receive, send)
+            async def _fallback_receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+            await self.app(scope, _fallback_receive, send)
             return
 
-        # Cache miss — capture response
+        # Cache miss — capture response.
+        # Provide the cached body via synthetic receive so downstream
+        # handlers don't get an empty body from the consumed receive.
+        async def _replay_receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
         response_started = False
         status_code = 200
         headers = []
@@ -100,7 +111,7 @@ class ResponseCacheMiddleware:
                     except Exception:
                         logger.debug("cache store failed", exc_info=True)
 
-        await self.app(scope, receive, send_wrapper)
+        await self.app(scope, _replay_receive, send_wrapper)
 
 
 class RequestCoalescingMiddleware:
