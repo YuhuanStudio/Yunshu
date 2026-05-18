@@ -11,7 +11,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
@@ -270,7 +270,7 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
 
 
 @router.post("/roofline")
-async def bench_roofline(request: RooflineRequest, bg: BackgroundTasks):
+async def bench_roofline(request: RooflineRequest):
     """Run GEMM roofline benchmark on Apple GPU."""
     with _lock:
         if _active_benchmark:

@@ -195,7 +195,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found: {e}")
 
     # Check for VLM/audio routing
-    from .chat import _has_images, _has_audio, _parse_response_format
+    from .chat import _has_images, _has_audio
     has_media = _has_images(messages) or _has_audio(messages)
     if has_media:
         from .chat import _handle_vlm_chat
@@ -676,22 +676,43 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             seq=_next_seq(),
         )
 
+        # ── Check for tool calls in the accumulated text ──
+        tool_calls = None
+        clean_text = accumulated_text
+        if req.tools:
+            from .chat import extract_tool_calls_model_aware, clean_tool_call_markup
+            tool_calls = extract_tool_calls_model_aware(accumulated_text, req.model)
+            if tool_calls:
+                clean_text = clean_tool_call_markup(accumulated_text)
+
         # ── Build final output for response.completed ──
+        content_parts = [
+            {
+                "type": "output_text",
+                "text": clean_text,
+                "annotations": [],
+            }
+        ]
         final_output = [
             {
                 "type": "message",
                 "id": msg_id,
                 "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": accumulated_text,
-                        "annotations": [],
-                    }
-                ],
+                "content": content_parts,
                 "status": "completed",
             }
         ]
+
+        # Append function_call items for detected tool calls
+        if tool_calls:
+            for tc in tool_calls:
+                final_output.append({
+                    "type": "function_call",
+                    "id": f"fc-{uuid.uuid4().hex[:24]}",
+                    "call_id": f"call_{uuid.uuid4().hex[:8]}",
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                })
 
         # ── Lifecycle: response.completed (includes usage) ──
         yield format_responses_completed(

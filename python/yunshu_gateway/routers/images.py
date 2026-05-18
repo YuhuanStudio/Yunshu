@@ -285,6 +285,18 @@ async def create_image_variation(req: ImageVariationsRequest) -> JSONResponse:
     except (ValueError, AttributeError):
         width, height = 1024, 1024
 
+    # Validate dimensions (same rules as /images/generations)
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
+
     try:
         # Generate variation using the input image as conditioning
         images = []
@@ -371,6 +383,18 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
         width, height = map(int, req.size.split("x"))
     except (ValueError, AttributeError):
         width, height = 1024, 1024
+
+    # Validate dimensions
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
 
     try:
         images = []
@@ -459,6 +483,18 @@ async def create_image_inpaint(req: ImageInpaintRequest) -> JSONResponse:
         width, height = map(int, req.size.split("x"))
     except (ValueError, AttributeError):
         width, height = 1024, 1024
+
+    # Validate dimensions
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
 
     try:
         data = []
@@ -549,6 +585,18 @@ async def create_image_controlnet(req: ImageControlNetRequest) -> JSONResponse:
     except (ValueError, AttributeError):
         width, height = 1024, 1024
 
+    # Validate dimensions
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
+
     try:
         data = []
         for i in range(req.n):
@@ -634,6 +682,18 @@ async def create_image_depth_guided(req: ImageDepthGuidedRequest) -> JSONRespons
         width, height = map(int, req.size.split("x"))
     except (ValueError, AttributeError):
         width, height = 1024, 1024
+
+    # Validate dimensions
+    if width < 64 or width > 2048 or height < 64 or height > 2048:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be between 64 and 2048, got {width}x{height}",
+        )
+    if width % 64 != 0 or height % 64 != 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
+        )
 
     try:
         data = []

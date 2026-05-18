@@ -96,6 +96,11 @@ class SessionConfig:
                 if key in ("input_audio_format", "output_audio_format"):
                     if value not in self.SUPPORTED_AUDIO_FORMATS:
                         continue
+                if key == "turn_detection" and isinstance(value, dict):
+                    # Validate turn_detection type value
+                    td_type = value.get("type")
+                    if td_type is not None and td_type not in ("server_vad", None):
+                        continue
                 setattr(self, key, value)
                 changed.append(key)
         return changed
@@ -678,9 +683,15 @@ class RealtimeSession:
         task = self._active_response
         if task and not task.done():
             # Capture task attributes before cancelling (cancel triggers finally which
-            # sets self._active_response = None)
+            # sets self._active_response = None).
             response_id = getattr(task, '_response_id', '')
             item_id = getattr(task, '_item_id', '')
+            # Capture audio modality BEFORE awaiting the task, because the task's
+            # finally block clears self._active_modalities to [].
+            _had_audio = (
+                "audio" in self._active_modalities
+                or not self._active_modalities
+            )
             # Signal the cancel_event so the engine can stop mid-generation
             if self._cancel_event is not None:
                 self._cancel_event.set()
@@ -692,13 +703,7 @@ class RealtimeSession:
             except asyncio.CancelledError:
                 pass
             # Signal audio truncation if audio modality was active.
-            # Send when audio was in modalities, or when modalities are unknown
-            # (edge case: cancel without a proper response.create flow).
-            _has_audio = (
-                "audio" in self._active_modalities
-                or not self._active_modalities
-            )
-            if _has_audio:
+            if _had_audio:
                 await self.send_event(_event(
                     RealtimeEvent.RESPONSE_AUDIO_DONE,
                     response_id=response_id,
@@ -885,6 +890,7 @@ class RealtimeSession:
             return
 
         # Transcribe via ASR engine
+        tmp_path = None
         try:
             import tempfile, os
             from ..engine import get_model_manager
@@ -921,10 +927,11 @@ class RealtimeSession:
         except Exception as e:
             logger.error(f"ASR error in realtime session: {e}", exc_info=True)
         finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         self._audio_buffer = bytearray()
 

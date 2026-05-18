@@ -244,7 +244,8 @@ async def create_completion(req: CompletionRequest, request: Request):
                 lp = None
                 if req.logprobs > 0:
                     lp = _format_logprobs(
-                        result, getattr(engine, '_tokenizer', None), req.logprobs
+                        result, getattr(engine, '_tokenizer', None),
+                        req.top_logprobs if req.top_logprobs is not None else req.logprobs,
                     )
             else:
                 state = await engine.generate(
@@ -283,7 +284,8 @@ async def create_completion(req: CompletionRequest, request: Request):
                 lp = None
                 if req.logprobs > 0:
                     lp = _format_logprobs(
-                        state, getattr(engine, '_tokenizer', None), req.logprobs
+                        state, getattr(engine, '_tokenizer', None),
+                        req.top_logprobs if req.top_logprobs is not None else req.logprobs,
                     )
 
             if req.echo:
@@ -380,8 +382,10 @@ async def _stream_completion(
     async def _stream_choice(choice_idx: int):
         nonlocal prompt_tok, completion_tok, cached_tok
         choice_finish_reason = None
-        # Per-choice text offset tracker for logprobs text_offset field
-        _choice_text_offset = 0
+        # Per-choice text offset tracker for logprobs text_offset field.
+        # When echo=True, the prompt text is emitted first, so the completion
+        # text offsets must account for the prompt length.
+        _choice_text_offset = len(prompt) if req.echo else 0
         if req.echo:
             yield format_openai_completion_chunk(
                 completion_id=completion_id,
@@ -565,7 +569,13 @@ async def _stream_completion(
 
 
 def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
-    """Format logprobs from request state into OpenAI Completions format."""
+    """Format logprobs from request state into OpenAI Completions format.
+
+    Args:
+        state: Generation result with logprobs attribute.
+        tokenizer: Tokenizer for decoding token IDs.
+        top_logprobs: Maximum number of top logprobs to return per token.
+    """
     raw_logprobs = getattr(state, 'logprobs', None)
     if not raw_logprobs:
         return None
@@ -583,9 +593,9 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                     except Exception:
                         logger.debug("tokenizer decode failed", exc_info=True)
                 top_lps = lp_entry.get("top_logprobs", [])
-                # Decode top_logprobs bytes if present
+                # Decode top_logprobs bytes if present, truncate to requested count
                 decoded_top = []
-                for tlp in top_lps:
+                for tlp in top_lps[:top_logprobs] if top_logprobs > 0 else top_lps:
                     tlp_token = tlp.get("token", "")
                     decoded_top.append({
                         "token": tlp_token,

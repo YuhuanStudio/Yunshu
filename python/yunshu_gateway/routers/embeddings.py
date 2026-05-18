@@ -103,21 +103,19 @@ async def create_embedding(req: EmbeddingRequest):
     total_tokens = 0
     for i, (emb, text) in enumerate(zip(embeddings, texts)):
         # Engine.embed() always returns a vector (zero vector for empty input),
-        # so empty embeddings should not occur.  Warn rather than silently drop
-        # to preserve the 1:1 index correspondence required by the OpenAI API.
+        # so empty embeddings should not occur.  Warn and substitute a zero
+        # vector to preserve the 1:1 index correspondence required by the
+        # OpenAI API.  Skipping entries would create index gaps that break
+        # client expectations.
         if not emb:
             logger.warning(
                 "Empty embedding at index %d — engine returned no vector. "
-                "Skipping entry (index gap in response).",
+                "Substituting zero vector to preserve index alignment.",
                 i,
             )
-            # Still count tokens for accurate usage reporting even when
-            # the embedding vector is empty/skipped.
-            if tokenizer:
-                total_tokens += len(tokenizer.encode(text))
-            else:
-                total_tokens += max(1, len(text) // 4)
-            continue
+            # Determine a reasonable dimension for the zero vector fallback
+            _dim = req.dimensions if req.dimensions else 768
+            emb = [0.0] * _dim
 
         # Truncate to requested dimensions (Matryoshka embedding support)
         if req.dimensions is not None and req.dimensions > 0:
