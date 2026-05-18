@@ -1430,11 +1430,11 @@ class EngineCore:
                         break
                     continue
 
-                # No buffered output — check if stream already ended
-                if collector._sentinel:
-                    break
-
-                # Wait for new output from engine loop
+                # Wait for new output from engine loop.
+                # Do NOT check collector._sentinel here — there is a race
+                # between get_nowait() returning None and the sentinel check
+                # where the engine could have put new output.  The await
+                # collector.get() handles both sentinel and new output correctly.
                 output = await collector.get()
                 if output is None:
                     break
