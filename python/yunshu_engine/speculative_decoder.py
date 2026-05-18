@@ -691,11 +691,14 @@ class SpeculativeDecoder:
             # This is O(accepted+1) instead of O(total_length) for full rebuild.
             if accepted < len(draft_tokens):
                 self._restore_cache(draft_cache, draft_snap)
-                # Re-feed the tokens that target accepted / corrected.
-                # After restore, the draft cache is at the pre-draft state,
-                # so we need to feed: last_tok + accepted_tokens + correction
-                refeed = [generated_tokens[-(accepted + 1) - 1]]
-                refeed += generated_tokens[-(accepted + 1):]
+                # Re-feed only the tokens that target accepted / corrected.
+                # After restore, the draft cache is at the pre-draft state
+                # (snapshot taken BEFORE draft loop fed anything), so we need
+                # to feed just the accepted draft tokens + the correction token.
+                # Do NOT include last_tok — it was already in the cache at
+                # snapshot time (fed during the previous iteration's refeed
+                # or the initial prefill).
+                refeed = generated_tokens[-(accepted + 1):]
                 for tok in refeed:
                     self.draft(mx.array([[tok]]), cache=draft_cache)
 
