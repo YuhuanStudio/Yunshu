@@ -234,7 +234,7 @@ class ControlNetBlock:
         """
         import mlx.core as mx
 
-        control_strength = strength or self._config.controlnet_strength
+        control_strength = strength if strength is not None else self._config.controlnet_strength
 
         # Check if conditioning should be active at this step
         step_frac = step / max(total_steps, 1)

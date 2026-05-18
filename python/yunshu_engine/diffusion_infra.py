@@ -298,7 +298,9 @@ class DiffusionScheduler:
         ):
             # Euler / Euler-ancestral: scale by c_in = 1 / (sigma^2 + 1)^0.5
             c_in = 1.0 / math.sqrt(sigma ** 2 + 1)
-            return sample * c_in if not isinstance(sample, (int, float)) else c_in
+            if sample is None:
+                return c_in
+            return sample * c_in
         # DDIM, DPM++, LMS: no scaling
         return sample
 
@@ -409,6 +411,8 @@ class DiffusionLoRAOffloader:
             List of adapter IDs that are currently loaded after this call.
         """
         target_ids = lora_ids if lora_ids is not None else self._adapters_for_step(step)
+        # Protect all target adapters from eviction (they are all needed this step).
+        protected = set(target_ids)
 
         for lora_id in target_ids:
             adapter = self._adapters.get(lora_id)
@@ -420,15 +424,20 @@ class DiffusionLoRAOffloader:
 
             # Check if we need to evict to make room
             if self._memory.total_bytes > 0:
-                if not self._evict_for(adapter.memory_bytes, lora_id, step):
+                if not self._evict_for(adapter.memory_bytes, lora_id, step, protected):
                     logger.warning(f"Cannot load {lora_id}: insufficient memory after eviction")
                     continue
 
             self._load(lora_id)
 
-        # Return IDs that are actually loaded right now (may exclude
-        # previously-loaded adapters that were evicted for a later target).
-        return self.loaded_adapters
+        # Return IDs that are actually loaded right now, sorted by priority
+        # (highest first) to match the _adapters_for_step ordering contract.
+        loaded = [aid for aid in target_ids
+                  if aid in self._adapters and self._adapters[aid].loaded]
+        # Also include any other loaded adapters not in target_ids
+        extras = [aid for aid, a in self._adapters.items()
+                  if a.loaded and aid not in set(loaded)]
+        return loaded + extras
 
     def unload_after_step(self, step: int) -> list[str]:
         """Unload adapters that are no longer needed after a step.
@@ -480,14 +489,25 @@ class DiffusionLoRAOffloader:
         self._memory.free(adapter.memory_bytes)
         self._unload_count += 1
 
-    def _evict_for(self, needed_bytes: int, exclude_id: str, step: int = 0) -> bool:
-        """Evict loaded adapters to free memory, excluding a specific adapter."""
+    def _evict_for(self, needed_bytes: int, exclude_id: str, step: int = 0,
+                    protected: Optional[set[str]] = None) -> bool:
+        """Evict loaded adapters to free memory, excluding protected adapters.
+
+        Args:
+            needed_bytes: Bytes to free.
+            exclude_id: Adapter being loaded (never evict this one).
+            step: Current step (for history logging).
+            protected: Set of adapter IDs that must not be evicted.
+        """
         if needed_bytes <= self._memory.available_bytes:
             return True
 
-        # Sort loaded adapters by priority (lowest first) for eviction
+        _protected = protected or set()
+
+        # Sort loaded adapters by priority (lowest first) for eviction.
+        # Never evict the adapter being loaded or any adapter in the protected set.
         candidates = [(a.priority, lid, a) for lid, a in self._adapters.items()
-                      if a.loaded and lid != exclude_id]
+                      if a.loaded and lid != exclude_id and lid not in _protected]
         candidates.sort()  # Lowest priority first
 
         freed = 0

@@ -1563,6 +1563,10 @@ class ImageGenEngine:
             loop = asyncio.get_running_loop()
             png_bytes = await loop.run_in_executor(self._executor, _generate_sync)
         except MemoryError as e:
+            # Clean up GPU memory before re-raising
+            gc.collect()
+            from .mlx_executor import sync_and_clear_cache
+            await loop.run_in_executor(self._executor, sync_and_clear_cache)
             raise MemoryError(f"GPU OOM during image generation: {e}") from e
 
         elapsed = time.monotonic() - t0
