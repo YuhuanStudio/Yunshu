@@ -898,10 +898,19 @@ class VideoEngine:
                     target_w = width or video_w or 64
                     target_h = height or video_h or 64
 
+                    # Build ffmpeg filter graph:
+                    # - frame_interval=1 → emit every frame (no fps filter)
+                    # - frame_interval>1 → select every Nth frame + scale
+                    if frame_interval <= 1:
+                        vf_filter = f"scale={target_w}:{target_h}"
+                    else:
+                        # select='not(mod(n,N))' picks frames 0, N, 2N, ...
+                        vf_filter = f"select='not(mod(n\\,{frame_interval}))',scale={target_w}:{target_h}"
+
                     # Decode frames via ffmpeg pipe (streaming, no temp PNG files)
                     ffmpeg_cmd = [
                         "ffmpeg", "-i", tmp_path,
-                        "-vf", f"fps=1/{frame_interval},scale={target_w}:{target_h}",
+                        "-vf", vf_filter,
                         "-f", "rawvideo", "-pix_fmt", "rgb24",
                         "-v", "quiet", "-"
                     ]
