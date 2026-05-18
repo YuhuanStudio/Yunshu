@@ -103,7 +103,7 @@ def _apply_qwen35_patches(model: Any, tokenizer: Any) -> list[str]:
     if hasattr(model, "model") and hasattr(model.model, "layers"):
         num_layers = len(model.model.layers) if hasattr(model.model.layers, "__len__") else 0
         expected = getattr(config, "num_hidden_layers", 0)
-        if num_layers > expected + 1:
+        if num_layers > expected:
             model._yunshu_mtp_heads = num_layers - expected
             patches.append("qwen35_mtp_detect")
 
