@@ -35,6 +35,8 @@ from ..streaming import (
     format_responses_content_part_done,
     format_responses_output_item_done,
     format_responses_completed,
+    format_responses_failed,
+    format_responses_incomplete,
 )
 from .chat import _format_chat_logprobs, _normalize_finish_reason, _record_metrics
 
@@ -735,14 +737,22 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     except MemoryError:
         if _cancel_evt is not None:
             _cancel_evt.set()
-        yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield format_responses_failed(
+            response_id, req.model,
+            error_code="server_error",
+            error_message="Insufficient GPU memory",
+        ).encode("utf-8")
         yield b"data: [DONE]\n\n"
         return
     except Exception as e:
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
-        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield format_responses_failed(
+            response_id, req.model,
+            error_code="server_error",
+            error_message=str(e)[:200],
+        ).encode("utf-8")
         yield b"data: [DONE]\n\n"
         return
     finally:

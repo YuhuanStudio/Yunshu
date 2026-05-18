@@ -388,12 +388,17 @@ class MeshManager:
         self.handle_node_failure(node.node_id)
         if self._dp_router:
             self._dp_router.mark_unavailable(node.node_id)
+        if self._disagg_router:
+            self._disagg_router.remove_node(node.node_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
         node.state = MeshNodeState.READY
         if self._dp_router:
             self._dp_router.mark_available(node.node_id)
+        if self._disagg_router:
+            self._disagg_router.add_node(node.node_id)
+            self._disagg_router.mark_available(node.node_id)
         self._publish_event("node_state_change", node.node_id, {
             "new_state": "ready",
             "reason": "heartbeat_recovered",

@@ -299,13 +299,26 @@ async def create_completion(req: CompletionRequest, request: Request):
             results = [await _gen_one(0)]
         else:
             import asyncio
-            results = await asyncio.gather(*[_gen_one(i) for i in range(n)])
+            results = await asyncio.gather(
+                *[_gen_one(i) for i in range(n)], return_exceptions=True,
+            )
+            # Filter out exceptions, log them
+            valid_results = []
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.error(f"Choice generation failed: {r}", exc_info=r)
+                else:
+                    valid_results.append(r)
+            results = valid_results
             results.sort(key=lambda x: x[0])
+
+        if not results:
+            raise HTTPException(status_code=500, detail="All choices failed to generate")
 
         prompt_tokens = results[0][1]
         total_completion_tokens = sum(r[2] for r in results)
         total_reasoning_tokens = sum(r[4] for r in results)
-        max_cached_tokens = max(r[7] for r in results)
+        max_cached_tokens = max(r[7] for r in results) if results else 0
         max_finish_reason = results[0][3]
 
         choices = []
@@ -376,6 +389,7 @@ async def _stream_completion(
     completion_tok = 0
     # Track reasoning tokens per-choice to avoid overwrite across n>1 choices
     reasoning_tok_per_choice: dict[int, int] = {}
+    completion_tok_per_choice: dict[int, int] = {}
     cached_tok = 0
     n = max(req.n, 1)
 
@@ -426,7 +440,7 @@ async def _stream_completion(
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
                 if hasattr(output, 'completion_tokens') and output.completion_tokens:
-                    completion_tok = output.completion_tokens
+                    completion_tok_per_choice[choice_idx] = output.completion_tokens
                 _choice_reasoning = getattr(output, 'reasoning_tokens', 0)
                 reasoning_tok_per_choice[choice_idx] = _choice_reasoning
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
@@ -480,7 +494,7 @@ async def _stream_completion(
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
                 if hasattr(output, 'completion_token_count') and output.completion_token_count:
-                    completion_tok = output.completion_token_count
+                    completion_tok_per_choice[choice_idx] = output.completion_token_count
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
                 _chunk_lp = None
@@ -515,18 +529,20 @@ async def _stream_completion(
         if include_usage:
             # Sum reasoning tokens across all choices for total usage
             _total_reasoning = sum(reasoning_tok_per_choice.values())
+            _total_completion = sum(completion_tok_per_choice.values()) if completion_tok_per_choice else completion_tok
             yield format_openai_completion_usage_chunk(
                 completion_id=completion_id,
                 model=req.model,
                 prompt_tokens=prompt_tok,
-                completion_tokens=completion_tok,
+                completion_tokens=_total_completion,
                 reasoning_tokens=_total_reasoning,
                 cached_tokens=cached_tok,
             )
 
         # Record metrics for completions streaming path
-        if prompt_tok > 0 or completion_tok > 0:
-            _record_metrics(prompt_tok, completion_tok)
+        _total_completion = sum(completion_tok_per_choice.values()) if completion_tok_per_choice else completion_tok
+        if prompt_tok > 0 or _total_completion > 0:
+            _record_metrics(prompt_tok, _total_completion)
 
         yield format_openai_done()
 

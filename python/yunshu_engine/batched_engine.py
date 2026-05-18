@@ -269,6 +269,7 @@ class BatchedEngine:
         self._engine_core = None
         self._loaded = False
         self._starting = False  # Guard against concurrent start() calls
+        self._kv_manager = None  # Set from EngineCore._kv_manager after start
 
         # Fast-path active request tracking (prevents model eviction mid-generation)
         self._active_fast_path_count = 0
@@ -1013,6 +1014,9 @@ class BatchedEngine:
             executor=executor,
         )
         self._engine_core.scheduler.config.model_name = self.model_name
+
+        # Propagate paged KV manager for memory pressure eviction in fast paths
+        self._kv_manager = self._engine_core._kv_manager
 
         # Setup memory guard with model dimensions
         try:

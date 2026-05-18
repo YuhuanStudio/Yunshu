@@ -472,7 +472,7 @@ class TestResponsesAPIStreaming:
         assert data["response"]["id"] == "resp-abc123"
         assert data["response"]["object"] == "response"
         assert data["response"]["model"] == "gpt-4o"
-        assert data["response"]["status"] == "in_progress"
+        assert data["response"]["status"] == "created"
         assert data["response"]["output"] == []
 
     def test_response_in_progress(self):

@@ -26,6 +26,7 @@ Limitations on Apple Silicon:
 
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -189,6 +190,7 @@ class DisaggRouter:
         self._pending_transfers: list[KVTransferRequest] = []
         self._stats = DisaggStats()
         self._kv_manager = kv_manager
+        self._lock = threading.Lock()
         # Event relay buffers: cache coherency events collected from the
         # local KV manager and awaiting relay to peer nodes.
         self._pending_events: list[Any] = []
@@ -219,7 +221,8 @@ class DisaggRouter:
 
     def _on_block_cached(self, event: Any) -> None:
         """Handle a block-cached event from the local KV manager."""
-        self._pending_events.append(event)
+        with self._lock:
+            self._pending_events.append(event)
         logger.debug(
             "Cache event: block_cached hash=0x%x block_ids=%s",
             event.block_hash or 0,
@@ -228,7 +231,8 @@ class DisaggRouter:
 
     def _on_block_evicted(self, event: Any) -> None:
         """Handle a block-evicted event from the local KV manager."""
-        self._pending_events.append(event)
+        with self._lock:
+            self._pending_events.append(event)
         logger.debug(
             "Cache event: block_evicted hash=0x%x block_ids=%s",
             event.block_hash or 0,
@@ -237,7 +241,8 @@ class DisaggRouter:
 
     def _on_request_freed(self, event: Any) -> None:
         """Handle a request-freed event from the local KV manager."""
-        self._pending_events.append(event)
+        with self._lock:
+            self._pending_events.append(event)
         logger.debug(
             "Cache event: request_freed node_id=%s block_ids=%s",
             event.node_id,
@@ -250,8 +255,9 @@ class DisaggRouter:
         The caller (mesh relay loop) is expected to batch-send these
         to peer nodes over the mesh connection.
         """
-        events = list(self._pending_events)
-        self._pending_events.clear()
+        with self._lock:
+            events = list(self._pending_events)
+            self._pending_events.clear()
         return events
 
     def add_node(
@@ -262,58 +268,55 @@ class DisaggRouter:
         gpu_cores: int = 0,
     ) -> None:
         """Register a node in the disaggregated pool."""
-        if self._config.auto_role_detection and role == NodeRole.HYBRID:
-            role = self._auto_detect_role(memory_gb, gpu_cores)
+        with self._lock:
+            if self._config.auto_role_detection and role == NodeRole.HYBRID:
+                role = self._auto_detect_role(memory_gb, gpu_cores)
 
-        self._nodes[node_id] = DisaggNodeInfo(
-            node_id=node_id,
-            role=role,
-            memory_gb=memory_gb,
-            gpu_cores=gpu_cores,
-        )
+            self._nodes[node_id] = DisaggNodeInfo(
+                node_id=node_id,
+                role=role,
+                memory_gb=memory_gb,
+                gpu_cores=gpu_cores,
+            )
         logger.info(f"Added node {node_id} as {role.name} ({memory_gb}GB, {gpu_cores} GPU cores)")
 
     def remove_node(self, node_id: str) -> None:
         """Remove a node from the pool."""
-        self._nodes.pop(node_id, None)
+        with self._lock:
+            self._nodes.pop(node_id, None)
 
     def mark_unavailable(self, node_id: str) -> None:
         """Mark a node as unavailable."""
-        if node_id in self._nodes:
-            self._nodes[node_id].available = False
+        with self._lock:
+            if node_id in self._nodes:
+                self._nodes[node_id].available = False
 
     def mark_available(self, node_id: str) -> None:
         """Mark a node as available."""
-        if node_id in self._nodes:
-            self._nodes[node_id].available = True
+        with self._lock:
+            if node_id in self._nodes:
+                self._nodes[node_id].available = True
 
     def route_request(
         self,
         prompt_tokens: int,
         request_id: str = "",
     ) -> tuple[str, NodeRole]:
-        """Route a request to the appropriate pool.
+        """Route a request to the appropriate pool."""
+        with self._lock:
+            if prompt_tokens >= self._config.prefill_threshold_tokens:
+                node_id = self._select_prefill_node()
+                role = NodeRole.PREFILL
+                self._stats.total_prefill_requests += 1
+            else:
+                node_id = self._select_decode_node()
+                role = NodeRole.DECODE
+                self._stats.total_decode_requests += 1
 
-        Args:
-            prompt_tokens: Number of prompt tokens.
-            request_id: Optional request ID for tracking.
-
-        Returns:
-            Tuple of (node_id, assigned_role).
-        """
-        if prompt_tokens >= self._config.prefill_threshold_tokens:
-            node_id = self._select_prefill_node()
-            role = NodeRole.PREFILL
-            self._stats.total_prefill_requests += 1
-        else:
-            node_id = self._select_decode_node()
-            role = NodeRole.DECODE
-            self._stats.total_decode_requests += 1
-
-        # Fallback to any available node
-        if node_id is None:
-            node_id = self._select_any_node()
-            role = NodeRole.HYBRID
+            # Fallback to any available node
+            if node_id is None:
+                node_id = self._select_any_node()
+                role = NodeRole.HYBRID
 
         return node_id or "", role
 
@@ -329,16 +332,17 @@ class DisaggRouter:
         In production, this would use Thunderbolt RDMA or TCP.
         Here we track the transfer lifecycle.
         """
-        transfer = KVTransferRequest(
-            request_id=request_id,
-            source_node=source_node,
-            target_node=target_node,
-            num_blocks=num_blocks,
-        )
-        self._pending_transfers.append(transfer)
+        with self._lock:
+            transfer = KVTransferRequest(
+                request_id=request_id,
+                source_node=source_node,
+                target_node=target_node,
+                num_blocks=num_blocks,
+            )
+            self._pending_transfers.append(transfer)
 
-        if source_node in self._nodes:
-            self._nodes[source_node].kv_transfer_queue += 1
+            if source_node in self._nodes:
+                self._nodes[source_node].kv_transfer_queue += 1
 
         logger.debug(
             f"KV transfer requested: {source_node} → {target_node}, "
@@ -348,32 +352,34 @@ class DisaggRouter:
 
     def complete_kv_transfer(self, request_id: str, success: bool = True) -> None:
         """Mark a KV transfer as completed or failed."""
-        for t in self._pending_transfers:
-            if t.request_id == request_id and t.status == "pending":
-                t.status = "completed" if success else "failed"
-                if t.source_node in self._nodes:
-                    self._nodes[t.source_node].kv_transfer_queue = max(
-                        0, self._nodes[t.source_node].kv_transfer_queue - 1
-                    )
-                self._stats.total_kv_transfers += 1
-                if not success:
-                    self._stats.kv_transfer_failures += 1
-                break
+        with self._lock:
+            for t in self._pending_transfers:
+                if t.request_id == request_id and t.status == "pending":
+                    t.status = "completed" if success else "failed"
+                    if t.source_node in self._nodes:
+                        self._nodes[t.source_node].kv_transfer_queue = max(
+                            0, self._nodes[t.source_node].kv_transfer_queue - 1
+                        )
+                    self._stats.total_kv_transfers += 1
+                    if not success:
+                        self._stats.kv_transfer_failures += 1
+                    break
 
-        # Prune completed/failed transfers to prevent unbounded growth.
-        # Keep only pending transfers and recent completions (last 100).
-        if len(self._pending_transfers) > 200:
-            self._pending_transfers = [
-                t for t in self._pending_transfers
-                if t.status == "pending"
-            ] + [
-                t for t in self._pending_transfers
-                if t.status != "pending"
-            ][-100:]
+            # Prune completed/failed transfers to prevent unbounded growth.
+            # Keep only pending transfers (capped at 500) and recent completions.
+            if len(self._pending_transfers) > 200:
+                self._pending_transfers = [
+                    t for t in self._pending_transfers
+                    if t.status == "pending"
+                ] + [
+                    t for t in self._pending_transfers
+                    if t.status != "pending"
+                ][-100:]
 
     def get_pending_transfers(self) -> list[KVTransferRequest]:
         """Get all pending KV transfers."""
-        return [t for t in self._pending_transfers if t.status == "pending"]
+        with self._lock:
+            return [t for t in self._pending_transfers if t.status == "pending"]
 
     def _select_prefill_node(self) -> str | None:
         """Select the best prefill node (least loaded)."""

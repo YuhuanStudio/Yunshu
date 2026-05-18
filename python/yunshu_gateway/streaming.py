@@ -876,7 +876,7 @@ def format_responses_created(
     """response.created — initial event with empty response object."""
     data = {
         "type": "response.created",
-        "response": _responses_base_response(response_id, model, status="in_progress"),
+        "response": _responses_base_response(response_id, model, status="created"),
         "sequence_number": seq,
     }
     return f"event: response.created\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -1073,6 +1073,59 @@ def format_responses_completed(
         "sequence_number": seq,
     }
     return f"event: response.completed\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_failed(
+    response_id: str,
+    model: str,
+    error_code: str = "server_error",
+    error_message: str = "An internal error occurred",
+    seq: int = 0,
+) -> str:
+    """response.failed — terminal event when generation encounters an error."""
+    failed_at = int(time.time())
+    resp = _responses_base_response(response_id, model, status="failed")
+    resp["failed_at"] = failed_at
+    resp["error"] = {"code": error_code, "message": error_message}
+    data = {
+        "type": "response.failed",
+        "response": resp,
+        "sequence_number": seq,
+    }
+    return f"event: response.failed\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def format_responses_incomplete(
+    response_id: str,
+    model: str,
+    reason: str = "max_output_tokens",
+    output: list | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    total_tokens: int = 0,
+    seq: int = 0,
+) -> str:
+    """response.incomplete — terminal event when generation is interrupted."""
+    usage: dict[str, Any] = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+    incomplete_at = int(time.time())
+    resp = _responses_base_response(
+        response_id, model,
+        status="incomplete",
+        output=output or [],
+        usage=usage,
+    )
+    resp["incomplete_at"] = incomplete_at
+    resp["incomplete_details"] = {"reason": reason}
+    data = {
+        "type": "response.incomplete",
+        "response": resp,
+        "sequence_number": seq,
+    }
+    return f"event: response.incomplete\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 # ── Anthropic SSE Formatter ──

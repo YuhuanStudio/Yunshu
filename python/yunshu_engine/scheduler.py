@@ -1628,6 +1628,10 @@ class Scheduler:
                 # Track failed insert so step() generates an error output for
                 # EngineCore to finalize (otherwise resources leak).
                 self._failed_insert_ids.append(req.request_id)
+                # Clean up partial prefill tracking if we incremented the counter
+                # but never added to self.running (which _cleanup_finished skips).
+                if should_chunk and self._pending_prefill.pop(req.request_id, None) is not None:
+                    self._active_partial_prefills -= 1
 
     def _run_external_prefill(self, req: Request) -> bool:
         """Run external prefill for a request.
@@ -2746,8 +2750,11 @@ class Scheduler:
         # Seed handling: mlx-lm's make_sampler() does NOT accept a seed parameter.
         # Instead, we set the MLX global RNG seed before sampler creation so that
         # the categorical_sampling call inside the sampler closure uses the
-        # specified seed. This ensures reproducibility per-request.
-        if sp.seed is not None:
+        # specified seed.  Note: this sets a GLOBAL seed, so deterministic output
+        # is only guaranteed when running a single request at a time. With
+        # concurrent requests, the last seed wins and results are non-deterministic.
+        # Only set the global seed when there's a single active request.
+        if sp.seed is not None and len(self.running) <= 1:
             import mlx.core as mx
             mx.random.seed(sp.seed)
 

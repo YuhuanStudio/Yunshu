@@ -206,28 +206,17 @@ class RadixTree:
             new_node.children[child_first_tok] = child
         child.parent = new_node
 
-        # Inherit ref_count: the new_node gets the child's ref_count
-        # so that eviction doesn't remove it while active requests use it.
-        #
-        # The child may still have sub-children whose own ref_counts
-        # represent active requests passing through the child.  We must
-        # preserve those by computing the child's effective ref_count
-        # from its subtree (sum of leaf ref_counts that transit through
-        # child).  However, the simplest correct approach is:
-        #   new_node.ref_count = child's original ref_count
-        #   child.ref_count   = sum of child's children's ref_counts
-        #
-        # This avoids under-counting (child still referenced by subtree)
-        # and over-counting (new_node carries the same count as before).
+        # Ref-count bookkeeping after split.
+        # Before the split, child had ref_count R meaning R requests'
+        # paths passed through it. After the split:
+        #   - new_node is now on all those same paths (R requests)
+        #   - child is still on those same R paths (the suffix portion)
+        # So both new_node and child should retain ref_count R.
+        # Setting child.ref_count = sum(children) was WRONG because it
+        # dropped the direct references from requests that matched the
+        # original (now-split) child.
         new_node.ref_count = child.ref_count
         new_node.last_access_time = child.last_access_time
-        # Compute child's residual ref_count from its remaining subtree.
-        # Each direct child's ref_count already includes its entire
-        # subtree, so summing direct children gives the correct value.
-        child_subtree_ref = sum(
-            c.ref_count for c in child.children.values()
-        )
-        child.ref_count = child_subtree_ref
 
         self._total_nodes += 1
         return new_node
@@ -438,31 +427,40 @@ class RadixTree:
         # Merge with the single child
         child = next(iter(node.children.values()))
 
+        # Save child's ref_count before clearing (needed for node inherit).
+        child_ref_count = child.ref_count
+
         # Append child's tokens, blocks, and hashes to the node
         node.token_ids.extend(child.token_ids)
         node.blocks.extend(child.blocks)
         node.block_hashes.extend(child.block_hashes)
 
-        # Clear child's data to prevent double-free if the child node
-        # object is later popped from an eviction heap (the heap may
-        # still hold a stale reference to this child).
-        child.token_ids = []
-        child.blocks = []
-        child.block_hashes = []
-        child.parent = None
-        child.children = {}
-
-        # Adopt child's children
+        # Adopt child's children before clearing child.
         node.children = child.children
         for grandchild in node.children.values():
             grandchild.parent = node
+
+        # Clear child's data to prevent double-free if the child node
+        # object is later popped from an eviction heap (the heap may
+        # still hold a stale reference to this child).
+        # Keep child.parent = node so that any stale dec_ref calls on
+        # the child object propagate up to node (instead of stopping
+        # at an orphan with parent=None, leaking the ref_count).
+        child.token_ids = []
+        child.blocks = []
+        child.block_hashes = []
+        child.parent = node
+        child.children = {}
+        child.ref_count = 0
 
         # Inherit child's ref_count and access metadata.  This is safe
         # even when child.ref_count > 0: any request that previously
         # traversed ...-> node -> child -> ... now traverses ...-> node -> ...
         # because node absorbed child's children.  The ref_count is
         # preserved on node so eviction accounting stays correct.
-        node.ref_count = child.ref_count
+        # Since node.ref_count == 0 (merge precondition), addition is
+        # equivalent to overwrite but clearer about intent.
+        node.ref_count = node.ref_count + child_ref_count
         node.last_access_time = max(
             node.last_access_time, child.last_access_time
         )
