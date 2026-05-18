@@ -115,19 +115,20 @@ class MemoryGuard:
             logger.warning(f"Preflight rejected: {reason}")
             return (False, reason)
 
-        # 1. Prompt KV memory
+        # 1. Prompt KV memory (included in prefill_peak, not added separately)
         prompt_kv = self._monitor.estimate_prompt_kv_bytes(num_prompt_tokens)
 
         # 2. Decode KV memory (max_tokens worth of generation)
         decode_kv = self._monitor.estimate_prompt_kv_bytes(max_tokens)
 
-        # 3. Prefill peak memory (prompt processing spike)
+        # 3. Prefill peak memory (prompt processing spike — includes prompt_kv)
         prefill_peak = self._monitor.estimate_prefill_peak_bytes(
             total_prompt_tokens=num_prompt_tokens,
             chunk_size=min(num_prompt_tokens, 2048),
         )
 
-        total_estimated = prompt_kv + decode_kv + prefill_peak
+        # Total = decode_kv + prefill_peak (prefill_peak already includes prompt_kv)
+        total_estimated = decode_kv + prefill_peak
 
         if total_estimated > usable:
             with self._stats_lock:

@@ -1695,107 +1695,120 @@ class Scheduler:
         When the request is re-scheduled, the prefix cache will be checked
         and only the uncached tail needs re-prefilling, significantly
         reducing re-prefill overhead compared to whole-request preemption.
+
+        Safety: The caller already popped the request from ``self.running``.
+        If any step below fails, we still push the request to ``self.waiting``
+        so it is never orphaned (neither running nor waiting).
         """
         uid = request.batch_uid
 
-        # SCHED-1: Extract KV cache before removal so we can save the prefix.
-        # BatchGenerator.remove(uids, return_prompt_caches=True) returns
-        # {uid: (cache_list, tokens_list)} for generation-stage requests,
-        # or {uid: (cache_list, tokens)} for prompt-stage requests.
-        extracted_caches = {}
-        if uid is not None and self._batch_gen is not None:
-            try:
-                extracted_caches = self._batch_gen.remove([uid], return_prompt_caches=True)
-            except Exception as e:
-                # Fallback: remove without cache extraction if API differs
-                logger.debug(f"Failed to extract cache for preempted UID {uid}: {e}")
+        try:
+            # SCHED-1: Extract KV cache before removal so we can save the prefix.
+            # BatchGenerator.remove(uids, return_prompt_caches=True) returns
+            # {uid: (cache_list, tokens_list)} for generation-stage requests,
+            # or {uid: (cache_list, tokens)} for prompt-stage requests.
+            extracted_caches = {}
+            if uid is not None and self._batch_gen is not None:
                 try:
-                    self._batch_gen.remove([uid])
-                except Exception as e2:
-                    logger.debug(f"Failed to remove preempted UID {uid}: {e2}")
+                    extracted_caches = self._batch_gen.remove([uid], return_prompt_caches=True)
+                except Exception as e:
+                    # Fallback: remove without cache extraction if API differs
+                    logger.debug(f"Failed to extract cache for preempted UID {uid}: {e}")
+                    try:
+                        self._batch_gen.remove([uid])
+                    except Exception as e2:
+                        logger.debug(f"Failed to remove preempted UID {uid}: {e2}")
 
-        # SCHED-1: Save the prompt prefix portion of the KV cache to the
-        # prefix cache.  Only the prompt tokens (not generated tokens) are
-        # saved because the prefix cache keys off prompt token sequences.
-        saved_prefix = 0
-        if (
-            self._prefix_cache is not None
-            and uid in extracted_caches
-            and request.prompt_token_ids
-        ):
-            try:
-                import mlx.core as mx
-                cache_and_tokens = extracted_caches[uid]
-                if cache_and_tokens is not None:
-                    cache_data = cache_and_tokens[0]
-                    tokens_data = cache_and_tokens[1]
-                    # Only save if we got valid cache data and the request
-                    # has generated enough tokens to make caching worthwhile
-                    if cache_data and request.num_prompt_tokens >= 32:
-                        prompt_ids = mx.array(request.prompt_token_ids)
-                        self._prefix_cache.add(prompt_ids, cache_data)
-                        saved_prefix = len(request.prompt_token_ids)
-                        logger.info(
-                            f"Saved KV prefix cache for preempted request "
-                            f"{request.request_id}: {saved_prefix} prompt tokens"
-                        )
-            except Exception:
-                logger.debug("Failed to save KV prefix during preemption", exc_info=True)
+            # SCHED-1: Save the prompt prefix portion of the KV cache to the
+            # prefix cache.  Only the prompt tokens (not generated tokens) are
+            # saved because the prefix cache keys off prompt token sequences.
+            saved_prefix = 0
+            if (
+                self._prefix_cache is not None
+                and uid in extracted_caches
+                and request.prompt_token_ids
+            ):
+                try:
+                    import mlx.core as mx
+                    cache_and_tokens = extracted_caches[uid]
+                    if cache_and_tokens is not None:
+                        cache_data = cache_and_tokens[0]
+                        tokens_data = cache_and_tokens[1]
+                        # Only save if we got valid cache data and the request
+                        # has generated enough tokens to make caching worthwhile
+                        if cache_data and request.num_prompt_tokens >= 32:
+                            prompt_ids = mx.array(request.prompt_token_ids)
+                            self._prefix_cache.add(prompt_ids, cache_data)
+                            saved_prefix = len(request.prompt_token_ids)
+                            logger.info(
+                                f"Saved KV prefix cache for preempted request "
+                                f"{request.request_id}: {saved_prefix} prompt tokens"
+                            )
+                except Exception:
+                    logger.debug("Failed to save KV prefix during preemption", exc_info=True)
 
-        self._uid_to_req.pop(uid, None)
-        self._detokenizers.pop(request.request_id, None)
-        self._thinking_processors.pop(request.request_id, None)
-        self._thinking_state.pop(request.request_id, None)
-        self._pending_prefill.pop(request.request_id, None)
-        self._cleanup_spec_state(request.request_id)
+            self._uid_to_req.pop(uid, None)
+            self._detokenizers.pop(request.request_id, None)
+            self._thinking_processors.pop(request.request_id, None)
+            self._thinking_state.pop(request.request_id, None)
+            self._pending_prefill.pop(request.request_id, None)
+            self._cleanup_spec_state(request.request_id)
 
-        # H2O: Log attention-based eviction order for debugging.
-        # When the tracker is enabled, the scheduler can use
-        # get_eviction_order() to decide which blocks to evict first
-        # instead of the default tail-eviction. This logging helps
-        # operators verify that attention-aware eviction is working.
-        if self._attention_score_tracker is not None:
-            eviction_order = self._attention_score_tracker.get_eviction_order(request.request_id)
-            if eviction_order:
-                logger.debug(
-                    f"H2O eviction order for preempted {request.request_id}: "
-                    f"first={eviction_order[0]}, last={eviction_order[-1]}, "
-                    f"total_blocks={len(eviction_order)}"
-                )
-            self._attention_score_tracker.remove_request(request.request_id)
+            # H2O: Log attention-based eviction order for debugging.
+            if self._attention_score_tracker is not None:
+                eviction_order = self._attention_score_tracker.get_eviction_order(request.request_id)
+                if eviction_order:
+                    logger.debug(
+                        f"H2O eviction order for preempted {request.request_id}: "
+                        f"first={eviction_order[0]}, last={eviction_order[-1]}, "
+                        f"total_blocks={len(eviction_order)}"
+                    )
+                self._attention_score_tracker.remove_request(request.request_id)
 
-        # Cleanup chunked prefill production tracking
-        self._chunked_prefill_fairness.pop(request.request_id, None)
-        self._chunked_prefill_enqueued_at.pop(request.request_id, None)
+            # Cleanup chunked prefill production tracking
+            self._chunked_prefill_fairness.pop(request.request_id, None)
+            self._chunked_prefill_enqueued_at.pop(request.request_id, None)
 
-        # Block-level preemption: check how many prefix tokens are cached.
-        # If SCHED-1 saved the prefix above, this will find it immediately.
-        # Otherwise, fall back to checking existing prefix cache entries.
-        cached_prefix = max(saved_prefix, 0)
-        if cached_prefix == 0 and self._prefix_cache is not None and request.prompt_token_ids:
-            try:
-                import mlx.core as mx
-                ids_arr = mx.array(request.prompt_token_ids)
-                _, _, matched = self._prefix_cache.get(ids_arr)
-                if matched > 0:
-                    cached_prefix = matched
-            except Exception:
-                logger.debug("failed", exc_info=True)
+            # Block-level preemption: check how many prefix tokens are cached.
+            # If SCHED-1 saved the prefix above, this will find it immediately.
+            # Otherwise, fall back to checking existing prefix cache entries.
+            cached_prefix = max(saved_prefix, 0)
+            if cached_prefix == 0 and self._prefix_cache is not None and request.prompt_token_ids:
+                try:
+                    import mlx.core as mx
+                    ids_arr = mx.array(request.prompt_token_ids)
+                    _, _, matched = self._prefix_cache.get(ids_arr)
+                    if matched > 0:
+                        cached_prefix = matched
+                except Exception:
+                    logger.debug("failed", exc_info=True)
 
-        request.status = RequestStatus.PREEMPTED
-        # Preserve cached prefix tokens — only reset beyond cache boundary
-        request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens)
-        request.batch_uid = None
-        request.num_preemptions += 1
+            request.status = RequestStatus.PREEMPTED
+            # Preserve cached prefix tokens — only reset beyond cache boundary
+            request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens)
+            request.batch_uid = None
+            request.num_preemptions += 1
 
-        self.waiting.push_front(request, priority=request.sampling_params.priority)
+            self.waiting.push_front(request, priority=request.sampling_params.priority)
 
-        prefix_info = f", cached_prefix={cached_prefix}" if cached_prefix > 0 else ""
-        logger.info(
-            f"Preempted request {request.request_id} "
-            f"(preemptions={request.num_preemptions}, "
-            f"output_tokens={request.num_output_tokens}{prefix_info})"
-        )
+            prefix_info = f", cached_prefix={cached_prefix}" if cached_prefix > 0 else ""
+            logger.info(
+                f"Preempted request {request.request_id} "
+                f"(preemptions={request.num_preemptions}, "
+                f"output_tokens={request.num_output_tokens}{prefix_info})"
+            )
+        except Exception:
+            # Safety net: if anything above failed, the request has already
+            # been popped from self.running by the caller.  We MUST push it
+            # to self.waiting so it is never orphaned.
+            logger.exception(
+                f"Unexpected error during preemption of {request.request_id}, "
+                f"returning request to waiting queue"
+            )
+            request.status = RequestStatus.PREEMPTED
+            request.batch_uid = None
+            request.num_preemptions += 1
+            self.waiting.push_front(request, priority=request.sampling_params.priority)
 
     def _retract_decode_requests(self, count: int) -> int:
         """Temporarily retract decode requests under memory pressure (C14).

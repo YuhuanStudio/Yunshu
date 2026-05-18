@@ -521,8 +521,13 @@ class KVPrefixCache:
         self._last_used[index] = self._access_counter
         self._access_counts[index] += 1
 
-    def _remove_entry(self, index: int) -> None:
-        """Remove an entry and clean up all indices."""
+    def _remove_entry(self, index: int, rebuild_index: bool = True) -> None:
+        """Remove an entry and clean up all indices.
+
+        Uses swap-and-pop for O(1) list removal instead of index-based pop
+        which requires O(n) shift. Set ``rebuild_index=False`` when calling
+        in a batch loop and rebuild once after all removals.
+        """
         # Pre-eviction callback: gives engine a chance to capture inverted
         # DeltaNet SSM state before the KV cache is discarded.
         if self._pre_evict_callback is not None:
@@ -562,27 +567,26 @@ class KVPrefixCache:
                                 )
             except Exception:
                 logger.debug("SSD spill failed during eviction", exc_info=True)
-        # Decrement block refcounts and clean up prefix index
-        for bh in self._block_hashes[index]:
-            if bh in self._block_refcount:
-                self._block_refcount[bh] -= 1
-                if self._block_refcount[bh] <= 0:
-                    self._block_refcount.pop(bh, None)
-            if bh in self._prefix_index:
-                self._prefix_index[bh] = [
-                    (idx, bi) for idx, bi in self._prefix_index[bh]
-                    if idx != index
-                ]
-                if not self._prefix_index[bh]:
-                    del self._prefix_index[bh]
 
-        self._prompts.pop(index)
-        self._caches.pop(index)
-        self._block_hashes.pop(index)
-        self._last_used.pop(index)
-        self._priorities.pop(index)
-        self._access_counts.pop(index)
-        self._rebuild_hash_index()
+        # Swap-and-pop: O(1) removal by swapping with the last element.
+        last = len(self._prompts) - 1
+        if index != last:
+            self._prompts[index] = self._prompts[last]
+            self._caches[index] = self._caches[last]
+            self._block_hashes[index] = self._block_hashes[last]
+            self._last_used[index] = self._last_used[last]
+            self._priorities[index] = self._priorities[last]
+            self._access_counts[index] = self._access_counts[last]
+        # Pop last element (O(1) — no shift needed)
+        self._prompts.pop()
+        self._caches.pop()
+        self._block_hashes.pop()
+        self._last_used.pop()
+        self._priorities.pop()
+        self._access_counts.pop()
+
+        if rebuild_index:
+            self._rebuild_hash_index()
 
     def _rebuild_hash_index(self) -> None:
         """Rebuild hash index, prefix index, and block refcounts after structural changes."""
@@ -600,6 +604,7 @@ class KVPrefixCache:
     def _evict_if_full(self) -> None:
         """Evict entries using the configured strategy when at capacity."""
         _skip_count = 0  # guard against infinite loop when checker blocks all
+        _evicted_any = False
         while len(self._prompts) >= self._max_entries and _skip_count < len(self._prompts):
             # Update SLRU access counts if applicable
             if isinstance(self._eviction_strategy, SLRUStrategy):
@@ -618,10 +623,14 @@ class KVPrefixCache:
                 if skip:
                     _skip_count += 1
                     continue
-            self._remove_entry(victim)
+            self._remove_entry(victim, rebuild_index=False)
+            _evicted_any = True
             logger.info(
                 f"KV prefix cache evicted entry via {type(self._eviction_strategy).__name__} (capacity)"
             )
+        # Rebuild the hash index once after all batch evictions (not per-entry).
+        if _evicted_any:
+            self._rebuild_hash_index()
 
     def evict_under_pressure(self, threshold_pct: float = 85.0) -> int:
         """Evict LRU entries when GPU memory is under pressure.
@@ -680,10 +689,11 @@ class KVPrefixCache:
                     if skip:
                         _skip_count += 1
                         continue
-                self._remove_entry(victim)
+                self._remove_entry(victim, rebuild_index=False)
                 evicted += 1
 
             if evicted > 0:
+                self._rebuild_hash_index()
                 mx.clear_cache()
                 logger.info(
                     f"KV prefix cache pressure eviction: {evicted} entries freed "

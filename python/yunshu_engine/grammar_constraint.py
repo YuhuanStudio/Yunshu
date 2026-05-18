@@ -161,6 +161,8 @@ class ChoiceConstraint:
         self._text_buffer = ""
         self._done = False
         self._matched_choice: str | None = None
+        self._has_partial_match = False  # True when matched text is also a prefix of a longer choice
+        self._failed = False  # True when an invalid path was encountered
         # Build prefix trie using appropriate case form
         self._trie: dict[str, Any] = {}
         trie_choices = choices if case_sensitive else [c.lower() for c in choices]
@@ -188,14 +190,21 @@ class ChoiceConstraint:
         node = self._trie
         for ch in buf:
             if ch not in node:
-                # Invalid path — mark done to stop generation
+                # Invalid path — mark failed, stop generation
+                self._failed = True
                 self._done = True
                 return
             node = node[ch]
 
         if "__end__" in node:
-            self._done = True
             self._matched_choice = node["__end__"]
+            # Check if there are longer choices still possible
+            if any(k != "__end__" for k in node):
+                # The matched text is a prefix of a longer choice — don't set done
+                self._has_partial_match = True
+            else:
+                # No longer choices possible — generation is complete
+                self._done = True
 
     def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
         if self._done:
@@ -231,6 +240,10 @@ class ChoiceConstraint:
                 eos_ids = [tokenizer.eos_token_id]
             return eos_ids
 
+        # When we have a partial match (text is also a prefix of a longer
+        # choice), include EOS tokens alongside continuation chars.
+        has_eos = "__eos__" in valid_chars
+
         # Build allowed tokens from valid chars
         cache_key = id(tokenizer)
         if not hasattr(self.__class__, '_token_char_cache'):
@@ -245,12 +258,24 @@ class ChoiceConstraint:
                 continue
             if ch in char_map:
                 allowed.update(char_map[ch])
+        # When we have a partial match (completed choice is also a prefix
+        # of a longer choice), include EOS tokens so the sampler can pick
+        # the shorter match.
+        if has_eos or self._has_partial_match:
+            eos_ids = []
+            if hasattr(tokenizer, 'eos_token_ids'):
+                eos_ids = list(tokenizer.eos_token_ids)
+            elif hasattr(tokenizer, 'eos_token_id'):
+                eos_ids = [tokenizer.eos_token_id]
+            allowed.update(eos_ids)
         return list(allowed)
 
     def reset(self) -> None:
         self._text_buffer = ""
         self._done = False
         self._matched_choice = None
+        self._has_partial_match = False
+        self._failed = False
 
     def get_stats(self) -> dict[str, Any]:
         return {

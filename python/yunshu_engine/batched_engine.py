@@ -20,6 +20,7 @@ This is the engine that ModelManager and the gateway routers use.
 import asyncio
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -268,6 +269,10 @@ class BatchedEngine:
         self._engine_core = None
         self._loaded = False
         self._starting = False  # Guard against concurrent start() calls
+
+        # Fast-path active request tracking (prevents model eviction mid-generation)
+        self._active_fast_path_count = 0
+        self._fast_path_lock = threading.Lock()
 
         # ── Wave 42: Wired production modules ──
         # Model preprocessor registry (auto-detects model family for multimodal input)
@@ -1808,13 +1813,18 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_rep_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
+            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty, n_prompt=prompt_tokens):
+                # Per OpenAI API spec, frequency/presence penalties only apply
+                # to generated tokens, NOT prompt tokens.
+                gen_tokens = tokens[n_prompt:] if len(tokens) > n_prompt else []
                 counts = {}
-                for t in tokens:
+                for t in gen_tokens:
                     counts[int(t)] = counts.get(int(t), 0) + 1
                 for tid, cnt in counts.items():
-                    logits[..., tid] -= fp * cnt
-                    logits[..., tid] -= pp
+                    if fp > 0:
+                        logits[..., tid] -= fp * cnt
+                    if pp > 0 and cnt > 0:
+                        logits[..., tid] -= pp
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
@@ -2170,6 +2180,13 @@ class BatchedEngine:
                 except Exception:
                     logger.debug("Thinking segment store failed", exc_info=True)
 
+            # Finalize detokenizer to flush any remaining partial UTF-8 bytes
+            # before assembling final output text.
+            try:
+                detokenizer.finalize()
+            except Exception:
+                logger.debug("detokenizer finalize failed in fast path", exc_info=True)
+
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
             mx.clear_cache()
@@ -2186,33 +2203,15 @@ class BatchedEngine:
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
+        _fp_lock = getattr(self, '_fast_path_lock', None)
+        if _fp_lock is not None:
+            with _fp_lock:
+                self._active_fast_path_count += 1
         try:
-            tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run)
-        except MemoryError:
-            logger.warning("OOM during generation — returning memory_limit finish reason")
             try:
-                from .inflight_prefix_sharing import get_inflight_tracker
-                get_inflight_tracker().unregister(_inflight_req_id)
-            except Exception:
-                logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
-            # Clear Metal buffers left behind by the OOM
-            try:
-                import mlx.core as _mx
-                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
-            except Exception:
-                pass
-            return GenerationOutput(
-                finished=True,
-                finish_reason="memory_limit",
-                prompt_tokens=prompt_tokens,
-                completion_tokens=0,
-                error="OOM during generation",
-                ttft_ms=0.0,
-                cached_tokens=0,
-            )
-        except RuntimeError as e:
-            if "memory" in str(e).lower() or "out of" in str(e).lower():
-                logger.warning(f"MLX OOM during generation: {e}")
+                tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run)
+            except MemoryError:
+                logger.warning("OOM during generation — returning memory_limit finish reason")
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
                     get_inflight_tracker().unregister(_inflight_req_id)
@@ -2229,146 +2228,174 @@ class BatchedEngine:
                     finish_reason="memory_limit",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
-                    error=str(e),
+                    error="OOM during generation",
                     ttft_ms=0.0,
                     cached_tokens=0,
                 )
-            try:
-                from .inflight_prefix_sharing import get_inflight_tracker
-                get_inflight_tracker().unregister(_inflight_req_id)
-            except Exception:
-                logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during generation: {e}", exc_info=True)
-            try:
-                from .inflight_prefix_sharing import get_inflight_tracker
-                get_inflight_tracker().unregister(_inflight_req_id)
-            except Exception:
-                logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
-            # Re-raise so the gateway can report the error to the client.
-            # Only MemoryError and RuntimeError were handled above; anything
-            # else is a bug or unexpected condition that should propagate.
-            raise
-
-        # Decode token strings for logprobs
-        lp_result = None
-        if logprobs and token_logprobs:
-            for lp_entry in token_logprobs:
-                tid = lp_entry["token_id"]
+            except RuntimeError as e:
+                if "memory" in str(e).lower() or "out of" in str(e).lower():
+                    logger.warning(f"MLX OOM during generation: {e}")
+                    try:
+                        from .inflight_prefix_sharing import get_inflight_tracker
+                        get_inflight_tracker().unregister(_inflight_req_id)
+                    except Exception:
+                        logger.debug("inflight prefix unregister failed in OOM handler", exc_info=True)
+                    # Clear Metal buffers left behind by the OOM
+                    try:
+                        import mlx.core as _mx
+                        await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+                    except Exception:
+                        pass
+                    return GenerationOutput(
+                        finished=True,
+                        finish_reason="memory_limit",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=0,
+                        error=str(e),
+                        ttft_ms=0.0,
+                        cached_tokens=0,
+                    )
                 try:
-                    lp_entry["token"] = tokenizer.decode([tid])
-                    lp_entry["bytes"] = list(lp_entry["token"].encode("utf-8"))
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(_inflight_req_id)
                 except Exception:
-                    logger.debug("logprob token decode failed", exc_info=True)
-                    lp_entry["token"] = ""
-                    lp_entry["bytes"] = []
-                if "top_logprobs" in lp_entry:
-                    for tlp in lp_entry["top_logprobs"]:
-                        try:
-                            tlp["token"] = tokenizer.decode([tlp["token_id"]])
-                            tlp["bytes"] = list(tlp["token"].encode("utf-8"))
-                        except Exception:
-                            logger.debug("top_logprob token decode failed", exc_info=True)
-                            tlp["token"] = ""
-                            tlp["bytes"] = []
-            lp_result = token_logprobs
+                    logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error during generation: {e}", exc_info=True)
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(_inflight_req_id)
+                except Exception:
+                    logger.debug("inflight prefix unregister failed in error handler", exc_info=True)
+                # Re-raise so the gateway can report the error to the client.
+                # Only MemoryError and RuntimeError were handled above; anything
+                # else is a bug or unexpected condition that should propagate.
+                raise
 
-        output_text = _clean_special_tokens(output_text)
+            # Decode token strings for logprobs
+            lp_result = None
+            if logprobs and token_logprobs:
+                for lp_entry in token_logprobs:
+                    tid = lp_entry["token_id"]
+                    try:
+                        lp_entry["token"] = tokenizer.decode([tid])
+                        lp_entry["bytes"] = list(lp_entry["token"].encode("utf-8"))
+                    except Exception:
+                        logger.debug("logprob token decode failed", exc_info=True)
+                        lp_entry["token"] = ""
+                        lp_entry["bytes"] = []
+                    if "top_logprobs" in lp_entry:
+                        for tlp in lp_entry["top_logprobs"]:
+                            try:
+                                tlp["token"] = tokenizer.decode([tlp["token_id"]])
+                                tlp["bytes"] = list(tlp["token"].encode("utf-8"))
+                            except Exception:
+                                logger.debug("top_logprob token decode failed", exc_info=True)
+                                tlp["token"] = ""
+                                tlp["bytes"] = []
+                lp_result = token_logprobs
 
-        # Trim stop suffix from output text when matched during generation
-        if _stopped_by_suffix and stop_suffixes:
-            for s in stop_suffixes:
-                if output_text.endswith(s):
-                    output_text = output_text[:-len(s)]
-                    break
+            output_text = _clean_special_tokens(output_text)
 
-        # Determine finish_reason.
-        # Priority: cancel > stop (suffix or stop_id) > length
-        # When cancel_event or timeout triggers, the loop breaks without
-        # setting _stopped_by_suffix or _stopped_by_stop_id, so those
-        # tokens correctly show up as "stop" only when genuinely stopped.
-        _cancelled = cancel_event is not None and cancel_event.is_set()
-        if _cancelled:
-            finish_reason = "stop"
-        elif _stopped_by_suffix or _stopped_by_stop_id:
-            finish_reason = "stop"
-        else:
-            finish_reason = "length"
+            # Trim stop suffix from output text when matched during generation
+            if _stopped_by_suffix and stop_suffixes:
+                for s in stop_suffixes:
+                    if output_text.endswith(s):
+                        output_text = output_text[:-len(s)]
+                        break
 
-        # BUG FIX: When the first token is a stop_id (SpecPrefill path),
-        # it is popped from `tokens` but its logprob entry remains in
-        # `token_logprobs`.  Trim the stale entry so logprobs count matches
-        # `completion_tokens`.
-        if lp_result is not None:
-            lp_result = lp_result[:len(tokens)]
+            # Determine finish_reason.
+            # Priority: cancel > stop (suffix or stop_id) > length
+            # When cancel_event or timeout triggers, the loop breaks without
+            # setting _stopped_by_suffix or _stopped_by_stop_id, so those
+            # tokens correctly show up as "stop" only when genuinely stopped.
+            _cancelled = cancel_event is not None and cancel_event.is_set()
+            if _cancelled:
+                finish_reason = "stop"
+            elif _stopped_by_suffix or _stopped_by_stop_id:
+                finish_reason = "stop"
+            else:
+                finish_reason = "length"
 
-        # Record TTFT + ITL in Prometheus
-        _ttft_ms_val = round(ttft_s * 1000, 1)
-        if ttft_s > 0:
+            # BUG FIX: When the first token is a stop_id (SpecPrefill path),
+            # it is popped from `tokens` but its logprob entry remains in
+            # `token_logprobs`.  Trim the stale entry so logprobs count matches
+            # `completion_tokens`.
+            if lp_result is not None:
+                lp_result = lp_result[:len(tokens)]
+
+            # Record TTFT + ITL in Prometheus
+            _ttft_ms_val = round(ttft_s * 1000, 1)
+            if ttft_s > 0:
+                try:
+                    from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                    pm = get_prometheus_metrics()
+                    pm.observe_histogram("ttft_seconds", ttft_s)
+                    if cached_tokens > 0:
+                        pm.set_gauge("kv_prefix_cache_hits", 1)
+                    else:
+                        pm.set_gauge("kv_prefix_cache_misses", 1)
+                    # ITL: record individual inter-token latency samples into histogram
+                    if _itl_samples:
+                        for _itl_sample in _itl_samples:
+                            pm.observe_histogram("itl_seconds", _itl_sample)
+                except Exception:
+                    logger.debug("TTFT/ITL prometheus recording failed", exc_info=True)
+
+            # Record in ServerMetrics (consistency with engine loop path)
             try:
-                from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
-                pm = get_prometheus_metrics()
-                pm.observe_histogram("ttft_seconds", ttft_s)
-                if cached_tokens > 0:
-                    pm.set_gauge("kv_prefix_cache_hits", 1)
-                else:
-                    pm.set_gauge("kv_prefix_cache_misses", 1)
-                # ITL: record individual inter-token latency samples into histogram
+                from .server_metrics import get_server_metrics
+                _sm = get_server_metrics()
+                _total_gen_s = sum(_itl_samples) + ttft_s if _itl_samples else ttft_s
+                _sm.record_request_complete(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=len(tokens),
+                    cached_tokens=cached_tokens,
+                    prefill_duration=ttft_s,
+                    generation_duration=_total_gen_s,
+                    model_id=self.model_name,
+                )
                 if _itl_samples:
-                    for _itl_sample in _itl_samples:
-                        pm.observe_histogram("itl_seconds", _itl_sample)
+                    for _itl in _itl_samples:
+                        _sm.record_itl(_itl)
             except Exception:
-                logger.debug("TTFT/ITL prometheus recording failed", exc_info=True)
+                logger.debug("ServerMetrics recording failed in fast path", exc_info=True)
 
-        # Record in ServerMetrics (consistency with engine loop path)
-        try:
-            from .server_metrics import get_server_metrics
-            _sm = get_server_metrics()
-            _total_gen_s = sum(_itl_samples) + ttft_s if _itl_samples else ttft_s
-            _sm.record_request_complete(
+            self._total_reasoning_tokens += len(_thinking_tokens)
+
+            # Reasoning parser: supplement token-level tracking with model-specific
+            # reasoning extraction when thinking tokens were not explicitly tracked
+            _reasoning_tok = len(_thinking_tokens)
+            if _reasoning_tok == 0 and output_text:
+                try:
+                    from .reasoning_parser import get_reasoning_parser
+                    rp = get_reasoning_parser(self.model_name)
+                    rp_out = rp.parse(output_text)
+                    if rp_out.reasoning:
+                        _reasoning_tok = rp_out.reasoning_tokens
+                        if rp_out.content != output_text:
+                            output_text = rp_out.content
+                except Exception:
+                    logger.debug("reasoning_parser failed in fast path", exc_info=True)
+
+            return GenerationOutput(
+                text=output_text,
+                new_text=output_text,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=len(tokens),
+                finished=True,
+                finish_reason=finish_reason,
                 cached_tokens=cached_tokens,
-                prefill_duration=ttft_s,
-                generation_duration=_total_gen_s,
-                model_id=self.model_name,
+                logprobs=lp_result,
+                ttft_ms=_ttft_ms_val,
+                reasoning_tokens=_reasoning_tok,
             )
-            if _itl_samples:
-                for _itl in _itl_samples:
-                    _sm.record_itl(_itl)
-        except Exception:
-            logger.debug("ServerMetrics recording failed in fast path", exc_info=True)
-
-        self._total_reasoning_tokens += len(_thinking_tokens)
-
-        # Reasoning parser: supplement token-level tracking with model-specific
-        # reasoning extraction when thinking tokens were not explicitly tracked
-        _reasoning_tok = len(_thinking_tokens)
-        if _reasoning_tok == 0 and output_text:
-            try:
-                from .reasoning_parser import get_reasoning_parser
-                rp = get_reasoning_parser(self.model_name)
-                rp_out = rp.parse(output_text)
-                if rp_out.reasoning:
-                    _reasoning_tok = rp_out.reasoning_tokens
-                    if rp_out.content != output_text:
-                        output_text = rp_out.content
-            except Exception:
-                logger.debug("reasoning_parser failed in fast path", exc_info=True)
-
-        return GenerationOutput(
-            text=output_text,
-            new_text=output_text,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=len(tokens),
-            finished=True,
-            finish_reason=finish_reason,
-            cached_tokens=cached_tokens,
-            logprobs=lp_result,
-            ttft_ms=_ttft_ms_val,
-            reasoning_tokens=_reasoning_tok,
-        )
+        finally:
+            _fp_lock = getattr(self, '_fast_path_lock', None)
+            if _fp_lock is not None:
+                with _fp_lock:
+                    self._active_fast_path_count -= 1
 
     async def stream_generate(
         self,
@@ -2786,13 +2813,18 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_repetition_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
-            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty):
+            def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty, n_prompt=prompt_tokens):
+                # Per OpenAI API spec, frequency/presence penalties only apply
+                # to generated tokens, NOT prompt tokens.
+                gen_tokens = tokens[n_prompt:] if len(tokens) > n_prompt else []
                 counts = {}
-                for t in tokens:
+                for t in gen_tokens:
                     counts[int(t)] = counts.get(int(t), 0) + 1
                 for tid, cnt in counts.items():
-                    logits[..., tid] -= fp * cnt
-                    logits[..., tid] -= pp
+                    if fp > 0:
+                        logits[..., tid] -= fp * cnt
+                    if pp > 0 and cnt > 0:
+                        logits[..., tid] -= pp
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
@@ -3115,6 +3147,10 @@ class BatchedEngine:
         n_tok = 0
         _reasoning_tokens = 0
         _cached_tokens_box = [0]  # Mutable box for inner _run_inner to set
+        _fp_lock = getattr(self, '_fast_path_lock', None)
+        if _fp_lock is not None:
+            with _fp_lock:
+                self._active_fast_path_count += 1
         try:
             while True:
                 try:
@@ -3293,6 +3329,11 @@ class BatchedEngine:
                     _q.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+            # Decrement active fast path count
+            _fp_lock = getattr(self, '_fast_path_lock', None)
+            if _fp_lock is not None:
+                with _fp_lock:
+                    self._active_fast_path_count -= 1
 
     async def chat(
         self,
@@ -5494,7 +5535,9 @@ class BatchedEngine:
         return "\n".join(parts)
 
     def has_active_requests(self) -> bool:
-        """Check if engine has in-flight requests."""
+        """Check if engine has in-flight requests (including fast-path)."""
+        if getattr(self, '_active_fast_path_count', 0) > 0:
+            return True
         if self._engine_core:
             return bool(self._engine_core.has_active_requests)
         return False

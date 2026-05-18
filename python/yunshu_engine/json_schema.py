@@ -264,13 +264,31 @@ class JsonSchemaConstraint:
             return _DIGIT_CHARS
 
         if state == JsonState.BOOLEAN_TRUE:
-            return {'t'}
+            literal = "true"
+            # After entering BOOLEAN_TRUE, first char 't' was consumed.
+            # _literal_remaining tracks how many chars of the suffix remain.
+            # idx = position in literal we need next (1='r', 2='u', 3='e')
+            remaining = getattr(self, '_literal_remaining', 3)
+            idx = len(literal) - remaining
+            if 0 <= idx < len(literal):
+                return {literal[idx]}
+            return set()
 
         if state == JsonState.BOOLEAN_FALSE:
-            return {'f'}
+            literal = "false"
+            remaining = getattr(self, '_literal_remaining', 4)
+            idx = len(literal) - remaining
+            if 0 <= idx < len(literal):
+                return {literal[idx]}
+            return set()
 
         if state == JsonState.NULL:
-            return {'n'}
+            literal = "null"
+            remaining = getattr(self, '_literal_remaining', 3)
+            idx = len(literal) - remaining
+            if 0 <= idx < len(literal):
+                return {literal[idx]}
+            return set()
 
         if state == JsonState.DONE:
             return set()  # nothing allowed
@@ -973,8 +991,11 @@ def apply_json_constraint(
     import mlx.core as mx
 
     if not allowed_token_ids:
-        # No tokens allowed — return logits as-is (shouldn't happen normally)
-        return logits
+        # No valid tokens in current state — mask everything to -inf so the
+        # sampler is forced toward EOS.  Returning raw logits would silently
+        # disable the constraint.
+        neg_inf = mx.array(float('-inf'), dtype=logits.dtype)
+        return mx.broadcast_to(neg_inf, logits.shape)
 
     # Create mask: True where token is NOT allowed
     vocab_size = logits.shape[-1]
@@ -1029,7 +1050,8 @@ class ConstrainedSampler:
             # Mask disallowed tokens
             masked_logits = apply_json_constraint(logits, allowed)
         else:
-            masked_logits = logits
+            # No valid tokens in current state — force EOS
+            masked_logits = apply_json_constraint(logits, [])
 
         # Sample using base sampler
         token = self._base_sampler(masked_logits)

@@ -139,12 +139,9 @@ class PipelineParallel:
     ) -> mx.array:
         """Receive hidden states from the previous pipeline stage."""
         if self._collective is None:
-            logger.warning(
-                "recv_activations called without collective ops; "
-                "returning zeros from rank %d — inference will be incorrect!",
-                src_rank,
+            raise RuntimeError(
+                "Pipeline collective not initialized — cannot receive activations"
             )
-            return mx.zeros(shape, dtype=dtype)
         return self._collective.recv(shape, dtype, src_rank)
 
     def to_dict(self) -> dict:

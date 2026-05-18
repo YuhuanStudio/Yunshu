@@ -434,13 +434,13 @@ class TestApplyJsonConstraint:
         for i in range(3):
             assert abs(float(masked[0, i]) - float(logits[0, i])) < 1e-6
 
-    def test_empty_allowed_returns_same(self):
+    def test_empty_allowed_masks_all_to_neg_inf(self):
         import mlx.core as mx
         logits = mx.array([[1.0, 2.0, 3.0]])
         masked = apply_json_constraint(logits, [])
-        # Should return as-is when no tokens allowed
+        # Empty allowed means no valid tokens — all should be -inf to force EOS
         for i in range(3):
-            assert abs(float(masked[0, i]) - float(logits[0, i])) < 1e-6
+            assert float(masked[0, i]) < -1e10, f"token {i} should be -inf but got {float(masked[0, i])}"
 
     def test_single_token_allowed(self):
         import mlx.core as mx

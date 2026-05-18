@@ -142,6 +142,8 @@ class TestBatchedEngineFastPathPromptTokens:
         engine._engine_loop_default = False
         engine._streaming_pipeline_enabled = False
         engine._thinking_store = None
+        engine._active_fast_path_count = 0
+        engine._fast_path_lock = __import__('threading').Lock()
         engine._settings = None
         engine._deltanet_inverter = None
         engine._deltanet_inversion_enabled = False
