@@ -120,8 +120,7 @@ class PagedScheduler(Scheduler):
                     f"need {effective_needed} blocks (of which {cached_blocks_estimate} cached), "
                     f"only {self._kv_manager.num_free_blocks} free"
                 )
-                request.status = RequestStatus.FINISHED_ERROR
-                request.finish_reason = "kv_cache_full"
+                request.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_full")
                 return
 
         table, prefix_match = self._kv_manager.allocate_for_prefill(token_ids)

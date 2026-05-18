@@ -870,8 +870,7 @@ class Scheduler:
             for req_id in list(self._pending_prefill.keys()):
                 req = self.running.get(req_id) or self.requests.get(req_id)
                 if req is not None:
-                    req.status = RequestStatus.FINISHED_ERROR
-                    req.finish_reason = "shutdown"
+                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="shutdown")
             logger.info(
                 f"Shutdown: draining {n_pending} pending chunked prefills"
             )
@@ -1216,8 +1215,7 @@ class Scheduler:
                 continue
             submit = getattr(req, '_submit_time', now)
             if timeout > 0 and (now - submit) > timeout:
-                req.status = RequestStatus.FINISHED_TIMEOUT
-                req.finish_reason = "timeout"
+                req.set_finished(RequestStatus.FINISHED_TIMEOUT, reason="timeout")
                 self.finished_ids.add(req.request_id)
                 # Track timed-out request so step() generates an error output
                 # for EngineCore to finalize (otherwise resources leak).
@@ -1369,8 +1367,7 @@ class Scheduler:
                 # Validate max_tokens: 0 or negative means no generation needed.
                 # Immediately finish the request to avoid inserting into BatchGenerator.
                 if sp.max_tokens is not None and sp.max_tokens <= 0:
-                    req.status = RequestStatus.FINISHED_STOPPED
-                    req.finish_reason = "length"
+                    req.set_finished(RequestStatus.FINISHED_STOPPED, reason="length")
                     self.finished_ids.add(req.request_id)
                     self._failed_insert_ids.append(req.request_id)
                     logger.debug(
@@ -1504,8 +1501,7 @@ class Scheduler:
 
                 if not uids:
                     logger.error(f"BatchGenerator.insert returned empty UIDs for {req.request_id}")
-                    req.status = RequestStatus.FINISHED_ERROR
-                    req.finish_reason = "insert_failed"
+                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
                     continue
                 req.batch_uid = uids[0]
                 req.status = RequestStatus.RUNNING
@@ -1563,8 +1559,7 @@ class Scheduler:
 
             except Exception as e:
                 logger.error(f"Failed to insert request {req.request_id}: {e}", exc_info=True)
-                req.status = RequestStatus.FINISHED_ERROR
-                req.finish_reason = "error"
+                req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
                 # Signal completion so callers don't hang
                 self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
                 self.finished_ids.add(req.request_id)
@@ -1619,8 +1614,7 @@ class Scheduler:
 
         except PrefillAbortedError:
             logger.info(f"External prefill aborted for {req.request_id}")
-            req.status = RequestStatus.FINISHED_ABORTED
-            req.finish_reason = "abort"
+            req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
             self.finished_ids.add(req.request_id)
             return False
 
@@ -1635,8 +1629,7 @@ class Scheduler:
                     f"External prefill failed for {req.request_id}: {e}",
                     exc_info=True,
                 )
-            req.status = RequestStatus.FINISHED_ERROR
-            req.finish_reason = "error"
+            req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
             self.finished_ids.add(req.request_id)
             return False
 
@@ -1901,8 +1894,7 @@ class Scheduler:
                 # Abort the request — return error to the client
                 req = self.running.get(req_id)
                 if req is not None:
-                    req.status = RequestStatus.FINISHED_ERROR
-                    req.finish_reason = "prefill_timeout"
+                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_timeout")
                     self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
                     logger.warning(
                         f"Chunked prefill timeout for {req_id}: aborting "
@@ -1948,8 +1940,7 @@ class Scheduler:
                             )
                             req = self.running.get(req_id)
                             if req is not None:
-                                req.status = RequestStatus.FINISHED_ERROR
-                                req.finish_reason = "prefill_error"
+                                req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
                             errored_ids.append(req_id)
                 # Only mark as completed if force-feed succeeded or there are no remaining tokens.
                 # If force-feed failed (but not errored — e.g., req was None or batch_gen missing),
@@ -2098,8 +2089,7 @@ class Scheduler:
                     exc_info=True,
                 )
                 # ── Error handling: abort entire request on chunk failure ──
-                req.status = RequestStatus.FINISHED_ERROR
-                req.finish_reason = "prefill_error"
+                req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
                 self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
                 errored_ids.append(req_id)
 
@@ -2383,8 +2373,10 @@ class Scheduler:
                     "stop": RequestStatus.FINISHED_STOPPED,
                     "length": RequestStatus.FINISHED_LENGTH,
                 }
-                req.status = status_map.get(finish_reason, RequestStatus.FINISHED_STOPPED)
-                req.finish_reason = finish_reason
+                req.set_finished(
+                    status_map.get(finish_reason, RequestStatus.FINISHED_STOPPED),
+                    reason=finish_reason,
+                )
                 self._uid_to_req.pop(uid, None)
 
                 # Deferred cache clearing (oMLX #435)
@@ -2469,8 +2461,7 @@ class Scheduler:
         for req_id in list(self._pending_abort_ids):
             req = self.requests.get(req_id)
             if req:
-                req.status = RequestStatus.FINISHED_ABORTED
-                req.finish_reason = "abort"
+                req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
                 uid = getattr(req, 'batch_uid', None)
                 self._uid_to_req.pop(uid, None)
                 if uid is not None:
@@ -2751,8 +2742,7 @@ class Scheduler:
         for req_id in failed:
             req = self.running.get(req_id)
             if req:
-                req.status = RequestStatus.FINISHED_ERROR
-                req.finish_reason = "error"
+                req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
         self.running.clear()
         self._uid_to_req.clear()
         return failed

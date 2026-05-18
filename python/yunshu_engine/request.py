@@ -223,9 +223,17 @@ class Request:
         self.num_computed_tokens += 1
 
     def set_finished(self, status: RequestStatus, reason: str | None = None) -> None:
+        """Transition to a finished state with optional reason.
+
+        Validates the transition: already-finished requests cannot transition
+        to a different finished state (prevents masking bugs).
+        """
+        if RequestStatus.is_finished(self.status) and self.status != status:
+            return  # Already finished — ignore spurious re-finish
         self.status = status
         self.finish_reason = reason or RequestStatus.finish_reason(status)
-        self.generation_end = time.monotonic()
+        if not self.generation_end:
+            self.generation_end = time.monotonic()
 
     def __lt__(self, other: "Request") -> bool:
         if self.priority != other.priority:
