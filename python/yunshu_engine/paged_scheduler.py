@@ -184,6 +184,21 @@ class PagedScheduler(Scheduler):
                     )
         self._kv_manager.free_request(table)
 
+    def _preempt_request(self, request) -> None:
+        """Preempt a running request, releasing its KV blocks back to the pool.
+
+        Without this override, the base Scheduler._preempt_request would move
+        the request back to the waiting queue but leave its paged KV blocks
+        allocated — a resource leak under memory pressure (which is the very
+        reason preemption is triggered).
+        """
+        # Release KV blocks BEFORE base class removes the request from
+        # the batch generator (which invalidates the cache reference).
+        self._finalize_request_blocks(request.request_id)
+        # Delegate to base class for the actual preemption logic
+        # (save prefix cache, move to waiting queue, etc.)
+        super()._preempt_request(request)
+
     def _cleanup_finished(self) -> None:
         if self._kv_manager is not None:
             for req_id in list(self.running.keys()):
