@@ -168,7 +168,7 @@ class HeartbeatMonitor:
         now = time.monotonic()
         with self._nodes_lock:
             return {
-                node_id: (now - self._last_heartbeat.get(node_id, 0)) < self.timeout
+                node_id: (now - self._last_heartbeat.get(node_id, now)) < self.timeout
                 for node_id in self._nodes
             }
 

@@ -188,7 +188,7 @@ class TestMeshNode:
         node = MeshNode(
             node_id="test",
             state=MeshNodeState.READY,
-            last_heartbeat=time.time() - 60,  # 60s ago
+            last_heartbeat=time.monotonic() - 60,  # 60s ago
         )
         assert not node.is_healthy(timeout=30)
         node.heartbeat()

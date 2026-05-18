@@ -251,7 +251,8 @@ class InflightPrefixTracker:
     def _evict_oldest(self) -> None:
         if not self._entries:
             return
-        oldest_id = min(self._entries, key=lambda k: self._entries[k].created_at)
+        # Evict least-recently-used (by last_updated_at, not created_at)
+        oldest_id = min(self._entries, key=lambda k: self._entries[k].last_updated_at)
         self.unregister(oldest_id)
         self._stats["evictions"] += 1
 

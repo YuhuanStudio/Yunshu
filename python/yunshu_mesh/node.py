@@ -144,12 +144,12 @@ class MeshNode:
         """Check if node is healthy based on heartbeat."""
         return (
             self.state not in (MeshNodeState.OFFLINE,)
-            and time.time() - self.last_heartbeat < timeout
+            and time.monotonic() - self.last_heartbeat < timeout
         )
 
     def heartbeat(self) -> None:
         """Update heartbeat timestamp."""
-        self.last_heartbeat = time.time()
+        self.last_heartbeat = time.monotonic()
 
     def to_dict(self) -> dict:
         return {

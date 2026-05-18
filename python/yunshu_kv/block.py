@@ -197,6 +197,7 @@ class BlockPool:
         if block.ref_count == 0 and not block.is_null:
             self.free_queue.remove(block)
         block.ref_count += 1
+        block.cache_only = False
         block.last_access_time = time.monotonic()
 
     def free(self, blocks: list[KVBlock]) -> None:

@@ -93,7 +93,10 @@ class NodeDiscovery:
                     pass
 
                 def remove_service(self, zc, type_, name):
-                    node_id = name.split("-")[1].split(".")[0] if "-" in name else name
+                    # Strip service type suffix to get "yunshu-{node_id}"
+                    prefix = f".{_SERVICE_TYPE}"
+                    base = name[:-len(prefix)] if name.endswith(prefix) else name
+                    node_id = base[len("yunshu-"):] if base.startswith("yunshu-") else name
                     self._discovery._remove_discovered(node_id)
 
             self._browser = ServiceBrowser(self._zeroconf, _SERVICE_TYPE, _Listener(self))
@@ -192,7 +195,7 @@ class NodeDiscovery:
         with self._lock:
             is_new = node.node_id not in self._discovered_nodes
             self._discovered_nodes[node.node_id] = node
-            self._discovered_times[node.node_id] = time.time()
+            self._discovered_times[node.node_id] = time.monotonic()
             callbacks = list(self._on_discovered_callbacks)
             # Prune stale nodes that haven't been seen in a while
             stale_nodes, stale_callbacks = self._prune_stale_nodes()
@@ -229,7 +232,7 @@ class NodeDiscovery:
         Must be called with _lock held. Returns (stale_nodes, callbacks)
         so the caller can fire callbacks after releasing the lock.
         """
-        now = time.time()
+        now = time.monotonic()
         stale_ids = [
             nid for nid, t in self._discovered_times.items()
             if now - t > self._stale_timeout

@@ -552,7 +552,9 @@ async def _stream_completion(
 
         yield format_openai_done()
         metrics_recorded = True
+        _done_emitted = True
     metrics_recorded = False
+    _done_emitted = False
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     # Register with request tracker for cancellation support
     _tracker = None
@@ -575,13 +577,15 @@ async def _stream_completion(
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
         yield f"data: {json.dumps({'error': {'message': 'Insufficient GPU memory', 'type': 'server_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not _done_emitted:
+            yield b"data: [DONE]\n\n"
     except Exception as e:
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
         logger.error(f"Completions streaming error: {e}", exc_info=True)
         yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
-        yield b"data: [DONE]\n\n"
+        if not _done_emitted:
+            yield b"data: [DONE]\n\n"
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _tracker is not None:

@@ -346,13 +346,17 @@ class RequestLifecycleOrchestrator:
         was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
         state.completion_tokens = completion_tokens
         state.transition(RequestPhase.FINISHED)
-        self._total_completed += 1
         if was_active or self._active_count > 0:
             self._active_count = max(0, self._active_count - 1)
-        self._model_counts[state.model]["completed"] += 1
 
-        # Report to concurrency controller
-        self._concurrency.report_success(state)
+        # Only count genuine completions, not errors/aborts/timeouts
+        if finish_reason in ("stop", "length"):
+            self._total_completed += 1
+            self._model_counts[state.model]["completed"] += 1
+            self._concurrency.report_success(state)
+        else:
+            self._total_rejected += 1
+            self._model_counts[state.model]["rejected"] += 1
 
         # Do NOT auto-promote pending requests here. Promotion via
         # on_prefill_start() increments _active_count, but the promoted
@@ -391,8 +395,9 @@ class RequestLifecycleOrchestrator:
             if was_active:
                 self._active_count = max(0, self._active_count - 1)
             self._total_retried += 1
-            # Re-queue the request so it can be promoted when a slot opens
-            self._pending_queue.append(request_id)
+            # Re-queue if not already pending (avoid duplicates on repeated failures)
+            if request_id not in self._pending_queue:
+                self._pending_queue.append(request_id)
             return state
 
         # Terminal failure — go to REJECTED then FINISHED

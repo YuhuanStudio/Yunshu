@@ -144,7 +144,7 @@ class InferenceCheckpoint:
                 # Move to end to maintain correct LRU eviction order.
                 # OrderedDict.__setitem__ does NOT move existing keys.
                 self._checkpoints.move_to_end(request_id)
-            self._checkpoints[request_id] = state
+            self._checkpoints[request_id] = copy.deepcopy(state)
             self._saves += 1
         logger.debug(f"Checkpoint saved: {request_id} (position={state.position})")
 

@@ -428,11 +428,11 @@ class KVCacheManager:
         if remaining_tokens:
             # Insert new nodes for the unmatched portion
             bs = self.config.block_size
-            # Ceiling division: the boundary block that partially overlaps
-            # the matched prefix must stay with the matched portion, not
-            # the remaining tokens.  This matches the split logic in
-            # RadixTree._split_node.
-            new_start_block = (matched_len + bs - 1) // bs
+            # Floor division: the boundary block that straddles the split
+            # point stays with the matched prefix, matching _split_node's
+            # floor division.  Ceiling division was losing the boundary
+            # block's tokens from the radix tree.
+            new_start_block = matched_len // bs
             if new_start_block > len(blocks):
                 return  # Defensive: matched more than we have blocks for
             new_blocks = blocks[new_start_block:]

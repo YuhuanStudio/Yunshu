@@ -672,7 +672,8 @@ class SpeculativeDecoder:
                 if draft_p > 0:
                     ratio = min(1.0, target_p / draft_p)
                 else:
-                    ratio = 1.0
+                    # Draft assigned zero probability — reject and resample from target
+                    ratio = 0.0
                 u = self.rng.random()
 
                 if u < ratio:

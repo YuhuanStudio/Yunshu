@@ -992,6 +992,7 @@ class JsonSchemaConstraint:
         self._is_first_value = True
         self._literal_remaining = 0
         self._unicode_remaining = 0
+        self._snapshots.clear()
 
     def get_stats(self) -> dict[str, Any]:
         """Return constraint statistics for monitoring."""

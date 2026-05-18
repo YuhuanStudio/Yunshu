@@ -381,7 +381,7 @@ class LRUPolicy(OffloadPolicy):
                 return blocks_to_offload
 
             candidates = []
-            for block in getattr(pool, '_blocks', []):
+            for block in pool.blocks:
                 if (
                     hasattr(block, 'ref_count')
                     and block.ref_count == 0
@@ -454,7 +454,7 @@ class PriorityPolicy(OffloadPolicy):
                 return blocks_to_offload
 
             candidates = []
-            for block in getattr(pool, '_blocks', []):
+            for block in pool.blocks:
                 if (
                     hasattr(block, 'ref_count')
                     and block.ref_count == 0
@@ -1099,7 +1099,7 @@ class KVOffloadManager:
             # Find the block by hash
             pool = getattr(hot_mgr, 'block_pool', None)
             if pool is not None:
-                for block in getattr(pool, '_blocks', []):
+                for block in pool.blocks:
                     if (
                         hasattr(block, 'block_hash')
                         and block.block_hash == block_hash
@@ -1111,7 +1111,7 @@ class KVOffloadManager:
             try:
                 pool = getattr(hot_mgr, 'block_pool', None)
                 if pool is not None:
-                    for block in getattr(pool, '_blocks', []):
+                    for block in pool.blocks:
                         if (
                             hasattr(block, 'block_hash')
                             and block.block_hash == block_hash
