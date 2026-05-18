@@ -1530,31 +1530,33 @@ class VLMEngine:
                 prompt_tokens=_num_prompt_tokens,
             ))
 
-            # Track vision feature cache stats after streaming completes
-            if self._vision_cache is not None:
-                vc_stats_after = self._vision_cache.stats
-                new_hits = vc_stats_after.get("hits", 0) - vc_stats_before.get("hits", 0)
-                if new_hits > 0:
-                    self._vlm_vision_hits += new_hits
-                    logger.debug("VLM stream vision feature cache hit: reused encoded image")
-                elif image_paths:
-                    self._vlm_vision_misses += 1
+            # Post-streaming bookkeeping (cache stats, encoder cache, KV prefix).
+            # Wrapped in try/except to prevent double finished=True if any of
+            # these operations raise after the finished output was already emitted.
+            try:
+                if self._vision_cache is not None:
+                    vc_stats_after = self._vision_cache.stats
+                    new_hits = vc_stats_after.get("hits", 0) - vc_stats_before.get("hits", 0)
+                    if new_hits > 0:
+                        self._vlm_vision_hits += new_hits
+                        logger.debug("VLM stream vision feature cache hit: reused encoded image")
+                    elif image_paths:
+                        self._vlm_vision_misses += 1
 
-            # Store encoder output in encoder cache for streaming vision path
-            if _encoder_cache_key is not None and hasattr(self._model, 'vision_tower'):
-                self._encoder_cache.put(_encoder_cache_key, True)
+                # Store encoder output in encoder cache for streaming vision path
+                if _encoder_cache_key is not None and hasattr(self._model, 'vision_tower'):
+                    self._encoder_cache.put(_encoder_cache_key, True)
 
-            # After streaming, save KV prefix state for this image
-            if image_hash is not None:
-                try:
+                # After streaming, save KV prefix state for this image
+                if image_hash is not None:
                     if kv_prefix_state is not None:
                         # State was already updated by stream_generate
                         pass
                     else:
                         # First time seeing this image — create a state entry
                         self._ensure_kv_prefix_state(image_hash)
-                except Exception:
-                    logger.warning("KV prefix state management failed", exc_info=True)
+            except Exception:
+                logger.debug("post-stream bookkeeping failed", exc_info=True)
 
         except Exception as e:
             queue.put_nowait(RequestOutput(
