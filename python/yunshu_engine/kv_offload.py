@@ -1022,12 +1022,15 @@ class KVOffloadManager:
 
                 elif request.source_tier == KVTier.WARM and request.dest_tier == KVTier.SSD:
                     # Warm → SSD: promote from warm, persist to SSD, then evict warm
+                    # If SSD write fails, re-insert back into warm to prevent data loss
                     if warm_tier is not None and ssd_store is not None:
                         kv_data = warm_tier.promote(block_hash)
                         if kv_data is not None:
                             if ssd_store.store(block_hash, kv_data, num_tokens=0):
-                                warm_tier.demote(block_hash, kv_data=None)
                                 offloaded = True
+                            else:
+                                # SSD write failed — re-insert into warm tier
+                                warm_tier.demote(block_hash, kv_data)
 
                 if offloaded:
                     result.blocks_offloaded += 1

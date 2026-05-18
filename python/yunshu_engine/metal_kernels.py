@@ -431,10 +431,13 @@ class MetalKernelManager:
         if scale is None:
             scale = 1.0 / (head_dim ** 0.5)
 
+        num_queries = queries.shape[0]
+        if num_queries == 0:
+            return mx.zeros_like(queries)
+
         kernel = _get_kernel(f"paged_attn_decode_h{head_dim}_k{kv_block_size}")
         if kernel is not None:
             try:
-                num_queries = queries.shape[0]
                 max_blocks = block_tables.shape[1]
                 output = kernel(
                     inputs=[queries, key_cache, value_cache, block_tables, seq_lens],
@@ -509,6 +512,14 @@ class MetalKernelManager:
         """KIVI 2-bit quantize: FP16 keys → packed 2-bit + scale + zp."""
         num_tokens, num_heads, head_dim = keys.shape
 
+        if num_tokens == 0 or num_heads == 0:
+            packed_dim = head_dim // 4
+            return (
+                mx.zeros((num_tokens, num_heads, packed_dim), dtype=mx.uint8),
+                mx.zeros((num_tokens, num_heads), dtype=mx.float16),
+                mx.zeros((num_tokens, num_heads), dtype=mx.float16),
+            )
+
         kernel = _get_kernel("kivi_quantize")
         if kernel is not None:
             try:
@@ -562,6 +573,9 @@ class MetalKernelManager:
     ) -> mx.array:
         """KIVI 2-bit dequantize: packed 2-bit → FP16 keys."""
         num_tokens, num_heads, packed_dim = quant_keys.shape
+
+        if num_tokens == 0 or num_heads == 0:
+            return mx.zeros((num_tokens, num_heads, head_dim), dtype=mx.float16)
 
         kernel = _get_kernel("kivi_dequantize")
         if kernel is not None:

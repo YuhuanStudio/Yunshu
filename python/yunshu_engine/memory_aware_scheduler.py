@@ -296,6 +296,17 @@ class MemoryAwareScheduler:
                     f"Cannot reserve {num_bytes} bytes for {request_id}: "
                     f"only {budget.available_bytes} available"
                 )
+                self._stats.total_rejections += 1
+                # Unwind pressure-pause if can_admit_request set it but
+                # reserve failed — prevents permanent pause when memory
+                # pressure was triggered by the admission check itself.
+                if self._is_paused:
+                    fresh_budget = self._get_budget()
+                    if fresh_budget.utilization_pct <= (self._pressure_threshold - self._hysteresis):
+                        self._is_paused = False
+                        self._paused_since = None
+                        self._stats.pressure_resumes += 1
+                        self._stats.is_paused = False
                 return False
 
             entry = RequestMemoryEntry(

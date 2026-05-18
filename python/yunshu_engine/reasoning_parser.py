@@ -16,7 +16,7 @@ Supported families:
 All parsers now:
 - Use finditer/search instead of match() to handle leading whitespace
 - Handle multiple think/unthink cycles (concatenating reasoning)
-- Count reasoning_tokens by character length (not word split — wrong for CJK)
+- Estimate reasoning_tokens via len//4 heuristic (character count ≈ 4× token count)
 """
 
 import re
@@ -89,7 +89,7 @@ class ReasoningParser(ABC):
             return ReasoningOutput(
                 content=content,
                 reasoning=reasoning,
-                reasoning_tokens=len(reasoning),
+                reasoning_tokens=max(1, len(reasoning) // 4),
             )
         return ReasoningOutput(content=text.strip())
 

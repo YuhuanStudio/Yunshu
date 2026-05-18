@@ -103,6 +103,9 @@ class ContextWindowManager:
         truncated = result.messages
     """
 
+    # Roles protected from truncation (never dropped by any strategy)
+    _PROTECTED_ROLES = {"system", "developer"}
+
     # Role priorities for importance_aware strategy
     _ROLE_PRIORITY = {
         "system": 100,
@@ -257,9 +260,9 @@ class ContextWindowManager:
             return []
 
         result = deepcopy(messages)
-        # Identify and protect system messages
-        system_msgs = [m for m in result if m.get("role") == "system"]
-        non_system = [m for m in result if m.get("role") != "system"]
+        # Identify and protect system + developer messages
+        system_msgs = [m for m in result if m.get("role") in self._PROTECTED_ROLES]
+        non_system = [m for m in result if m.get("role") not in self._PROTECTED_ROLES]
 
         # Remove oldest non-system messages first
         prev_len = -1
@@ -285,8 +288,8 @@ class ContextWindowManager:
         if not messages:
             return []
 
-        system_msgs = [m for m in messages if m.get("role") == "system"]
-        non_system = [m for m in messages if m.get("role") != "system"]
+        system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
+        non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
 
         # Start from the most recent and work backwards
         window = []
@@ -317,9 +320,9 @@ class ContextWindowManager:
         if not messages:
             return []
 
-        # Always keep system messages
-        system_msgs = [m for m in messages if m.get("role") == "system"]
-        non_system = [m for m in messages if m.get("role") != "system"]
+        # Always keep system + developer messages
+        system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
+        non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
 
         if not non_system:
             return deepcopy(system_msgs)
@@ -399,8 +402,8 @@ class ContextWindowManager:
         if not messages:
             return []
 
-        system_msgs = [m for m in messages if m.get("role") == "system"]
-        non_system = [m for m in messages if m.get("role") != "system"]
+        system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
+        non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
 
         if not non_system:
             return deepcopy(system_msgs)

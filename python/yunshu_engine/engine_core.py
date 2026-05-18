@@ -1803,11 +1803,13 @@ class EngineCore:
                     if use_simple_streaming:
                         collector.put(req_output)
                     else:
+                        # Always put output to collector to prevent token loss
+                        # when stream_interval > 1.  The SSE emission layer
+                        # handles throttling — skipping here would discard
+                        # intermediate tokens permanently.
+                        collector.put(req_output)
                         stream_state = self._stream_states.get(rid)
-                        if stream_state and stream_state.should_send(
-                            req_output.completion_tokens, req_output.finished
-                        ):
-                            collector.put(req_output)
+                        if stream_state is not None:
                             stream_state.mark_sent(req_output.completion_tokens)
 
                     if req_output.finished:

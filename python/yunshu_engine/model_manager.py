@@ -269,11 +269,22 @@ class ModelManager:
                 model_id, estimated_bytes / 1e9, self.max_memory_bytes / 1e9,
             )
 
+        # Guard: never overwrite a loaded entry — would leak the engine's GPU memory
+        existing = self._entries.get(model_id)
+        if existing is not None and existing.is_loaded:
+            logger.warning(
+                "register_model('%s'): already loaded, skipping re-registration", model_id,
+            )
+            return
+
+        # Preserve pinned status when re-registering an existing entry
+        preserve_pinned = existing.is_pinned if existing is not None else False
+
         self._entries[model_id] = ModelEntry(
             model_id=model_id,
             model_path=model_path,
             estimated_bytes=estimated_bytes,
-            is_pinned=pinned,
+            is_pinned=pinned or preserve_pinned,
             model_type=model_type,
             settings=settings,
         )
@@ -742,6 +753,9 @@ class ModelManager:
             if existing is not None and existing.is_loaded:
                 continue
 
+            # Preserve pinned status from existing registration
+            was_pinned = existing.is_pinned if existing is not None else False
+
             raw_bytes = sum(f.stat().st_size for f in subdir.rglob("*.safetensors"))
             estimated = int(raw_bytes * 1.8)
 
@@ -749,6 +763,7 @@ class ModelManager:
                 model_id=model_id,
                 model_path=str(subdir),
                 estimated_bytes=estimated,
+                pinned=was_pinned,
             )
             count += 1
 
