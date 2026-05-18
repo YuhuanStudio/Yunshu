@@ -130,6 +130,8 @@ class InferenceCheckpoint:
         """Save a checkpoint for the given request.
 
         Evicts the oldest checkpoint if capacity is exceeded.
+        Overwriting an existing entry moves it to the end of the LRU order
+        (Python's OrderedDict does NOT do this on simple reassignment).
         """
         with self._lock:
             if (
@@ -137,6 +139,10 @@ class InferenceCheckpoint:
                 and request_id not in self._checkpoints
             ):
                 self._checkpoints.popitem(last=False)
+            if request_id in self._checkpoints:
+                # Move to end to maintain correct LRU eviction order.
+                # OrderedDict.__setitem__ does NOT move existing keys.
+                self._checkpoints.move_to_end(request_id)
             self._checkpoints[request_id] = state
             self._saves += 1
         logger.debug(f"Checkpoint saved: {request_id} (position={state.position})")
@@ -209,13 +215,6 @@ class InferenceCheckpoint:
         Returns True if checkpoint was saved.
         """
         tokens = len(state.generated_tokens)
-        if self._auto_policy == AutoCheckpointPolicy.EVERY_N_SECONDS:
-            if self.should_auto_checkpoint(state.request_id, tokens):
-                self.save(state.request_id, state)
-                with self._lock:
-                    self._auto_checkpoints += 1
-                return True
-            return False
         if self.should_auto_checkpoint(state.request_id, tokens):
             self.save(state.request_id, state)
             with self._lock:

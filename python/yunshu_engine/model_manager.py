@@ -440,13 +440,13 @@ class ModelManager:
 
         elif entry.model_type == ModelType.STS:
             from .sts_engine import STSEngine
-            engine = STSEngine(entry.model_path)
+            engine = STSEngine(entry.model_path, config)
             engine.start()
             return engine
 
         elif entry.model_type == ModelType.VIDEO:
             from .video_engine import VideoEngine
-            engine = VideoEngine(entry.model_path)
+            engine = VideoEngine(entry.model_path, config)
             engine.start()
             return engine
 
@@ -589,7 +589,8 @@ class ModelManager:
             victim = self._find_lru_victim()
             if victim is None:
                 raise MemoryError(
-                    f"Cannot free model slot: max_models={self.max_models} reached"
+                    f"Cannot free model slot: max_models={self.max_models} reached, "
+                    f"all loaded models are pinned or have active requests"
                 )
             await self._unload_model_locked(victim.model_id)
 

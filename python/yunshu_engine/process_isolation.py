@@ -666,17 +666,28 @@ class InferenceWorker:
             pass
         finally:
             # Only record crash if we exited due to pipe closure (not
-            # intentional stop).  Read both flags under the lifecycle lock
-            # to avoid TOCTOU with stop() which sets both under the same lock.
+            # intentional stop).  Record crash AND update state atomically
+            # under the lifecycle lock to prevent races with stop().
             with self._lifecycle_lock:
                 should_record = (
                     self._result_thread_running
                     and self._state not in (WorkerState.STOPPING, WorkerState.STOPPED)
                 )
-            if should_record:
-                self._record_crash()
-                with self._lifecycle_lock:
-                    if self._state != WorkerState.CIRCUIT_OPEN:
+                if should_record:
+                    now = time.monotonic()
+                    self._crash_times.append(now)
+                    self._stats.crash_count += 1
+                    self._stats.last_crash_time = now
+                    if self._is_circuit_open():
+                        self._state = WorkerState.CIRCUIT_OPEN
+                        logger.warning(
+                            "Circuit breaker tripped for worker %s "
+                            "(%d crashes in %.0fs) [result reader]",
+                            self._config.model_id,
+                            len(self._crash_times),
+                            self._config.restart_window_seconds,
+                        )
+                    elif self._state != WorkerState.CIRCUIT_OPEN:
                         self._state = WorkerState.CRASHED
 
     def _heartbeat_monitor_loop(self) -> None:
