@@ -109,17 +109,22 @@ def _decompress_numpy(compressed: bytes) -> bytes:
     """Decompress numpy compressed data."""
     buf = io.BytesIO(compressed)
     loaded = np.load(buf)
-    return loaded["data"].tobytes()
+    try:
+        return loaded["data"].tobytes()
+    finally:
+        loaded.close()
 
 
 # Dispatch tables
 _COMPRESS = {
     "none": _compress_raw,
     "numpy": _compress_numpy,
+    "safetensors": _compress_raw,  # safetensors handles framing at block level
 }
 _DECOMPRESS = {
     "none": _decompress_raw,
     "numpy": _decompress_numpy,
+    "safetensors": _decompress_raw,  # safetensors handles framing at block level
 }
 
 
