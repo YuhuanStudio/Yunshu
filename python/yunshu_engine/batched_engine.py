@@ -20,6 +20,7 @@ This is the engine that ModelManager and the gateway routers use.
 import asyncio
 import logging
 import os
+import platform
 import threading
 import time
 from contextlib import contextmanager
@@ -466,17 +467,30 @@ class BatchedEngine:
 
         # mx.compile() for Metal kernel caching (SGLang CUDA Graphs equivalent)
         self._compiled = False
-        self._use_compile = os.environ.get(
-            "YUNSHU_MX_COMPILE", ""
-        ).strip() in ("1", "true", "yes")
+        _mx_compile_env = os.environ.get("YUNSHU_MX_COMPILE", "").strip().lower()
+        if _mx_compile_env in ("1", "true", "yes"):
+            self._use_compile = True
+        elif _mx_compile_env in ("0", "false", "no"):
+            self._use_compile = False
+        else:
+            # Auto-enable mx.compile on Apple Silicon — it's always safe
+            self._use_compile = platform.system() == "Darwin"
 
         # Metal kernel manager for custom GPU kernels (paged attention, GEMV, KIVI)
         # Enable via YUNSHU_METAL_KERNELS=1 — provides Metal-accelerated attention,
         # quantized GEMV, and KIVI 2-bit KV cache compression kernels.
         self._metal_kernel_manager = None
-        self._metal_kernels_enabled = os.environ.get(
-            "YUNSHU_METAL_KERNELS", ""
-        ).strip() in ("1", "true", "yes")
+        _metal_env = os.environ.get("YUNSHU_METAL_KERNELS", "").strip().lower()
+        if _metal_env in ("1", "true", "yes"):
+            self._metal_kernels_enabled = True
+        elif _metal_env in ("0", "false", "no"):
+            self._metal_kernels_enabled = False
+        else:
+            # Auto-enable Metal kernels on Apple Silicon when metallib is built
+            self._metal_kernels_enabled = (
+                platform.system() == "Darwin"
+                and os.path.exists(os.path.join(os.path.dirname(__file__), "..", "..", "metal", "default.metallib"))
+            )
 
         # Engine loop default (continuous batching mode)
         # Enable via YUNSHU_ENGINE_LOOP=1 for multi-user concurrent serving
