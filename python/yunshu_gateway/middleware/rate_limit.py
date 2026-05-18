@@ -37,11 +37,11 @@ class _TokenBucket:
         now = time.monotonic()
         elapsed = now - self.last_refill
         self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-        self.last_refill = now
         self.last_used = now
 
         if self.tokens >= tokens:
             self.tokens -= tokens
+            self.last_refill = now
             return True
         return False
 

@@ -92,7 +92,11 @@ class FreeBlockQueue:
         return blocks
 
     def append(self, block: KVBlock) -> None:
-        """Add a freed block at tail (most recently freed)."""
+        """Add a freed block at tail (most recently freed."""
+        # Detach from old position if already in the list
+        if block.prev is not None or (block.next is not None and self._head is block):
+            self._remove(block)
+            self.num_free_blocks -= 1
         self._push_back(block)
         self.num_free_blocks += 1
 

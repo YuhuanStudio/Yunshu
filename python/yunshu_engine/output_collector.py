@@ -71,7 +71,9 @@ class RequestOutputCollector:
         finally:
             if self._is_waiting:
                 self._is_waiting = False
-                RequestOutputCollector._waiting_consumers -= 1
+                RequestOutputCollector._waiting_consumers = max(
+                    0, RequestOutputCollector._waiting_consumers - 1
+                )
 
     def _merge(self, existing: RequestOutput, new: RequestOutput) -> RequestOutput:
         # Accumulate logprobs across steps (fast path gives per-step lists)

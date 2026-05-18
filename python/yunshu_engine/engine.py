@@ -396,8 +396,11 @@ class Engine:
 
         common_stops = [((t,), None) for t in eos_ids]
         for w in (stop or []):
+            if not w:
+                continue
             t = tuple(tokenizer.encode(w, add_special_tokens=False))
-            common_stops.append((t, None))
+            if t:
+                common_stops.append((t, None))
 
         # Add explicit stop_token_ids (Wave 57 pattern)
         for tid in (stop_token_ids or []):

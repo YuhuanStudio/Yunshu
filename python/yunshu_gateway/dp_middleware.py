@@ -288,6 +288,8 @@ class DPLoadBalancer:
                     "p99_latency_ms": sorted(lats)[min(int(len(lats) * 0.99), len(lats) - 1)] if lats else 0.0,
                     "sample_count": len(lats),
                 }
+            total_req = self._total_requests
+            total_routed = self._total_routed
 
         # Merge with DP router stats
         router_stats = {}
@@ -296,8 +298,8 @@ class DPLoadBalancer:
 
         return {
             "active": self._dp_router is not None,
-            "total_requests": self._total_requests,
-            "total_routed": self._total_routed,
+            "total_requests": total_req,
+            "total_routed": total_routed,
             "node_health": nodes,
             "router": router_stats,
         }

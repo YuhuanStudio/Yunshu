@@ -451,7 +451,7 @@ class VideoEngine:
                     frames=frames,
                     width=width,
                     height=height,
-                    num_frames=num_frames,
+                    num_frames=len(frames) if frames else num_frames,
                     fps=fps,
                     method=f"mlx_video_{self._model_type}",
                 )
@@ -1277,4 +1277,4 @@ class VideoEngine:
                 block_key = name.rsplit(".", 2)[0] if "." in name else name
                 applied_layers.add(block_key)
 
-        logger.info(f"Applied LoRA to {applied} layers in video model")
+        logger.info(f"Applied LoRA to {len(applied_layers)} layers in video model")
