@@ -301,10 +301,18 @@ class MeshManager:
 
         # When no heartbeat monitor is running, all nodes are assumed
         # healthy, so count from the node list rather than the empty dict.
-        healthy_count = (
-            sum(1 for h in health.values() if h) if health
-            else len(nodes)
+        # The health dict only tracks peers, not the local node, so always
+        # count the local node as healthy when present in the node list.
+        local_is_in_nodes = any(
+            n.node_id == (self._local_node.node_id if self._local_node else "")
+            for n in self._topology.nodes
         )
+        if health:
+            healthy_count = sum(1 for h in health.values() if h)
+            if local_is_in_nodes:
+                healthy_count += 1
+        else:
+            healthy_count = len(nodes)
 
         return {
             "distributed": self.is_distributed,

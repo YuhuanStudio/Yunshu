@@ -770,9 +770,9 @@ def extract_kv_blocks_from_cache(
                             if len(state_tuple) >= 2:
                                 keys, values = state_tuple[0], state_tuple[1]
                                 if hasattr(keys, 'item'):
-                                    # mx.array — extract slice
-                                    k_slice = keys[:actual_tokens]
-                                    v_slice = values[:actual_tokens]
+                                    # mx.array — extract slice for THIS block
+                                    k_slice = keys[block_start:block_end]
+                                    v_slice = values[block_start:block_end]
                                     # Convert to bytes for transport
                                     k_bytes = _tensor_to_bytes(k_slice)
                                     v_bytes = _tensor_to_bytes(v_slice)
@@ -784,9 +784,9 @@ def extract_kv_blocks_from_cache(
                             keys = getattr(layer_cache, 'keys', None)
                             vals = getattr(layer_cache, 'values', None)
                             if keys is not None:
-                                # Take relevant slice
-                                k_bytes = _tensor_to_bytes(keys[:actual_tokens])
-                                v_bytes = _tensor_to_bytes(vals[:actual_tokens])
+                                # Take relevant slice for THIS block
+                                k_bytes = _tensor_to_bytes(keys[block_start:block_end])
+                                v_bytes = _tensor_to_bytes(vals[block_start:block_end])
                                 layer_data[layer_idx] = k_bytes + v_bytes
             except Exception:
                 logger.debug(
@@ -1343,16 +1343,24 @@ class KVTransferServer:
 
         removed = len(expired_keys)
 
-        # Safety net: cap the dict size even if completed_at is missing
+        # Safety net: cap the dict size even if completed_at is missing.
+        # Collect all non-IN_PROGRESS entries, sort by completed_at (oldest
+        # first), and remove enough to get below the cap.
         max_tracked = 1000
         if len(self._active_transfers) > max_tracked:
-            # Remove oldest completed entries (first-in, first-out)
+            removable = [
+                rid for rid, res in self._active_transfers.items()
+                if res.status != TransferStatus.IN_PROGRESS
+            ]
+            # Sort by completed_at so oldest entries are evicted first.
+            # Entries without completed_at (0.0) are treated as oldest.
+            removable.sort(
+                key=lambda rid: self._active_transfers[rid].completed_at
+            )
             to_remove = len(self._active_transfers) - max_tracked
-            for rid in list(self._active_transfers.keys())[:to_remove]:
-                result = self._active_transfers[rid]
-                if result.status != TransferStatus.IN_PROGRESS:
-                    del self._active_transfers[rid]
-                    removed += 1
+            for rid in removable[:to_remove]:
+                del self._active_transfers[rid]
+                removed += 1
         return removed
 
     def get_stats(self) -> dict:
