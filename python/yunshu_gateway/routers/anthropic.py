@@ -719,6 +719,8 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
                 visible_text = visible_text[:idx]
                 text_block["text"] = visible_text
                 break
+    if matched_stop is None and result.finish_reason == "stop" and stop:
+        matched_stop = stop[0]
 
     # Include logprobs in the text content block if requested
     if req.logprobs:

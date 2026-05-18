@@ -80,7 +80,7 @@ class CacheEventBus:
             try:
                 cb(event)
             except Exception:
-                logger.debug(
+                logger.warning(
                     "CacheEventBus subscriber %r raised on %s",
                     cb,
                     event.event_type,

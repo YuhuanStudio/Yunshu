@@ -203,12 +203,16 @@ class _MlxVlmVisionCacheAdapter:
 
         try:
             if isinstance(image, list):
-                # Multi-image: hash all paths concatenated
-                img_hash = compute_image_hash(
-                    b"".join(p.encode() for p in image)
-                )
+                # Multi-image: hash actual file contents, not paths
+                parts = []
+                for p in image:
+                    if os.path.exists(p):
+                        with open(p, "rb") as f:
+                            parts.append(f.read())
+                    else:
+                        parts.append(p.encode())
+                img_hash = compute_image_hash(b"".join(parts))
             else:
-                # Single image: read file bytes and hash
                 if os.path.exists(image):
                     with open(image, "rb") as f:
                         img_hash = compute_image_hash(f.read())
@@ -225,9 +229,14 @@ class _MlxVlmVisionCacheAdapter:
 
         try:
             if isinstance(image, list):
-                img_hash = compute_image_hash(
-                    b"".join(p.encode() for p in image)
-                )
+                parts = []
+                for p in image:
+                    if os.path.exists(p):
+                        with open(p, "rb") as f:
+                            parts.append(f.read())
+                    else:
+                        parts.append(p.encode())
+                img_hash = compute_image_hash(b"".join(parts))
             else:
                 if os.path.exists(image):
                     with open(image, "rb") as f:
@@ -1777,23 +1786,26 @@ class VLMEngine:
             output = lm(current[None], cache=cache)
             logits = output.logits[:, -1, :]
 
+            tokens_list.append(current.item())
+
             if has_penalty:
-                tokens_list.append(current.item())
                 if repetition_penalty != 1.0:
                     ctx = tokens_list[-20:]
                     sel = logits[..., ctx]
                     sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
                     logits[..., ctx] = sel
                 if frequency_penalty != 0.0:
-                    logits[..., tokens_list[-1]] -= frequency_penalty
+                    for tid in set(tokens_list):
+                        logits[..., tid] -= frequency_penalty * tokens_list.count(tid)
                 if presence_penalty != 0.0:
-                    logits[..., tokens_list[-1]] -= presence_penalty
+                    for tid in set(tokens_list):
+                        logits[..., tid] -= presence_penalty
                 if logit_bias:
                     for tid, bias in logit_bias.items():
                         logits[..., tid] += bias
 
             # JSON schema constraint masking
-            if json_constraint is not None and tokens_list:
+            if json_constraint is not None:
                 try:
                     allowed = json_constraint.get_allowed_tokens(self._tokenizer, tokens_list)
                     if allowed:

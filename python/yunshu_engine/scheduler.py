@@ -1566,6 +1566,9 @@ class Scheduler:
                 if not uids:
                     logger.error(f"BatchGenerator.insert returned empty UIDs for {req.request_id}")
                     req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
+                    if should_chunk:
+                        self._pending_prefill.pop(req.request_id, None)
+                        self._active_partial_prefills -= 1
                     continue
                 req.batch_uid = uids[0]
                 req.status = RequestStatus.RUNNING
@@ -2172,14 +2175,14 @@ class Scheduler:
                 prev_kv = state.get('kv_cache')
                 all_tokens = state.get('all_prompt_tokens')
                 if prev_kv is not None and all_tokens is not None:
-                    # Compute which tokens have been processed so far
+                    # offset was updated above to include this chunk's length,
+                    # so all_tokens[:offset] covers everything through this chunk.
                     processed_count = state.get('offset', len(chunk))
-                    remaining_in_full = all_tokens[processed_count:]
                     uids = self._batch_gen.insert_segments(
-                        segments=[[remaining_in_full[:chunk_size]]],
+                        segments=[[chunk]],
                         max_tokens=[sp.max_tokens],
                         caches=[prev_kv],
-                        all_tokens=[all_tokens[:processed_count + chunk_size]],
+                        all_tokens=[all_tokens[:processed_count]],
                         samplers=[sampler],
                         state_machines=[sm],
                     )

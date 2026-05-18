@@ -317,16 +317,15 @@ class ThresholdPolicy(OffloadPolicy):
             if pool is None:
                 return blocks_to_offload
 
-            # Find blocks with ref_count == 0 (not actively used)
-            # and that have a hash (meaningful content)
-            for block in getattr(pool, '_blocks', []):
+            # Find cache-only blocks (ref_count==0, in prefix cache, not actively used)
+            # that have a hash (meaningful content)
+            for block in pool.blocks:
                 if len(blocks_to_offload) >= max_blocks:
                     break
                 if (
-                    hasattr(block, 'ref_count')
-                    and block.ref_count == 0
-                    and hasattr(block, 'block_hash')
+                    block.ref_count == 0
                     and block.block_hash is not None
+                    and block.cache_only
                 ):
                     blocks_to_offload.append(block.block_hash)
         except Exception:
@@ -1022,11 +1021,12 @@ class KVOffloadManager:
                                 offloaded = True
 
                 elif request.source_tier == KVTier.WARM and request.dest_tier == KVTier.SSD:
-                    # Warm → SSD: dequantize then persist
+                    # Warm → SSD: promote from warm, persist to SSD, then evict warm
                     if warm_tier is not None and ssd_store is not None:
                         kv_data = warm_tier.promote(block_hash)
                         if kv_data is not None:
                             if ssd_store.store(block_hash, kv_data, num_tokens=0):
+                                warm_tier.demote(block_hash, kv_data=None)
                                 offloaded = True
 
                 if offloaded:
@@ -1041,7 +1041,15 @@ class KVOffloadManager:
                 logger.debug("Offload failed for block 0x%x: %s", block_hash, e)
 
         request.completed_at = time.monotonic()
-        request.status = OffloadStatus.COMPLETED if result.blocks_failed == 0 else OffloadStatus.FAILED
+        if result.blocks_offloaded > 0 and result.blocks_failed == 0:
+            request.status = OffloadStatus.COMPLETED
+        elif result.blocks_offloaded > 0:
+            request.status = OffloadStatus.COMPLETED
+            result.errors.insert(0, f"Partial: {result.blocks_failed} blocks failed out of {result.blocks_offloaded + result.blocks_failed + result.blocks_skipped}")
+        elif result.blocks_failed > 0:
+            request.status = OffloadStatus.FAILED
+        else:
+            request.status = OffloadStatus.SKIPPED
         result.status = request.status
         result.latency_seconds = request.latency_seconds or 0.0
 
@@ -1105,10 +1113,17 @@ class KVOffloadManager:
                             hasattr(block, 'block_hash')
                             and block.block_hash == block_hash
                         ):
+                            import mlx.core as mx
+                            kv_parts = []
                             for layer_caches in hot_mgr._kv_layers:
-                                for slot_idx, (key_cache, _) in enumerate(layer_caches):
-                                    if slot_idx == block.block_id:
-                                        return key_cache
+                                if block.block_id < len(layer_caches):
+                                    key_cache, val_cache = layer_caches[block.block_id]
+                                    if val_cache is not None:
+                                        kv_parts.append(mx.stack([key_cache, val_cache], axis=0))
+                                    else:
+                                        kv_parts.append(key_cache)
+                            if kv_parts:
+                                return mx.stack(kv_parts, axis=0) if len(kv_parts) > 1 else kv_parts[0]
             except Exception:
                 logger.debug("Direct KV extraction failed", exc_info=True)
 
@@ -1134,6 +1149,11 @@ class KVOffloadManager:
         pool._evict_cached_block(block)
         if block.ref_count == 1:
             pool.free([block])
+        elif block.ref_count == 0 and block.cache_only:
+            # Block is already in free queue as cache_only; eviction above
+            # cleared its hash so it won't be looked up again.  No further
+            # action needed — the free queue will reclaim it on demand.
+            pass
 
     async def _wait_for_completion(self, request_id: str) -> OffloadResult:
         """Wait for an offload request to complete.

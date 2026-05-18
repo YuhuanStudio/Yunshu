@@ -350,12 +350,14 @@ class SpeculativeDecoder:
         draft_model: Any,
         tokenizer: Any,
         config: SpecDecodingConfig | None = None,
+        lookahead: LookaheadReasoning | None = None,
     ) -> None:
         self.target = target_model
         self.draft = draft_model
         self.tokenizer = tokenizer
         self.config = config or SpecDecodingConfig()
         self.rng = random.Random()
+        self.lookahead = lookahead
 
         self._stats = {
             "total_draft_tokens": 0,
@@ -389,7 +391,7 @@ class SpeculativeDecoder:
         Returns:
             DraftResult with proposed token IDs and their logprobs
         """
-        K = self.config.draft_length
+        K = self.lookahead.adjust_draft_k() if self.lookahead else self.config.draft_length
         token_ids = []
         logprobs = []
 
@@ -632,6 +634,7 @@ class SpeculativeDecoder:
             # Step 1: Draft generates K tokens from last generated token
             last_tok = generated_tokens[-1]
             draft_tokens = []
+            draft_probs = []
             d_input = mx.array([[last_tok]])
             for _ in range(K):
                 # Check cancellation inside draft loop too
@@ -639,8 +642,11 @@ class SpeculativeDecoder:
                     break
                 d_out = self.draft(d_input, cache=draft_cache)
                 d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
+                d_probs = mx.softmax(d_logits, axis=-1)
                 next_tok = draft_sampler(d_logits)
-                draft_tokens.append(int(next_tok.item()))
+                tok_id = int(next_tok.item())
+                draft_tokens.append(tok_id)
+                draft_probs.append(float(d_probs[0, tok_id].item()))
                 d_input = next_tok.reshape(1, 1)
 
             if not draft_tokens:
@@ -656,21 +662,35 @@ class SpeculativeDecoder:
 
             accepted = 0
             all_accepted = True
+            t_probs = mx.softmax(t_logits, axis=-1)
             for j in range(len(draft_tokens)):
-                target_choice = int(target_sampler(t_logits).item()) if target_sampler else int(t_logits.argmax(axis=-1).item())
+                draft_tok = draft_tokens[j]
+                draft_p = float(draft_probs[j]) if j < len(draft_probs) else 1.0
+                target_p = float(t_probs[0, draft_tok].item())
 
-                if target_choice == draft_tokens[j]:
+                # EAGLE-3 probabilistic acceptance: accept if U < min(1, target_p/draft_p)
+                if draft_p > 0:
+                    ratio = min(1.0, target_p / draft_p)
+                else:
+                    ratio = 1.0
+                u = self.rng.random()
+
+                if u < ratio:
                     accepted += 1
-                    generated_tokens.append(draft_tokens[j])
-                    if draft_tokens[j] in eos_ids:
+                    generated_tokens.append(draft_tok)
+                    if draft_tok in eos_ids:
                         return generated_tokens
-                    # Feed to target for next position
-                    t_input = mx.array([[draft_tokens[j]]])
+                    t_input = mx.array([[draft_tok]])
                     t_out = self.target(t_input, cache=target_cache)
                     t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
+                    t_probs = mx.softmax(t_logits, axis=-1)
                 else:
-                    # Rejected: take target's choice
-                    generated_tokens.append(target_choice)
+                    # Rejected: resample from target distribution at this position
+                    if target_sampler:
+                        corrected = int(target_sampler(t_logits).item())
+                    else:
+                        corrected = int(t_logits.argmax(axis=-1).item())
+                    generated_tokens.append(corrected)
                     all_accepted = False
                     break
 

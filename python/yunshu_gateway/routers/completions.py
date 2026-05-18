@@ -221,7 +221,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logit_bias=req.logit_bias,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
-                    seed=req.seed,
+                    seed=(req.seed + idx) if req.seed is not None else None,
                     spec_decode=req.spec_decode,
                     enable_thinking=req.enable_thinking,
                     thinking_budget=req.thinking_budget,
@@ -261,7 +261,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logit_bias=req.logit_bias,
                     stop=req.stop,
                     stop_token_ids=req.stop_token_ids,
-                    seed=req.seed,
+                    seed=(req.seed + idx) if req.seed is not None else None,
                     enable_thinking=req.enable_thinking,
                     thinking_budget=req.thinking_budget,
                     reasoning_effort=req.reasoning_effort,
@@ -422,7 +422,7 @@ async def _stream_completion(
                 logit_bias=req.logit_bias,
                 stop=req.stop,
                 stop_token_ids=req.stop_token_ids,
-                seed=req.seed,
+                seed=(req.seed + choice_idx) if req.seed is not None else None,
                 enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
                 json_schema=json_schema,
@@ -475,7 +475,7 @@ async def _stream_completion(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
-                seed=req.seed,
+                seed=(req.seed + choice_idx) if req.seed is not None else None,
                 enable_thinking=req.enable_thinking,
                 thinking_budget=req.thinking_budget,
                 reasoning_effort=req.reasoning_effort,
@@ -611,7 +611,7 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                 top_lps = lp_entry.get("top_logprobs", [])
                 # Decode top_logprobs bytes if present, truncate to requested count
                 decoded_top = []
-                for tlp in top_lps[:top_logprobs] if top_logprobs > 0 else top_lps:
+                for tlp in top_lps[:top_logprobs] if top_logprobs else []:
                     tlp_token = tlp.get("token", "")
                     decoded_top.append({
                         "token": tlp_token,

@@ -3589,6 +3589,7 @@ class BatchedEngine:
                 from .speculative_decoder import SpeculativeDecoder
                 self._spec_decoder = SpeculativeDecoder(
                     self._model, draft_model, self._tokenizer,
+                    lookahead=self._lookahead_reasoning,
                 )
                 self._spec_enabled = True
                 logger.info(
@@ -4062,6 +4063,8 @@ class BatchedEngine:
             self._spec_decoder._stats["total_accepted_tokens"] += accepted_count
             self._spec_decoder._stats["total_bonus_tokens"] += 1
             self._spec_decoder._stats["total_steps"] += 1
+            if self._lookahead_reasoning is not None:
+                self._lookahead_reasoning.record_accept(accepted_count)
 
             hit_eos = False
             _hit_suffix = False

@@ -737,6 +737,15 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     except MemoryError:
         if _cancel_evt is not None:
             _cancel_evt.set()
+        # Close open lifecycle items before reporting failure
+        yield format_responses_content_part_done(
+            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            output_index=0, content_index=0, seq=_next_seq(),
+        ).encode("utf-8")
+        yield format_responses_output_item_done(
+            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            output_index=0, seq=_next_seq(),
+        ).encode("utf-8")
         yield format_responses_failed(
             response_id, req.model,
             error_code="server_error",
@@ -747,6 +756,15 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
+        # Close open lifecycle items before reporting failure
+        yield format_responses_content_part_done(
+            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            output_index=0, content_index=0, seq=_next_seq(),
+        ).encode("utf-8")
+        yield format_responses_output_item_done(
+            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            output_index=0, seq=_next_seq(),
+        ).encode("utf-8")
         yield format_responses_failed(
             response_id, req.model,
             error_code="server_error",

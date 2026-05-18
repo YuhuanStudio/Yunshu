@@ -226,22 +226,19 @@ class KVCacheManager:
                 matched_hashes.append(h)
                 self._total_hits += 1
             elif self._warm_tier is not None and self._warm_tier.contains(h):
-                # Warm tier hit: promote back to hot tier
+                # Warm tier hit: promote back to hot tier.
+                # Allocate BEFORE promoting to avoid data loss if allocation fails.
+                try:
+                    new_block = self.block_pool.allocate(1)[0]
+                except ValueError:
+                    logger.warning(
+                        "Warm tier promotion skipped: no free blocks for hash 0x%x",
+                        h,
+                    )
+                    break
                 promoted = self._warm_tier.promote(h)
                 if promoted is not None:
                     self._total_hits += 1
-                    # Re-allocate a hot block and copy the promoted data.
-                    try:
-                        new_block = self.block_pool.allocate(1)[0]
-                    except ValueError:
-                        logger.warning(
-                            "Warm tier promotion failed: no free blocks for hash 0x%x",
-                            h,
-                        )
-                        # promote() already popped from the warm store.
-                        # Re-insert to avoid data loss.
-                        self._warm_tier.demote(h, promoted)
-                        break
                     # Register in prefix cache so future lookups can find it.
                     # Directly setting block_hash without cache_block() would
                     # make the block invisible to lookup_hash().

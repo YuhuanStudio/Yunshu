@@ -17,6 +17,7 @@ distinction for performance optimization on Apple Silicon.
 
 import json
 import logging
+import os
 import struct
 import time
 from dataclasses import dataclass
@@ -123,8 +124,18 @@ class SSDCacheStore:
             for e in self._index.values()
         ]
         try:
-            with open(self._index_path(), "w") as f:
-                json.dump({"entries": entries}, f)
+            import tempfile
+            index_path = self._index_path()
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(index_path.parent), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump({"entries": entries}, f)
+                os.replace(tmp_path, str(index_path))
+            except Exception:
+                os.unlink(tmp_path) if os.path.exists(tmp_path) else None
+                raise
         except Exception as e:
             logger.warning(f"Failed to save SSD cache index: {e}")
 
@@ -156,11 +167,14 @@ class SSDCacheStore:
         self._next_block_index += 1
 
         try:
+            import zlib
+            crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
             with open(self._block_path(block_index), "wb") as f:
-                # Header: ndim (4 bytes) + shape values (4 bytes each)
+                # Header: ndim (4 bytes) + shape values (4 bytes each) + CRC32
                 f.write(struct.pack("<I", len(shape)))
                 for dim in shape:
                     f.write(struct.pack("<I", dim))
+                f.write(struct.pack("<I", crc))
                 f.write(raw_bytes)
         except OSError as e:
             logger.warning(f"Failed to write SSD cache block: {e}")
@@ -192,7 +206,17 @@ class SSDCacheStore:
             with open(path, "rb") as f:
                 ndim = struct.unpack("<I", f.read(4))[0]
                 shape = tuple(struct.unpack("<I", f.read(4))[0] for _ in range(ndim))
+                stored_crc = struct.unpack("<I", f.read(4))[0]
                 raw_bytes = f.read()
+            import zlib
+            actual_crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
+            if stored_crc != actual_crc:
+                logger.warning(
+                    "CRC mismatch for SSD block 0x%x (stored=%08x actual=%08x), discarding",
+                    block_hash, stored_crc, actual_crc,
+                )
+                del self._index[block_hash]
+                return None
             import numpy as np
             numpy_data = np.frombuffer(raw_bytes, dtype=np.float16).copy().reshape(shape)
             return mx.array(numpy_data)
@@ -224,8 +248,8 @@ class SSDCacheStore:
             del self._index[entry.block_hash]
             self._current_size_bytes -= entry.size_bytes
 
+        self._current_size_bytes = max(0, self._current_size_bytes)
         self._save_index()
-        logger.debug(f"SSD cache: evicted {to_evict} LRU blocks")
 
     def get_stats(self) -> dict:
         return {
@@ -540,13 +564,14 @@ class BackgroundSSDFlush:
         flushed = 0
         # Access the warm tier's internal store
         for block_hash, entry in list(self._warm._store.items()):
-            packed, scales = entry
+            packed, scales = entry[0], entry[1]
+            head_dim = entry[2] if len(entry) > 2 else 0
             if not self._ssd.contains(block_hash):
                 try:
                     import numpy as np
                     # Reconstruct full data from packed+scales for SSD storage
                     from .compression import dequantize_kv_4bit
-                    kv_data = dequantize_kv_4bit(packed, scales)
+                    kv_data = dequantize_kv_4bit(packed, scales, head_dim=head_dim)
                     self._ssd.store(block_hash, mx.array(kv_data), num_tokens=0)
                     flushed += 1
                 except Exception as e:

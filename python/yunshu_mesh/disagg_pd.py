@@ -302,7 +302,11 @@ class DisaggRouter:
         prompt_tokens: int,
         request_id: str = "",
     ) -> tuple[str, NodeRole]:
-        """Route a request to the appropriate pool."""
+        """Route a request to the appropriate pool.
+
+        Increments active load counters so subsequent routing decisions
+        account for in-flight requests.
+        """
         with self._lock:
             if prompt_tokens >= self._config.prefill_threshold_tokens:
                 node_id = self._select_prefill_node()
@@ -318,7 +322,26 @@ class DisaggRouter:
                 node_id = self._select_any_node()
                 role = NodeRole.HYBRID
 
+            # Increment load counter on the selected node
+            if node_id and node_id in self._nodes:
+                node = self._nodes[node_id]
+                if role == NodeRole.PREFILL or role == NodeRole.HYBRID:
+                    node.active_prefills += 1
+                if role == NodeRole.DECODE or role == NodeRole.HYBRID:
+                    node.active_decodes += 1
+
         return node_id or "", role
+
+    def request_completed(self, node_id: str, role: NodeRole) -> None:
+        """Decrement load counters after a request finishes."""
+        with self._lock:
+            if node_id not in self._nodes:
+                return
+            node = self._nodes[node_id]
+            if role == NodeRole.PREFILL or role == NodeRole.HYBRID:
+                node.active_prefills = max(0, node.active_prefills - 1)
+            if role == NodeRole.DECODE or role == NodeRole.HYBRID:
+                node.active_decodes = max(0, node.active_decodes - 1)
 
     def request_kv_transfer(
         self,

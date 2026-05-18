@@ -81,7 +81,9 @@ class KVWarmTier:
             from .compression import quantize_kv_4bit
 
             packed, scales = quantize_kv_4bit(kv_data)
-            self._store[block_hash] = (packed, scales)
+            # Recover original head_dim from the kv_data shape for correct dequantize
+            head_dim = kv_data.shape[-1] if hasattr(kv_data, 'shape') else 0
+            self._store[block_hash] = (packed, scales, head_dim)
             # Move to end (most recently used)
             self._store.move_to_end(block_hash)
 
@@ -114,7 +116,7 @@ class KVWarmTier:
             return None
 
         self._hits += 1
-        packed, scales = entry
+        packed, scales, head_dim = entry if len(entry) == 3 else (*entry, 0)
 
         # Adjust memory accounting
         try:
@@ -132,7 +134,7 @@ class KVWarmTier:
         try:
             from .compression import dequantize_kv_4bit
 
-            return dequantize_kv_4bit(packed, scales)
+            return dequantize_kv_4bit(packed, scales, head_dim=head_dim)
         except Exception:
             # Dequantization failed — re-insert the raw data so it can be
             # retried later, since the compressed data itself may be fine
@@ -143,7 +145,7 @@ class KVWarmTier:
                 "Failed to promote block 0x%x from warm tier — re-inserting for retry",
                 block_hash, exc_info=True,
             )
-            self._store[block_hash] = (packed, scales)
+            self._store[block_hash] = (packed, scales, head_dim)
             self._store.move_to_end(block_hash)
             while len(self._store) > self.config.max_blocks:
                 self.evict(1)
@@ -176,7 +178,7 @@ class KVWarmTier:
         evicted = 0
         for _ in range(min(count, len(self._store))):
             _block_hash, entry = self._store.popitem(last=False)  # FIFO = LRU
-            packed, scales = entry
+            packed, scales = entry[0], entry[1]  # May include head_dim as entry[2]
             # Adjust memory accounting
             try:
                 packed_nbytes = (

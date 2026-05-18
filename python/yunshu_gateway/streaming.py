@@ -259,9 +259,12 @@ class ThinkingParser:
                 self.thinking_text += self.buffer
                 result = self.buffer
             else:
-                self.visible_text += self.buffer
-                result = self.buffer
-            self.buffer = ""
+                # Check for partial tag at the end — don't emit as visible
+                emit, retain = self._retain_tail(self.buffer)
+                if emit:
+                    self.visible_text += emit
+                    result = emit
+                self.buffer = ""
         return {"visible": result if not self.in_thinking else "",
                 "thinking": result if self.in_thinking else "",
                 "in_thinking": self.in_thinking}

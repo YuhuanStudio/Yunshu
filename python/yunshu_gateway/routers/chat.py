@@ -634,7 +634,7 @@ async def _build_multi_choice(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
-                seed=req.seed,
+                seed=(req.seed + idx) if req.seed is not None else None,
                 enable_thinking=req.enable_thinking,
                 json_schema=json_schema,
                 spec_decode=req.spec_decode,
@@ -672,7 +672,7 @@ async def _build_multi_choice(
                 presence_penalty=req.presence_penalty,
                 logit_bias=req.logit_bias,
                 stop=req.stop,
-                seed=req.seed,
+                seed=(req.seed + idx) if req.seed is not None else None,
                 enable_thinking=req.enable_thinking,
                 stop_token_ids=req.stop_token_ids,
                 thinking_budget=req.thinking_budget,
@@ -1205,7 +1205,11 @@ async def _handle_vlm_chat(
 
     async def _vlm_gen_one(idx: int):
         try:
-            r = await vlm_engine.generate(**gen_kwargs)
+            kwargs = {
+                **gen_kwargs,
+                "seed": (req.seed + idx) if req.seed is not None else None,
+            }
+            r = await vlm_engine.generate(**kwargs)
         except MemoryError:
             return idx, None, "memory_error"
         except Exception as e:
@@ -1238,12 +1242,17 @@ async def _handle_vlm_chat(
         }, None
 
     n = max(req.n, 1)
-    if n == 1:
-        results = [await _vlm_gen_one(0)]
-    else:
-        import asyncio
-        results = await asyncio.gather(*[_vlm_gen_one(i) for i in range(n)])
-        results.sort(key=lambda x: x[0])
+    loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
+    try:
+        if n == 1:
+            results = [await _vlm_gen_one(0)]
+        else:
+            import asyncio
+            results = await asyncio.gather(*[_vlm_gen_one(i) for i in range(n)])
+            results.sort(key=lambda x: x[0])
+
+    finally:
+        _release_lora_adapter(vlm_engine, loaded_adapter)
 
     # Check for errors
     for idx, data, err in results:
