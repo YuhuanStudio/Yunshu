@@ -121,7 +121,7 @@ class RequestOutput:
 
     @property
     def token_id(self) -> int:
-        return self.new_token_ids[-1] if self.new_token_ids else 0
+        return self.new_token_ids[-1] if self.new_token_ids else -1
 
     @property
     def logprob(self) -> Any:

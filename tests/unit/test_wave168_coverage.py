@@ -246,9 +246,9 @@ class TestRequestOutputUsageEdgeCases:
         assert out.token_id == 300
 
     def test_token_id_default_when_empty(self):
-        """token_id returns 0 when new_token_ids is empty."""
+        """token_id returns -1 when new_token_ids is empty (no valid token)."""
         out = RequestOutput(request_id="req-1")
-        assert out.token_id == 0
+        assert out.token_id == -1
 
     def test_logprob_alias(self):
         """logprob property should alias logprobs."""
