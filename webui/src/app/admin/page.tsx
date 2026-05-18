@@ -19,7 +19,7 @@ import {
   Shield,
 } from "lucide-react";
 
-type Tab = "models" | "keys" | "logs" | "cache";
+type Tab = "models" | "keys" | "logs" | "cache" | "hardware";
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("models");
@@ -38,6 +38,7 @@ export default function AdminPage() {
           { id: "keys", label: "API Keys", icon: Key },
           { id: "logs", label: "Logs", icon: FileText },
           { id: "cache", label: "Cache", icon: HardDrive },
+          { id: "hardware", label: "Hardware", icon: Cpu },
         ] as const).map((t) => (
           <button
             key={t.id}
@@ -59,6 +60,7 @@ export default function AdminPage() {
       {tab === "keys" && <ApiKeyManager />}
       {tab === "logs" && <LogViewer />}
       {tab === "cache" && <CacheManager />}
+      {tab === "hardware" && <HardwareProfile />}
     </div>
   );
 }
@@ -415,17 +417,83 @@ function CacheManager() {
         </div>
 
         {cacheInfo ? (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
-            {Object.entries(cacheInfo).map(([key, value]) => (
-              <div key={key}>
-                <div className="text-xs text-[var(--color-text-secondary)]">{key.replace(/_/g, " ")}</div>
-                <div className="font-medium tabular-nums">{String(value)}</div>
+          <div className="space-y-4">
+            {/* Per-model KV caches */}
+            {(cacheInfo.caches as Array<{ model_id: string; stats: Record<string, unknown> }>)?.map?.((entry) => (
+              <div key={entry.model_id} className="border border-[var(--color-border)] rounded-lg p-3">
+                <div className="text-xs font-medium mb-2">{entry.model_id}</div>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                  {Object.entries(entry.stats).map(([key, value]) => (
+                    <div key={key}>
+                      <div className="text-[10px] text-[var(--color-text-secondary)]">{key.replace(/_/g, " ")}</div>
+                      <div className="font-medium tabular-nums text-xs">{typeof value === "object" ? JSON.stringify(value) : String(value)}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
+            {(cacheInfo.caches as unknown[])?.length === 0 && (
+              <div className="text-sm text-[var(--color-text-secondary)]">No KV caches active.</div>
+            )}
+            <div className="text-xs text-[var(--color-text-secondary)]">
+              Total cache entries: {String(cacheInfo.total ?? 0)}
+            </div>
           </div>
         ) : (
           <div className="text-sm text-[var(--color-text-secondary)]">Cache info not available.</div>
         )}
+      </div>
+
+      {/* GPU Memory */}
+      <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+        <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+          <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
+          GPU Memory
+        </h3>
+        <GpuMemoryBars />
+      </div>
+    </div>
+  );
+}
+
+// ── Hardware Profile ──
+
+function HardwareProfile() {
+  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/v1/admin/hardware-profile")
+      .then((r) => r.json())
+      .then((d) => setProfile(d))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="text-[var(--color-text-secondary)] text-sm">Loading hardware profile...</div>;
+  if (!profile || profile.error) return <div className="text-sm text-[var(--color-text-secondary)]">Hardware profile not available. {String(profile?.error || "")}</div>;
+
+  return (
+    <div className="space-y-4">
+      {/* Chip Info */}
+      <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
+        <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
+          <Cpu className="w-4 h-4 text-[var(--color-accent)]" />
+          Apple Silicon Profile
+        </h3>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+          {Object.entries(profile).map(([key, value]) => {
+            if (typeof value === "object" && value !== null) return null;
+            return (
+              <div key={key}>
+                <div className="text-[10px] text-[var(--color-text-secondary)] uppercase tracking-wide">
+                  {key.replace(/_/g, " ")}
+                </div>
+                <div className="font-medium text-sm tabular-nums">{String(value)}</div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* GPU Memory */}

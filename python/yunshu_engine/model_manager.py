@@ -508,7 +508,9 @@ class ModelManager:
                 logger.debug("model_registry release failed", exc_info=True)
 
             try:
-                await entry.engine.stop()
+                _stop_result = entry.engine.stop()
+                if asyncio.iscoroutine(_stop_result):
+                    await _stop_result
             except Exception as e:
                 logger.warning(f"Error stopping engine for {model_id}: {e}")
             entry.engine = None

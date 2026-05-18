@@ -295,9 +295,6 @@ class MistralMessageAdapter(MessageAdapter):
                 # Insert empty opposite turn
                 opposite = "assistant" if role == "user" else "user"
                 alternated.append({"role": opposite, "content": ""})
-            elif alternated and alternated[-1]["role"] == "tool" and role == "tool":
-                # Two consecutive tool messages are fine
-                pass
             alternated.append(msg)
 
         return alternated

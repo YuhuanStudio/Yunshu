@@ -1344,24 +1344,29 @@ async def _stream_vlm_response(
                 vlm_last_finish_reason = output.finish_reason
             # Route thinking content based on engine's current_state
             _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+            _vlm_token_text = output.token_text or ""
+            _vlm_is_final = output.finish_reason is not None
             if _is_reasoning:
-                yield format_openai_chunk(
-                    completion_id=completion_id,
-                    model=req.model,
-                    delta_content="",
-                    thinking_content=output.token_text,
-                    finish_reason=None,
-                    include_role=first_chunk,
-                )
+                if _vlm_token_text or not _vlm_is_final:
+                    yield format_openai_chunk(
+                        completion_id=completion_id,
+                        model=req.model,
+                        delta_content="",
+                        thinking_content=_vlm_token_text,
+                        finish_reason=None,
+                        include_role=first_chunk,
+                    )
+                    first_chunk = False
             else:
-                yield format_openai_chunk(
-                    completion_id=completion_id,
-                    model=req.model,
-                    delta_content=output.token_text,
-                    finish_reason=None,  # intermediate: always None
-                    include_role=first_chunk,
-                )
-            first_chunk = False
+                if _vlm_token_text or not _vlm_is_final:
+                    yield format_openai_chunk(
+                        completion_id=completion_id,
+                        model=req.model,
+                        delta_content=_vlm_token_text,
+                        finish_reason=None,  # intermediate: always None
+                        include_role=first_chunk,
+                    )
+                    first_chunk = False
 
         # Final chunk with finish_reason
         # If no tokens were emitted (first_chunk is still True), this is also
@@ -1564,14 +1569,16 @@ async def _stream_response_multi(
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                     if _is_reasoning:
-                        yield _format_choice_chunk(
-                            completion_id, req.model, choice_idx,
-                            "", None,
-                            include_role=first_chunk_for_choice,
-                            logprobs=_chunk_lp,
-                            thinking_content=token_text,
-                        )
-                        first_chunk_for_choice = False
+                        # Skip empty thinking chunk when engine already signaled finish.
+                        if token_text or fr is None:
+                            yield _format_choice_chunk(
+                                completion_id, req.model, choice_idx,
+                                "", None,
+                                include_role=first_chunk_for_choice,
+                                logprobs=_chunk_lp,
+                                thinking_content=token_text,
+                            )
+                            first_chunk_for_choice = False
                     elif use_tool_streamer and choice_tool_streamer and token_text:
                         # Process through per-choice tool call streamer
                         for out in choice_tool_streamer.process_token(token_text):
@@ -1593,13 +1600,17 @@ async def _stream_response_multi(
                                 choice_has_tool_call = True
                                 first_chunk_for_choice = False
                     else:
-                        yield _format_choice_chunk(
-                            completion_id, req.model, choice_idx,
-                            token_text, None,  # intermediate: always None
-                            include_role=first_chunk_for_choice,
-                            logprobs=_chunk_lp,
-                        )
-                        first_chunk_for_choice = False
+                        # Skip empty intermediate chunk when engine already
+                        # signaled finish (e.g. stop-on-first-token).
+                        _is_final_from_engine = output.finish_reason is not None
+                        if token_text or not _is_final_from_engine:
+                            yield _format_choice_chunk(
+                                completion_id, req.model, choice_idx,
+                                token_text, None,  # intermediate: always None
+                                include_role=first_chunk_for_choice,
+                                logprobs=_chunk_lp,
+                            )
+                            first_chunk_for_choice = False
             else:
                 stream = engine.generate_stream(
                     prompt=messages,
@@ -1652,14 +1663,16 @@ async def _stream_response_multi(
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                     if _is_reasoning:
-                        yield _format_choice_chunk(
-                            completion_id, req.model, choice_idx,
-                            "", None,
-                            include_role=first_chunk_for_choice,
-                            logprobs=_chunk_lp,
-                            thinking_content=token_text,
-                        )
-                        first_chunk_for_choice = False
+                        # Skip empty thinking chunk when engine already signaled finish.
+                        if token_text or fr is None:
+                            yield _format_choice_chunk(
+                                completion_id, req.model, choice_idx,
+                                "", None,
+                                include_role=first_chunk_for_choice,
+                                logprobs=_chunk_lp,
+                                thinking_content=token_text,
+                            )
+                            first_chunk_for_choice = False
                     elif use_tool_streamer and choice_tool_streamer and token_text:
                         # Process through per-choice tool call streamer
                         for out in choice_tool_streamer.process_token(token_text):
@@ -1681,13 +1694,18 @@ async def _stream_response_multi(
                                 choice_has_tool_call = True
                                 first_chunk_for_choice = False
                     else:
-                        yield _format_choice_chunk(
-                            completion_id, req.model, choice_idx,
-                            token_text, None,  # intermediate: always None
-                            include_role=first_chunk_for_choice,
-                            logprobs=_chunk_lp,
-                        )
-                        first_chunk_for_choice = False
+                        # Skip empty intermediate chunk when engine already
+                        # signaled finish (e.g. stop-on-first-token).
+                        _fr = getattr(output, 'finish_reason', None)
+                        _is_final_from_engine = _fr is not None
+                        if token_text or not _is_final_from_engine:
+                            yield _format_choice_chunk(
+                                completion_id, req.model, choice_idx,
+                                token_text, None,  # intermediate: always None
+                                include_role=first_chunk_for_choice,
+                                logprobs=_chunk_lp,
+                            )
+                            first_chunk_for_choice = False
 
             # Flush any remaining content from per-choice tool streamer
             if use_tool_streamer and choice_tool_streamer:
@@ -1957,17 +1975,20 @@ async def _stream_response(
 
                 # Route thinking content based on SequenceStateMachine state
                 _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                _is_final_from_engine = output.finish_reason is not None
                 if _is_reasoning:
-                    yield format_openai_chunk(
-                        completion_id=completion_id,
-                        model=req.model,
-                        delta_content="",
-                        thinking_content=token_text,
-                        finish_reason=None,
-                        include_role=first_chunk,
-                        logprobs=_chunk_lp,
-                    )
-                    first_chunk = False
+                    # Skip empty thinking chunk when engine already signaled finish.
+                    if token_text or not _is_final_from_engine:
+                        yield format_openai_chunk(
+                            completion_id=completion_id,
+                            model=req.model,
+                            delta_content="",
+                            thinking_content=token_text,
+                            finish_reason=None,
+                            include_role=first_chunk,
+                            logprobs=_chunk_lp,
+                        )
+                        first_chunk = False
                 elif use_tool_streamer and tool_streamer and token_text:
                     # Run through tool call streamer
                     outputs = tool_streamer.process_token(token_text)
@@ -1987,15 +2008,20 @@ async def _stream_response(
                             has_emitted_tool_call = True
                             first_chunk = False
                 else:
-                    yield format_openai_chunk(
-                        completion_id=completion_id,
-                        model=req.model,
-                        delta_content=token_text,
-                        finish_reason=None,  # intermediate: always None
-                        include_role=first_chunk,
-                        logprobs=_chunk_lp,
-                    )
-                    first_chunk = False
+                    # Skip empty intermediate chunk when engine already signaled
+                    # finish (e.g. stop-on-first-token). The final chunk after
+                    # this loop will carry finish_reason and include_role.
+                    _is_final_from_engine = output.finish_reason is not None
+                    if token_text or not _is_final_from_engine:
+                        yield format_openai_chunk(
+                            completion_id=completion_id,
+                            model=req.model,
+                            delta_content=token_text,
+                            finish_reason=None,  # intermediate: always None
+                            include_role=first_chunk,
+                            logprobs=_chunk_lp,
+                        )
+                        first_chunk = False
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
@@ -2038,17 +2064,20 @@ async def _stream_response(
                     last_finish_reason = output.finish_reason
                 _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
+                _is_final_from_engine = output.finish_reason is not None
                 if getattr(output, 'current_state', None) == "reasoning":
-                    yield format_openai_chunk(
-                        completion_id=completion_id,
-                        model=req.model,
-                        delta_content="",
-                        thinking_content=output.token_text,
-                        finish_reason=None,  # intermediate: always None
-                        include_role=first_chunk,
-                        logprobs=_chunk_lp,
-                    )
-                    first_chunk = False
+                    _thinking_text = output.token_text
+                    if _thinking_text or not _is_final_from_engine:
+                        yield format_openai_chunk(
+                            completion_id=completion_id,
+                            model=req.model,
+                            delta_content="",
+                            thinking_content=_thinking_text,
+                            finish_reason=None,  # intermediate: always None
+                            include_role=first_chunk,
+                            logprobs=_chunk_lp,
+                        )
+                        first_chunk = False
                 else:
                     token_text = output.token_text
                     if use_tool_streamer and tool_streamer and token_text:
@@ -2069,15 +2098,20 @@ async def _stream_response(
                                 has_emitted_tool_call = True
                                 first_chunk = False
                     else:
-                        yield format_openai_chunk(
-                            completion_id=completion_id,
-                            model=req.model,
-                            delta_content=token_text,
-                            finish_reason=None,  # intermediate: always None
-                            include_role=first_chunk,
-                            logprobs=_chunk_lp,
-                        )
-                        first_chunk = False
+                        # Skip empty intermediate chunk when engine already
+                        # signaled finish (e.g. stop-on-first-token). The final
+                        # chunk after this loop carries finish_reason + include_role.
+                        _is_final_from_engine = output.finish_reason is not None
+                        if token_text or not _is_final_from_engine:
+                            yield format_openai_chunk(
+                                completion_id=completion_id,
+                                model=req.model,
+                                delta_content=token_text,
+                                finish_reason=None,  # intermediate: always None
+                                include_role=first_chunk,
+                                logprobs=_chunk_lp,
+                            )
+                            first_chunk = False
 
         # Flush any remaining content from tool streamer
         if use_tool_streamer and tool_streamer:

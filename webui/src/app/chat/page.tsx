@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -932,10 +932,18 @@ function MessageBubble({ msg }: { msg: Message }) {
                       </pre>
                       <button
                         onClick={() => {
-                          const code = (children as React.ReactNode[])?.[0]
-                            ? String((children as React.ReactNode[])[0])
-                            : "";
-                          navigator.clipboard.writeText(code.replace(/\n$/, ""));
+                          // children is [<code>...</code>], extract text recursively
+                          const extractText = (node: React.ReactNode): string => {
+                            if (typeof node === "string") return node;
+                            if (typeof node === "number") return String(node);
+                            if (Array.isArray(node)) return node.map(extractText).join("");
+                            if (node && typeof node === "object" && "props" in (node as unknown as Record<string, unknown>)) {
+                              return extractText(((node as unknown as Record<string, unknown>).props as { children?: React.ReactNode })?.children);
+                            }
+                            return "";
+                          };
+                          const text = extractText(children);
+                          navigator.clipboard.writeText(text.replace(/\n$/, ""));
                         }}
                         className="absolute top-2 right-2 p-1 rounded bg-[var(--color-bg-secondary)] border border-[var(--color-border)] opacity-0 group-hover:opacity-100 transition-opacity text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                       >
