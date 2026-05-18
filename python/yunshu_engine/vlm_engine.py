@@ -2389,6 +2389,5 @@ class VLMEngine:
             stats["pipeline"] = self._pipeline.get_stats()
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
 
         return stats

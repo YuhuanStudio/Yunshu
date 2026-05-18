@@ -384,8 +384,6 @@ def _estimate_model_memory(model: Any) -> float:
                     total_bytes += leaf.nbytes
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
     except Exception:
         logger.debug("operation failed", exc_info=True)
-        pass
     return total_bytes / (1024 * 1024)

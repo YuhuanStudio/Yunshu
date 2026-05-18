@@ -264,13 +264,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                                 logger.debug("scheduler monitoring gauge population failed", exc_info=True)
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
-                    pass
                 pm_text = pm.generate()
                 if pm_text:
                     parts.append(pm_text)
             except Exception:
                 logger.debug("operation failed", exc_info=True)
-                pass
             return Response(
                 content="\n".join(parts),
                 media_type="text/plain; version=0.0.4; charset=utf-8",

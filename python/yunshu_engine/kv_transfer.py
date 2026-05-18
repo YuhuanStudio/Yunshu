@@ -920,7 +920,6 @@ class KVTransferClient:
                 await writer.wait_closed()
             except Exception:
                 logger.debug("operation failed", exc_info=True)
-                pass
         self._connections.clear()
         logger.info("KV transfer client stopped")
 
@@ -1221,7 +1220,6 @@ class KVTransferServer:
                 await writer.wait_closed()
             except Exception:
                 logger.debug("operation failed", exc_info=True)
-                pass
 
     async def _process_frame(self, frame: bytes) -> KVTransferResult:
         """Process a received transfer frame.

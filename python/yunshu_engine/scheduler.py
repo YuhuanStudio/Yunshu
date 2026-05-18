@@ -1326,7 +1326,6 @@ class Scheduler:
                     to_insert = []
             except Exception:
                 logger.debug("memory guard check failed in scheduling", exc_info=True)
-                pass  # Memory guard is best-effort
 
         # Track batch composition via BatchComposer (vLLM/SGLang pattern)
         if to_insert:

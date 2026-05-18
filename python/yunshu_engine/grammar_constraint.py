@@ -307,7 +307,6 @@ class LarkGrammarConstraint:
             self._done = True
         except Exception:
             logger.debug("CFG parse incomplete, continuing generation", exc_info=True)
-            pass  # Incomplete parse — keep generating
 
     def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
         if self._done or self._parser is None:

@@ -767,7 +767,6 @@ class HealthDashboard:
                     })
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
         return data
 
     def _collect_requests(self) -> dict[str, Any]:
@@ -785,7 +784,6 @@ class HealthDashboard:
             data["avg_latency_ms"] = summary.get("avg_duration_ms", 0)
         except Exception:
             logger.debug("metrics collection failed", exc_info=True)
-            pass
         return data
 
     def _collect_memory_guard(self) -> dict[str, Any]:
@@ -822,7 +820,6 @@ class HealthDashboard:
             data["max_pressure"] = max_pressure
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
         return data
 
     def _collect_kv_cache(self) -> dict[str, Any]:
@@ -843,7 +840,6 @@ class HealthDashboard:
                             caches.append(stats)
                         except Exception:
                             logger.debug("operation failed", exc_info=True)
-                            pass
             else:
                 engine = get_engine()
                 if engine and isinstance(engine, BatchedEngine):
@@ -851,7 +847,6 @@ class HealthDashboard:
                         caches.append(engine.get_kv_cache_stats())
                     except Exception:
                         logger.debug("operation failed", exc_info=True)
-                        pass
 
             if caches:
                 data["active"] = True
@@ -862,7 +857,6 @@ class HealthDashboard:
                 data["total_caches"] = len(caches)
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
         return data
 
     def _collect_spec_decode(self) -> dict[str, Any]:
@@ -885,7 +879,6 @@ class HealthDashboard:
                             )
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
         return data
 
 

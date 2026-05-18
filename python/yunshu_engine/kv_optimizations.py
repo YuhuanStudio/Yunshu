@@ -914,7 +914,6 @@ class ChunkedPrefillOptimizer:
                         return True
             except Exception:
                 logger.debug("operation failed", exc_info=True)
-                pass
 
         return False
 

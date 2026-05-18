@@ -1410,7 +1410,6 @@ async def _stream_vlm_response(
                     vlm_prompt_tok = len(tok.encode(vlm_engine._format_prompt(messages)))
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
-                    pass
             yield format_openai_usage_chunk(
                 completion_id=completion_id,
                 model=req.model,

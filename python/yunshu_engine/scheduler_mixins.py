@@ -204,7 +204,6 @@ class ProfilingMixin(SchedulerMixin):
             peak_mem = mx.get_peak_memory()
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
 
         phase = "decode"
         if hasattr(scheduler, '_waiting') and scheduler._waiting:
@@ -564,7 +563,6 @@ class MemoryPressureMixin(SchedulerMixin):
                 )
         except Exception:
             logger.debug("operation failed", exc_info=True)
-            pass
 
     def post_step(self, scheduler: Any, output: Any) -> None:
         pass
