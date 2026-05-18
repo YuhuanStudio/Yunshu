@@ -398,7 +398,7 @@ class SpeculativeDecoder:
 
         current_ids = input_ids
 
-        for step in range(K):
+        for _ in range(K):
             output = self.draft(current_ids, cache=cache)
             logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
 
@@ -604,8 +604,6 @@ class SpeculativeDecoder:
 
         target_cache = make_prompt_cache(self.target)
         draft_cache = make_prompt_cache(self.draft)
-
-        prompt_ids = input_ids.flatten().tolist()
 
         target_sampler = make_sampler(temp=temperature) if temperature > 0 else None
 

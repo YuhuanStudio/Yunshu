@@ -71,7 +71,7 @@ def detect_moe_config(model) -> dict | None:
     top_k = None
     moe_layers = 0
 
-    for name, module in model.named_modules():
+    for _, module in model.named_modules():
         cls_name = type(module).__name__
         if "SwitchGLU" in cls_name or "SwitchLinear" in cls_name:
             experts_found += 1
@@ -94,7 +94,7 @@ def detect_moe_config(model) -> dict | None:
 def restore_moe_top_k(model, original_top_k: int) -> int:
     """Restore original top_k value for all MoE layers."""
     restored = 0
-    for name, module in model.named_modules():
+    for _, module in model.named_modules():
         cls_name = type(module).__name__
         if any(k in cls_name for k in ("SwitchGLU", "SwitchLinear", "TopKRouter")):
             if hasattr(module, "top_k"):

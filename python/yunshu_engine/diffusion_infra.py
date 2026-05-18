@@ -455,7 +455,7 @@ class DiffusionLoRAOffloader:
     def _adapters_for_step(self, step: int) -> list[str]:
         """Find adapters assigned to a given step, sorted by priority."""
         result = []
-        for lora_id, adapter in self._adapters.items():
+        for _, adapter in self._adapters.items():
             if adapter.assigned_steps is not None:
                 if step in adapter.assigned_steps:
                     result.append(adapter)
@@ -488,7 +488,7 @@ class DiffusionLoRAOffloader:
         candidates.sort()  # Lowest priority first
 
         freed = 0
-        for priority, lid, adapter in candidates:
+        for _, lid, adapter in candidates:
             if freed >= needed_bytes - self._memory.available_bytes:
                 break
             self._unload(lid)
@@ -629,7 +629,7 @@ class DistributedDiffusionCoordinator:
         sync = set()
 
         # Node boundary sync points — use first/last steps of each assignment
-        for node_id, assignment in self._assignments.items():
+        for _, assignment in self._assignments.items():
             if assignment.steps:
                 sync.add(assignment.first_step)
                 sync.add(assignment.last_step + 1)  # stop boundary

@@ -1116,7 +1116,7 @@ class KVBlockCompactor:
         blocks_freed = 0
         blocks_to_remove: list[str] = []
 
-        for req_id, partial_blocks in request_blocks.items():
+        for _, partial_blocks in request_blocks.items():
             if len(partial_blocks) < 2:
                 continue
 

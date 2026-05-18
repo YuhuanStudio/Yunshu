@@ -342,7 +342,7 @@ class Gemma4SpecProposer:
         # Extract from each speculative layer's hidden state
         # In a real Gemma4 model, intermediate layers have separate
         # prediction heads or share the lm_head
-        for i in range(n):
+        for _ in range(n):
             # Use the hidden state directly with the lm_head
             # In practice, Gemma4 may route to specific layers
             if hidden_states.ndim == 3:

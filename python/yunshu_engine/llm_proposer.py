@@ -341,7 +341,6 @@ class LLMProposer:
             logits = mask
 
         # Sample
-        probs = mx.softmax(logits)
         token = mx.random.categorical(logits.reshape(1, -1), axis=-1)
         return int(token.item())
 
@@ -371,7 +370,7 @@ def _estimate_model_memory(model: Any) -> float:
     total_bytes = 0
     try:
         from mlx.utils import tree_flatten_with_path
-        for path, leaf in tree_flatten_with_path(model.parameters()):
+        for _, leaf in tree_flatten_with_path(model.parameters()):
             if hasattr(leaf, 'nbytes'):
                 total_bytes += leaf.nbytes
     except ImportError:
@@ -379,7 +378,7 @@ def _estimate_model_memory(model: Any) -> float:
         try:
             from mlx.utils import tree_flatten
             flat = tree_flatten(model.parameters())
-            for name, leaf in flat:
+            for _, leaf in flat:
                 if hasattr(leaf, 'nbytes'):
                     total_bytes += leaf.nbytes
         except Exception:

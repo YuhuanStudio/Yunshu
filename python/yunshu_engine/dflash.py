@@ -374,7 +374,7 @@ class DFlashEngine:
         try:
             import numpy as np
             canvas = None
-            for (x, y, x_end, y_end), block_data in blocks:
+            for (x, y, _x_end, _y_end), block_data in blocks:
                 if block_data is None:
                     continue
                 block_img = block_data
