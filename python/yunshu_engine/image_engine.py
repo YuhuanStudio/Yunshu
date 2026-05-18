@@ -1469,11 +1469,19 @@ class ImageGenEngine:
         self._running = True
 
     async def stop(self) -> None:
+        """Stop and release resources.
+
+        Idempotent: safe to call multiple times.
+        """
+        if not self._running and self._transformer is None:
+            return
         self._text_encoder = None
         self._transformer = None
         self._vae = None
         self._tokenizer = None
         self._running = False
+        self._teacache = None
+        self._lora_offloader = None
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache

@@ -237,6 +237,278 @@ class QwenMessageAdapter(MessageAdapter):
         return "qwen"
 
 
+class MistralMessageAdapter(MessageAdapter):
+    """Mistral/Codestral: Strict role alternation, no system role.
+
+    Mistral models expect:
+    - No system role (merge into first user turn)
+    - Strict user/assistant alternation (insert empty turns if needed)
+    - Tool calls as function_call blocks
+    """
+
+    def adapt(self, messages: list[dict]) -> list[dict]:
+        adapted = []
+        system_prefix = ""
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_prefix = (system_prefix + "\n\n" + content).strip() if system_prefix else content
+                continue
+
+            new_msg = {"role": role, "content": content}
+
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
+            if role == "tool":
+                new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
+
+            adapted.append(new_msg)
+
+        # Merge system prefix into first user message
+        if system_prefix and adapted:
+            first = adapted[0]
+            if first["role"] == "user":
+                first["content"] = f"{system_prefix}\n\n{first['content']}" if first["content"] else system_prefix
+            else:
+                adapted.insert(0, {"role": "user", "content": system_prefix})
+
+        # Ensure strict alternation starting with user
+        if adapted and adapted[0]["role"] != "user":
+            adapted.insert(0, {"role": "user", "content": ""})
+
+        alternated = []
+        for msg in adapted:
+            role = msg["role"]
+            # Tool messages are passthrough — they don't participate in alternation
+            if role == "tool":
+                alternated.append(msg)
+                continue
+            if alternated and alternated[-1]["role"] == role and role in ("user", "assistant"):
+                # Insert empty opposite turn
+                opposite = "assistant" if role == "user" else "user"
+                alternated.append({"role": opposite, "content": ""})
+            elif alternated and alternated[-1]["role"] == "tool" and role == "tool":
+                # Two consecutive tool messages are fine
+                pass
+            alternated.append(msg)
+
+        return alternated
+
+    def family_name(self) -> str:
+        return "mistral"
+
+
+class PhiMessageAdapter(MessageAdapter):
+    """Phi-3/4: System-first with tool call and reasoning support.
+
+    Phi models expect:
+    - System message must come first if present
+    - Tool results must include tool_call_id
+    - Reasoning content preserved in assistant turns
+    """
+
+    def adapt(self, messages: list[dict]) -> list[dict]:
+        adapted = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            new_msg = {"role": role, "content": content}
+
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
+            if role == "tool":
+                new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
+
+            adapted.append(new_msg)
+
+        # System must be first if present
+        sys_msgs = [m for m in adapted if m["role"] == "system"]
+        other = [m for m in adapted if m["role"] != "system"]
+        return sys_msgs + other
+
+    def family_name(self) -> str:
+        return "phi"
+
+
+class CohereMessageAdapter(MessageAdapter):
+    """Cohere Command-R: Tool call formatting with reasoning support.
+
+    Command-R models expect:
+    - Tool calls wrapped in specific format
+    - System messages preserved as-is (Cohere supports system role)
+    - Reasoning content in assistant turns
+    """
+
+    def adapt(self, messages: list[dict]) -> list[dict]:
+        adapted = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            new_msg = {"role": role, "content": content}
+
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
+            if role == "tool":
+                new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
+
+            adapted.append(new_msg)
+
+        return adapted
+
+    def family_name(self) -> str:
+        return "cohere"
+
+
+class LLamaMessageAdapter(MessageAdapter):
+    """LLaMA 3/4: System message handling with tool call support.
+
+    LLaMA models expect:
+    - System messages supported (native in LLaMA 3+)
+    - Tool calls with function format
+    - BOS/EOS handled by tokenizer
+    """
+
+    def adapt(self, messages: list[dict]) -> list[dict]:
+        adapted = []
+        has_system = False
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            new_msg = {"role": role, "content": content}
+
+            if role == "system":
+                has_system = True
+
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
+            if role == "tool":
+                new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
+
+            adapted.append(new_msg)
+
+        # System must be first
+        if has_system and adapted and adapted[0]["role"] != "system":
+            sys_msgs = [m for m in adapted if m["role"] == "system"]
+            other = [m for m in adapted if m["role"] != "system"]
+            adapted = sys_msgs + other
+
+        return adapted
+
+    def family_name(self) -> str:
+        return "llama"
+
+
+class InternVLMessageAdapter(MessageAdapter):
+    """InternVL: Vision-language message formatting.
+
+    InternVL models expect:
+    - Image tokens as <img> placeholders in content
+    - System messages supported
+    - Multi-part content with image_url type
+    """
+
+    def adapt(self, messages: list[dict]) -> list[dict]:
+        adapted = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            new_msg = {"role": role, "content": content}
+
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
+            if role == "tool":
+                new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
+
+            adapted.append(new_msg)
+
+        return adapted
+
+    def family_name(self) -> str:
+        return "internvl"
+
+
+class GLMMessageAdapter(MessageAdapter):
+    """GLM-4/5: System message handling with tool call support.
+
+    GLM models expect:
+    - System messages supported
+    - Tool calls with function format
+    - Observation tags for tool results
+    """
+
+    def adapt(self, messages: list[dict]) -> list[dict]:
+        adapted = []
+        has_system = False
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            new_msg = {"role": role, "content": content}
+
+            if role == "system":
+                has_system = True
+
+            if role == "assistant":
+                if msg.get("tool_calls"):
+                    new_msg["tool_calls"] = msg["tool_calls"]
+                if msg.get("reasoning_content"):
+                    new_msg["reasoning_content"] = msg["reasoning_content"]
+            if role == "tool":
+                new_msg["tool_call_id"] = msg.get("tool_call_id", "")
+                if msg.get("name"):
+                    new_msg["name"] = msg["name"]
+
+            adapted.append(new_msg)
+
+        # System must be first
+        if has_system and adapted and adapted[0]["role"] != "system":
+            sys_msgs = [m for m in adapted if m["role"] == "system"]
+            other = [m for m in adapted if m["role"] != "system"]
+            adapted = sys_msgs + other
+
+        return adapted
+
+    def family_name(self) -> str:
+        return "glm"
+
+
 class GenericMessageAdapter(MessageAdapter):
     """Generic: pass-through with minimal cleanup."""
 
@@ -254,6 +526,12 @@ _REGISTRY: dict[str, type[MessageAdapter]] = {
     "gemma4": Gemma4MessageAdapter,
     "deepseek": DeepSeekMessageAdapter,
     "qwen": QwenMessageAdapter,
+    "mistral": MistralMessageAdapter,
+    "phi": PhiMessageAdapter,
+    "cohere": CohereMessageAdapter,
+    "llama": LLamaMessageAdapter,
+    "internvl": InternVLMessageAdapter,
+    "glm": GLMMessageAdapter,
     "generic": GenericMessageAdapter,
 }
 
@@ -262,6 +540,12 @@ _MODEL_FAMILY_HINTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"gemma.?[4-9]", re.IGNORECASE), "gemma4"),
     (re.compile(r"deepseek", re.IGNORECASE), "deepseek"),
     (re.compile(r"qwen", re.IGNORECASE), "qwen"),
+    (re.compile(r"mistral|codestral|mixtral|pixtral", re.IGNORECASE), "mistral"),
+    (re.compile(r"phi[-_.]?[34]", re.IGNORECASE), "phi"),
+    (re.compile(r"command[-_.]?r|cohere", re.IGNORECASE), "cohere"),
+    (re.compile(r"llama", re.IGNORECASE), "llama"),
+    (re.compile(r"intern[-_.]?vl", re.IGNORECASE), "internvl"),
+    (re.compile(r"glm", re.IGNORECASE), "glm"),
 ]
 
 

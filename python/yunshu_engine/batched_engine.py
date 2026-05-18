@@ -1600,7 +1600,7 @@ class BatchedEngine:
         )
 
         if result is None:
-            return GenerationOutput(finish_reason="error")
+            return GenerationOutput(finished=True, finish_reason="error", error="engine_core returned None")
 
         # Map engine_core finish_reason to OpenAI-compatible finish_reason
         finish_reason = result.finish_reason
@@ -4906,6 +4906,7 @@ class BatchedEngine:
             reasoning_tokens=0,
             cached_tokens=0,
             logprobs=_mtp_logprobs,
+            ttft_ms=round(_mtp_ttft_s * 1000, 1),
         )
 
     async def _stream_generate_mtp(

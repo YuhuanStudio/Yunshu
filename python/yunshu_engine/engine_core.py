@@ -2017,8 +2017,6 @@ class EngineCore:
         event = self._finished_events.get(request_id)
         if event:
             event.set()
-        # Clean up prefix hash tracking
-        self._kv_prefix_hashes.pop(request_id, None)
 
     def _finalize_request(self, request_id: str) -> None:
         """Release scheduler-side per-request resources (NOT consumer-side state).
@@ -2079,6 +2077,11 @@ class EngineCore:
                 self._sliding_window_mgr.remove_request(request_id)
             except Exception:
                 logger.debug("sliding window cleanup failed", exc_info=True)
+        # Fairness tracker: remove per-request allocation accumulators
+        try:
+            self._fairness_tracker.remove_request(request_id)
+        except Exception:
+            logger.debug("fairness tracker cleanup failed", exc_info=True)
         # Remove from scheduler
         self.scheduler.remove_finished_request(request_id)
 

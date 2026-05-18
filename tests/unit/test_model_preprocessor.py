@@ -3,11 +3,16 @@
 import pytest
 
 from yunshu_engine.model_preprocessor import (
+    CohereVisionPreprocessor,
     CosyVoicePhonemePreprocessor,
     DeepSeekOCRPreprocessor,
     GLMOCRPreprocessor,
+    InternVLImagePreprocessor,
+    InternVLVideoPreprocessor,
     LLaVAImagePreprocessor,
+    LTXVideoPreprocessor,
     ModelPreprocessor,
+    PhiVisionPreprocessor,
     PreprocessedInput,
     PreprocessorRegistry,
     PreprocessorType,
@@ -234,11 +239,118 @@ class TestWhisperSpeechPreprocessor:
         assert not p.detect_model({"model_type": "cosyvoice"})
 
 
+class TestPhiVisionPreprocessor:
+    def test_basic_preprocessing(self):
+        p = PhiVisionPreprocessor()
+        result = p.preprocess(None)
+        assert result.input_type == PreprocessorType.IMAGE
+        assert result.model_family == "phi_vision"
+        assert result.token_ids == []
+        assert result.features["num_crops"] == 4
+
+    def test_custom_crops(self):
+        p = PhiVisionPreprocessor(num_crops=8)
+        result = p.preprocess(None, num_crops=8)
+        assert result.features["num_crops"] == 8
+        # base_patches * (1 + num_crops)
+        base_patches = (336 // 14) ** 2
+        assert result.features["total_patches"] == base_patches * 9
+
+    def test_detect_model(self):
+        p = PhiVisionPreprocessor()
+        assert p.detect_model({"model_type": "phi3_vision"})
+        assert p.detect_model({"model_type": "phi4_vision"})
+        assert not p.detect_model({"model_type": "phi3"})
+
+
+class TestInternVLImagePreprocessor:
+    def test_basic_preprocessing(self):
+        p = InternVLImagePreprocessor()
+        result = p.preprocess(None)
+        assert result.input_type == PreprocessorType.IMAGE
+        assert result.model_family == "internvl"
+        assert result.token_ids == []
+        assert result.features["downsample_ratio"] == 0.5
+
+    def test_custom_resolution(self):
+        p = InternVLImagePreprocessor()
+        result = p.preprocess(None, image_size=672)
+        assert result.features["image_size"] == 672
+
+    def test_detect_model(self):
+        p = InternVLImagePreprocessor()
+        assert p.detect_model({"model_type": "internvl"})
+        assert p.detect_model({"model_type": "internvl_chat"})
+        assert not p.detect_model({"model_type": "llava"})
+
+
+class TestCohereVisionPreprocessor:
+    def test_basic_preprocessing(self):
+        p = CohereVisionPreprocessor()
+        result = p.preprocess(None)
+        assert result.input_type == PreprocessorType.IMAGE
+        assert result.model_family == "cohere_vision"
+        assert result.token_ids == []
+
+    def test_features(self):
+        p = CohereVisionPreprocessor()
+        result = p.preprocess(None)
+        assert result.features["image_size"] == 384
+        assert result.features["patch_size"] == 14
+
+    def test_detect_model(self):
+        p = CohereVisionPreprocessor()
+        assert p.detect_model({"model_type": "cohere2_vision"})
+        assert not p.detect_model({"model_type": "cohere2"})
+        assert not p.detect_model({"model_type": "cohere"})
+
+
+class TestLTXVideoPreprocessor:
+    def test_basic_preprocessing(self):
+        p = LTXVideoPreprocessor()
+        result = p.preprocess(None)
+        assert result.input_type == PreprocessorType.VIDEO
+        assert result.model_family == "ltx_video"
+        assert result.features["num_frames"] == 25
+        assert result.features["temporal_encoding"] == "vae"
+
+    def test_custom_params(self):
+        p = LTXVideoPreprocessor(num_frames=16, frame_size=256)
+        result = p.preprocess(None, num_frames=16, frame_size=256)
+        assert result.features["num_frames"] == 16
+
+    def test_detect_model(self):
+        p = LTXVideoPreprocessor()
+        assert p.detect_model({"model_type": "ltx_video"})
+        assert p.detect_model({"model_type": "ltx-video"})
+        assert not p.detect_model({"model_type": "wan"})
+
+
+class TestInternVLVideoPreprocessor:
+    def test_basic_preprocessing(self):
+        p = InternVLVideoPreprocessor()
+        result = p.preprocess(None)
+        assert result.input_type == PreprocessorType.VIDEO
+        assert result.model_family == "internvl_video"
+        assert result.features["num_frames"] == 8
+
+    def test_custom_frames(self):
+        p = InternVLVideoPreprocessor()
+        result = p.preprocess(None, num_frames=16)
+        assert result.features["num_frames"] == 16
+
+    def test_detect_model(self):
+        p = InternVLVideoPreprocessor()
+        assert p.detect_model({"model_type": "internvl_video"})
+        assert p.detect_model({"model_type": "internvl-video"})
+        assert not p.detect_model({"model_type": "internvl"})
+
+
 class TestPreprocessorRegistry:
     def test_default_registration(self):
         reg = PreprocessorRegistry()
         stats = reg.get_stats()
-        assert stats["registered"] >= 8
+        assert stats["registered"] >= 13
 
     def test_get_by_family(self):
         reg = PreprocessorRegistry()
@@ -284,11 +396,15 @@ class TestPreprocessorRegistry:
     def test_list_preprocessors(self):
         reg = PreprocessorRegistry()
         entries = reg.list_preprocessors()
-        assert len(entries) >= 8
+        assert len(entries) >= 13
         families = [e["family"] for e in entries]
         assert "qwen3_omni" in families
         assert "llava" in families
         assert "whisper" in families
+        assert "phi_vision" in families
+        assert "internvl" in families
+        assert "cohere_vision" in families
+        assert "ltx_video" in families
 
     def test_custom_preprocessor(self):
         class CustomPreprocessor(ModelPreprocessor):
@@ -313,10 +429,10 @@ class TestPreprocessorRegistry:
         stats = reg.get_stats()
         assert "IMAGE" in stats["by_type"]
         assert "AUDIO" in stats["by_type"]
-        assert stats["by_type"]["IMAGE"] >= 2  # LLaVA + QwenVL
+        assert stats["by_type"]["IMAGE"] >= 5  # LLaVA + QwenVL + PhiVision + InternVL + CohereVision
 
     def test_stats(self):
         reg = PreprocessorRegistry()
         stats = reg.get_stats()
-        assert stats["registered"] >= 8
+        assert stats["registered"] >= 13
         assert "by_type" in stats

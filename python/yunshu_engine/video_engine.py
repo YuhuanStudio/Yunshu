@@ -232,12 +232,27 @@ class VideoEngine:
         logger.info("Video engine started")
 
     def stop(self) -> None:
-        """Stop and release resources."""
+        """Stop and release resources.
+
+        Idempotent: safe to call multiple times.
+        """
+        if not self._running and self._model is None:
+            return
         self.unload_lora_adapter()
         self._model = None
         self._running = False
         self._base_model_weights = None
+        self._native_pipeline = None
+        self._teacache = None
+        self._lora_loaded = False
+        self._lora_merged = False
         gc.collect()
+        try:
+            import mlx.core as mx
+            mx.synchronize()
+            mx.clear_cache()
+        except Exception:
+            logger.debug("MLX cache clear in video stop failed", exc_info=True)
 
     def _get_model_dir(self) -> str:
         """Resolve model directory path."""

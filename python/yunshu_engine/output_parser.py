@@ -150,6 +150,127 @@ class GLMOutputParser(OutputParser):
         return "glm"
 
 
+class MistralOutputParser(OutputParser):
+    """Mistral/Codestral: Extract [THINK]...[/THINK] blocks."""
+
+    _THINK_RE = re.compile(r"\[THINK\](.*?)\[/THINK\]", re.DOTALL)
+    _TOOL_RE = re.compile(r"\[TOOL_CALLS\](.*?)$", re.DOTALL)
+
+    def parse(self, text: str) -> ParsedOutput:
+        reasoning = None
+        think_match = self._THINK_RE.search(text)
+        if think_match:
+            reasoning = think_match.group(1).strip()
+            text = self._THINK_RE.sub("", text).strip()
+
+        tool_text = None
+        tool_match = self._TOOL_RE.search(text)
+        if tool_match:
+            tool_text = tool_match.group(1).strip()
+            text = self._TOOL_RE.sub("", text).strip()
+
+        return ParsedOutput(content=text, reasoning=reasoning, tool_call_text=tool_text)
+
+    def family_name(self) -> str:
+        return "mistral"
+
+
+class PhiOutputParser(OutputParser):
+    """Phi-3/4: Extract <think/> blocks, strip tool markers."""
+
+    _THINK_RE = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
+    _TOOL_RE = re.compile(r"<\|tool_calls\|>(.*?)<\|/tool_calls\|>", re.DOTALL)
+
+    def parse(self, text: str) -> ParsedOutput:
+        reasoning = None
+        think_match = self._THINK_RE.search(text)
+        if think_match:
+            reasoning = think_match.group(1).strip()
+            text = self._THINK_RE.sub("", text).strip()
+
+        tool_text = None
+        tool_match = self._TOOL_RE.search(text)
+        if tool_match:
+            tool_text = tool_match.group(1).strip()
+            text = self._TOOL_RE.sub("", text).strip()
+
+        return ParsedOutput(content=text, reasoning=reasoning, tool_call_text=tool_text)
+
+    def family_name(self) -> str:
+        return "phi"
+
+
+class CohereOutputParser(OutputParser):
+    """Cohere Command-R: Extract <|START_THINKING|>...<|END_THINKING|> blocks."""
+
+    _THINK_RE = re.compile(r"<\|START_THINKING\|>(.*?)<\|END_THINKING\|>", re.DOTALL)
+    _ACTION_RE = re.compile(r"<\|START_ACTION\|>(.*?)<\|END_ACTION\|>", re.DOTALL)
+
+    def parse(self, text: str) -> ParsedOutput:
+        reasoning = None
+        think_match = self._THINK_RE.search(text)
+        if think_match:
+            reasoning = think_match.group(1).strip()
+            text = self._THINK_RE.sub("", text).strip()
+
+        tool_text = None
+        action_match = self._ACTION_RE.search(text)
+        if action_match:
+            tool_text = action_match.group(1).strip()
+            text = self._ACTION_RE.sub("", text).strip()
+
+        return ParsedOutput(content=text, reasoning=reasoning, tool_call_text=tool_text)
+
+    def family_name(self) -> str:
+        return "cohere"
+
+
+class LLamaOutputParser(OutputParser):
+    """LLaMA 3/4: Extract <think/> blocks, strip tool call markers."""
+
+    _THINK_RE = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
+    _TOOL_RE = re.compile(r"<\|python_tag\|>(.*?)$", re.DOTALL)
+
+    def parse(self, text: str) -> ParsedOutput:
+        reasoning = None
+        think_match = self._THINK_RE.search(text)
+        if think_match:
+            reasoning = think_match.group(1).strip()
+            text = self._THINK_RE.sub("", text).strip()
+
+        tool_text = None
+        tool_match = self._TOOL_RE.search(text)
+        if tool_match:
+            tool_text = tool_match.group(1).strip()
+            text = self._TOOL_RE.sub("", text).strip()
+
+        return ParsedOutput(content=text, reasoning=reasoning, tool_call_text=tool_text)
+
+    def family_name(self) -> str:
+        return "llama"
+
+
+class InternVLOutputParser(OutputParser):
+    """InternVL: Extract <think/> blocks, strip image artifacts."""
+
+    _THINK_RE = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
+    _IMG_RE = re.compile(r"<IMG_CONTEXT>.*?</IMG_CONTEXT>", re.DOTALL)
+
+    def parse(self, text: str) -> ParsedOutput:
+        reasoning = None
+        think_match = self._THINK_RE.search(text)
+        if think_match:
+            reasoning = think_match.group(1).strip()
+            text = self._THINK_RE.sub("", text).strip()
+
+        text = self._IMG_RE.sub("", text).strip()
+
+        return ParsedOutput(content=text, reasoning=reasoning)
+
+    def family_name(self) -> str:
+        return "internvl"
+
+
 class GenericOutputParser(OutputParser):
     """Generic: try <think/> extraction, pass through otherwise."""
 
@@ -176,6 +297,11 @@ _REGISTRY: dict[str, type[OutputParser]] = {
     "gemma": GemmaOutputParser,
     "harmony": HarmonyOutputParser,
     "glm": GLMOutputParser,
+    "mistral": MistralOutputParser,
+    "phi": PhiOutputParser,
+    "cohere": CohereOutputParser,
+    "llama": LLamaOutputParser,
+    "internvl": InternVLOutputParser,
     "generic": GenericOutputParser,
 }
 
@@ -185,6 +311,11 @@ _MODEL_FAMILY_HINTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"gemma", re.IGNORECASE), "gemma"),
     (re.compile(r"harmony|gpt.?oss", re.IGNORECASE), "harmony"),
     (re.compile(r"glm", re.IGNORECASE), "glm"),
+    (re.compile(r"mistral|codestral|mixtral|pixtral", re.IGNORECASE), "mistral"),
+    (re.compile(r"phi[-_.]?[34]", re.IGNORECASE), "phi"),
+    (re.compile(r"command[-_.]?r|cohere", re.IGNORECASE), "cohere"),
+    (re.compile(r"llama", re.IGNORECASE), "llama"),
+    (re.compile(r"intern[-_.]?vl", re.IGNORECASE), "internvl"),
 ]
 
 

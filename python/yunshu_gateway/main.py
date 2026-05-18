@@ -168,13 +168,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     - Background task tracking for clean cancellation
     """
     global _memory_enforcer, _drain_event, _server_state, _startup_time
-    global _background_tasks
+    global _background_tasks, _active_requests
 
     # Always reset state on lifespan entry — handles test isolation
     # where module-level globals persist between TestClient instances
     _drain_event = asyncio.Event()
     _server_state = ServerState.RUNNING
     _background_tasks = []
+    _active_requests = 0
 
     # Store state on app for middleware to read (avoids stale module-level
     # state when TestClient doesn't trigger lifespan in Starlette 1.0+)
@@ -351,9 +352,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _server_state = ServerState.SHUTTING_DOWN
     app.state.server_state = ServerState.SHUTTING_DOWN
 
-    # Stop single-engine mode
+    # Reset active request counter (drain is complete or timed out)
+    _active_requests = 0
+
+    # Stop single-engine mode — call stop() even if not fully loaded
+    # to clean up partial state from a failed start()
     engine = get_engine()
-    if engine and getattr(engine, 'is_loaded', False):
+    if engine:
         try:
             await engine.stop()
         except Exception:

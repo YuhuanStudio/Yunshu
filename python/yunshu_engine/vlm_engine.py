@@ -485,6 +485,12 @@ class VLMEngine:
         self._start_time = time.monotonic()
 
     async def stop(self) -> None:
+        """Stop and release resources.
+
+        Idempotent: safe to call multiple times.
+        """
+        if not self._running and self._model is None:
+            return
         self._cleanup_temp_files()
         self._model = None
         self._tokenizer = None

@@ -95,6 +95,41 @@ class TestGetReasoningParser:
         parser = get_reasoning_parser("harmony-4o")
         assert parser.family_name() == "harmony"
 
+    def test_glm_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("glm-4-9b")
+        assert parser.family_name() == "glm"
+
+    def test_mistral_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("mistral-7b-instruct")
+        assert parser.family_name() == "mistral"
+
+    def test_codestral_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("codestral-22b")
+        assert parser.family_name() == "mistral"
+
+    def test_phi_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("phi-3.5-mini")
+        assert parser.family_name() == "phi"
+
+    def test_cohere_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("command-r-plus")
+        assert parser.family_name() == "cohere"
+
+    def test_llama_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("llama-3.1-70b")
+        assert parser.family_name() == "llama"
+
+    def test_internvl_detection(self):
+        from yunshu_engine.reasoning_parser import get_reasoning_parser
+        parser = get_reasoning_parser("internvl-2.5-8b")
+        assert parser.family_name() == "internvl"
+
     def test_unknown_falls_back(self):
         from yunshu_engine.reasoning_parser import get_reasoning_parser
         parser = get_reasoning_parser("unknown-model-xyz")
@@ -104,6 +139,102 @@ class TestGetReasoningParser:
         from yunshu_engine.reasoning_parser import get_reasoning_parser
         parser = get_reasoning_parser(None)
         assert parser.family_name() == "generic"
+
+
+class TestMistralReasoningParser:
+    def test_basic_think_tags(self):
+        from yunshu_engine.reasoning_parser import MistralReasoningParser
+        parser = MistralReasoningParser()
+        out = parser.parse("[THINK]step 1: analyze\nstep 2: conclude[/THINK]The answer is 42")
+        assert out.reasoning == "step 1: analyze\nstep 2: conclude"
+        assert out.content == "The answer is 42"
+
+    def test_no_thinking(self):
+        from yunshu_engine.reasoning_parser import MistralReasoningParser
+        parser = MistralReasoningParser()
+        out = parser.parse("Just a direct answer")
+        assert out.reasoning is None
+        assert out.content == "Just a direct answer"
+
+    def test_family_name(self):
+        from yunshu_engine.reasoning_parser import MistralReasoningParser
+        assert MistralReasoningParser().family_name() == "mistral"
+
+
+class TestPhiReasoningParser:
+    def test_basic_think_tags(self):
+        from yunshu_engine.reasoning_parser import PhiReasoningParser
+        parser = PhiReasoningParser()
+        out = parser.parse("<think/>reasoning here</think/>answer")
+        assert out.reasoning == "reasoning here"
+        assert out.content == "answer"
+
+    def test_no_thinking(self):
+        from yunshu_engine.reasoning_parser import PhiReasoningParser
+        parser = PhiReasoningParser()
+        out = parser.parse("Just a direct answer")
+        assert out.reasoning is None
+
+    def test_family_name(self):
+        from yunshu_engine.reasoning_parser import PhiReasoningParser
+        assert PhiReasoningParser().family_name() == "phi"
+
+
+class TestCohereReasoningParser:
+    def test_basic_thinking_tags(self):
+        from yunshu_engine.reasoning_parser import CohereReasoningParser
+        parser = CohereReasoningParser()
+        out = parser.parse("<|START_THINKING|>I thought about this<|END_THINKING|>The answer is 42")
+        assert out.reasoning == "I thought about this"
+        assert out.content == "The answer is 42"
+
+    def test_no_thinking(self):
+        from yunshu_engine.reasoning_parser import CohereReasoningParser
+        parser = CohereReasoningParser()
+        out = parser.parse("Just a direct answer")
+        assert out.reasoning is None
+
+    def test_family_name(self):
+        from yunshu_engine.reasoning_parser import CohereReasoningParser
+        assert CohereReasoningParser().family_name() == "cohere"
+
+
+class TestLLamaReasoningParser:
+    def test_basic_think_tags(self):
+        from yunshu_engine.reasoning_parser import LLamaReasoningParser
+        parser = LLamaReasoningParser()
+        out = parser.parse("<think/>reasoning here</think/>answer")
+        assert out.reasoning == "reasoning here"
+        assert out.content == "answer"
+
+    def test_no_thinking(self):
+        from yunshu_engine.reasoning_parser import LLamaReasoningParser
+        parser = LLamaReasoningParser()
+        out = parser.parse("Just a direct answer")
+        assert out.reasoning is None
+
+    def test_family_name(self):
+        from yunshu_engine.reasoning_parser import LLamaReasoningParser
+        assert LLamaReasoningParser().family_name() == "llama"
+
+
+class TestInternVLReasoningParser:
+    def test_basic_think_tags(self):
+        from yunshu_engine.reasoning_parser import InternVLReasoningParser
+        parser = InternVLReasoningParser()
+        out = parser.parse("<think/>reasoning here</think/>answer")
+        assert out.reasoning == "reasoning here"
+        assert out.content == "answer"
+
+    def test_no_thinking(self):
+        from yunshu_engine.reasoning_parser import InternVLReasoningParser
+        parser = InternVLReasoningParser()
+        out = parser.parse("Just a direct answer")
+        assert out.reasoning is None
+
+    def test_family_name(self):
+        from yunshu_engine.reasoning_parser import InternVLReasoningParser
+        assert InternVLReasoningParser().family_name() == "internvl"
 
 
 class TestExtractThinkingWithModelName:

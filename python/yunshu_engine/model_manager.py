@@ -763,11 +763,16 @@ class ModelManager:
         """Gracefully unload all loaded models.
 
         Also signals any in-progress loading events so waiters don't hang.
+        Idempotent: safe to call multiple times.
         """
         # Signal all loading events so any waiters unblock
         for model_id, event in list(self._loading_events.items()):
             event.set()
         self._loading_events.clear()
+
+        # If no models are loaded, shutdown is a no-op
+        if not any(e.is_loaded for e in self._entries.values()):
+            return
 
         # Collect loaded model IDs under the lock, then unload each
         async with self._lock:

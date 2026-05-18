@@ -159,6 +159,126 @@ class GemmaReasoningParser(ReasoningParser):
         return "gemma"
 
 
+class MistralReasoningParser(ReasoningParser):
+    """Mistral/Codestral: [THINK]...[/THINK] markers."""
+
+    _PATTERN = re.compile(
+        r"\[THINK\](.*?)\[/THINK\](.*)",
+        re.DOTALL,
+    )
+
+    def parse(self, text: str) -> ReasoningOutput:
+        m = self._PATTERN.match(text)
+        if m:
+            reasoning = m.group(1).strip()
+            content = m.group(2).strip()
+            return ReasoningOutput(
+                content=content,
+                reasoning=reasoning,
+                reasoning_tokens=len(reasoning.split()),
+            )
+        return ReasoningOutput(content=text.strip())
+
+    def family_name(self) -> str:
+        return "mistral"
+
+
+class PhiReasoningParser(ReasoningParser):
+    """Phi-3/4: <think/>...</think/> tags (same as generic but explicit)."""
+
+    _PATTERN = re.compile(
+        r"<think\s*/?\s*>(.*?)</think\s*/?\s*>(.*)",
+        re.DOTALL,
+    )
+
+    def parse(self, text: str) -> ReasoningOutput:
+        m = self._PATTERN.match(text)
+        if m:
+            reasoning = m.group(1).strip()
+            content = m.group(2).strip()
+            return ReasoningOutput(
+                content=content,
+                reasoning=reasoning,
+                reasoning_tokens=len(reasoning.split()),
+            )
+        return ReasoningOutput(content=text.strip())
+
+    def family_name(self) -> str:
+        return "phi"
+
+
+class CohereReasoningParser(ReasoningParser):
+    """Cohere Command-R: <|START_THINKING|>...<|END_THINKING|> markers."""
+
+    _PATTERN = re.compile(
+        r"<\|START_THINKING\|>(.*?)<\|END_THINKING\|>(.*)",
+        re.DOTALL,
+    )
+
+    def parse(self, text: str) -> ReasoningOutput:
+        m = self._PATTERN.match(text)
+        if m:
+            reasoning = m.group(1).strip()
+            content = m.group(2).strip()
+            return ReasoningOutput(
+                content=content,
+                reasoning=reasoning,
+                reasoning_tokens=len(reasoning.split()),
+            )
+        return ReasoningOutput(content=text.strip())
+
+    def family_name(self) -> str:
+        return "cohere"
+
+
+class LLamaReasoningParser(ReasoningParser):
+    """LLaMA 3/4: <think/>...</think/> tags (same format as generic)."""
+
+    _PATTERN = re.compile(
+        r"<think\s*/?\s*>(.*?)</think\s*/?\s*>(.*)",
+        re.DOTALL,
+    )
+
+    def parse(self, text: str) -> ReasoningOutput:
+        m = self._PATTERN.match(text)
+        if m:
+            reasoning = m.group(1).strip()
+            content = m.group(2).strip()
+            return ReasoningOutput(
+                content=content,
+                reasoning=reasoning,
+                reasoning_tokens=len(reasoning.split()),
+            )
+        return ReasoningOutput(content=text.strip())
+
+    def family_name(self) -> str:
+        return "llama"
+
+
+class InternVLReasoningParser(ReasoningParser):
+    """InternVL: <think/>...</think/> tags with image context markers."""
+
+    _PATTERN = re.compile(
+        r"<think\s*/?\s*>(.*?)</think\s*/?\s*>(.*)",
+        re.DOTALL,
+    )
+
+    def parse(self, text: str) -> ReasoningOutput:
+        m = self._PATTERN.match(text)
+        if m:
+            reasoning = m.group(1).strip()
+            content = m.group(2).strip()
+            return ReasoningOutput(
+                content=content,
+                reasoning=reasoning,
+                reasoning_tokens=len(reasoning.split()),
+            )
+        return ReasoningOutput(content=text.strip())
+
+    def family_name(self) -> str:
+        return "internvl"
+
+
 class GenericReasoningParser(ReasoningParser):
     """Generic fallback: tries <think/>...</think/> then returns raw text."""
 
@@ -191,6 +311,11 @@ _REGISTRY: dict[str, type[ReasoningParser]] = {
     "glm": GLMReasoningParser,
     "harmony": HarmonyReasoningParser,
     "gemma": GemmaReasoningParser,
+    "mistral": MistralReasoningParser,
+    "phi": PhiReasoningParser,
+    "cohere": CohereReasoningParser,
+    "llama": LLamaReasoningParser,
+    "internvl": InternVLReasoningParser,
     "generic": GenericReasoningParser,
 }
 
@@ -200,6 +325,11 @@ _MODEL_FAMILY_HINTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"glm", re.IGNORECASE), "glm"),
     (re.compile(r"gemma", re.IGNORECASE), "gemma"),
     (re.compile(r"harmony|gpt.?oss", re.IGNORECASE), "harmony"),
+    (re.compile(r"mistral|codestral|mixtral|pixtral", re.IGNORECASE), "mistral"),
+    (re.compile(r"phi[-_.]?[34]", re.IGNORECASE), "phi"),
+    (re.compile(r"command[-_.]?r|cohere", re.IGNORECASE), "cohere"),
+    (re.compile(r"llama", re.IGNORECASE), "llama"),
+    (re.compile(r"intern[-_.]?vl", re.IGNORECASE), "internvl"),
 ]
 
 

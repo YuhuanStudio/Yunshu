@@ -189,7 +189,12 @@ class TTSEngine:
         self._running = True
 
     async def stop(self) -> None:
-        """Stop and cleanup (oMLX EngineCore.close pattern)."""
+        """Stop and cleanup (oMLX EngineCore.close pattern).
+
+        Idempotent: safe to call multiple times.
+        """
+        if not self._running and self._model is None:
+            return
         self._model = None
         self._running = False
         gc.collect()
@@ -454,6 +459,12 @@ class ASREngine:
         self._running = True
 
     async def stop(self) -> None:
+        """Stop and cleanup.
+
+        Idempotent: safe to call multiple times.
+        """
+        if not self._running and self._model is None:
+            return
         self._model = None
         self._running = False
         gc.collect()

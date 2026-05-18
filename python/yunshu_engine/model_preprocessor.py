@@ -389,6 +389,203 @@ class WhisperSpeechPreprocessor(ModelPreprocessor):
         return "whisper" in model_config.get("model_type", "").lower()
 
 
+class PhiVisionPreprocessor(ModelPreprocessor):
+    """Handles Phi-3/4 vision preprocessing.
+
+    Phi-3-Vision uses dynamic image resolution with crop-based encoding.
+    """
+
+    model_family = "phi_vision"
+    input_type = PreprocessorType.IMAGE
+
+    def __init__(self, image_size: int = 336, num_crops: int = 4) -> None:
+        self._image_size = image_size
+        self._num_crops = num_crops
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        num_crops = kwargs.get("num_crops", self._num_crops)
+        patch_size = 14
+        base_patches = (self._image_size // patch_size) ** 2
+        total_patches = base_patches * (1 + num_crops)
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.IMAGE,
+            model_family=self.model_family,
+            token_ids=[],  # Placeholder: vision encoder not yet integrated
+            original_tokens=1,
+            processed_tokens=total_patches,
+            features={
+                "image_size": self._image_size,
+                "num_crops": num_crops,
+                "total_patches": total_patches,
+            },
+            warnings=["Phi vision encoder not yet integrated"],
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        model_type = model_config.get("model_type", "").lower()
+        return "phi3_vision" in model_type or "phi4_vision" in model_type
+
+
+class InternVLImagePreprocessor(ModelPreprocessor):
+    """Handles InternVL-family image preprocessing.
+
+    InternVL uses dynamic resolution with pixel shuffle and
+    supports interleaved image-text inputs.
+    """
+
+    model_family = "internvl"
+    input_type = PreprocessorType.IMAGE
+
+    def __init__(self, image_size: int = 448, patch_size: int = 14, downsample_ratio: float = 0.5) -> None:
+        self._image_size = image_size
+        self._patch_size = patch_size
+        self._downsample_ratio = downsample_ratio
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        image_size = kwargs.get("image_size", self._image_size)
+        patch_size = self._patch_size
+        num_patches = (image_size // patch_size) ** 2
+        # InternVL downsamples via pixel shuffle
+        effective_patches = int(num_patches * self._downsample_ratio)
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.IMAGE,
+            model_family=self.model_family,
+            token_ids=[],  # Placeholder: vision encoder not yet integrated
+            original_tokens=1,
+            processed_tokens=effective_patches,
+            features={
+                "image_size": image_size,
+                "num_patches": num_patches,
+                "downsample_ratio": self._downsample_ratio,
+                "effective_patches": effective_patches,
+            },
+            warnings=["InternVL vision encoder not yet integrated"],
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        model_type = model_config.get("model_type", "").lower()
+        return "internvl" in model_type
+
+
+class CohereVisionPreprocessor(ModelPreprocessor):
+    """Handles Cohere Command-R Vision image preprocessing.
+
+    Cohere2VisionForConditionalGeneration uses ViT + adapter layers.
+    """
+
+    model_family = "cohere_vision"
+    input_type = PreprocessorType.IMAGE
+
+    def __init__(self, image_size: int = 384, patch_size: int = 14) -> None:
+        self._image_size = image_size
+        self._patch_size = patch_size
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        num_patches = (self._image_size // self._patch_size) ** 2
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.IMAGE,
+            model_family=self.model_family,
+            token_ids=[],  # Placeholder: vision encoder not yet integrated
+            original_tokens=1,
+            processed_tokens=num_patches,
+            features={
+                "image_size": self._image_size,
+                "patch_size": self._patch_size,
+                "num_patches": num_patches,
+            },
+            warnings=["Cohere vision encoder not yet integrated"],
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        model_type = model_config.get("model_type", "").lower()
+        return "cohere2" in model_type and "vision" in model_type
+
+
+class LTXVideoPreprocessor(ModelPreprocessor):
+    """Handles LTX-Video frame preprocessing.
+
+    LTX-Video uses VAE-based temporal encoding for video generation.
+    """
+
+    model_family = "ltx_video"
+    input_type = PreprocessorType.VIDEO
+
+    def __init__(self, num_frames: int = 25, frame_size: int = 512) -> None:
+        self._num_frames = num_frames
+        self._frame_size = frame_size
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        num_frames = kwargs.get("num_frames", self._num_frames)
+        frame_size = kwargs.get("frame_size", self._frame_size)
+
+        tokens_per_frame = (frame_size // 16) ** 2
+        total_tokens = num_frames * tokens_per_frame
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.VIDEO,
+            model_family=self.model_family,
+            token_ids=[],  # Placeholder: video encoder not yet integrated
+            original_tokens=num_frames,
+            processed_tokens=total_tokens,
+            features={
+                "num_frames": num_frames,
+                "frame_size": frame_size,
+                "tokens_per_frame": tokens_per_frame,
+                "temporal_encoding": "vae",
+            },
+            warnings=["LTX video encoder not yet integrated"],
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        model_type = model_config.get("model_type", "").lower()
+        return "ltx" in model_type and "video" in model_type
+
+
+class InternVLVideoPreprocessor(ModelPreprocessor):
+    """Handles InternVL video frame preprocessing.
+
+    InternVL processes video as temporal image sequences.
+    """
+
+    model_family = "internvl_video"
+    input_type = PreprocessorType.VIDEO
+
+    def __init__(self, num_frames: int = 8, image_size: int = 448, patch_size: int = 14) -> None:
+        self._num_frames = num_frames
+        self._image_size = image_size
+        self._patch_size = patch_size
+
+    def preprocess(self, raw_input: Any, **kwargs) -> PreprocessedInput:
+        num_frames = kwargs.get("num_frames", self._num_frames)
+        image_size = kwargs.get("image_size", self._image_size)
+        patch_size = self._patch_size
+
+        patches_per_frame = (image_size // patch_size) ** 2
+        total_tokens = num_frames * patches_per_frame
+
+        return PreprocessedInput(
+            input_type=PreprocessorType.VIDEO,
+            model_family=self.model_family,
+            token_ids=[],  # Placeholder: video encoder not yet integrated
+            original_tokens=num_frames,
+            processed_tokens=total_tokens,
+            features={
+                "num_frames": num_frames,
+                "image_size": image_size,
+                "patches_per_frame": patches_per_frame,
+                "total_tokens": total_tokens,
+            },
+            warnings=["InternVL video encoder not yet integrated"],
+        )
+
+    def detect_model(self, model_config: dict) -> bool:
+        model_type = model_config.get("model_type", "").lower()
+        return "internvl" in model_type and "video" in model_type
+
+
 class PreprocessorRegistry:
     """Registry of model-specific preprocessors (vllm-omni pattern).
 
@@ -411,6 +608,11 @@ class PreprocessorRegistry:
             GLMOCRPreprocessor,
             DeepSeekOCRPreprocessor,
             WhisperSpeechPreprocessor,
+            PhiVisionPreprocessor,
+            InternVLImagePreprocessor,
+            CohereVisionPreprocessor,
+            LTXVideoPreprocessor,
+            InternVLVideoPreprocessor,
         ]:
             instance = cls()
             self.register(instance)

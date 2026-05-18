@@ -1037,6 +1037,16 @@ class FairnessTracker:
         variance = sum((t - mean) ** 2 for t in times) / len(times)
         return variance
 
+    def remove_request(self, request_id: str) -> None:
+        """Remove per-request tracking data to prevent unbounded growth.
+
+        Called from EngineCore._finalize_request() when a request completes
+        or is aborted. Keeps history/completions for rolling stats but removes
+        the per-request allocation accumulators that would otherwise leak.
+        """
+        self._allocations.pop(request_id, None)
+        self._allocation_count.pop(request_id, None)
+
     def reset(self) -> None:
         """Reset all tracking state."""
         self._allocations.clear()
