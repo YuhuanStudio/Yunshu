@@ -159,15 +159,17 @@ class DeltaNetInverter:
         denom = 1.0 - beta_kk  # [B, Hv, 1]
         # Guard against near-zero denominator (beta*||k||² close to 1).
         # Clamp to a small epsilon to avoid inf/nan in the division.
+        # Use +eps or -eps based on sign of denom; if denom is exactly 0,
+        # default to +eps (the typical case where beta*||k||² < 1).
         eps = mx.array(1e-6, dtype=denom.dtype)
-        denom = mx.where(mx.abs(denom) < eps, mx.sign(denom) * eps, denom)
+        denom = mx.where(mx.abs(denom) < eps, eps, denom)
         r_gw = (r_new - beta_kk * v) / denom  # [B, Hv, Dv]
 
         # Step 4: state_old = (state_new - k * beta * (v - r_gw)) / g
         delta_v = v - r_gw  # [B, Hv, Dv]
         correction = beta_expanded * delta_v[:, :, :, None] * k_expanded  # [B, Hv, Dv, Dk]
         # Guard against near-zero gate (g ≈ 0 means heavy decay, inversion is unstable).
-        g_safe = mx.where(mx.abs(g_expanded) < eps, mx.sign(g_expanded) * eps, g_expanded)
+        g_safe = mx.where(mx.abs(g_expanded) < eps, eps, g_expanded)
         state_old = (state_new - correction) / g_safe
 
         return state_old.astype(orig_dtype)

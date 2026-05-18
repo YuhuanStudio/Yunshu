@@ -109,9 +109,11 @@ class AdaptiveSpecController:
         """
         self._total_steps += 1
         self._total_draft += draft_length
+        # Clamp accepted to draft_length to prevent rate > 1.0
+        accepted = min(accepted, draft_length)
         self._total_accepted += accepted
 
-        # Compute current step acceptance rate
+        # Compute current step acceptance rate (clamped to [0, 1])
         current_rate = accepted / draft_length if draft_length > 0 else 0.0
 
         # Update EMA

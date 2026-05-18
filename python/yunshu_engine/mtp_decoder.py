@@ -103,7 +103,6 @@ class MTPDecoder:
         self.model = model
         self.tokenizer = tokenizer
         self.config = config or MTPConfig()
-        self.inner = getattr(model, "language_model", model)
         self._stats = MTPStats()
 
     @property

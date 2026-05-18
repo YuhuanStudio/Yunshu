@@ -380,10 +380,10 @@ class TestEdgeCases:
         assert ctrl.get_draft_length() == 4  # No crash
 
     def test_accepted_exceeds_draft(self):
-        """Accepted tokens can't exceed draft (clamped by caller, but handle gracefully)."""
+        """Accepted tokens are clamped to draft_length to prevent rate > 1.0."""
         ctrl = AdaptiveSpecController(initial_draft_length=4)
-        ctrl.record_step(4, 6)  # Impossible but shouldn't crash
-        assert ctrl.get_stats()["ema_rate"] == 1.5  # rate = 6/4 = 1.5 (caller's responsibility to clamp)
+        ctrl.record_step(4, 6)  # Accepted clamped to 4
+        assert ctrl.get_stats()["ema_rate"] == 1.0  # rate = min(6,4)/4 = 1.0
 
 
 # ---------------------------------------------------------------------------
