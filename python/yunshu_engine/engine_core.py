@@ -1146,6 +1146,12 @@ class EngineCore:
             if excess > 0 and num_prompt_tokens > excess:
                 token_ids = token_ids[excess:]
                 num_prompt_tokens = len(token_ids)
+                # Keep prompt in sync with truncated token_ids so downstream
+                # consumers see the correct truncated content.
+                try:
+                    prompt = self._tokenizer.decode(token_ids)
+                except Exception:
+                    prompt = token_ids
                 # Record truncation via ContextWindowManager
                 if self._context_window_mgr is not None:
                     self._context_window_mgr._stats.truncations_applied += 1
@@ -1866,12 +1872,16 @@ class EngineCore:
                                         shadow_collector.put(None)  # sentinel
                                         # Signal shadow finished before finalize
                                         self._signal_finished(shadow_id)
-                                        self._finalize_request(shadow_id)
+                                        self._cleanup_request(shadow_id)
                         # Signal request completion before finalize so generate()
                         # consumers waiting on the event can wake up.
                         self._signal_finished(rid)
                         # Finalize: release scheduler-side resources for this request
-                        self._finalize_request(rid)
+                        self._finalize_request(
+                            rid,
+                            completion_tokens=req_output.completion_tokens,
+                            finish_reason=req_output.finish_reason or "stop",
+                        )
                 except Exception as _output_err:
                     logger.error(
                         "Output distribution error for %s: %s",
@@ -2059,7 +2069,7 @@ class EngineCore:
                                             ))
                                             s_collector.put(None)
                                         self._signal_finished(sid)
-                                        self._finalize_request(sid)
+                                        self._cleanup_request(sid)
                                 self._signal_finished(rid)
                                 self._finalize_request(rid)
                 except Exception:
@@ -2147,7 +2157,7 @@ class EngineCore:
         if event:
             event.set()
 
-    def _finalize_request(self, request_id: str) -> None:
+    def _finalize_request(self, request_id: str, completion_tokens: int = 0, finish_reason: str = "stop") -> None:
         """Release scheduler-side per-request resources (NOT consumer-side state).
 
         Called from:
@@ -2184,7 +2194,7 @@ class EngineCore:
             except Exception:
                 logger.debug("LoRA cleanup failed", exc_info=True)
         # Lifecycle + budget + memory + KV lifecycle
-        self._lifecycle_orchestrator.on_request_finished(request_id)
+        self._lifecycle_orchestrator.on_request_finished(request_id, completion_tokens=completion_tokens, finish_reason=finish_reason)
         self._budget_manager.remove(request_id)
         self._memory_aware_scheduler.release_memory(request_id)
         try:
@@ -2283,12 +2293,13 @@ class EngineCore:
                 ))
                 collector.put(None)
             self._signal_finished(sid)
-            self._finalize_request(sid)
+            self._cleanup_request(sid)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request state (consumer-side entry point).
 
         Called from stream_outputs() finally block and generate() finally block.
+        Also called for dedup shadow requests that have no consumer.
         Releases scheduler-side resources via _finalize_request, then removes
         consumer-side state (collector, event, stream state, timestamps).
         """

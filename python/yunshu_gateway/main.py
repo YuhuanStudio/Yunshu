@@ -468,9 +468,10 @@ def create_app() -> FastAPI:
             )
 
         # Default: OpenAI error format
+        error_type = "invalid_request_error" if exc.status_code < 500 else "server_error"
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error": {"message": str(exc.detail), "type": "server_error"}},
+            content={"error": {"message": str(exc.detail), "type": error_type}},
         )
 
     @app.exception_handler(Exception)

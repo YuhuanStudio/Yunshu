@@ -323,6 +323,17 @@ class LoRAAdapterManager:
         # restore base weights while we are mid-merge.
         with self._gpu_lock:
             try:
+                # Re-verify adapter is still loaded under gpu_lock — a
+                # concurrent unload_adapter could have restored base between
+                # the _lock release and gpu_lock acquisition.
+                with self._lock:
+                    entry = self._adapters.get(adapter_id)
+                    if entry is None or not entry.is_loaded:
+                        logger.warning(
+                            "Adapter %s was unloaded during merge", adapter_id
+                        )
+                        return False
+
                 import mlx.nn as nn
                 from mlx.utils import tree_unflatten
                 from mlx_lm.tuner.lora import LoRALinear

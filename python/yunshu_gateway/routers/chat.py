@@ -1171,6 +1171,11 @@ async def _handle_vlm_chat(
         messages = _inject_tool_system_prompt(messages, req.tools, req.tool_choice, req.parallel_tool_calls)
 
     if req.stream:
+        if req.n > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="VLM streaming does not support n > 1. Use non-streaming mode for multiple choices.",
+            )
         return StreamingResponse(
             _stream_vlm_response(vlm_engine, messages, req, completion_id, request, json_schema=json_schema),
             media_type="text/event-stream",
