@@ -522,7 +522,7 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                     if name:
                         if isinstance(args, str):
                             args = json.loads(args)
-                        calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else args})
+                        calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
         except (json.JSONDecodeError, KeyError):
             continue
     if calls:
@@ -537,7 +537,7 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                 args = data.get("arguments", data.get("parameters", {}))
                 if isinstance(args, str):
                     args = json.loads(args)
-                calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else args})
+                calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
         except (json.JSONDecodeError, KeyError):
             continue
 

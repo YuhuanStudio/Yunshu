@@ -95,6 +95,10 @@ class SessionConfig:
                 if key in ("input_audio_format", "output_audio_format"):
                     if value not in self.SUPPORTED_AUDIO_FORMATS:
                         continue
+                if key == "voice":
+                    valid_voices = {"alloy", "echo", "shimmer"}
+                    if value not in valid_voices:
+                        continue
                 if key == "turn_detection" and isinstance(value, dict):
                     # Validate turn_detection type value
                     td_type = value.get("type")
@@ -673,7 +677,7 @@ class RealtimeSession:
             if self._active_response is asyncio.current_task():
                 self._active_response = None
                 self._active_modalities = []
-            self._cancel_event = None
+                self._cancel_event = None
 
     async def _handle_response_cancel(self, event: dict) -> None:
         """Handle response.cancel — abort current generation with audio truncation.

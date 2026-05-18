@@ -370,6 +370,9 @@ class MeshManager:
 
     def _on_peer_lost(self, node: MeshNode) -> None:
         """Callback: peer disappeared."""
+        # Skip if node already processed by heartbeat timeout
+        if node.state == MeshNodeState.OFFLINE:
+            return
         # Mark node offline instead of removing from topology.
         # Removing would re-rank remaining nodes and invalidate
         # pipeline stage assignments that reference the original ranks.
@@ -397,7 +400,12 @@ class MeshManager:
         if self._dp_router:
             self._dp_router.mark_available(node.node_id)
         if self._disagg_router:
-            self._disagg_router.add_node(node.node_id)
+            caps = getattr(node, 'capabilities', None)
+            self._disagg_router.add_node(
+                node.node_id,
+                memory_gb=caps.total_memory_gb if caps and hasattr(caps, 'total_memory_gb') else 0.0,
+                gpu_cores=caps.gpu_cores if caps and hasattr(caps, 'gpu_cores') else 0,
+            )
             self._disagg_router.mark_available(node.node_id)
         self._publish_event("node_state_change", node.node_id, {
             "new_state": "ready",

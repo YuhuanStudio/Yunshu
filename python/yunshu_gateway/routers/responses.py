@@ -742,7 +742,6 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             error_code="server_error",
             error_message="Insufficient GPU memory",
         ).encode("utf-8")
-        yield b"data: [DONE]\n\n"
         return
     except Exception as e:
         if _cancel_evt is not None:
@@ -753,7 +752,6 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             error_code="server_error",
             error_message=str(e)[:200],
         ).encode("utf-8")
-        yield b"data: [DONE]\n\n"
         return
     finally:
         if _tracker is not None:

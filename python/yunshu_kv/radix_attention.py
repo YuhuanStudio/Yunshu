@@ -217,6 +217,8 @@ class RadixTree:
         # original (now-split) child.
         new_node.ref_count = child.ref_count
         new_node.last_access_time = child.last_access_time
+        new_node.creation_time = child.creation_time
+        new_node.access_count = child.access_count
 
         self._total_nodes += 1
         return new_node

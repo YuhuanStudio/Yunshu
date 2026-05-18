@@ -1506,6 +1506,8 @@ class Scheduler:
                         'chunk_size': effective_chunk_size,
                         'total_prompt_len': len(tokens_to_insert),
                         'offset': effective_chunk_size,
+                        'kv_cache': None,  # Filled after first chunk response
+                        'all_prompt_tokens': tokens_to_insert,  # Full prompt for insert_segments
                     }
                     # Chunked prefill production tracking: fairness + timeout
                     self._chunked_prefill_fairness[req.request_id] = 0
@@ -2024,16 +2026,34 @@ class Scheduler:
                             sp = req.sampling_params
                             sampler = self._make_sampler(sp)
                             sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
-                            uids = self._batch_gen.insert(
-                                prompts=[remaining],
-                                max_tokens=[sp.max_tokens],
-                                samplers=[sampler],
-                                state_machines=[sm],
-                            )
+                            # Use insert_segments for KV continuity if cache available
+                            prev_kv = state.get('kv_cache')
+                            all_tokens = state.get('all_prompt_tokens')
+                            if prev_kv is not None and all_tokens is not None:
+                                processed_count = state.get('offset', 0)
+                                uids = self._batch_gen.insert_segments(
+                                    segments=[[remaining]],
+                                    max_tokens=[sp.max_tokens],
+                                    caches=[prev_kv],
+                                    all_tokens=[all_tokens[:processed_count] + remaining],
+                                    samplers=[sampler],
+                                    state_machines=[sm],
+                                )
+                            else:
+                                uids = self._batch_gen.insert(
+                                    prompts=[remaining],
+                                    max_tokens=[sp.max_tokens],
+                                    samplers=[sampler],
+                                    state_machines=[sm],
+                                )
                             # Update UID tracking (force-feed creates a new UID)
                             old_uid = getattr(req, 'batch_uid', None)
                             if old_uid is not None and old_uid != uids[0]:
                                 self._uid_to_req.pop(old_uid, None)
+                                try:
+                                    self._batch_gen.remove([old_uid])
+                                except Exception:
+                                    pass
                             req.batch_uid = uids[0]
                             self._uid_to_req[uids[0]] = req_id
                             self._chunked_prefill_chunks_processed += 1
@@ -2139,12 +2159,31 @@ class Scheduler:
                 sampler = self._make_sampler(sp)
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
-                uids = self._batch_gen.insert(
-                    prompts=[chunk],
-                    max_tokens=[sp.max_tokens],
-                    samplers=[sampler],
-                    state_machines=[sm],
-                )
+                # KV continuity: if we have a cached KV from a previous chunk,
+                # use insert_segments instead of insert to carry forward the
+                # KV cache. This prevents the model from seeing each chunk as
+                # an isolated prompt without context.
+                prev_kv = state.get('kv_cache')
+                all_tokens = state.get('all_prompt_tokens')
+                if prev_kv is not None and all_tokens is not None:
+                    # Compute which tokens have been processed so far
+                    processed_count = state.get('offset', len(chunk))
+                    remaining_in_full = all_tokens[processed_count:]
+                    uids = self._batch_gen.insert_segments(
+                        segments=[[remaining_in_full[:chunk_size]]],
+                        max_tokens=[sp.max_tokens],
+                        caches=[prev_kv],
+                        all_tokens=[all_tokens[:processed_count + chunk_size]],
+                        samplers=[sampler],
+                        state_machines=[sm],
+                    )
+                else:
+                    uids = self._batch_gen.insert(
+                        prompts=[chunk],
+                        max_tokens=[sp.max_tokens],
+                        samplers=[sampler],
+                        state_machines=[sm],
+                    )
 
                 # Update tracking: each insert() returns a new UID.
                 # Remove the old UID from both the scheduler mapping AND
@@ -2152,11 +2191,17 @@ class Scheduler:
                 # _uid_to_req, the old UID stays in BatchGenerator and
                 # causes silent token loss (the old chunk's forward pass
                 # produces output for a UID nobody tracks).
+                #
+                # KV continuity: extract the KV cache from the old chunk
+                # before removing it, so the next chunk can use insert_segments
+                # to carry forward the accumulated KV state.
                 old_uid = getattr(req, 'batch_uid', None)
                 if old_uid is not None and old_uid != uids[0]:
                     self._uid_to_req.pop(old_uid, None)
                     try:
-                        self._batch_gen.remove([old_uid])
+                        extracted = self._batch_gen.remove([old_uid], return_prompt_caches=True)
+                        if old_uid in extracted and extracted[old_uid] is not None:
+                            state['kv_cache'] = extracted[old_uid][0]
                     except Exception:
                         logger.debug(
                             "Failed to remove old chunked UID %s from BatchGenerator",
