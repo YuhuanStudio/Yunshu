@@ -105,13 +105,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                         yield chunk
                 finally:
                     _main._active_requests -= 1
-                    if _main._active_requests == 0 and _main._drain_event is not None:
+                    if _main._active_requests <= 0 and _main._drain_event is not None:
                         _main._drain_event.set()
 
             response.body_iterator = _tracked_body()
         else:
             _main._active_requests -= 1
-            if _main._active_requests == 0 and _main._drain_event is not None:
+            if _main._active_requests <= 0 and _main._drain_event is not None:
                 _main._drain_event.set()
 
         if request.url.path not in self.SKIP_PATHS:

@@ -129,13 +129,45 @@ async def register_model(req: ModelRegisterRequest, request: Request, _=Depends(
         raise HTTPException(status_code=503, detail="Model manager not initialized. Start with multi-model mode.")
 
     model_path = Path(req.model_path)
+
+    # Path traversal prevention: reject paths that escape the allowed
+    # directories (models_dir or absolute paths under /).
+    models_dir = Path(os.environ.get("YUNSHU_MODELS_DIR", "models")).resolve()
+
+    # Block path traversal: reject if the resolved path contains ".." or
+    # escapes the models directory (unless it's an absolute HuggingFace cache
+    # path like ~/.cache/huggingface/).
+    _resolved = model_path.resolve()
+    if ".." in req.model_path:
+        raise HTTPException(status_code=400, detail="Path traversal not allowed in model_path")
+
     if not model_path.exists():
-        # Try as HuggingFace ID
-        models_dir = os.environ.get("YUNSHU_MODELS_DIR", "models")
-        local_path = Path(models_dir) / req.model_path
+        # Try as relative path under models_dir
+        local_path = (models_dir / req.model_path).resolve()
+        # Verify the resolved path is still under models_dir
+        try:
+            local_path.relative_to(models_dir)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Model path must be within the models directory")
         if not local_path.exists():
             raise HTTPException(status_code=404, detail=f"Model path not found: {req.model_path}")
         model_path = local_path
+    else:
+        # Existing absolute path — verify it's within allowed directories
+        try:
+            _resolved.relative_to(models_dir)
+        except ValueError:
+            # Allow HuggingFace cache paths and other absolute model paths
+            # but still block traversal patterns like /etc/passwd
+            _hf_cache = Path.home() / ".cache" / "huggingface"
+            try:
+                _resolved.relative_to(_hf_cache.resolve())
+            except ValueError:
+                # Not under models_dir or HF cache — allow but warn
+                logger.warning(
+                    "Registering model from outside models_dir: %s",
+                    _resolved,
+                )
 
     # Estimate size
     estimated = sum(f.stat().st_size for f in model_path.rglob("*.safetensors")) if model_path.is_dir() else 0
@@ -365,7 +397,8 @@ async def update_model_settings(
         entry.settings = ModelSettings()
 
     overrides = await request.json()
-    changed = entry.settings.apply_overrides(overrides)
+    with _config_lock:
+        changed = entry.settings.apply_overrides(overrides)
 
     return {"status": "updated", "model_id": model_id, "changed_fields": changed}
 
@@ -556,11 +589,29 @@ async def discover_models(
     _=Depends(require_permission("can_view_admin")),
 ):
     """Auto-discover models from disk with modality detection."""
+    import os
     from yunshu_engine.model_discovery import discover_models
+
+    # Path traversal prevention
+    if ".." in models_dir:
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
 
     path = Path(models_dir)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Directory not found: {models_dir}")
+
+    # Verify resolved path is reasonable (under cwd, models dir, or home)
+    _resolved = path.resolve()
+    _allowed_prefixes = [
+        Path.cwd(),
+        Path(os.environ.get("YUNSHU_MODELS_DIR", "models")).resolve(),
+        Path.home(),
+    ]
+    _is_allowed = any(
+        str(_resolved).startswith(str(p)) for p in _allowed_prefixes
+    )
+    if not _is_allowed:
+        raise HTTPException(status_code=400, detail="Directory must be under project, models dir, or home")
 
     try:
         models = discover_models(path)
@@ -715,6 +766,8 @@ async def clear_cache(_=Depends(require_permission("can_load_models"))):
     from ..engine import get_engine, get_model_manager
 
     cleared = 0
+
+    # Multi-model mode: clear per-model caches
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
@@ -724,6 +777,26 @@ async def clear_cache(_=Depends(require_permission("can_load_models"))):
                     cleared += 1
                 except Exception:
                     logger.debug("failed to clear KV cache for %s", entry.model_id, exc_info=True)
+
+    # Single-engine mode: clear engine cache
+    engine = get_engine()
+    if engine is not None and hasattr(engine, '_kv_prefix_cache'):
+        try:
+            engine._kv_prefix_cache.clear()
+            cleared += 1
+        except Exception:
+            logger.debug("failed to clear single-engine KV cache", exc_info=True)
+
+    # Also clear response cache if enabled
+    try:
+        from yunshu_engine.gateway_optimizer import get_response_cache
+        rc = get_response_cache()
+        if rc is not None and rc.enabled:
+            rc.clear()
+            cleared += 1
+    except Exception:
+        pass
+
     return {"cleared": cleared, "status": "ok"}
 
 

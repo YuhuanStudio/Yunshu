@@ -96,6 +96,12 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
 
+        # CORS preflight (OPTIONS) must pass through without auth —
+        # browsers send OPTIONS without Authorization headers, and the
+        # CORSMiddleware (inner) needs to respond before any auth check.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Check if auth is enabled
         if not self._is_auth_enabled():
             return await call_next(request)

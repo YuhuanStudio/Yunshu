@@ -951,6 +951,7 @@ async def _stream_anthropic(
                                         if text_block_started:
                                             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                             block_index += 1
+                                            text_block_started = False
                                         tool_use_block_started = True
                                         for tc in tool_calls:
                                             tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
@@ -1059,6 +1060,7 @@ async def _stream_anthropic(
                                     if text_block_started:
                                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                         block_index += 1
+                                        text_block_started = False
                                     tool_use_block_started = True
                                     for tc in tool_calls:
                                         tool_id = f"toolu_{uuid.uuid4().hex[:24]}"

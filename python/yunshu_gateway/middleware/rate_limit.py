@@ -172,6 +172,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(request.url.path.startswith(p) for p in self.PUBLIC_PREFIXES):
             return await call_next(request)
 
+        # CORS preflight (OPTIONS) must pass through without rate limiting —
+        # browsers send OPTIONS without Authorization headers, and the inner
+        # CORSMiddleware needs to respond first.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Apply rate limiting to WebSocket upgrade requests as well
         is_websocket = (
             request.headers.get("upgrade", "").lower() == "websocket"

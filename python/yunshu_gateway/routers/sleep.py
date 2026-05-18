@@ -66,6 +66,20 @@ async def sleep_server(req: SleepRequest, request: Request):
 
         if level >= 1 and engine:
             # L1: unload model weights but keep KV cache
+            # Safety: refuse L1 sleep if there are active requests that
+            # would crash when engine._model is set to None mid-generation.
+            # The sleep_guard middleware will reject new requests, but we
+            # must also check for in-flight requests here.
+            import yunshu_gateway.main as _main
+            if _main._active_requests > 0:
+                # Roll back sleep state
+                _sleeping = False
+                _sleep_level = -1
+                os.environ.pop("YUNSHU_SLEEPING", None)
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot sleep: {_main._active_requests} active requests in progress. Wait for them to complete or use force shutdown.",
+                )
             if engine.is_loaded:
                 # Release model weights from GPU
                 if hasattr(engine, '_model'):

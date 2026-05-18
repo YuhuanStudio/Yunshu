@@ -514,7 +514,13 @@ def create_app() -> FastAPI:
         allow_origins=cors_origins,
         allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
+        allow_headers=[
+            "Authorization", "Content-Type", "Accept", "X-Request-ID",
+            # Anthropic SDK headers
+            "anthropic-version", "anthropic-beta", "x-api-key",
+            # OpenAI SDK headers
+            "OpenAI-Organization", "OpenAI-Beta",
+        ],
     )
 
     # Gateway middleware (order: outermost first)

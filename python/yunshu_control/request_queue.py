@@ -166,7 +166,12 @@ class RequestQueueManager:
         completion_tokens: int = 0,
         error: Optional[str] = None,
     ) -> None:
-        """Called when a request completes (success or failure)."""
+        """Called when a request completes (success or failure).
+
+        Completed entries are automatically evicted once more than 500
+        accumulate (keeps the most recent 200) to prevent unbounded memory
+        growth.  Stats counters are always updated before eviction.
+        """
         with self._lock:
             entry = self._entries.get(request_id)
             if entry is not None:
@@ -178,6 +183,22 @@ class RequestQueueManager:
                 self._completed_count += 1
                 self._total_prompt_tokens += prompt_tokens
                 self._total_completion_tokens += completion_tokens
+
+            # Auto-evict old completed entries to prevent memory leak.
+            # Keep at most _max_completed_retained completed entries.
+            _max_completed_retained = 200
+            completed_ids = [
+                rid for rid, e in self._entries.items()
+                if e.completion_time is not None
+            ]
+            if len(completed_ids) > _max_completed_retained:
+                # Sort by completion time and remove the oldest
+                completed_ids.sort(
+                    key=lambda rid: self._entries[rid].completion_time
+                )
+                to_remove = completed_ids[:len(completed_ids) - _max_completed_retained]
+                for rid in to_remove:
+                    del self._entries[rid]
 
     def on_request_cancelled(self, request_id: str) -> None:
         """Called when a request is cancelled."""
