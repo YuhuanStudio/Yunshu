@@ -38,6 +38,8 @@ def _wired_limit_ctx(model):
     Follows mlx-lm's generate.py pattern: set limit to recommended max before
     generation, restore + synchronize after.
     """
+    mx = None
+    old_limit = None
     try:
         import mlx.core as mx
         max_rec = mx.metal.recommended_max_working_memory_size()
@@ -560,10 +562,10 @@ class BatchedEngine:
             return load_model(self.model_name, **kwargs)
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)
-        self._loaded = True
 
         try:
             await self._finish_start(loop, executor)
+            self._loaded = True
         except Exception:
             # Partial init: clean up model that was loaded but subsystems failed
             logger.error("BatchedEngine start failed after model load, cleaning up", exc_info=True)

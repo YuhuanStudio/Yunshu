@@ -108,10 +108,10 @@ class LoRAAdapterManager:
         logger.info("LoRA manager shut down, all adapters and base model released")
 
     def save_base_weights(self) -> None:
-        """Save a copy of base model weights before merging adapters."""
+        """Save a deep copy of base model weights before merging adapters."""
         if self._base_model is not None and self._base_model_copy is None:
             import mlx.core as mx
-            self._base_model_copy = mx.tree_map(lambda x: x, self._base_model.parameters())
+            self._base_model_copy = mx.tree_map(lambda x: mx.array(x), self._base_model.parameters())
 
     def register_adapter(
         self,
@@ -486,8 +486,9 @@ class LoRAAdapterManager:
 
         # Load adapter weights
         weights_path = adapter_path / "adapters.safetensors"
-        if weights_path.exists():
-            self._base_model.load_weights(str(weights_path), strict=False)
+        if not weights_path.exists():
+            raise FileNotFoundError(f"LoRA weights not found: {weights_path}")
+        self._base_model.load_weights(str(weights_path), strict=False)
 
     def _apply_lora_manual(self, entry: LoRAAdapterEntry, lora_params: dict, num_layers: int) -> None:
         """Fallback manual LoRA layer application when tuner utils unavailable."""

@@ -154,7 +154,7 @@ class MistralOutputParser(OutputParser):
     """Mistral/Codestral: Extract [THINK]...[/THINK] blocks."""
 
     _THINK_RE = re.compile(r"\[THINK\](.*?)\[/THINK\]", re.DOTALL)
-    _TOOL_RE = re.compile(r"\[TOOL_CALLS\](.*)", re.DOTALL)
+    _TOOL_RE = re.compile(r"\[TOOL_CALLS\](.*?)(?:\n\n|\Z)", re.DOTALL)
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
@@ -229,7 +229,7 @@ class LLamaOutputParser(OutputParser):
     """LLaMA 3/4: Extract <think/> blocks, strip tool call markers."""
 
     _THINK_RE = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
-    _TOOL_RE = re.compile(r"<\|python_tag\|>(.*)", re.DOTALL)
+    _TOOL_RE = re.compile(r"<\|python_tag\|>(.*?)(?:<\|/python_tag\>|$)", re.DOTALL)
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
