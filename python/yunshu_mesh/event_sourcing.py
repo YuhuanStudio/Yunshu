@@ -22,6 +22,7 @@ Event types:
 import json
 import logging
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -142,6 +143,7 @@ class EventLog:
         self._db_path = db_path or ":memory:"
         self._conn: sqlite3.Connection | None = None
         self._sequence: int = 0
+        self._lock = threading.Lock()
         self._stats = EventLogStats()
         # In-memory state reconstruction cache
         self._node_states: dict[str, NodeState] = {}
@@ -206,32 +208,31 @@ class EventLog:
         if not self._initialized:
             self.initialize()
 
-        self._sequence += 1
-        event = ClusterEvent(
-            event_type=event_type,
-            node_id=node_id,
-            payload=payload or {},
-            sequence=self._sequence,
-        )
+        with self._lock:
+            self._sequence += 1
+            event = ClusterEvent(
+                event_type=event_type,
+                node_id=node_id,
+                payload=payload or {},
+                sequence=self._sequence,
+            )
 
-        assert self._conn is not None
-        self._conn.execute(
-            "INSERT INTO events (sequence, event_id, event_type, timestamp, node_id, payload) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (event.sequence, event.event_id, event.event_type,
-             event.timestamp, event.node_id, json.dumps(event.payload)),
-        )
-        self._conn.commit()
+            assert self._conn is not None
+            self._conn.execute(
+                "INSERT INTO events (sequence, event_id, event_type, timestamp, node_id, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (event.sequence, event.event_id, event.event_type,
+                 event.timestamp, event.node_id, json.dumps(event.payload)),
+            )
+            self._conn.commit()
 
-        # Update stats
-        self._stats.total_events = self._sequence
-        self._stats.events_by_type[event_type] = (
-            self._stats.events_by_type.get(event_type, 0) + 1
-        )
-        self._stats.last_event_time = event.timestamp
+            self._stats.total_events = self._sequence
+            self._stats.events_by_type[event_type] = (
+                self._stats.events_by_type.get(event_type, 0) + 1
+            )
+            self._stats.last_event_time = event.timestamp
 
-        # Apply event to in-memory state
-        self._apply_event(event)
+            self._apply_event(event)
 
         return event
 
@@ -311,6 +312,8 @@ class EventLog:
         """
         if not self._initialized:
             self.initialize()
+
+        self._node_states.clear()
 
         # Find last snapshot
         snapshot_seq = self.get_last_snapshot()

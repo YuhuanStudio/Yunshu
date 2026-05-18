@@ -293,6 +293,8 @@ class CollectiveOps:
         elif op_name == "all_gather":
             return mx.distributed.all_gather(x, **kwargs)
         elif op_name == "send_recv":
+            if self.size <= 1:
+                return x
             rank = self.rank
             world = self.size
             dst = (rank + 1) % world

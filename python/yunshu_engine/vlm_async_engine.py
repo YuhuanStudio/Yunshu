@@ -55,14 +55,6 @@ class VLMRequestConfig:
     min_p: float = 0.0
     xtc_probability: float = 0.0
     xtc_threshold: float = 0.0
-    stop: list[str] = field(default_factory=list)
-    enable_thinking: bool | None = None
-    stream: bool = False
-    frequency_penalty: float = 0.0
-    presence_penalty: float = 0.0
-    logit_bias: dict[int, float] | None = None
-    json_schema: dict | str | None = None
-    tools: list[dict] | None = None
 
 
 @dataclass
@@ -295,7 +287,7 @@ class VLMAsyncEngineCore:
 
         text = result.get("text", "")
         ttft = (time.monotonic() - t0) * 1000
-        tokens = len(text) // 4 if text else 0
+        tokens = result.get("completion_tokens") or (len(text) // 4 if text else 0)
         self._stats["total_tokens_generated"] += tokens
 
         chunk = VLMStreamChunk(

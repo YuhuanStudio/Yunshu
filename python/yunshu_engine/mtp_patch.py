@@ -174,14 +174,14 @@ def _patch_text_model(q35: Any) -> None:
             ".pre_fc_norm_hidden.weight", ".pre_fc_norm_embedding.weight",
             "mtp.norm.weight",
         )
+        shifted_keys: set[str] = set()
         for k, v in list(weights.items()):
             if "conv1d.weight" in k and v.shape[-1] != 1:
                 weights[k] = v.moveaxis(2, 1)
             if should_shift_norm_weights and any(k.endswith(s) for s in norm_keys):
-                if v.ndim == 1 and not getattr(v, '_yunshu_shifted', False):
-                    shifted = v + 1.0
-                    shifted._yunshu_shifted = True
-                    weights[k] = shifted
+                if v.ndim == 1 and k not in shifted_keys:
+                    weights[k] = v + 1.0
+                    shifted_keys.add(k)
         return weights
 
     cls.__init__ = __init__

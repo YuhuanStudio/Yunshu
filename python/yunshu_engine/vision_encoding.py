@@ -682,10 +682,9 @@ class VisionEncoderFactory:
     @classmethod
     def _auto_detect(cls, model: Any, **kwargs) -> Optional[VisionEncoder]:
         """Auto-detect the right encoder by checking each encoder's supports_model."""
-        # Try specific encoders first (more specific = higher priority)
         for encoder_cls in [QwenVLEncoder, LLaVAEncoder]:
             try:
-                encoder = encoder_cls(**kwargs)
+                encoder = encoder_cls()
                 if encoder.supports_model(model):
                     logger.info(
                         "Vision encoder: auto-detected %s for model",

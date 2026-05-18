@@ -29,6 +29,7 @@ References:
 """
 
 import logging
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -396,7 +397,7 @@ class DFlashProposer:
             # Speculative sampling acceptance check
             if draft_logprobs is not None and i < len(draft_logprobs):
                 draft_lp = draft_logprobs[i]
-                ratio = min(1.0, target_lp - draft_lp)
+                ratio = min(1.0, math.exp(target_lp - draft_lp))
                 u = self._rng.random()
                 if u < ratio:
                     accepted_ids.append(draft_token)

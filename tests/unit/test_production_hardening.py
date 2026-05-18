@@ -596,17 +596,17 @@ class TestThinkingBudgetEnforcement:
     def test_budget_not_exceeded_within_limit(self):
         """Tokens within budget should not trigger force_stop."""
         proc = ThinkingBudgetProcessor(ThinkingBudgetConfig(max_thinking_tokens=100))
-        for i in range(100):
+        for i in range(99):
             result = proc.process_token("reasoning")
             assert result["force_stop"] is False
             assert result["budget_exceeded"] is False
 
-    def test_budget_exceeded_at_limit_plus_one(self):
-        """Token at budget+1 must trigger force_stop."""
+    def test_budget_exceeded_at_limit(self):
+        """Token at exactly max_thinking_tokens must trigger force_stop."""
         proc = ThinkingBudgetProcessor(ThinkingBudgetConfig(max_thinking_tokens=10))
-        for i in range(10):
+        for i in range(9):
             proc.process_token("reasoning")
-        # 11th token exceeds budget
+        # 10th token hits the budget
         result = proc.process_token("reasoning")
         assert result["force_stop"] is True
         assert result["budget_exceeded"] is True

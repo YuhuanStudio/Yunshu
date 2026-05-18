@@ -426,19 +426,16 @@ class KVSynchronizationService:
 
             peer_ids = list(self._peers.keys())
 
-        # In production: serialize and send over network
-        # For testing: we return the broadcast payload so tests can
-        # call receive_broadcast on peer services
-        self._last_broadcast = {
-            "source_node_id": self._local_node_id,
-            "hashes": {str(h): {
-                "block_hash": e.block_hash,
-                "block_ids": e.block_ids,
-                "model_name": e.model_name,
-                "num_tokens": e.num_tokens,
-            } for h, e in entries.items()},
-            "timestamp": time.time(),
-        }
+            self._last_broadcast = {
+                "source_node_id": self._local_node_id,
+                "hashes": {str(h): {
+                    "block_hash": e.block_hash,
+                    "block_ids": e.block_ids,
+                    "model_name": e.model_name,
+                    "num_tokens": e.num_tokens,
+                } for h, e in entries.items()},
+                "timestamp": time.time(),
+            }
 
         results: dict[str, bool] = {}
         for peer_id in peer_ids:

@@ -220,7 +220,7 @@ class DPLoadBalancer:
                     "last_success_time": health.last_success_time,
                     "avg_latency_ms": sum(lats) / len(lats) if lats else 0.0,
                     "p50_latency_ms": sorted(lats)[len(lats) // 2] if lats else 0.0,
-                    "p99_latency_ms": sorted(lats)[int(len(lats) * 0.99)] if lats else 0.0,
+                    "p99_latency_ms": sorted(lats)[min(int(len(lats) * 0.99), len(lats) - 1)] if lats else 0.0,
                     "sample_count": len(lats),
                 }
 
@@ -352,10 +352,6 @@ class DPRouterMiddleware(BaseHTTPMiddleware):
         # Store in request state so downstream code can access it
         request.state.dp_node_id = node_id
         request.state.dp_start_time = t0
-
-        # Record start on the router
-        if node_id is not None:
-            lb.record_start(node_id)
 
         # Process request
         try:

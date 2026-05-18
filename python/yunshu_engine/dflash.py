@@ -109,6 +109,9 @@ class BlockPlan:
     @classmethod
     def create(cls, width: int, height: int, block_size: int, overlap: int = 16) -> BlockPlan:
         """Create a block plan for the given image dimensions."""
+        if overlap >= block_size:
+            overlap = max(0, block_size - 1)
+        step = block_size - overlap
         blocks = []
         y = 0
         while y < height:
@@ -117,8 +120,8 @@ class BlockPlan:
                 x_end = min(x + block_size, width)
                 y_end = min(y + block_size, height)
                 blocks.append((x, y, x_end, y_end))
-                x += block_size - overlap
-            y += block_size - overlap
+                x += step
+            y += step
         return cls(
             image_width=width,
             image_height=height,

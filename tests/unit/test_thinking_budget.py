@@ -28,7 +28,6 @@ class TestThinkingBudgetProcessor:
         proc = ThinkingBudgetProcessor(ThinkingBudgetConfig(max_thinking_tokens=3))
         proc.process_token("reasoning")
         proc.process_token("reasoning")
-        proc.process_token("reasoning")
         result = proc.process_token("reasoning")
         assert result['force_stop'] is True
         assert result['budget_exceeded'] is True

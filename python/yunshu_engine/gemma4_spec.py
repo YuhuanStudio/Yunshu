@@ -332,36 +332,42 @@ class Gemma4SpecProposer:
         """
         draft_tokens: list[int] = []
 
-        # Try to get logits from the model's speculative layers
-        # The model may have a method to extract these, or we use the
-        # lm_head on intermediate hidden states
         lm_head = self._get_lm_head()
         if lm_head is None:
             return []
 
-        # Extract from each speculative layer's hidden state
-        # In a real Gemma4 model, intermediate layers have separate
-        # prediction heads or share the lm_head
-        for _ in range(n):
-            # Use the hidden state directly with the lm_head
-            # In practice, Gemma4 may route to specific layers
-            if hidden_states.ndim == 3:
-                hs = hidden_states[:, -1:, :]  # (batch, 1, hidden)
-            elif hidden_states.ndim == 2:
-                hs = hidden_states[-1:, :]  # (1, hidden)
-                hs = hs.reshape(1, 1, -1)
+        # Extract from each speculative layer index.
+        # Gemma4's built-in spec layers produce independent predictions at
+        # different depths — we advance through self._spec_layers so each
+        # draft position comes from a distinct speculative head.
+        spec_to_use = self._spec_layers[:n]
+
+        for layer_idx in spec_to_use:
+            # Gemma4 models expose per-layer hidden states through a
+            # dedicated method or store them as intermediate outputs.
+            # Fall back to the final hidden state when per-layer access
+            # is unavailable.
+            layer_hs = hidden_states
+            extract_fn = getattr(self._model, "get_layer_hidden", None)
+            if extract_fn is not None:
+                try:
+                    layer_hs = extract_fn(layer_idx)
+                except Exception:
+                    pass  # fall back to final hidden state
+
+            if layer_hs.ndim == 3:
+                hs = layer_hs[:, -1:, :]
+            elif layer_hs.ndim == 2:
+                hs = layer_hs[-1:, :].reshape(1, 1, -1)
             else:
-                hs = hidden_states.reshape(1, 1, -1)
+                hs = layer_hs.reshape(1, 1, -1)
 
-            # Project to logits and take argmax
-            logits = lm_head(hs)  # (batch, 1, vocab)
+            logits = lm_head(hs)
 
-            # Apply acceptance threshold
             if self._config.acceptance_threshold > 0:
                 probs = mx.softmax(logits, axis=-1)
                 max_prob = float(mx.max(probs).item())
                 if max_prob < self._config.acceptance_threshold:
-                    # Confidence too low, stop proposing
                     break
 
             token = int(mx.argmax(logits.reshape(-1)).item())

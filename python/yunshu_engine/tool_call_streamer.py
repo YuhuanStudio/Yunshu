@@ -96,7 +96,6 @@ class ToolCallStreamer:
         self._state = StreamState.TEXT
         self._buffer = ""
         self._json_buffer = ""  # Accumulated JSON inside tool call
-        self._tool_text_buffer = ""  # Text before first tool call
 
     @property
     def state(self) -> StreamState:
@@ -236,7 +235,7 @@ class ToolCallStreamer:
 
         # If buffer gets too long without >, it's not a valid tag
         if len(self._buffer) > self._flush_threshold:
-            text = "<tool_call" + self._buffer[:self._flush_threshold]
+            text = self._buffer[:self._flush_threshold]
             self._buffer = self._buffer[self._flush_threshold:]
             self._state = StreamState.TEXT
             results.append(StreamOutput(text=text, state=self._state))
@@ -402,4 +401,3 @@ class ToolCallStreamer:
         self._state = StreamState.TEXT
         self._buffer = ""
         self._json_buffer = ""
-        self._tool_text_buffer = ""

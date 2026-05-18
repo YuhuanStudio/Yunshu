@@ -105,6 +105,8 @@ class MeshTopology:
         """Get neighbor ranks based on topology type."""
         with self._lock:
             size = len(self._nodes)
+        if size == 0:
+            return []
         if self.topo_type == TopologyType.RING:
             return [
                 (rank - 1) % size,
@@ -153,6 +155,8 @@ class MeshTopology:
         """
         with self._lock:
             size = len(self._nodes)
+        if size == 0:
+            return []
         if self.topo_type == TopologyType.RING:
             # Ring reduce-scatter phase
             send_rank = (step + 1) % size

@@ -407,7 +407,8 @@ class GeminiToolCallParser(ToolCallParser):
             # Use string-aware brace counting
             candidate = _extract_brace_block(text, brace_start)
             if candidate is None:
-                break
+                idx = brace_start + 1
+                continue
             try:
                 data = json.loads(candidate)
                 name = data.get("name", "")

@@ -95,7 +95,7 @@ class ThinkingBudgetProcessor:
                 self._segment_start_count = self._thinking_token_count
             self._thinking_token_count += 1
 
-            if self._thinking_token_count > self.config.max_thinking_tokens:
+            if self._thinking_token_count >= self.config.max_thinking_tokens:
                 self._budget_exceeded = True
                 logger.debug(
                     f"Thinking budget exceeded: {self._thinking_token_count} > "

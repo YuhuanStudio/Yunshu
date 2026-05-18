@@ -121,8 +121,12 @@ class ProcessMemoryEnforcer:
             f"(+{_fmt_gb(overage)})"
         )
 
-        # Evict LRU models until under limit
-        while mx.get_active_memory() > self._max_bytes:
+        # Evict LRU models until under limit (max 10 iterations to avoid infinite loop)
+        max_eviction_rounds = 10
+        for _ in range(max_eviction_rounds):
+            if mx.get_active_memory() <= self._max_bytes:
+                break
+
             async with self._manager._lock:
                 victim = self._manager._find_lru_victim()
                 if victim is None:
@@ -153,9 +157,11 @@ class ProcessMemoryEnforcer:
                                 f"Aborting active requests on '{victim.model_id}' "
                                 f"due to memory pressure (model kept loaded)"
                             )
-                            if hasattr(victim.engine, '_abort_set'):
-                                for rid in list(victim.engine._active.keys()):
-                                    victim.engine._abort_set.add(rid)
+                            active_dict = getattr(victim.engine, '_active', None)
+                            abort_set = getattr(victim.engine, '_abort_set', None)
+                            if active_dict is not None and abort_set is not None:
+                                for rid in list(active_dict.keys()):
+                                    abort_set.add(rid)
                     break
 
             if victim_id:
