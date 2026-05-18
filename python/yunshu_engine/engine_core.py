@@ -1195,6 +1195,7 @@ class EngineCore:
             self._output_collectors[req_id].put(error_output)
             self._output_collectors[req_id].put(None)
             self._finished_events[req_id].set()
+            self._fail_dedup_shadows(req_id, f"Budget exceeded: {budget_reason}", budget_reason)
             return req_id
 
         # ── Wave 42: Request dedup ──
@@ -1344,6 +1345,8 @@ class EngineCore:
                 self._output_collectors[req_id].put(error_output)
                 self._output_collectors[req_id].put(None)  # sentinel
                 self._finished_events[req_id].set()
+                # Fail any dedup shadows waiting for this primary
+                self._fail_dedup_shadows(req_id, f"Memory guard rejected: {reason}", "memory_exceeded")
                 return req_id
 
         sampling_params = SamplingParams(
@@ -2245,6 +2248,33 @@ class EngineCore:
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._finalize_request(req_id)
+
+    def _fail_dedup_shadows(self, primary_id: str, error_msg: str, finish_reason: str = "error") -> None:
+        """Deliver error output to all dedup shadows of a failed primary request.
+
+        When a primary request is rejected before entering the scheduler (memory
+        guard, budget, etc.), its shadow requests have collectors but no output.
+        This method delivers error outputs to all of them so consumers don't hang.
+        """
+        from .request import RequestOutput
+        shadow_ids = [
+            sid for sid, pid in list(self._dedup_shadows.items())
+            if pid == primary_id
+        ]
+        for sid in shadow_ids:
+            collector = self._output_collectors.get(sid)
+            if collector is not None:
+                collector.put(RequestOutput(
+                    request_id=sid,
+                    finished=True,
+                    finish_reason=finish_reason,
+                    error=error_msg,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                ))
+                collector.put(None)
+            self._signal_finished(sid)
+            self._finalize_request(sid)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request state (consumer-side entry point).

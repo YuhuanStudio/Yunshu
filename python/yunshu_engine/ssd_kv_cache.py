@@ -623,21 +623,28 @@ class SSDKVCache:
 
         except Exception:
             logger.debug(f"SSD KV load failed for {hex_hash[:16]}", exc_info=True)
-            # Only prune if the file was fully written (file_size > 0).
-            # If file_size == 0, the background writer hasn't finished yet —
-            # deleting the entry would cause data loss.
+            # Prune stale entries: either file_size > 0 (corrupted/missing file)
+            # or file_size == 0 but old enough that the writer should have finished
+            # (prevents phantom entries where has_block() returns True but
+            # load_block() always returns None).
             with self._lock:
                 meta_now = self._index.get(hex_hash)
-                if meta_now is not None and meta_now.file_size > 0:
-                    # File was written but is corrupted — safe to prune
-                    self._index.pop(hex_hash, None)
-                    self._hot_cache.pop(hex_hash, None)
-                    self._sqlite_delete(hex_hash)
-                    try:
-                        if meta_now.file_path:
-                            os.unlink(meta_now.file_path)
-                    except OSError:
-                        pass
+                if meta_now is not None:
+                    if meta_now.file_size > 0:
+                        # File was written but is corrupted — safe to prune
+                        self._index.pop(hex_hash, None)
+                        self._hot_cache.pop(hex_hash, None)
+                        self._sqlite_delete(hex_hash)
+                        try:
+                            if meta_now.file_path:
+                                os.unlink(meta_now.file_path)
+                        except OSError:
+                            pass
+                    elif meta_now.created_at > 0 and (time.time() - meta_now.created_at) > 30:
+                        # file_size == 0 but entry is >30s old — writer failed/lost
+                        self._index.pop(hex_hash, None)
+                        self._hot_cache.pop(hex_hash, None)
+                        self._sqlite_delete(hex_hash)
             return None
 
     def has_block(self, block_hash: bytes) -> bool:

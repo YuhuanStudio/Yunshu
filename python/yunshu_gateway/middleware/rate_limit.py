@@ -12,6 +12,7 @@ unique-IP DoS. Configurable via environment:
 
 
 import os
+import threading
 import time
 from collections import OrderedDict
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -147,6 +148,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         )
         self._key_buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
         self._max_key_buckets = max_buckets
+        self._key_lock = threading.Lock()
         # Parse trusted proxies for X-Forwarded-For validation
         trusted_raw = os.environ.get("YUNSHU_TRUSTED_PROXIES", "").strip()
         self._trusted_proxies: set[str] = (
@@ -155,16 +157,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         )
 
     def _get_key_bucket(self, key_name: str, rpm: int) -> _TokenBucket:
-        if key_name in self._key_buckets:
-            if self._key_buckets[key_name].capacity != rpm:
-                self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
-            else:
-                self._key_buckets.move_to_end(key_name)
+        with self._key_lock:
+            if key_name in self._key_buckets:
+                if self._key_buckets[key_name].capacity != rpm:
+                    self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
+                else:
+                    self._key_buckets.move_to_end(key_name)
+                return self._key_buckets[key_name]
+            if len(self._key_buckets) >= self._max_key_buckets:
+                self._key_buckets.popitem(last=False)
+            self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
             return self._key_buckets[key_name]
-        if len(self._key_buckets) >= self._max_key_buckets:
-            self._key_buckets.popitem(last=False)
-        self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
-        return self._key_buckets[key_name]
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.PUBLIC_PATHS:

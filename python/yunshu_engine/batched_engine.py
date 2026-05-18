@@ -5698,6 +5698,11 @@ class BatchedEngine:
             stats["thinking_segment_store"] = self._thinking_store.get_stats()
         if self._adaptive_spec is not None:
             stats["adaptive_spec"] = self._adaptive_spec.get_stats()
+        if getattr(self, '_spec_decoder', None) is not None:
+            stats["spec_decode"] = {
+                **self._spec_decoder._stats,
+                "enabled": getattr(self, '_spec_enabled', False),
+            }
         if self._ngram_proposer is not None:
             stats["ngram"] = {**self._ngram_stats, **self._ngram_proposer.get_stats()}
         if self._mtp_decoder is not None:
