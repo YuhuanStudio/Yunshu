@@ -46,9 +46,9 @@ class DeepSeekOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         tool_text = None
@@ -76,9 +76,9 @@ class QwenOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         tool_text = None
@@ -101,9 +101,9 @@ class GemmaOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         return ParsedOutput(content=text, reasoning=reasoning)
@@ -119,9 +119,9 @@ class HarmonyOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        reason_match = self._REASON_RE.search(text)
-        if reason_match:
-            reasoning = reason_match.group(1).strip()
+        reason_matches = self._REASON_RE.findall(text)
+        if reason_matches:
+            reasoning = "\n".join(m.strip() for m in reason_matches if m.strip())
             text = self._REASON_RE.sub("", text).strip()
 
         return ParsedOutput(content=text, reasoning=reasoning)
@@ -138,9 +138,9 @@ class GLMOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         text = self._OBS_RE.sub("", text).strip()
@@ -154,13 +154,13 @@ class MistralOutputParser(OutputParser):
     """Mistral/Codestral: Extract [THINK]...[/THINK] blocks."""
 
     _THINK_RE = re.compile(r"\[THINK\](.*?)\[/THINK\]", re.DOTALL)
-    _TOOL_RE = re.compile(r"\[TOOL_CALLS\](.*?)$", re.DOTALL)
+    _TOOL_RE = re.compile(r"\[TOOL_CALLS\](.*)", re.DOTALL)
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         tool_text = None
@@ -183,9 +183,9 @@ class PhiOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         tool_text = None
@@ -208,9 +208,9 @@ class CohereOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         tool_text = None
@@ -229,13 +229,13 @@ class LLamaOutputParser(OutputParser):
     """LLaMA 3/4: Extract <think/> blocks, strip tool call markers."""
 
     _THINK_RE = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
-    _TOOL_RE = re.compile(r"<\|python_tag\|>(.*?)$", re.DOTALL)
+    _TOOL_RE = re.compile(r"<\|python_tag\|>(.*)", re.DOTALL)
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         tool_text = None
@@ -258,9 +258,9 @@ class InternVLOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         text = self._IMG_RE.sub("", text).strip()
@@ -278,9 +278,9 @@ class GenericOutputParser(OutputParser):
 
     def parse(self, text: str) -> ParsedOutput:
         reasoning = None
-        think_match = self._THINK_RE.search(text)
-        if think_match:
-            reasoning = think_match.group(1).strip()
+        think_matches = self._THINK_RE.findall(text)
+        if think_matches:
+            reasoning = "\n".join(m.strip() for m in think_matches if m.strip())
             text = self._THINK_RE.sub("", text).strip()
 
         return ParsedOutput(content=text, reasoning=reasoning)
