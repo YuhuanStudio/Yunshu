@@ -208,13 +208,13 @@ class MemoryGuard:
             # Model info not set — return a sensible default
             return 256
 
-        # Prefill peak cost
+        # Prefill peak cost (includes prompt_kv — do not subtract prompt_kv again)
         prefill_peak = self._monitor.estimate_prefill_peak_bytes(
             total_prompt_tokens=num_prompt_tokens,
             chunk_size=min(num_prompt_tokens, 2048),
         )
 
-        remaining = usable - prompt_kv - prefill_peak
+        remaining = usable - prefill_peak
         if remaining <= 0:
             return 0
 

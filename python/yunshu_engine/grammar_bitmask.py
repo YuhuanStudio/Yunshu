@@ -332,12 +332,13 @@ class BitmaskConstrainedSampler:
             masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
         else:
             bitmask = self._engine.compute_bitmask(self._tokenizer)
-            # If mask is all zeros (nothing allowed), don't mask — let model decide
             import mlx.core as mx
             if mx.any(bitmask).item():
                 masked_logits = self._applicator.apply(logits, bitmask)
             else:
-                masked_logits = logits
+                # Nothing is grammatically allowed — force EOS to avoid
+                # producing invalid output.
+                masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
 
         token = self._base_sampler(masked_logits)
 

@@ -610,6 +610,10 @@ class StopConfig:
     stop_strings: list[str] = field(default_factory=list)
     # For Aho-Corasick multi-pattern matching
     stop_string_trie: Any = None  # built by _build_stop_trie()
+    # Rolling token window for multi-token stop string detection.
+    # Must be at least as long as the longest stop string token pattern.
+    _token_window: list[int] = field(default_factory=list)
+    _max_window: int = 0
 
 
 @dataclass
@@ -653,6 +657,7 @@ class _AhoCorasickTrie:
         self._root = _AhoCorasickNode()
         self._patterns = patterns
         self._num_patterns = len(patterns)
+        self._max_pattern_len = max((len(seq) for seq, _ in patterns), default=0)
 
         # Build trie
         for token_seq, pidx in patterns:
@@ -800,9 +805,15 @@ class BatchStopChecker:
 
             # Check 4: Stop strings via Aho-Corasick (if configured)
             if config.stop_string_trie is not None:
-                matches = config.stop_string_trie.search(
-                    config._current_tokens if hasattr(config, '_current_tokens') else [tid]
-                )
+                # Maintain a rolling window of recent tokens for multi-token
+                # stop sequence matching. The window size matches the longest
+                # stop string pattern length.
+                if config._max_window == 0 and config.stop_string_trie._max_pattern_len > 0:
+                    config._max_window = config.stop_string_trie._max_pattern_len
+                config._token_window.append(tid)
+                if config._max_window > 0 and len(config._token_window) > config._max_window:
+                    config._token_window = config._token_window[-config._max_window:]
+                matches = config.stop_string_trie.search(config._token_window)
                 if matches:
                     # Find which pattern matched
                     matched_idx = matches[0]

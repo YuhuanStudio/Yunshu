@@ -191,7 +191,10 @@ class ServerMetrics:
         n = len(samples)
         self._itl_p50 = samples[n // 2]
         self._itl_p99 = samples[min(int(n * 0.99), n - 1)]
-        self._itl_samples = samples[-100:]  # Keep last 100 for rolling stats
+        # Keep the 100 most recent samples (not the largest).
+        # _itl_samples is appended chronologically, so the last 100 are
+        # the most recent — do NOT sort before slicing.
+        self._itl_samples = self._itl_samples[-100:]
 
     def get_itl_stats(self) -> dict[str, Any]:
         """Return ITL statistics (read-only — does not mutate sample buffer)."""
@@ -233,7 +236,8 @@ class ServerMetrics:
         n = len(samples)
         self._batch_size_p50 = samples[n // 2]
         self._batch_size_p99 = samples[min(int(n * 0.99), n - 1)]
-        self._batch_size_samples = samples[-100:]  # Keep last 100 for rolling stats
+        # Keep the 100 most recent samples (chronological order, not sorted).
+        self._batch_size_samples = self._batch_size_samples[-100:]
 
     def get_batch_size_stats(self) -> dict[str, Any]:
         """Return batch size distribution statistics (read-only — does not mutate sample buffer)."""

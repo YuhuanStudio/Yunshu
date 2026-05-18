@@ -106,7 +106,7 @@ class OverlapMetrics:
         self.gpu_time_ms += gpu_time_ms
         self.cpu_overlap_time_ms += cpu_overlap_time_ms
         self.cpu_only_time_ms += cpu_only_time_ms
-        self.gpu_only_time_ms += gpu_time_ms
+        self.gpu_only_time_ms += max(0.0, gpu_time_ms - cpu_overlap_time_ms)
         self.total_overlap_time_ms += cpu_overlap_time_ms
 
         if had_overlap:
