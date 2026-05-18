@@ -5,7 +5,6 @@ Maintains a registry of in-progress generations that can be cancelled
 via the /v1/cancel endpoint. Tracks request_id → cancellation Event mapping.
 """
 
-import asyncio
 import logging
 import threading
 import time
@@ -21,7 +20,7 @@ class ActiveGeneration:
     request_id: str
     model: str
     created_at: float
-    cancel_event: asyncio.Event
+    cancel_event: threading.Event
 
     @property
     def elapsed_s(self) -> float:
@@ -41,7 +40,7 @@ class RequestTracker:
             request_id=request_id,
             model=model,
             created_at=time.time(),
-            cancel_event=asyncio.Event(),
+            cancel_event=threading.Event(),
         )
         with self._lock:
             self._active[request_id] = gen

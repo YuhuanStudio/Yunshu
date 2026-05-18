@@ -71,9 +71,19 @@ class RegexConstraint:
             return set()
 
         # Try extending with each printable ASCII char + common whitespace
+        # + common Unicode ranges (CJK, Hangul, Hiragana/Katakana)
         valid = set()
         test_chars = [chr(i) for i in range(32, 127)]
         test_chars.extend(['\n', '\t', '\r'])
+        # CJK Unified Ideographs sample (common Chinese/Japanese characters)
+        for cp in range(0x4E00, 0x4E00 + 100):
+            test_chars.append(chr(cp))
+        # Hangul Syllables sample (Korean)
+        for cp in range(0xAC00, 0xAC00 + 50):
+            test_chars.append(chr(cp))
+        # Hiragana + Katakana sample (Japanese)
+        for cp in range(0x3040, 0x3040 + 30):
+            test_chars.append(chr(cp))
         total_tested = len(test_chars)
 
         for ch in test_chars:

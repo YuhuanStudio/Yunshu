@@ -339,14 +339,14 @@ class RequestLifecycleOrchestrator:
         if state is None:
             return None
 
-        # Only decrement if the request was in an active phase.
-        # Requests in REJECTED/RETRYING/QUEUED had their count already
-        # adjusted (or never incremented).
+        # Decrement if the request was in an active phase. Use max(0, ...)
+        # guard to prevent drift when scheduler bypasses the orchestrator
+        # and directly mutates req.status (dual state machines can diverge).
         was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
         state.completion_tokens = completion_tokens
         state.transition(RequestPhase.FINISHED)
         self._total_completed += 1
-        if was_active:
+        if was_active or self._active_count > 0:
             self._active_count = max(0, self._active_count - 1)
         self._model_counts[state.model]["completed"] += 1
 

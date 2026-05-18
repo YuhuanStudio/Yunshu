@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import threading
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from dataclasses import dataclass
@@ -297,7 +298,7 @@ class TestStreamingCancelEventPropagation:
         gen = tracker.register("test-req-1", "test-model")
 
         assert hasattr(gen, 'cancel_event')
-        assert isinstance(gen.cancel_event, asyncio.Event)
+        assert isinstance(gen.cancel_event, threading.Event)
         assert not gen.cancel_event.is_set()
 
         gen.cancel_event.set()
@@ -331,7 +332,7 @@ class TestStreamingCancelEventPropagation:
         gen = tracker.register("chatcmpl-test123", "test-model")
 
         assert gen.cancel_event is not None
-        assert isinstance(gen.cancel_event, asyncio.Event)
+        assert isinstance(gen.cancel_event, threading.Event)
 
         tracker.unregister("chatcmpl-test123")
 
@@ -362,7 +363,7 @@ class TestStreamingCancelEventPropagation:
         gen = tracker.register("cmpl-test456", "test-model")
 
         assert gen.cancel_event is not None
-        assert isinstance(gen.cancel_event, asyncio.Event)
+        assert isinstance(gen.cancel_event, threading.Event)
 
         tracker.unregister("cmpl-test456")
 
