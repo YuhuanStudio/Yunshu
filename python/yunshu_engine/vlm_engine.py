@@ -1829,6 +1829,14 @@ class VLMEngine:
                 if has_detokenizer:
                     remaining = detokenizer.finalize()
                     if remaining:
+                        # When a stop suffix was hit, the remaining text from
+                        # finalize() includes the suffix — trim it.
+                        if suffix_hit:
+                            for s in stop_suffixes:
+                                if remaining.endswith(s):
+                                    remaining = remaining[:-len(s)]
+                                    break
+                    if remaining:
                         queue.put_nowait(RequestOutput(
                             request_id=req_id,
                             new_text=remaining,
