@@ -756,6 +756,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             response_id, req.model,
             error_code="server_error",
             error_message="Insufficient GPU memory",
+            seq=_next_seq(),
         ).encode("utf-8")
         return
     except Exception as e:
@@ -775,6 +776,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             response_id, req.model,
             error_code="server_error",
             error_message=str(e)[:200],
+            seq=_next_seq(),
         ).encode("utf-8")
         return
     finally:

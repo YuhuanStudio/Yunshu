@@ -1934,7 +1934,7 @@ class BatchedEngine:
             # Try KV prefix cache hit
             prefix_cache = self._kv_prefix_cache
             # Proactive memory pressure eviction (vllm-mlx pattern)
-            if self._mem_pressure_threshold > 0:
+            if prefix_cache is not None and self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
                 # Also evict from paged KV manager when enabled
                 if self._kv_manager is not None:
@@ -1944,7 +1944,7 @@ class BatchedEngine:
                         )
                     except Exception:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
             cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             if cached_kv is not None:
                 cached_tokens = matched
@@ -2063,9 +2063,11 @@ class BatchedEngine:
                     spec_prefill_done = True
                 except Exception:
                     logger.warning("SpecPrefill failed, falling back to standard prefill", exc_info=True)
-                    if not tokens:
-                        cache = _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
-                        ids_to_prefill = ids
+                    tokens.clear()
+                    detokenizer.reset()
+                    cache = _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
+                    ids_to_prefill = ids
+                    first = True
 
             if not spec_prefill_done:
                 _timeout_deadline = gen_t0 + timeout_seconds
@@ -2960,7 +2962,7 @@ class BatchedEngine:
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
             # Proactive memory pressure eviction (vllm-mlx pattern)
-            if self._mem_pressure_threshold > 0:
+            if prefix_cache is not None and self._mem_pressure_threshold > 0:
                 prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
                 # Also evict from paged KV manager when enabled
                 if self._kv_manager is not None:
@@ -2970,7 +2972,7 @@ class BatchedEngine:
                         )
                     except Exception:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
             cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
             _stream_cached_tokens = matched
@@ -4360,7 +4362,8 @@ class BatchedEngine:
 
             # Prefill with KV prefix cache
             prefix_cache = self._kv_prefix_cache
-            prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
+            if prefix_cache is not None:
+                prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             # Also evict from paged KV manager when enabled
             if self._kv_manager is not None:
                 try:
@@ -4369,7 +4372,7 @@ class BatchedEngine:
                     )
                 except Exception:
                     logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
@@ -4744,7 +4747,8 @@ class BatchedEngine:
             all_token_ids = list(input_ids)
 
             prefix_cache = self._kv_prefix_cache
-            prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
+            if prefix_cache is not None:
+                prefix_cache.evict_under_pressure(self._mem_pressure_threshold)
             # Also evict from paged KV manager when enabled
             if self._kv_manager is not None:
                 try:
@@ -4753,7 +4757,7 @@ class BatchedEngine:
                     )
                 except Exception:
                     logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = prefix_cache.get(ids)
+            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 

@@ -172,7 +172,10 @@ async def run_with_disconnect_guard(
                 return None
         except Exception:
             logger.debug("is_disconnected() failed in disconnect guard", exc_info=True)
-    return task.result()
+    try:
+        return task.result()
+    except asyncio.CancelledError:
+        return None
 
 
 # ── Thinking Parser ──

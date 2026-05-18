@@ -312,6 +312,7 @@ class LCGHashPool:
         for i in range(self._capacity):
             self._keys[i] = 0
             self._values[i] = None
+        self._indexed_len = 0
 
     def get_stats(self) -> dict:
         occupied = sum(1 for k in self._keys if k != 0)

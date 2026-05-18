@@ -1761,7 +1761,9 @@ async def _stream_response_multi(
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx,
                             out.text, None,
+                            include_role=first_chunk_for_choice,
                         )
+                        first_chunk_for_choice = False
                     elif out.tool_call:
                         yield _format_tool_call_chunk_multi(
                             completion_id, req.model, choice_idx,
@@ -1847,7 +1849,10 @@ def _format_choice_chunk(
     delta: dict[str, Any] = {}
     if include_role:
         delta["role"] = "assistant"
-    delta["content"] = delta_content
+    if include_role and not delta_content:
+        delta["content"] = None
+    else:
+        delta["content"] = delta_content
     if thinking_content:
         delta["reasoning_content"] = thinking_content
     choice: dict[str, Any] = {
@@ -2172,7 +2177,9 @@ async def _stream_response(
                         completion_id=completion_id,
                         model=req.model,
                         delta_content=out.text,
+                        include_role=first_chunk,
                     )
+                    first_chunk = False
                 elif out.tool_call:
                     yield _format_tool_call_chunk(out.tool_call, tool_call_index, include_role=first_chunk)
                     tool_call_index += 1

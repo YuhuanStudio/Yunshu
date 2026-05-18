@@ -482,17 +482,18 @@ class EventLog:
 
     @property
     def stats(self) -> EventLogStats:
-        self._stats.nodes_tracked = len(self._node_states)
-        if self._initialized and self._conn:
-            try:
-                row = self._conn.execute(
-                    "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()"
-                ).fetchone()
-                if row:
-                    self._stats.log_size_bytes = row[0]
-            except Exception:
-                logger.debug("failed to query log size", exc_info=True)
-        return self._stats
+        with self._lock:
+            self._stats.nodes_tracked = len(self._node_states)
+            if self._initialized and self._conn:
+                try:
+                    row = self._conn.execute(
+                        "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()"
+                    ).fetchone()
+                    if row:
+                        self._stats.log_size_bytes = row[0]
+                except Exception:
+                    logger.debug("failed to query log size", exc_info=True)
+            return self._stats
 
     def get_stats(self) -> dict[str, Any]:
         """Return event log statistics."""

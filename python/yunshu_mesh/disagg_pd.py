@@ -479,27 +479,39 @@ class DisaggRouter:
 
     def get_stats(self) -> dict[str, Any]:
         """Return disaggregated serving statistics."""
-        self.compute_utilization()
-        return {
-            "config": self._config.to_dict(),
-            "nodes": {
-                nid: node.to_dict() for nid, node in self._nodes.items()
-            },
-            "pending_transfers": len(self.get_pending_transfers()),
-            "prefill_nodes": sum(
-                1 for n in self._nodes.values()
-                if n.role == NodeRole.PREFILL
-            ),
-            "decode_nodes": sum(
-                1 for n in self._nodes.values()
-                if n.role == NodeRole.DECODE
-            ),
-            "hybrid_nodes": sum(
-                1 for n in self._nodes.values()
-                if n.role == NodeRole.HYBRID
-            ),
-            "stats": self._stats.get_stats(),
-        }
+        with self._lock:
+            # Inline compute_utilization to avoid nested lock acquire
+            prefill_nodes = [n for n in self._nodes.values() if n.role == NodeRole.PREFILL]
+            decode_nodes = [n for n in self._nodes.values() if n.role == NodeRole.DECODE]
+            if prefill_nodes:
+                self._stats.prefill_node_utilization = sum(
+                    n.active_prefills for n in prefill_nodes
+                ) / len(prefill_nodes)
+            if decode_nodes:
+                self._stats.decode_node_utilization = sum(
+                    n.active_decodes for n in decode_nodes
+                ) / len(decode_nodes)
+            pending = [t for t in self._pending_transfers if t.status == "pending"]
+            return {
+                "config": self._config.to_dict(),
+                "nodes": {
+                    nid: node.to_dict() for nid, node in self._nodes.items()
+                },
+                "pending_transfers": len(pending),
+                "prefill_nodes": sum(
+                    1 for n in self._nodes.values()
+                    if n.role == NodeRole.PREFILL
+                ),
+                "decode_nodes": sum(
+                    1 for n in self._nodes.values()
+                    if n.role == NodeRole.DECODE
+                ),
+                "hybrid_nodes": sum(
+                    1 for n in self._nodes.values()
+                    if n.role == NodeRole.HYBRID
+                ),
+                "stats": self._stats.get_stats(),
+            }
 
     def reset(self) -> None:
         """Reset all stats."""

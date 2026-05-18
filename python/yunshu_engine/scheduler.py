@@ -1105,7 +1105,7 @@ class Scheduler:
 
             # 5. Process initial generation responses
             if gen_responses:
-                outputs = self._process_responses(gen_responses)
+                outputs.extend(self._process_responses(gen_responses))
 
             # 6. Run additional decode steps to get more tokens per step
             for _ in range(self.config.stream_interval):
@@ -3307,6 +3307,9 @@ class Scheduler:
                 # No tokens generated at start_pos yet — nothing to compare
                 recent_actual = []
             else:
+                # Fallback: take last n_draft tokens. This is incorrect when
+                # stream_interval > 0 (more than 1 token generated per step),
+                # but better than skipping verification entirely.
                 recent_actual = actual_tokens[-n_draft:] if n_draft > 0 else []
             n_compare = min(len(draft_ids), len(recent_actual))
 

@@ -26,13 +26,15 @@ class FakeOutput:
 
 class FakeReqOutput:
     def __init__(self, request_id="r1", finished=False, completion_tokens=1,
-                 prompt_tokens=10, spec_accepted=None, spec_proposer="ngram"):
+                 prompt_tokens=10, spec_accepted=None, spec_proposer="ngram",
+                 replica_id=0):
         self.request_id = request_id
         self.finished = finished
         self.completion_tokens = completion_tokens
         self.prompt_tokens = prompt_tokens
         self.spec_accepted = spec_accepted
         self.spec_proposer = spec_proposer
+        self.replica_id = replica_id
 
 
 class FakeScheduler:
@@ -275,7 +277,11 @@ class TestDataParallelMixin:
     def test_post_step_decrements_load(self):
         dp = DataParallelMixin(num_replicas=2)
         dp._replica_loads = {0: 3, 1: 2}
-        dp.post_step(None, FakeOutput())
+        # Only finished requests on replica 0 and 1 should decrement
+        dp.post_step(None, FakeOutput([
+            FakeReqOutput(finished=True, replica_id=0),
+            FakeReqOutput(finished=True, replica_id=1),
+        ]))
         assert dp._replica_loads[0] == 2
         assert dp._replica_loads[1] == 1
 

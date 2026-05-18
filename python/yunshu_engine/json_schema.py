@@ -266,10 +266,9 @@ class JsonSchemaConstraint:
             return chars
 
         if state == JsonState.NUMBER_FRACTION:
-            # After decimal point, digits, exponent, or terminate.
+            # After '.', at least one digit is REQUIRED before termination.
             chars = set(_DIGIT_CHARS)
             chars.update('eE')
-            chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
             return chars
 
         if state == JsonState.NUMBER_EXPONENT:

@@ -200,6 +200,9 @@ class KVCacheManager:
                 # nodes used by active requests.
                 self._radix_tree.inc_ref(matched_node)
                 if request_id is not None:
+                    old_node = self._request_nodes.get(request_id)
+                    if old_node is not None:
+                        self._radix_tree.dec_ref(old_node)
                     self._request_nodes[request_id] = matched_node
                 return self._build_table_from_match(
                     matched_blocks, num_matched_tokens, token_ids,
@@ -527,6 +530,12 @@ class KVCacheManager:
                 # only held by the prefix cache). Safe to recycle.
                 block.cache_only = False
                 self.block_pool.free_queue.append(block)
+            elif block.ref_count == 1 and block.block_hash is None:
+                # Block was prefix-cache-only with ref_count=1.
+                # Eviction cleared its hash above. Decrement and recycle.
+                block.ref_count = 0
+                block.cache_only = False
+                self.block_pool.free_queue.append(block)
             elif block.ref_count == 0:
                 # Already in free queue with stale hash — just clearing above is enough.
                 pass
@@ -604,6 +613,11 @@ class KVCacheManager:
             self.block_pool._evict_cached_block(block)
 
             if block.cache_only and block.ref_count == 0:
+                block.cache_only = False
+                self.block_pool.free_queue.append(block)
+                evicted += 1
+            elif block.ref_count == 1 and block.block_hash is None:
+                block.ref_count = 0
                 block.cache_only = False
                 self.block_pool.free_queue.append(block)
                 evicted += 1

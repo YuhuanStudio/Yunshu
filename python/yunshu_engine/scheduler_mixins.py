@@ -334,8 +334,14 @@ class DataParallelMixin(SchedulerMixin):
         pass
 
     def post_step(self, scheduler: Any, output: Any) -> None:
-        for replica_id in self._replica_loads:
-            self._replica_loads[replica_id] = max(0, self._replica_loads[replica_id] - 1)
+        if not output or not hasattr(output, 'outputs') or not output.outputs:
+            return
+        for o in output.outputs:
+            if getattr(o, 'finished', False):
+                replica_id = getattr(o, 'replica_id', 0)
+                self._replica_loads[replica_id] = max(
+                    0, self._replica_loads.get(replica_id, 0) - 1
+                )
 
     def on_add_request(self, scheduler: Any, request: Any) -> None:
         if self._num_replicas <= 1:
