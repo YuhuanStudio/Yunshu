@@ -380,6 +380,8 @@ async def _stream_completion(
     async def _stream_choice(choice_idx: int):
         nonlocal prompt_tok, completion_tok, cached_tok
         choice_finish_reason = None
+        # Per-choice text offset tracker for logprobs text_offset field
+        _choice_text_offset = 0
         if req.echo:
             yield format_openai_completion_chunk(
                 completion_id=completion_id,
@@ -431,7 +433,9 @@ async def _stream_completion(
                 # Format logprobs for this token if present
                 _chunk_logprobs = None
                 if output.logprobs:
-                    _chunk_logprobs = _format_streaming_logprobs(output.logprobs)
+                    _chunk_logprobs, _choice_text_offset = _format_streaming_logprobs(
+                        output.logprobs, text_offset_start=_choice_text_offset,
+                    )
                 yield format_openai_completion_chunk(
                     completion_id=completion_id,
                     model=req.model,
@@ -475,7 +479,11 @@ async def _stream_completion(
                     completion_tok += 1
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
-                _chunk_lp = _format_streaming_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
+                _chunk_lp = None
+                if req.logprobs and hasattr(output, 'logprobs'):
+                    _chunk_lp, _choice_text_offset = _format_streaming_logprobs(
+                        output.logprobs, text_offset_start=_choice_text_offset,
+                    )
                 yield format_openai_completion_chunk(
                     completion_id=completion_id,
                     model=req.model,
@@ -563,6 +571,8 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
         return None
 
     token_logprobs = []
+    text_offsets = []
+    _offset = 0
     if isinstance(raw_logprobs, (list, tuple)):
         for lp_entry in raw_logprobs:
             if isinstance(lp_entry, dict):
@@ -588,6 +598,8 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                     "bytes": list(token_str.encode("utf-8")) if token_str else [],
                     "top_logprobs": decoded_top,
                 })
+                text_offsets.append(_offset)
+                _offset += len(token_str)
             elif isinstance(lp_entry, (int, float)):
                 token_logprobs.append({
                     "token": "",
@@ -595,6 +607,7 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                     "bytes": [],
                     "top_logprobs": [],
                 })
+                text_offsets.append(_offset)
 
     if not token_logprobs:
         return None
@@ -603,18 +616,29 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
         "tokens": [e["token"] for e in token_logprobs],
         "token_logprobs": [e["logprob"] for e in token_logprobs],
         "top_logprobs": [e["top_logprobs"] for e in token_logprobs],
+        "text_offset": text_offsets,
     }
 
 
-def _format_streaming_logprobs(logprobs_list: list[dict]) -> dict | None:
+def _format_streaming_logprobs(
+    logprobs_list: list[dict],
+    *,
+    text_offset_start: int = 0,
+) -> tuple[dict | None, int]:
     """Format per-token logprobs from streaming GenerationOutput into OpenAI Completions format.
 
     In streaming mode, each GenerationOutput has at most 1 logprob entry.
-    Returns the single-token logprobs dict in OpenAI completions format, or None.
+    Returns (logprobs_dict, new_text_offset) where new_text_offset is the
+    running offset to pass into the next call.
+
+    Per the OpenAI Completions API, logprobs must include ``text_offset``
+    (character offset of each token in the output text).
     """
     if not logprobs_list:
-        return None
+        return None, text_offset_start
     entries = []
+    offsets = []
+    _offset = text_offset_start
     for lp_entry in logprobs_list:
         if not isinstance(lp_entry, dict):
             continue
@@ -635,10 +659,13 @@ def _format_streaming_logprobs(logprobs_list: list[dict]) -> dict | None:
             "bytes": list(token_str.encode("utf-8")) if token_str else [],
             "top_logprobs": decoded_top,
         })
+        offsets.append(_offset)
+        _offset += len(token_str)
     if not entries:
-        return None
+        return None, text_offset_start
     return {
         "tokens": [e["token"] for e in entries],
         "token_logprobs": [e["logprob"] for e in entries],
         "top_logprobs": [e["top_logprobs"] for e in entries],
-    }
+        "text_offset": offsets,
+    }, _offset

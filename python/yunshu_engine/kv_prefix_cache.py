@@ -432,45 +432,62 @@ class KVPrefixCache:
     ) -> tuple[int, int]:
         """Find longest prefix match using hash-chain index.
 
+        Optimised to avoid O(n*k) full-chain verification on every block.
+        Instead, maintains a candidate set that is narrowed at each step:
+        after processing query block i, only entries whose block i matches
+        are retained as candidates for block i+1.  This gives O(total_matches)
+        instead of O(n * k).
+
         Returns (entry_index, matched_blocks).
         """
-        best_entry = -1
-        best_blocks = 0
+        if not query_blocks:
+            return -1, 0
 
-        for qi, qhash in enumerate(query_blocks):
+        # Seed candidates from the first query block's prefix_index entries.
+        first_hash = query_blocks[0]
+        if first_hash not in self._prefix_index:
+            return -1, 0
+
+        # candidate_entry -> number of consecutive matching blocks (from 0)
+        candidates: dict[int, int] = {}
+        for entry_idx, block_idx in self._prefix_index[first_hash]:
+            if block_idx == 0:
+                candidates[entry_idx] = 1
+
+        if not candidates:
+            return -1, 0
+
+        # Extend the chain one block at a time, pruning entries that
+        # diverge from the query.
+        for qi in range(1, len(query_blocks)):
+            qhash = query_blocks[qi]
             if qhash not in self._prefix_index:
-                break  # Chain broken — no further blocks can match
-            found_at_position = False
-            for entry_idx, block_idx in self._prefix_index[qhash]:
-                if block_idx != qi:
-                    continue  # Not at the right position in the chain
-                # Verify chain continuity: all previous blocks must match
-                if qi == 0:
-                    # First block matches — record it
-                    matched = qi + 1
-                    if matched > best_blocks:
-                        best_entry = entry_idx
-                        best_blocks = matched
-                    found_at_position = True
-                else:
-                    # Check if all previous blocks also match
-                    entry_hashes = self._block_hashes[entry_idx]
-                    if len(entry_hashes) > qi:
-                        chain_match = all(
-                            entry_hashes[j] == query_blocks[j]
-                            for j in range(qi + 1)
-                        )
-                        if chain_match:
-                            matched = qi + 1
-                            if matched > best_blocks:
-                                best_entry = entry_idx
-                                best_blocks = matched
-                            found_at_position = True
-            if not found_at_position:
-                # No entry has this hash at the correct chain position,
-                # so no longer prefix can match.  Break for all qi >= 0.
                 break
 
+            # Build a lookup: entry_idx -> True for entries that have this
+            # hash at position qi.
+            entries_at_qi: set[int] = set()
+            for entry_idx, block_idx in self._prefix_index[qhash]:
+                if block_idx == qi:
+                    entries_at_qi.add(entry_idx)
+
+            # Retain only candidates that also match at position qi.
+            surviving: dict[int, int] = {}
+            for entry_idx, matched in candidates.items():
+                if entry_idx in entries_at_qi:
+                    surviving[entry_idx] = matched + 1
+            if not surviving:
+                break
+            candidates = surviving
+
+        if not candidates:
+            # Only the first block matched (from the seeding step).
+            # Pick any entry with 1 matched block.
+            best_entry = next(iter(candidates)) if candidates else -1
+            return best_entry, 1
+
+        # Return the entry with the longest match.
+        best_entry, best_blocks = max(candidates.items(), key=lambda x: x[1])
         return best_entry, best_blocks
 
     def _snapshot_cache(self, cache: list, trim: int = 0) -> list:

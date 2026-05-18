@@ -10,6 +10,7 @@ that supports:
 """
 
 
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -350,26 +351,45 @@ class RadixTree:
         After eviction, merges parent nodes that end up with a single child
         and ref_count == 0 (post-split compaction).
 
+        Optimisation: uses heapq for O(n log n) selection instead of full sort
+        and filters ref_count > 0 before sorting to avoid wasted comparisons.
+
         Returns:
             List of freed KV blocks.
         """
+        import heapq
+
         freed_blocks: list[KVBlock] = []
         evicted = 0
 
-        # Collect all evictable leaves (ref_count == 0, not root)
+        # Collect only evictable leaves (ref_count == 0, leaf, not root)
         leaves = self._collect_evictable_leaves()
-        # Sort by chosen strategy
-        if self._eviction_strategy == "lfu":
-            leaves.sort(key=lambda n: n.access_count)
-        elif self._eviction_strategy == "fifo":
-            leaves.sort(key=lambda n: n.creation_time)
-        else:  # lru (default)
-            leaves.sort(key=lambda n: n.last_access_time)
 
-        for leaf in leaves:
-            if evicted >= n_nodes:
-                break
+        # Early exit when nothing to evict
+        if not leaves:
+            return freed_blocks
+
+        # Build a min-heap keyed by the eviction strategy metric so we
+        # only pop as many entries as we actually need, avoiding a full sort
+        # of potentially thousands of leaves.
+        if self._eviction_strategy == "lfu":
+            heap = [(n.access_count, id(n), n) for n in leaves]
+        elif self._eviction_strategy == "fifo":
+            heap = [(n.creation_time, id(n), n) for n in leaves]
+        else:  # lru (default)
+            heap = [(n.last_access_time, id(n), n) for n in leaves]
+
+        heapq.heapify(heap)
+
+        while heap and evicted < n_nodes:
+            _key, _tid, leaf = heapq.heappop(heap)
+            # Re-check ref_count — it may have changed since collection
+            # (e.g., another inc_ref happened between collection and eviction).
             if leaf.ref_count > 0:
+                continue
+
+            # Double-check it's still a leaf (merge may have changed children).
+            if not leaf.is_leaf or leaf.is_root:
                 continue
 
             freed_blocks.extend(leaf.blocks)
@@ -430,11 +450,11 @@ class RadixTree:
         self._total_nodes -= 1
 
     def _collect_evictable_leaves(self) -> list[RadixNode]:
-        """Collect all leaf nodes (no children, not root)."""
+        """Collect leaf nodes eligible for eviction (no children, not root, ref_count == 0)."""
         leaves = []
 
         def _walk(node: RadixNode) -> None:
-            if node.is_leaf and not node.is_root:
+            if node.is_leaf and not node.is_root and node.ref_count == 0:
                 leaves.append(node)
             for child in node.children.values():
                 _walk(child)
@@ -478,6 +498,4 @@ class RadixTree:
 
 
 def _now() -> float:
-    import time
-
     return time.monotonic()

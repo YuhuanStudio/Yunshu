@@ -1044,9 +1044,11 @@ def format_responses_completed(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
-        "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
-        "input_tokens_details": {"cached_tokens": cached_tokens},
     }
+    if reasoning_tokens > 0:
+        usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    if cached_tokens > 0:
+        usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
     completed_at = int(time.time())
     resp = _responses_base_response(
         response_id, model,

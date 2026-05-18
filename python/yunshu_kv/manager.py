@@ -424,8 +424,10 @@ class KVCacheManager:
            cache (no active request). These can be freed to yield new
            free blocks.
         2. Blocks with ref_count==0 and block_hash: already in the free
-           queue — just clear stale hash entries (no new free blocks).
-        3. Blocks with ref_count>1: actively shared — cannot evict.
+           queue -- just clear stale hash entries (no new free blocks).
+        3. Blocks with ref_count>1: actively shared -- cannot evict.
+
+        Eviction order: LRU by last_access_time (oldest first).
 
         If a warm tier is configured, evicted blocks are demoted to 4-bit
         quantized storage instead of being lost entirely.
@@ -436,14 +438,18 @@ class KVCacheManager:
         initial_free = self.block_pool.get_free_block_count()
 
         cached = self.block_pool.get_cached_blocks()
-        for block in list(cached):
+        # Sort by last_access_time (LRU: oldest first) for deterministic
+        # eviction order instead of arbitrary dict iteration.
+        cached.sort(key=lambda b: b.last_access_time)
+
+        for block in cached:
             if block.block_hash is None:
                 continue
             if self.block_pool.get_free_block_count() >= needed_blocks:
                 break
 
             if block.ref_count > 1:
-                # Actively shared by multiple requests — cannot evict
+                # Actively shared by multiple requests -- cannot evict
                 continue
 
             # Demote to warm tier (if we have KV data to compress)
@@ -464,7 +470,7 @@ class KVCacheManager:
                 # free queue, yielding a genuinely new free block.
                 self.block_pool.free([block])
             # else ref_count == 0: already in the free queue; just clearing
-            # the stale hash above is sufficient — no new free block gained.
+            # the stale hash above is sufficient -- no new free block gained.
 
         return self.block_pool.get_free_block_count() >= needed_blocks
 
@@ -474,6 +480,8 @@ class KVCacheManager:
         Called by the scheduler periodically. When usage exceeds the
         threshold, evicts the oldest (LRU) cached blocks to bring
         usage below the threshold.
+
+        Eviction order: LRU by last_access_time (oldest first).
 
         Args:
             pressure_threshold: Eviction triggers when usage exceeds this (0.0-1.0).
@@ -496,6 +504,10 @@ class KVCacheManager:
 
         evicted = 0
         cached = self.block_pool.get_cached_blocks()
+        # Sort by last_access_time (LRU: oldest first) for deterministic
+        # eviction order instead of arbitrary dict iteration.
+        cached.sort(key=lambda b: b.last_access_time)
+
         for block in cached:
             if evicted >= blocks_to_free:
                 break
@@ -503,7 +515,7 @@ class KVCacheManager:
                 continue
 
             if block.ref_count > 1:
-                # Actively shared by multiple requests — cannot evict
+                # Actively shared by multiple requests -- cannot evict
                 continue
 
             # Demote to warm tier if available
@@ -517,7 +529,7 @@ class KVCacheManager:
             self.block_pool._evict_cached_block(block)
 
             if block.ref_count == 1:
-                # Only in prefix cache — free() yields a new free block
+                # Only in prefix cache -- free() yields a new free block
                 self.block_pool.free([block])
                 evicted += 1
             # else ref_count == 0: already free; clearing stale hash only

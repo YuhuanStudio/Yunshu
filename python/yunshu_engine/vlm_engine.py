@@ -647,6 +647,8 @@ class VLMEngine:
                     logger.debug("operation failed", exc_info=True)
                     think_start_id = think_end_id = None
 
+                _stop_hit = False
+                _budget_hit = False
                 for token_id, _ in generate_step(
                     input_ids, self._model,
                     max_tokens=max_tokens,
@@ -662,19 +664,21 @@ class VLMEngine:
                             if token_id == think_end_id:
                                 _in_thinking = False
                     if token_id in stop_ids:
+                        _stop_hit = True
                         break
                     # Thinking budget enforcement — cap thinking tokens, not total tokens
                     if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
+                        _budget_hit = True
                         break
 
-                # Return (decoded_text, thinking_tokens, total_token_count).
+                # Return (decoded_text, thinking_tokens, total_token_count, stop_hit, budget_hit).
                 # total_token_count includes the stop token if present.
                 _decoded = self._tokenizer.decode(tokens, skip_special_tokens=True)
-                return _decoded, _thinking_tokens, len(tokens)
+                return _decoded, _thinking_tokens, len(tokens), _stop_hit, _budget_hit
 
             loop = asyncio.get_running_loop()
             try:
-                result, reasoning_tokens, completion_token_count = await loop.run_in_executor(self._executor, _generate_sync)
+                result, reasoning_tokens, completion_token_count, stop_hit, budget_hit = await loop.run_in_executor(self._executor, _generate_sync)
             except Exception:
                 self._active_count -= 1
                 self._num_requests_processed += 1
@@ -687,9 +691,16 @@ class VLMEngine:
 
             prompt_text = self._format_prompt(messages)
             prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
+            # Determine correct finish_reason based on exit condition
+            if stop_hit:
+                _finish_reason = "stop"
+            elif budget_hit:
+                _finish_reason = "stop"
+            else:
+                _finish_reason = "length"
             return {
                 "text": result,
-                "finish_reason": "stop",
+                "finish_reason": _finish_reason,
                 "model": self.model_name,
                 "created": int(time.time()),
                 "reasoning_tokens": reasoning_tokens,
@@ -1157,6 +1168,10 @@ class VLMEngine:
             except Exception:
                 logger.warning("KV prefix state management failed", exc_info=True)
 
+        # Check for stop sequence presence BEFORE trimming
+        _raw_text = result.text if hasattr(result, 'text') else str(result)
+        _stop_hit = bool(stop and any(s in _raw_text for s in stop))
+
         # Trim output at stop sequences if provided
         if stop and isinstance(result, str):
             for s in stop:
@@ -1171,11 +1186,11 @@ class VLMEngine:
             if delta is not None:
                 logger.debug(f"mRoPE delta captured: {delta:.4f}")
 
-        # Return 3-tuple: (text, thinking_tokens, token_count)
+        # Return 5-tuple: (text, thinking_tokens, token_count, stop_hit, budget_hit)
         _result_text = result.text if hasattr(result, 'text') else str(result)
         # vlm_generate doesn't expose raw token list, estimate from text
         _est_tokens = len(self._tokenizer.encode(_result_text)) if _result_text and self._tokenizer else 0
-        return _result_text, 0, _est_tokens
+        return _result_text, 0, _est_tokens, _stop_hit, False
 
     # ── VLM text generation (for mlx-vlm models) ──
 
@@ -1277,10 +1292,12 @@ class VLMEngine:
 
             tokens = [current.item()]
             if current.item() in stop_ids:
-                return self._tokenizer.decode(tokens, skip_special_tokens=True), 0, len(tokens)
+                return self._tokenizer.decode(tokens, skip_special_tokens=True), 0, len(tokens), True, False
 
             _in_thinking = False
             _thinking_tokens = 0
+            _stop_hit = False
+            _budget_hit = False
             try:
                 think_start_id = self._tokenizer.encode("<think")[-1]
                 think_end_id = self._tokenizer.encode("</think")[-1]
@@ -1331,11 +1348,13 @@ class VLMEngine:
                             _in_thinking = False
                 # Thinking budget enforcement — cap thinking tokens
                 if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
+                    _budget_hit = True
                     break
                 if tok_id in stop_ids:
+                    _stop_hit = True
                     break
 
-        return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens, len(tokens)
+        return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens, len(tokens), _stop_hit, _budget_hit
 
     def _stream_vlm_vision(
         self,
@@ -1400,6 +1419,13 @@ class VLMEngine:
         stop_suffixes = stop or []
         token_count = 0
         accumulated = ""  # Accumulate text for multi-token stop suffix matching
+        _num_prompt_tokens = 0
+        # Estimate prompt tokens for output metadata
+        if self._tokenizer is not None:
+            try:
+                _num_prompt_tokens = len(self._tokenizer.encode(prompt))
+            except Exception:
+                logger.debug("prompt token estimation failed in stream_vlm_vision", exc_info=True)
         try:
             stream_kwargs: dict = {
                 "max_tokens": max_tokens,
@@ -1431,6 +1457,7 @@ class VLMEngine:
                         finish_reason="cancel",
                         finished=True,
                         completion_tokens=token_count,
+                        prompt_tokens=_num_prompt_tokens,
                     ))
                     return
                 token_count += 1
@@ -1457,6 +1484,7 @@ class VLMEngine:
                     finish_reason=finish_reason,
                     finished=finish_reason is not None,
                     completion_tokens=token_count,
+                    prompt_tokens=_num_prompt_tokens,
                 ))
                 if finish_reason:
                     return
@@ -1494,6 +1522,7 @@ class VLMEngine:
                 finish_reason="error",
                 finished=True,
                 completion_tokens=token_count,
+                prompt_tokens=_num_prompt_tokens,
                 error=str(e),
             ))
 
@@ -1582,6 +1611,8 @@ class VLMEngine:
             detokenizer = self._tokenizer.detokenizer
             detokenizer.reset()
 
+        _num_prompt_tokens = len(input_ids)
+
         # Prefill
         output = lm(input_ids[None], cache=cache)
         logits = output.logits[:, -1, :]
@@ -1620,6 +1651,7 @@ class VLMEngine:
             finish_reason=finish_reason,
             finished=finish_reason is not None,
             completion_tokens=token_count,
+            prompt_tokens=_num_prompt_tokens,
             current_state=_state,
         ))
         if finish_reason:
@@ -1638,6 +1670,7 @@ class VLMEngine:
                             new_text=remaining,
                             finish_reason=None,
                             finished=False,
+                            prompt_tokens=_num_prompt_tokens,
                         ))
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
@@ -1645,6 +1678,7 @@ class VLMEngine:
                     finish_reason="cancel",
                     finished=True,
                     completion_tokens=token_count,
+                    prompt_tokens=_num_prompt_tokens,
                 ))
                 return
             output = lm(current[None], cache=cache)
@@ -1700,6 +1734,7 @@ class VLMEngine:
                             finish_reason=None,
                             finished=False,
                             current_state=_state,
+                            prompt_tokens=_num_prompt_tokens,
                         ))
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
@@ -1708,6 +1743,7 @@ class VLMEngine:
                     finished=True,
                     completion_tokens=token_count,
                     current_state=_state,
+                    prompt_tokens=_num_prompt_tokens,
                 ))
                 return
             is_eos = token_id in stop_ids
@@ -1740,6 +1776,7 @@ class VLMEngine:
                 finish_reason=finish_reason,
                 finished=finish_reason is not None,
                 completion_tokens=token_count,
+                prompt_tokens=_num_prompt_tokens,
                 current_state=_state,
             ))
 
@@ -1752,6 +1789,7 @@ class VLMEngine:
                             new_text=remaining,
                             finish_reason=None,
                             finished=False,
+                            prompt_tokens=_num_prompt_tokens,
                         ))
                 return
 
@@ -1764,6 +1802,7 @@ class VLMEngine:
                       new_text=remaining,
                       finish_reason=None,
                       finished=False,
+                      prompt_tokens=_num_prompt_tokens,
                   ))
           queue.put_nowait(RequestOutput(
               request_id=req_id,
@@ -1771,6 +1810,7 @@ class VLMEngine:
               finish_reason="length",
               finished=True,
               completion_tokens=token_count,
+              prompt_tokens=_num_prompt_tokens,
           ))
         except Exception as e:
             logger.error(f"VLM text streaming error: {e}", exc_info=True)
@@ -1784,6 +1824,7 @@ class VLMEngine:
                             new_text=remaining,
                             finish_reason=None,
                             finished=False,
+                            prompt_tokens=_num_prompt_tokens,
                         ))
                 except Exception:
                     logger.debug("detokenizer finalize in error handler failed", exc_info=True)
@@ -1793,6 +1834,7 @@ class VLMEngine:
                 finish_reason="error",
                 finished=True,
                 error=str(e),
+                prompt_tokens=_num_prompt_tokens,
             ))
 
     # ── Prompt Formatting ──

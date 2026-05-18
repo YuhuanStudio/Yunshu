@@ -130,30 +130,7 @@ class PagedScheduler(Scheduler):
             req_id = req_output.request_id
 
             if req_output.finished:
-                table = self._block_tables.pop(req_id, None)
-                if table is not None:
-                    req = self.requests.get(req_id)
-                    if req is not None:
-                        prompt_ids = req.prompt_token_ids or []
-                        output_ids = list(req.output_token_ids) if hasattr(req, 'output_token_ids') else []
-                        all_tokens = prompt_ids + output_ids
-                        if all_tokens:
-                            self._kv_manager.cache_completed_blocks(table, all_tokens)
-                            # Insert completed blocks into RadixTree for O(k) prefix matching.
-                            # Only pass blocks that have a hash — uncached blocks would
-                            # misalign with the hashes list since they are filtered.
-                            blocks = table.get_blocks()
-                            cached_blocks = []
-                            cached_hashes = []
-                            for b in blocks:
-                                if b.block_hash is not None:
-                                    cached_blocks.append(b)
-                                    cached_hashes.append(b.block_hash)
-                            if cached_hashes:
-                                self._kv_manager.cache_to_radix_tree(
-                                    all_tokens, cached_blocks, cached_hashes,
-                                )
-                    self._kv_manager.free_request(table)
+                self._finalize_request_blocks(req_id)
             else:
                 req = self.requests.get(req_id)
                 if req is not None:
@@ -174,33 +151,45 @@ class PagedScheduler(Scheduler):
                                 logger.warning(f"KV cache exhausted for request {req_id}")
                                 self.abort_request(req_id)
 
+    def _finalize_request_blocks(self, req_id: str) -> None:
+        """Cache completed blocks and free the block table for a finished request.
+
+        Extracted from _manage_kv_cache and _cleanup_finished to avoid
+        duplication.  Safe to call multiple times — the second call is a
+        no-op because _block_tables.pop returns None.
+        """
+        table = self._block_tables.pop(req_id, None)
+        if table is None:
+            return
+        req = self.requests.get(req_id)
+        if req is not None:
+            prompt_ids = req.prompt_token_ids or []
+            output_ids = list(req.output_token_ids) if hasattr(req, 'output_token_ids') else []
+            all_tokens = prompt_ids + output_ids
+            if all_tokens:
+                self._kv_manager.cache_completed_blocks(table, all_tokens)
+                # Insert completed blocks into RadixTree for O(k) prefix matching.
+                # Only pass blocks that have a hash -- uncached blocks would
+                # misalign with the hashes list since they are filtered.
+                blocks = table.get_blocks()
+                cached_blocks = []
+                cached_hashes = []
+                for b in blocks:
+                    if b.block_hash is not None:
+                        cached_blocks.append(b)
+                        cached_hashes.append(b.block_hash)
+                if cached_hashes:
+                    self._kv_manager.cache_to_radix_tree(
+                        all_tokens, cached_blocks, cached_hashes,
+                    )
+        self._kv_manager.free_request(table)
+
     def _cleanup_finished(self) -> None:
         if self._kv_manager is not None:
             for req_id in list(self.running.keys()):
                 req = self.running[req_id]
                 if RequestStatus.is_finished(req.status):
-                    table = self._block_tables.pop(req_id, None)
-                    if table is not None:
-                        # Cache completed blocks into prefix cache and
-                        # radix tree BEFORE freeing, so that future
-                        # requests can reuse the prefix.
-                        prompt_ids = req.prompt_token_ids or []
-                        output_ids = list(req.output_token_ids) if hasattr(req, 'output_token_ids') else []
-                        all_tokens = prompt_ids + output_ids
-                        if all_tokens:
-                            self._kv_manager.cache_completed_blocks(table, all_tokens)
-                            blocks = table.get_blocks()
-                            cached_blocks = []
-                            cached_hashes = []
-                            for b in blocks:
-                                if b.block_hash is not None:
-                                    cached_blocks.append(b)
-                                    cached_hashes.append(b.block_hash)
-                            if cached_hashes:
-                                self._kv_manager.cache_to_radix_tree(
-                                    all_tokens, cached_blocks, cached_hashes,
-                                )
-                        self._kv_manager.free_request(table)
+                    self._finalize_request_blocks(req_id)
         super()._cleanup_finished()
 
     def get_stats(self) -> dict:

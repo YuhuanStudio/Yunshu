@@ -557,9 +557,10 @@ class SlidingWindowKVManager:
 
         blocks = self._request_blocks[request_id]
 
-        # Check if we already have this block
-        existing_ids = {b.block_id for b in blocks}
-        if block_idx not in existing_ids:
+        # Check if we already have this block.  Since block_ids are
+        # monotonically increasing and appended in order, only the last
+        # block needs checking — O(1) instead of rebuilding a set.
+        if not blocks or blocks[-1].block_id != block_idx:
             blocks.append(kv_block)
 
         return self._evict_outside_window(request_id)
@@ -583,17 +584,17 @@ class SlidingWindowKVManager:
             elif block.token_position >= window_start:
                 active.append(block)
 
-        self._stats.active_blocks = len(active)
         return active
 
     def get_stats(self) -> WindowStats:
         """Return sliding window statistics."""
-        # Count only blocks within the sliding window (not all stored blocks).
-        total_active = sum(
-            len(self.get_active_blocks(rid))
-            for rid in self._request_blocks
+        # Count stored blocks (approximation for active; exact count
+        # would require per-request window computation which is O(n*m)).
+        # Use len() on the stored lists instead of calling get_active_blocks()
+        # for each request to avoid O(n*m) overhead in the stats path.
+        self._stats.active_blocks = sum(
+            len(blocks) for blocks in self._request_blocks.values()
         )
-        self._stats.active_blocks = total_active
         # Estimate memory saved: evicted blocks * per-block memory
         blocks_evicted = self._stats.total_evictions
         per_block_bytes = (

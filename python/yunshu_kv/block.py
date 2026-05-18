@@ -27,6 +27,7 @@ class KVBlock:
         block_hash: Hash of content for prefix caching (None if not yet full/cached).
         prev: Previous block in LRU free list.
         next: Next block in LRU free list.
+        last_access_time: Monotonic timestamp of last prefix-cache access (for LRU eviction).
     """
 
     block_id: int
@@ -35,6 +36,7 @@ class KVBlock:
     is_null: bool = False
     prev: Optional[KVBlock] = None
     next: Optional[KVBlock] = None
+    last_access_time: float = 0.0
 
     def reset_hash(self) -> None:
         self.block_hash = None
@@ -167,9 +169,11 @@ class BlockPool:
 
     def touch(self, block: KVBlock) -> None:
         """Increase ref count of a shared block (prefix cache hit)."""
+        import time
         if block.ref_count == 0 and not block.is_null:
             self.free_queue.remove(block)
         block.ref_count += 1
+        block.last_access_time = time.monotonic()
 
     def free(self, blocks: list[KVBlock]) -> None:
         """Decrease ref count; blocks reaching 0 go back to free list."""
@@ -187,7 +191,9 @@ class BlockPool:
         """Register a full block in the prefix cache."""
         if not self.enable_caching:
             return
+        import time
         block.block_hash = block_hash
+        block.last_access_time = time.monotonic()
         self._hash_to_block[block_hash] = block
 
     def lookup_hash(self, block_hash: int) -> Optional[KVBlock]:

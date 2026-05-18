@@ -1179,4 +1179,4 @@ async def count_tokens(req: AnthropicMessagesRequest) -> dict:
     full_text = "\n".join(text_parts)
     tokens = tokenizer.encode(full_text)
 
-    return {"input_tokens": len(tokens)}
+    return {"type": "token_count", "input_tokens": len(tokens)}

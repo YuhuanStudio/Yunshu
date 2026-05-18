@@ -597,7 +597,8 @@ class TestResponsesAPIStreaming:
         assert resp["usage"]["input_tokens"] == 10
         assert resp["usage"]["output_tokens"] == 2
         assert resp["usage"]["total_tokens"] == 12
-        assert resp["usage"]["output_tokens_details"]["reasoning_tokens"] == 0
+        # output_tokens_details only present when reasoning_tokens > 0
+        assert "output_tokens_details" not in resp["usage"]
         assert resp["usage"]["input_tokens_details"]["cached_tokens"] == 5
         assert "completed_at" in resp
 
