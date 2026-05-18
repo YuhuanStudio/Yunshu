@@ -245,6 +245,8 @@ class EncoderCacheManager:
             total_mem = sum(e.memory_bytes for e in self._entries.values())
             self._entries.clear()
             self._stats.memory_bytes -= total_mem
+            if self._stats.memory_bytes < 0:
+                self._stats.memory_bytes = 0
             self._stats.num_entries = 0
             self._stats.evictions += count
             if count:

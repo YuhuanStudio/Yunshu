@@ -481,10 +481,7 @@ class KVPrefixCache:
             candidates = surviving
 
         if not candidates:
-            # Only the first block matched (from the seeding step).
-            # Pick any entry with 1 matched block.
-            best_entry = next(iter(candidates)) if candidates else -1
-            return best_entry, 1
+            return -1, 0
 
         # Return the entry with the longest match.
         best_entry, best_blocks = max(candidates.items(), key=lambda x: x[1])
@@ -617,8 +614,6 @@ class KVPrefixCache:
                 if skip:
                     _skip_count += 1
                     continue
-            h = _token_hash(self._prompts[victim])
-            self._hash_index.pop(h, None)
             self._remove_entry(victim)
             logger.info(
                 f"KV prefix cache evicted entry via {type(self._eviction_strategy).__name__} (capacity)"
