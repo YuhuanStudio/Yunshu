@@ -859,11 +859,13 @@ class ExternalPrefillClient:
         request_data = _encode_message(request_header, payload)
 
         last_error: Exception | None = None
+        t_start = time.monotonic()
         for attempt in range(self._config.retry_attempts):
             try:
                 result = await self._send_request(request_data)
                 self._requests_sent += 1
                 self._successes += 1
+                self._total_latency_s += time.monotonic() - t_start
                 return result
             except Exception as e:
                 last_error = e

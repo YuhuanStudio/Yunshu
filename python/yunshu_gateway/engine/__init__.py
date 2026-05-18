@@ -27,7 +27,10 @@ _engine_start_lock = None  # asyncio.Lock, created lazily in _get_engine_start_l
 def _get_engine_start_lock():
     """Get or create the asyncio.Lock for engine startup.
 
-    Must be called from an async context (has a running event loop).
+    Safe under asyncio's single-threaded event loop — no two coroutines
+    execute the check-then-act sequence concurrently.  The lock is per-process
+    (shared across all models), which means starting model A blocks starting
+    model B.  This is acceptable for the current single-model default path.
     """
     global _engine_start_lock
     import asyncio

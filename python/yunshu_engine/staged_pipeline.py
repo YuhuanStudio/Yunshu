@@ -227,6 +227,10 @@ class MultimodalPipelineCoordinator:
         self._max_workers = max_workers
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
+    def shutdown(self) -> None:
+        """Shut down the pipeline coordinator and release resources."""
+        self._executor.shutdown(wait=False)
+
     def register_processor(self, stage: PipelineStage, modality: str,
                            processor_fn: ProcessorFn,
                            config: Optional[StageConfig] = None) -> None:

@@ -38,13 +38,17 @@ def detect_model_type(model_path: Path) -> ModelType:
     detected = _detect_model_type(str(model_path))
 
     # Map internal ModelType enum to string literal
-    return {
+    type_map = {
         MT.LLM: "llm",
         MT.VLM: "vlm",
         MT.TTS: "audio_tts",
         MT.ASR: "audio_stt",
         MT.IMAGE_GEN: "image_gen",
-    }[detected]
+        MT.OCR: "ocr",
+        MT.STS: "sts",
+        MT.VIDEO: "video",
+    }
+    return type_map.get(detected, "llm")
 
 
 def estimate_model_size(model_path: Path) -> int:

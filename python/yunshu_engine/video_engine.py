@@ -1128,8 +1128,11 @@ class VideoEngine:
             except Exception as e:
                 logger.warning(f"Could not save base model weights: {e}")
 
-        # If model not yet loaded, just record the adapter path for lazy loading
+        # If model not yet loaded, just record the adapter path for lazy loading.
+        # Do NOT set _lora_loaded = True yet — start() checks it to decide
+        # whether to apply the adapter after the model loads.
         if self._model is None:
+            self._lora_loaded = False
             self._lora_adapter_path = str(adapter_dir)
             logger.info(f"LoRA adapter queued for lazy loading: {adapter_path}")
             return True

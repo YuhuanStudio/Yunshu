@@ -352,6 +352,10 @@ class TestRequestPreemption:
         req_high = Request(request_id="high", prompt="test", priority=10)
         req_low = Request(request_id="low", prompt="test", priority=1)
         req_med = Request(request_id="med", prompt="test", priority=5)
+        # Priority preemption uses sampling_params.priority
+        req_high.sampling_params.priority = 10
+        req_low.sampling_params.priority = 1
+        req_med.sampling_params.priority = 5
 
         req_high.status = RequestStatus.RUNNING
         req_low.status = RequestStatus.RUNNING
@@ -381,6 +385,7 @@ class TestRequestPreemption:
 
         for i in range(5):
             req = Request(request_id=f"req-{i}", prompt="test", priority=i)
+            req.sampling_params.priority = i
             req.status = RequestStatus.RUNNING
             sched.running[f"req-{i}"] = req
 

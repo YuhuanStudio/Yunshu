@@ -1724,10 +1724,12 @@ class Scheduler:
             # In Yunshu: higher priority number = higher priority, so
             # we evict the minimum priority (least important).
             # Ties broken by latest arrival_time (newest first).
+            # Note: use sampling_params.priority, not Request.priority
+            # (which is always the default 0).
             victim_id = min(
                 self.running.keys(),
                 key=lambda rid: (
-                    self.running[rid].priority,
+                    self.running[rid].sampling_params.priority,
                     -self.running[rid].arrival_time,
                 ),
             )
@@ -1984,7 +1986,22 @@ class Scheduler:
                 req = self.running.get(req_id)
                 if req is not None:
                     req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_timeout")
-                    self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                    uid = getattr(req, 'batch_uid', None)
+                    self._uid_to_req.pop(uid, None)
+                    # Remove from BatchGenerator if it was inserted
+                    if uid is not None and self._batch_gen is not None:
+                        try:
+                            self._batch_gen.remove([uid])
+                        except Exception:
+                            logger.debug("batch gen remove for timeout abort failed", exc_info=True)
+                    # Clean up per-request state
+                    self._pop_pending_prefill(req_id)
+                    for cleanup_dict in (
+                        self._detokenizers, self._thinking_processors,
+                        self._thinking_state, self._chunked_prefill_fairness,
+                        self._chunked_prefill_enqueued_at,
+                    ):
+                        cleanup_dict.pop(req_id, None)
                     logger.warning(
                         f"Chunked prefill timeout for {req_id}: aborting "
                         f"(pending for {pending_duration:.1f}s, "
