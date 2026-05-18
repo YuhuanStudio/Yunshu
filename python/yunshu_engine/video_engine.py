@@ -846,7 +846,11 @@ class VideoEngine:
         with self._stats_lock:
             self._stats.total_stream_calls += 1
 
-        queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=128)
+        # Use a thread-safe queue for the executor → async bridge.
+        # asyncio.Queue.put_nowait() from a non-event-loop thread is unsafe.
+        import queue as _queue_mod
+        _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=128)
+        _consumer_cancel = threading.Event()
 
         # Check env var for streaming mode
         streaming_enabled = os.environ.get("YUNSHU_VIDEO_STREAMING", "0").strip() in ("1", "true", "yes")
@@ -920,6 +924,11 @@ class VideoEngine:
                         elapsed_decode = (time.monotonic() - t_decode_start) * 1000.0
                         frames_decoded += 1
 
+                        # Check if consumer has gone away
+                        if _consumer_cancel.is_set():
+                            proc.terminate()
+                            break
+
                         # Enforce max_frames limit
                         if max_frames > 0 and frames_emitted >= max_frames:
                             proc.terminate()
@@ -959,8 +968,8 @@ class VideoEngine:
                             "is_final": is_final,
                         }
                         try:
-                            queue.put_nowait(frame_data)
-                        except asyncio.QueueFull:
+                            _thread_queue.put_nowait(frame_data)
+                        except _queue_mod.Full:
                             logger.warning("Video stream queue full — consumer likely gone, stopping decode")
                             _queue_full = True
                             proc.terminate()
@@ -983,31 +992,37 @@ class VideoEngine:
 
                 # Signal final frame
                 try:
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
+                    _thread_queue.put_nowait(None)
+                except _queue_mod.Full:
                     pass
 
             except Exception as e:
                 logger.error(f"Frame streaming error: {e}", exc_info=True)
                 try:
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
+                    _thread_queue.put_nowait(None)
+                except _queue_mod.Full:
                     pass
 
         # Run decoder in executor
         loop = asyncio.get_running_loop()
         decode_task = loop.run_in_executor(self._executor, _decode_sync)
 
-        # Yield frames as they arrive
+        # Yield frames as they arrive, bridging from thread-safe queue to async
         try:
             while True:
-                chunk = await queue.get()
+                # Poll the thread-safe queue without blocking the event loop
+                try:
+                    chunk = _thread_queue.get_nowait()
+                except _queue_mod.Empty:
+                    await asyncio.sleep(0.01)  # Brief yield to event loop
+                    continue
                 if chunk is None:
                     break
                 yield chunk
                 if chunk.get("is_final"):
                     break
         finally:
+            _consumer_cancel.set()
             if not decode_task.done():
                 decode_task.cancel()
                 try:
@@ -1015,10 +1030,10 @@ class VideoEngine:
                 except (asyncio.CancelledError, Exception):
                     pass
             # Drain remaining queue items to unblock the executor thread
-            while not queue.empty():
+            while True:
                 try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
+                    _thread_queue.get_nowait()
+                except _queue_mod.Empty:
                     break
 
     def process_frame_batch_sync(self, batch: FrameBatch) -> list[dict]:
@@ -1077,9 +1092,12 @@ class VideoEngine:
             logger.error(f"No adapter_config.json in {adapter_path}")
             return False
 
-        if self._lora_loaded:
-            logger.warning("LoRA adapter already loaded, unload first")
-            return False
+        with self._stats_lock:
+            if self._lora_loaded:
+                logger.warning("LoRA adapter already loaded, unload first")
+                return False
+            # Mark as loading to prevent concurrent loads
+            self._lora_loaded = True
 
         import json
 
@@ -1116,7 +1134,6 @@ class VideoEngine:
             if weights_path.exists():
                 self._model.load_weights(str(weights_path), strict=False)
 
-            self._lora_loaded = True
             self._lora_adapter_path = str(adapter_dir)
             with self._stats_lock:
                 self._stats.lora_adapter_id = adapter_dir.name
@@ -1128,6 +1145,8 @@ class VideoEngine:
             return True
         except Exception as e:
             logger.error(f"Failed to load video LoRA adapter: {e}", exc_info=True)
+            with self._stats_lock:
+                self._lora_loaded = False
             return False
 
     def unload_lora_adapter(self) -> bool:
@@ -1136,12 +1155,13 @@ class VideoEngine:
         Returns:
             True if adapter was unloaded successfully.
         """
-        if not self._lora_loaded:
-            return False
+        with self._stats_lock:
+            if not self._lora_loaded:
+                return False
 
-        if self._lora_merged:
-            logger.warning("Cannot unload merged LoRA adapter (weights are fused)")
-            return False
+            if self._lora_merged:
+                logger.warning("Cannot unload merged LoRA adapter (weights are fused)")
+                return False
 
         try:
             if self._model is not None and self._base_model_weights is not None:
@@ -1168,13 +1188,14 @@ class VideoEngine:
         The merged model has zero LoRA inference overhead.
         Follows the same pattern as LoRAAdapterManager.merge_adapter().
         """
-        if not self._lora_loaded:
-            logger.error("No LoRA adapter loaded to merge")
-            return False
+        with self._stats_lock:
+            if not self._lora_loaded:
+                logger.error("No LoRA adapter loaded to merge")
+                return False
 
-        if self._lora_merged:
-            logger.warning("LoRA adapter already merged")
-            return False
+            if self._lora_merged:
+                logger.warning("LoRA adapter already merged")
+                return False
 
         try:
             import mlx.nn as nn

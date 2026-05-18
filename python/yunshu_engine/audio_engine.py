@@ -323,7 +323,8 @@ class TTSEngine:
             gen_kwargs["temperature"] = temperature
         gen_kwargs.update(kwargs)
 
-        queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=64)
+        import queue as _queue_mod
+        _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=64)
         sample_rate = getattr(model, "sample_rate", DEFAULT_SAMPLE_RATE)
         # Thread-safe cancel flag — asyncio.Event.is_set() reads a bool but
         # calling it from the executor thread is technically unsafe in older
@@ -349,40 +350,40 @@ class TTSEngine:
                     wav = _audio_to_wav_bytes(audio, int(sample_rate))
                     segment_text = getattr(result, "text", "")
                     try:
-                        queue.put_nowait({
+                        _thread_queue.put_nowait({
                             "audio": wav,
                             "text": segment_text,
                             "is_final": False,
                         })
-                    except asyncio.QueueFull:
+                    except _queue_mod.Full:
                         logger.warning("TTS stream queue full, dropping chunk")
                 # Send is_final sentinel — drain one item if full so the client
                 # always receives the completion marker and doesn't hang.
                 try:
-                    queue.put_nowait({"audio": b"", "text": "", "is_final": True})
-                except asyncio.QueueFull:
+                    _thread_queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                except _queue_mod.Full:
                     try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
+                        _thread_queue.get_nowait()
+                    except _queue_mod.Empty:
                         pass
                     try:
-                        queue.put_nowait({"audio": b"", "text": "", "is_final": True})
-                    except asyncio.QueueFull:
+                        _thread_queue.put_nowait({"audio": b"", "text": "", "is_final": True})
+                    except _queue_mod.Full:
                         pass
             except Exception as e:
                 logger.error(f"TTS stream error: {e}", exc_info=True)
                 try:
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
+                    _thread_queue.put_nowait(None)
+                except _queue_mod.Full:
                     # Queue is full and we can't signal error — drain one
                     # item and retry so the client sees the error sentinel.
                     try:
-                        queue.get_nowait()
-                    except asyncio.QueueEmpty:
+                        _thread_queue.get_nowait()
+                    except _queue_mod.Empty:
                         pass
                     try:
-                        queue.put_nowait(None)
-                    except asyncio.QueueFull:
+                        _thread_queue.put_nowait(None)
+                    except _queue_mod.Full:
                         pass
 
         loop = asyncio.get_running_loop()
@@ -395,7 +396,11 @@ class TTSEngine:
                 # executor thread can pick it up without touching asyncio.
                 if cancel_event is not None and cancel_event.is_set():
                     _cancel.set()
-                chunk = await queue.get()
+                try:
+                    chunk = _thread_queue.get_nowait()
+                except _queue_mod.Empty:
+                    await asyncio.sleep(0.01)  # Brief yield to event loop
+                    continue
                 if chunk is None:
                     break
                 yield chunk
@@ -415,10 +420,10 @@ class TTSEngine:
                 except (asyncio.CancelledError, Exception):
                     pass
             # Drain remaining queue items to unblock the executor thread
-            while not queue.empty():
+            while True:
                 try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
+                    _thread_queue.get_nowait()
+                except _queue_mod.Empty:
                     break
 
     def list_voices(self) -> list[str]:

@@ -1679,7 +1679,8 @@ class ImageGenEngine:
         if self._transformer is None:
             raise RuntimeError("Engine not started")
 
-        queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=64)
+        import queue as _queue_mod
+        _thread_queue: _queue_mod.Queue[dict | None] = _queue_mod.Queue(maxsize=64)
 
         # Thread-safe cancel flag for the executor thread.
         # asyncio.Event.is_set() is not safe to call from non-event-loop
@@ -1728,8 +1729,8 @@ class ImageGenEngine:
                     if _cancel.is_set():
                         logger.info("Image stream cancelled at step %d/%d", t + 1, num_inference_steps)
                         try:
-                            queue.put_nowait(None)
-                        except asyncio.QueueFull:
+                            _thread_queue.put_nowait(None)
+                        except _queue_mod.Full:
                             pass
                         return
 
@@ -1752,14 +1753,14 @@ class ImageGenEngine:
                         preview_png = self._to_png(image)
 
                     try:
-                        queue.put_nowait({
+                        _thread_queue.put_nowait({
                             "step": step_num,
                             "total_steps": num_inference_steps,
                             "progress": progress,
                             "image": preview_png,
                             "is_final": False,
                         })
-                    except asyncio.QueueFull:
+                    except _queue_mod.Full:
                         logger.warning("Image stream queue full — consumer likely gone, stopping")
                         return
 
@@ -1768,20 +1769,20 @@ class ImageGenEngine:
                 mx.eval(image)
                 png = self._to_png(image)
                 try:
-                    queue.put_nowait({
+                    _thread_queue.put_nowait({
                         "step": num_inference_steps,
                         "total_steps": num_inference_steps,
                         "progress": 1.0,
                         "image": png,
                         "is_final": True,
                     })
-                except asyncio.QueueFull:
+                except _queue_mod.Full:
                     pass
             except Exception as e:
                 logger.error(f"Image stream error: {e}", exc_info=True)
                 try:
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
+                    _thread_queue.put_nowait(None)
+                except _queue_mod.Full:
                     pass
 
         loop = asyncio.get_running_loop()
@@ -1792,7 +1793,11 @@ class ImageGenEngine:
                 # Propagate cancel_event to the thread-safe flag
                 if cancel_event is not None and cancel_event.is_set():
                     _cancel.set()
-                chunk = await queue.get()
+                try:
+                    chunk = _thread_queue.get_nowait()
+                except _queue_mod.Empty:
+                    await asyncio.sleep(0.01)
+                    continue
                 if chunk is None:
                     break
                 yield chunk
@@ -1808,10 +1813,10 @@ class ImageGenEngine:
                 except (asyncio.CancelledError, Exception):
                     pass
             # Drain remaining queue items to unblock the executor thread
-            while not queue.empty():
+            while True:
                 try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
+                    _thread_queue.get_nowait()
+                except _queue_mod.Empty:
                     break
 
     def _run_dflash_pipeline(
