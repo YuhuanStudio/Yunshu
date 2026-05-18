@@ -291,6 +291,7 @@ class TieredKVCacheManager:
         remaining = match.unmatched_token_ids
 
         # Check warm tier for each block-sized chunk
+        warm_promoted_blocks: list[KVBlock] = []
         if self.warm:
             warm_loaded = 0
             for i in range(0, len(remaining), block_size):
@@ -302,6 +303,23 @@ class TieredKVCacheManager:
                     # Promote from warm tier back to hot
                     kv_data = self.warm.promote(h)
                     if kv_data is not None:
+                        # Allocate a hot block for the promoted data
+                        try:
+                            new_block = self.hot.block_pool.allocate(1)[0]
+                        except ValueError:
+                            logger.warning(
+                                "Warm tier promotion: no free blocks for hash 0x%x",
+                                h,
+                            )
+                            break
+                        # Write KV data into hot cache tensors
+                        if self.hot._key_cache is not None:
+                            self.hot._key_cache[new_block.block_id] = kv_data
+                        if self.hot._value_cache is not None:
+                            self.hot._value_cache[new_block.block_id] = kv_data
+                        # Register in prefix cache for future lookups
+                        self.hot.block_pool.cache_block(new_block, h)
+                        warm_promoted_blocks.append(new_block)
                         warm_loaded += 1
                     else:
                         break
@@ -317,6 +335,7 @@ class TieredKVCacheManager:
                 )
 
         # If still unmatched tokens and we have SSD cache, check SSD
+        ssd_promoted_blocks: list[KVBlock] = []
         if self.ssd and remaining:
             ssd_loaded = 0
             for i in range(0, len(remaining), block_size):
@@ -329,18 +348,26 @@ class TieredKVCacheManager:
                     kv_data = self.ssd.load(h)
                     if kv_data is not None:
                         # Allocate a hot block and write kv_data back into it
-                        new_blocks = self.hot.block_pool.allocate(1)
-                        if new_blocks:
-                            new_block = new_blocks[0]
-                            new_block.block_hash = h
-                            new_block.ref_count = 1
-                            # Write KV data into hot cache tensors if available
-                            if self.hot._key_cache is not None:
-                                self.hot._key_cache[new_block.block_id] = kv_data
-                            if self.hot._value_cache is not None:
-                                self.hot._value_cache[new_block.block_id] = kv_data
-                            # Register in prefix cache for future lookups
-                            self.hot.block_pool.cache_block(new_block, h)
+                        try:
+                            new_block = self.hot.block_pool.allocate(1)[0]
+                        except ValueError:
+                            logger.warning(
+                                "SSD cache promotion: no free blocks for hash 0x%x",
+                                h,
+                            )
+                            break
+                        # Write KV data into hot cache tensors if available.
+                        # SSD stores full KV; the loaded array contains both
+                        # key and value data.  For now we write the same data
+                        # to both slots (the Metal kernel path will handle
+                        # proper key/value separation).
+                        if self.hot._key_cache is not None:
+                            self.hot._key_cache[new_block.block_id] = kv_data
+                        if self.hot._value_cache is not None:
+                            self.hot._value_cache[new_block.block_id] = kv_data
+                        # Register in prefix cache for future lookups
+                        self.hot.block_pool.cache_block(new_block, h)
+                        ssd_promoted_blocks.append(new_block)
                         ssd_loaded += 1
                     else:
                         break
@@ -356,6 +383,30 @@ class TieredKVCacheManager:
                 )
         elif not remaining:
             match.unmatched_token_ids = []
+
+        # Insert warm/SSD promoted blocks into the BlockTable.  They
+        # logically sit between the hot-tier matched blocks (already in
+        # the table) and the newly allocated blocks (also already in the
+        # table from hot.allocate_for_prefill).  We splice them in at
+        # the boundary between matched and new blocks.
+        all_promoted = warm_promoted_blocks + ssd_promoted_blocks
+        if all_promoted:
+            # The hot manager already placed matched blocks first, then
+            # new blocks.  The new blocks start at index
+            # len(match.matched_blocks).  Insert promoted blocks between.
+            hot_matched_count = len(match.matched_blocks)
+            new_count = len(all_promoted)
+            # Rebuild the internal block list with promoted blocks spliced in.
+            existing = table._blocks
+            table._blocks = (
+                existing[:hot_matched_count]
+                + all_promoted
+                + existing[hot_matched_count:]
+            )
+            table.total_tokens = len(table._blocks) * block_size
+            # Also update the match to include promoted blocks so callers
+            # know the full set of reused blocks.
+            match.matched_blocks = match.matched_blocks + all_promoted
 
         return table, match
 

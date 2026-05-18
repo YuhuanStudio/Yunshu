@@ -208,21 +208,26 @@ class RadixTree:
 
         # Inherit ref_count: the new_node gets the child's ref_count
         # so that eviction doesn't remove it while active requests use it.
-        # The child retains its own ref_count since any request that
-        # referenced child=[A,B,C] now references the path through
-        # new_node=[A,B] -> child=[C], so both must carry the count.
-        # However, to avoid ref_count inflation, we must NOT duplicate:
-        # the new_node should get the child's original ref_count, and
-        # the child's ref_count should be reset to 0 since the active
-        # requests now traverse through new_node to reach child.
+        #
+        # The child may still have sub-children whose own ref_counts
+        # represent active requests passing through the child.  We must
+        # preserve those by computing the child's effective ref_count
+        # from its subtree (sum of leaf ref_counts that transit through
+        # child).  However, the simplest correct approach is:
+        #   new_node.ref_count = child's original ref_count
+        #   child.ref_count   = sum of child's children's ref_counts
+        #
+        # This avoids under-counting (child still referenced by subtree)
+        # and over-counting (new_node carries the same count as before).
         new_node.ref_count = child.ref_count
         new_node.last_access_time = child.last_access_time
-        # The child is now a suffix node under new_node. Any request
-        # that previously referenced child=[A,B,C] now references
-        # new_node=[A,B] (which carries the ref_count). The child=[C]
-        # inherits ref_count 0 — when a new request matches the full
-        # [A,B,C] path, inc_ref will increment both new_node and child.
-        child.ref_count = 0
+        # Compute child's residual ref_count from its remaining subtree.
+        # Each direct child's ref_count already includes its entire
+        # subtree, so summing direct children gives the correct value.
+        child_subtree_ref = sum(
+            c.ref_count for c in child.children.values()
+        )
+        child.ref_count = child_subtree_ref
 
         self._total_nodes += 1
         return new_node
@@ -432,8 +437,6 @@ class RadixTree:
 
         # Merge with the single child
         child = next(iter(node.children.values()))
-        if child.ref_count > 0:
-            return
 
         # Append child's tokens, blocks, and hashes to the node
         node.token_ids.extend(child.token_ids)
@@ -445,8 +448,16 @@ class RadixTree:
         for grandchild in node.children.values():
             grandchild.parent = node
 
-        # Update ref_count to child's value
+        # Inherit child's ref_count and access metadata.  This is safe
+        # even when child.ref_count > 0: any request that previously
+        # traversed …→ node → child → … now traverses …→ node → …
+        # because node absorbed child's children.  The ref_count is
+        # preserved on node so eviction accounting stays correct.
         node.ref_count = child.ref_count
+        node.last_access_time = max(
+            node.last_access_time, child.last_access_time
+        )
+        node.access_count += child.access_count
         self._total_nodes -= 1
 
     def _collect_evictable_leaves(self) -> list[RadixNode]:
