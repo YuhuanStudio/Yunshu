@@ -178,8 +178,18 @@ def _shard_llama_like(model, group: mx.distributed.Group) -> None:
         attn.k_proj = all_to_sharded(attn.k_proj)
         attn.v_proj = all_to_sharded(attn.v_proj)
         attn.o_proj = sharded_to_all(attn.o_proj)
+        if attn.n_heads % n != 0:
+            raise ValueError(
+                f"n_heads ({attn.n_heads}) must be divisible by "
+                f"world_size ({n}) for tensor parallel sharding"
+            )
         attn.n_heads //= n
         if attn.n_kv_heads is not None:
+            if attn.n_kv_heads % n != 0:
+                raise ValueError(
+                    f"n_kv_heads ({attn.n_kv_heads}) must be divisible by "
+                    f"world_size ({n}) for tensor parallel sharding"
+                )
             attn.n_kv_heads //= n
 
         # MLP
