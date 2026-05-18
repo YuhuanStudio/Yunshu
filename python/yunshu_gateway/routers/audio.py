@@ -528,6 +528,7 @@ async def voice_pipeline(
         system_prompt=system_prompt,
     )
     pipeline = VoicePipeline(config)
+    _streaming_returned = False
 
     try:
         if stream:
@@ -552,7 +553,15 @@ async def voice_pipeline(
                         yield event.encode("utf-8") if isinstance(event, str) else event
                 finally:
                     _vp_tracker.unregister(_vp_id)
+                    # Clean up temp file after streaming completes — cannot
+                    # use the outer finally because the generator hasn't started
+                    # executing when StreamingResponse is returned.
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
+            _streaming_returned = True
             return StreamingResponse(
                 _event_stream(),
                 media_type="text/event-stream",
@@ -573,10 +582,14 @@ async def voice_pipeline(
         logger.error(f"Voice pipeline error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Voice pipeline failed")
     finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        # Clean up temp file unless the StreamingResponse took ownership.
+        # If streaming was requested but setup failed before the return,
+        # _streaming_returned is still False and we clean up here.
+        if not _streaming_returned:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 # ── Subtitle formatters ──
