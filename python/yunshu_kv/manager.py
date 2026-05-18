@@ -525,13 +525,14 @@ class KVCacheManager:
             # Remove from hot prefix cache
             self.block_pool._evict_cached_block(block)
 
-            if block.ref_count == 1:
-                # Block is only in the prefix cache (not held by any request).
-                # free() will decrement ref_count to 0 and return it to the
-                # free queue, yielding a genuinely new free block.
-                self.block_pool.free([block])
-            # else ref_count == 0: already in the free queue; just clearing
-            # the stale hash above is sufficient -- no new free block gained.
+            if block.cache_only and block.ref_count == 0:
+                # Block is cache-only (was freed by its request and is now
+                # only held by the prefix cache). Safe to recycle.
+                block.cache_only = False
+                self.block_pool.free_queue.append(block)
+            elif block.ref_count == 0:
+                # Already in free queue with stale hash — just clearing above is enough.
+                pass
 
         freed_block_count = self.block_pool.get_free_block_count() - initial_free
 
@@ -605,11 +606,10 @@ class KVCacheManager:
 
             self.block_pool._evict_cached_block(block)
 
-            if block.ref_count == 1:
-                # Only in prefix cache -- free() yields a new free block
-                self.block_pool.free([block])
+            if block.cache_only and block.ref_count == 0:
+                block.cache_only = False
+                self.block_pool.free_queue.append(block)
                 evicted += 1
-            # else ref_count == 0: already free; clearing stale hash only
 
         # Prune stale radix tree nodes (Bug 1: evict() was never called,
         # causing unbounded memory growth in the tree structure).

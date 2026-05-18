@@ -469,6 +469,10 @@ class RadixTree:
         node.access_count += child.access_count
         self._total_nodes -= 1
 
+        # Recursively merge parent if it now also has a single child + ref_count == 0
+        if node.parent is not None:
+            self._try_merge(node.parent)
+
     def _collect_evictable_leaves(self) -> list[RadixNode]:
         """Collect leaf nodes eligible for eviction (no children, not root, ref_count == 0)."""
         leaves = []

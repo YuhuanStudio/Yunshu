@@ -28,6 +28,7 @@ class KVBlock:
         block_id: Unique physical block identifier.
         ref_count: Number of requests sharing this block.
         block_hash: Hash of content for prefix caching (None if not yet full/cached).
+        cache_only: True when block is only held by the prefix cache (no active request).
         prev: Previous block in LRU free list.
         next: Next block in LRU free list.
         last_access_time: Monotonic timestamp of last prefix-cache access (for LRU eviction).
@@ -36,6 +37,7 @@ class KVBlock:
     block_id: int
     ref_count: int = 0
     block_hash: Optional[int] = None
+    cache_only: bool = False
     is_null: bool = False
     prev: Optional[KVBlock] = None
     next: Optional[KVBlock] = None
@@ -43,6 +45,7 @@ class KVBlock:
 
     def reset_hash(self) -> None:
         self.block_hash = None
+        self.cache_only = False
 
 
 class FreeBlockQueue:
@@ -181,14 +184,20 @@ class BlockPool:
         block.last_access_time = time.monotonic()
 
     def free(self, blocks: list[KVBlock]) -> None:
-        """Decrease ref count; blocks reaching 0 go back to free list."""
+        """Decrease ref count; blocks reaching 0 go back to free list.
+
+        When a block with a block_hash reaches ref_count 0, it is marked
+        cache_only — it's in the free queue but still registered in the
+        prefix cache. Eviction can safely free these blocks.
+        """
         freed = []
         for block in blocks:
             if block.ref_count <= 0:
-                # Guard against underflow — block already free or null
                 continue
             block.ref_count -= 1
             if block.ref_count == 0 and not block.is_null:
+                if block.block_hash is not None:
+                    block.cache_only = True
                 freed.append(block)
         self.free_queue.append_n(freed)
 
