@@ -544,9 +544,18 @@ class ModelManager:
                 lambda: (mx.synchronize(), mx.clear_cache()),
             )
 
-        self._current_memory_bytes = max(
-            0, self._current_memory_bytes - estimated_bytes
-        )
+        # Update memory tracker. When estimated_bytes is 0 (unknown), use
+        # the actual measured delta from the settle barrier instead of
+        # subtracting 0 (which would never decrease the tracker).
+        if estimated_bytes > 0:
+            self._current_memory_bytes = max(
+                0, self._current_memory_bytes - estimated_bytes
+            )
+        else:
+            actual_freed = max(0, pre_unload_active - mx.get_active_memory())
+            self._current_memory_bytes = max(
+                0, self._current_memory_bytes - actual_freed
+            )
 
         logger.info(
             f"Unloaded model {model_id} "

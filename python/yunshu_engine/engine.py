@@ -618,10 +618,16 @@ class Engine:
 
             # 3. Run one BatchGenerator step on the Metal thread
             try:
-                prompt_responses, gen_responses = await loop.run_in_executor(
+                all_responses = await loop.run_in_executor(
                     self._executor,
                     self._batch_gen.next,
                 )
+                # BatchGenerator.next() returns List[Response] (flat list).
+                # Filter for generation-phase responses only.
+                gen_responses = [
+                    r for r in all_responses
+                    if not getattr(r, 'end_of_prompt', False)
+                ]
             except Exception as e:
                 logger.error(f"Step error: {e}", exc_info=True)
                 for req in list(self._active.values()):
