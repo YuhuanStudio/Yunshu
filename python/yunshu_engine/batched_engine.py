@@ -4426,6 +4426,13 @@ class BatchedEngine:
             finish_reason = "length"
         output_text = _clean_special_tokens(output_text)
 
+        # Trim stop suffix from output text when matched during generation
+        if _stopped_by_suffix and stop_suffixes:
+            for s in stop_suffixes:
+                if output_text.endswith(s):
+                    output_text = output_text[:-len(s)]
+                    break
+
         # Build logprobs from generated tokens
         _ngram_logprobs = None
         if logprobs and tokens:
