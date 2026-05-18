@@ -311,6 +311,9 @@ class TieredKVCacheManager:
                                 "Warm tier promotion: no free blocks for hash 0x%x",
                                 h,
                             )
+                            # promote() already popped from the warm store.
+                            # Re-insert to avoid data loss.
+                            self.warm.demote(h, kv_data)
                             break
                         # Write KV data into hot cache tensors
                         if self.hot._key_cache is not None:

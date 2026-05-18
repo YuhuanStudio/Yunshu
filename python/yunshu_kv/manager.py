@@ -214,9 +214,6 @@ class KVCacheManager:
                 if promoted is not None:
                     self._total_hits += 1
                     # Re-allocate a hot block and copy the promoted data.
-                    # If allocation fails the promoted data is already lost
-                    # (promote() pops from the warm store), but we cannot
-                    # do anything about it — treat as a miss.
                     try:
                         new_block = self.block_pool.allocate(1)[0]
                     except ValueError:
@@ -224,6 +221,9 @@ class KVCacheManager:
                             "Warm tier promotion failed: no free blocks for hash 0x%x",
                             h,
                         )
+                        # promote() already popped from the warm store.
+                        # Re-insert to avoid data loss.
+                        self._warm_tier.demote(h, promoted)
                         break
                     # Register in prefix cache so future lookups can find it.
                     # Directly setting block_hash without cache_block() would
