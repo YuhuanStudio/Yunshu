@@ -145,11 +145,10 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
                 tenant = manager.authenticate(token)
                 if tenant is None:
                     return _ErrorFormatter.auth_error(request, "Invalid API key")
-                if not tenant.check_rate_limit():
+                if not tenant.check_and_record():
                     return _ErrorFormatter.auth_error(
                         request, "Rate limit exceeded", status_code=429,
                     )
-                tenant.record_request()
                 request.state.tenant = tenant
                 return await call_next(request)
         except ImportError:

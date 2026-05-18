@@ -85,6 +85,26 @@ class Tenant:
             return False
         return True
 
+    def check_and_record(self, tokens: int = 0) -> bool:
+        """Atomically check rate limit and record if allowed. Returns True if allowed."""
+        now = time.time()
+        if now - self._window_start > 60:
+            self._request_count = 0
+            self._token_count = 0
+            self._window_start = now
+
+        if self._request_count >= self.quota.requests_per_minute:
+            return False
+        if self._token_count >= self.quota.tokens_per_minute:
+            return False
+        if self._active_requests >= self.quota.max_concurrent:
+            return False
+
+        self._request_count += 1
+        self._token_count += tokens
+        self._active_requests += 1
+        return True
+
     def record_request(self, tokens: int = 0) -> None:
         self._request_count += 1
         self._token_count += tokens

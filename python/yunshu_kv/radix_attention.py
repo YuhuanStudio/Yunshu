@@ -175,12 +175,12 @@ class RadixTree:
             The new intermediate node containing the shared prefix.
         """
         # Convert token-based split_pos to block-based index.
-        # Each block covers self._block_size tokens.  When split_pos is
-        # NOT block-aligned the boundary block must go to the new_node
-        # (prefix), because its tokens span both sides of the split.
-        # Ceiling division gives the correct number of blocks for the
-        # prefix portion.
-        split_block_idx = (split_pos + self._block_size - 1) // self._block_size
+        # Use floor division: only assign fully-contained blocks to the
+        # prefix. A boundary block that straddles the split point goes to
+        # the child, because its KV data covers tokens beyond split_pos.
+        # The child's blocks[:0] slice correctly gives it no blocks if
+        # split_pos < block_size (everything is one block).
+        split_block_idx = split_pos // self._block_size
 
         # Create the intermediate node with the shared prefix
         new_node = RadixNode(

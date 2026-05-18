@@ -636,7 +636,6 @@ async def _build_multi_choice(
     choices = []
 
     async def _gen_one(idx: int):
-        nonlocal prompt_tok, completion_tok, reasoning_tok
         if is_batched:
             result = await engine.chat(
                 messages=messages,
