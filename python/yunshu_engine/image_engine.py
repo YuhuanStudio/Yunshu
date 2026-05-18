@@ -1898,11 +1898,11 @@ class ImageGenEngine:
                 logger.debug(f"DFlash block ({bx},{by}): L1 cache hit (coarse)")
                 continue
 
-            # Generate initial noise for full image region but encode at block granularity
-            latent_h = height // 8
-            latent_w = width // 8
+            # Generate initial noise at block granularity
+            block_latent_h = (by_end - by) // 8
+            block_latent_w = (bx_end - bx) // 8
             block_latents = mx.random.normal(
-                shape=[16, 1, latent_h, latent_w],
+                shape=[16, 1, block_latent_h, block_latent_w],
                 key=mx.random.key(seed + i),
             ).astype(mx.float16)
 

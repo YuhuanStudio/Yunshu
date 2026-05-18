@@ -239,8 +239,19 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
     name_re = re.compile(r'"name"\s*:\s*"([^"]+)"')
     for i, match in enumerate(name_re.finditer(text)):
         name = match.group(1)
-        # Walk backward to find the opening brace
-        brace_start = text.rfind('{', 0, match.start())
+        # Walk backward with brace-depth tracking to find the true
+        # enclosing brace (rfind would match nested braces incorrectly).
+        depth = 0
+        brace_start = -1
+        for pos in range(match.start() - 1, -1, -1):
+            ch = text[pos]
+            if ch == '}':
+                depth += 1
+            elif ch == '{':
+                if depth == 0:
+                    brace_start = pos
+                    break
+                depth -= 1
         if brace_start == -1:
             continue
         block = _extract_brace_block(text, brace_start)

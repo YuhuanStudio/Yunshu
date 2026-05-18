@@ -565,10 +565,18 @@ class ASREngine:
                     pcm = raw
                 samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
                 if len(samples) > 0:
-                    frame_size = int(self._vad.sample_rate * self._vad.frame_duration_ms / 1000) * 2
-                    raw_pcm = pcm[:frame_size]
-                    vad_result = self._vad.process_frame(raw_pcm, sample_rate=24000)
-                    if not vad_result.is_speech:
+                    frame_samples = int(self._vad.sample_rate * self._vad.frame_duration_ms / 1000)
+                    frame_bytes = frame_samples * 2  # 16-bit = 2 bytes per sample
+                    speech_detected = False
+                    offset = 0
+                    while offset + frame_bytes <= len(pcm):
+                        raw_pcm = pcm[offset:offset + frame_bytes]
+                        vad_result = self._vad.process_frame(raw_pcm, sample_rate=self._vad.sample_rate)
+                        if vad_result.is_speech:
+                            speech_detected = True
+                            break
+                        offset += frame_bytes
+                    if not speech_detected:
                         logger.debug("VAD: no speech detected, skipping transcription")
                         return {"text": "", "language": language or "und", "segments": [], "duration": 0.0}
             except Exception:

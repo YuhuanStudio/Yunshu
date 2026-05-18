@@ -378,7 +378,7 @@ class MeshManager:
         # pipeline stage assignments that reference the original ranks.
         node.state = MeshNodeState.OFFLINE
         if self._dp_router:
-            self._dp_router.mark_unavailable(node.node_id)
+            self._dp_router.remove_node(node.node_id)
         if self._disagg_router:
             self._disagg_router.remove_node(node.node_id)
         self._publish_event("node_leave", node.node_id, {

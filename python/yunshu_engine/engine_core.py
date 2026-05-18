@@ -1772,6 +1772,7 @@ class EngineCore:
 
             # Bug 1 fix: guard against stale/uninitialized scheduler_output
             if scheduler_output is None:
+                self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
                 continue
 
             # Distribute outputs to per-request collectors
@@ -1946,7 +1947,10 @@ class EngineCore:
                     _est_ttft_ms = 0.0
                     _ttft_count = 0
                     for o in scheduler_output.outputs:
-                        if o.finished and o.completion_tokens <= 1:
+                        if (o.finished
+                            and o.completion_tokens <= 1
+                            and getattr(o, 'finish_reason', 'stop') not in ("error", "timeout", "abort")
+                            and not getattr(o, 'error', None)):
                             _start_ts = self._request_timestamps.get(o.request_id)
                             if _start_ts is not None:
                                 _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
