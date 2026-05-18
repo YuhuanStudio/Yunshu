@@ -42,6 +42,11 @@ def _normalize_endpoint(path: str) -> str:
     return "/" + "/".join(parts[:_MAX_LABEL_SEGMENTS]) + "/{id}"
 
 
+def _esc_prom(v: str) -> str:
+    """Escape a Prometheus label value."""
+    return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
 @dataclass
 class _Metrics:
     """Thread-safe metrics store."""
@@ -100,7 +105,7 @@ class _Metrics:
             parts = key.split(":")
             if len(parts) == 3:
                 lines.append(
-                    f'yunshu_request_count{{method="{parts[0]}",endpoint="{parts[1]}",status="{parts[2]}"}} {count}'
+                    f'yunshu_request_count{{method="{_esc_prom(parts[0])}",endpoint="{_esc_prom(parts[1])}",status="{_esc_prom(parts[2])}"}} {count}'
                 )
 
         lines.append("")
@@ -112,17 +117,18 @@ class _Metrics:
                 avg = sum(latencies) / len(latencies)
                 p50 = sorted_lat[len(sorted_lat) // 2]
                 p99 = sorted_lat[min(int(len(sorted_lat) * 0.99), len(sorted_lat) - 1)]
+                esc_ep = _esc_prom(endpoint)
                 lines.append(
-                    f'yunshu_request_latency_seconds{{endpoint="{endpoint}",quantile="0.5"}} {p50:.4f}'
+                    f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.5"}} {p50:.4f}'
                 )
                 lines.append(
-                    f'yunshu_request_latency_seconds{{endpoint="{endpoint}",quantile="0.99"}} {p99:.4f}'
+                    f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.99"}} {p99:.4f}'
                 )
                 lines.append(
-                    f'yunshu_request_latency_seconds_avg{{endpoint="{endpoint}"}} {avg:.4f}'
+                    f'yunshu_request_latency_seconds_avg{{endpoint="{esc_ep}"}} {avg:.4f}'
                 )
                 lines.append(
-                    f'yunshu_request_latency_seconds_count{{endpoint="{endpoint}"}} {len(latencies)}'
+                    f'yunshu_request_latency_seconds_count{{endpoint="{esc_ep}"}} {len(latencies)}'
                 )
 
         lines.append("")

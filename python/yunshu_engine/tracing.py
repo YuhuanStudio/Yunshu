@@ -483,8 +483,12 @@ class MetricsAggregatorV2:
     def _format_labels(self, key: frozenset) -> str:
         if not key:
             return ""
+
+        def _esc(v: str) -> str:
+            return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
         pairs = ",".join(
-            f'{k}="{v}"' for k, v in sorted(key)
+            f'{k}="{_esc(v)}"' for k, v in sorted(key)
         )
         return f"{{{pairs}}}"
 

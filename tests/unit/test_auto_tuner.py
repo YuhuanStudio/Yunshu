@@ -528,7 +528,7 @@ class TestAutoTunerHistory:
     """Test history and statistics."""
 
     def test_tuning_history(self):
-        t = AutoTuner(params=TunableParams(batch_size=8))
+        t = AutoTuner(params=TunableParams(batch_size=8), min_tuning_interval=0)
         t.apply_tuning("batch_size", "increase", "reason 1")
         t.apply_tuning("batch_size", "increase", "reason 2")
         history = t.get_tuning_history()

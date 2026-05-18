@@ -419,6 +419,13 @@ class SLOMonitor:
                     self._auto_tuning_triggers += 1
                     callback_to_fire = self._auto_tuning_callback
                     callback_violations = list(self._recent_violations)
+                    # Reset counts after triggering so the tuner needs fresh
+                    # violations before firing again.  Without this, the
+                    # monotonically-growing violation rate would cause the
+                    # callback to fire on every single check once the 30%
+                    # threshold is crossed, even after the system recovers.
+                    self._check_counts[metric] = 0
+                    self._violation_counts[metric] = 0
 
         # Invoke callback outside the lock to avoid deadlock
         if callback_to_fire is not None:
@@ -640,6 +647,7 @@ class AutoTuner:
         profiler: Optional[PerformanceProfiler] = None,
         slo_monitor: Optional[SLOMonitor] = None,
         regression_threshold: float = -0.1,
+        min_tuning_interval: float = 30.0,
     ) -> None:
         self._params = params or TunableParams()
         self._params.clamp()
@@ -651,6 +659,8 @@ class AutoTuner:
         self._total_tunings: int = 0
         self._improvements: int = 0
         self._regressions: int = 0
+        self._last_tuning_time: float = 0.0
+        self._min_tuning_interval = min_tuning_interval
         self._lock = threading.RLock()
 
     @property
@@ -684,6 +694,17 @@ class AutoTuner:
             TuningDecision record.
         """
         with self._lock:
+            # Rate limit: don't tune more frequently than _min_tuning_interval
+            now = time.time()
+            if now - self._last_tuning_time < self._min_tuning_interval:
+                return TuningDecision(
+                    timestamp=now,
+                    param_name=param_name,
+                    old_value=getattr(self._params, param_name, None),
+                    new_value=getattr(self._params, param_name, None),
+                    reason="Rate-limited: tuning cooldown active",
+                )
+
             old_value = getattr(self._params, param_name, None)
             if old_value is None:
                 logger.warning("Unknown parameter: %s", param_name)
@@ -726,6 +747,7 @@ class AutoTuner:
 
             self._history.append(decision)
             self._total_tunings += 1
+            self._last_tuning_time = time.time()
 
             logger.info(
                 "AutoTuner: %s %s %s -> %s (%s)",
