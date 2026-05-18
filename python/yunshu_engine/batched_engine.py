@@ -1606,6 +1606,9 @@ class BatchedEngine:
         finish_reason = result.finish_reason
         if finish_reason == "memory_exceeded":
             finish_reason = "memory_limit"
+        # Guard: finish_reason must never be None when finished=True
+        if finish_reason is None:
+            finish_reason = "stop"
 
         # Apply output parser to extract reasoning/tool_calls from raw text
         output_text = _clean_special_tokens(result.output_text)
@@ -1851,6 +1854,7 @@ class BatchedEngine:
             _in_thinking = False
             _thinking_tokens: list[int] = []
             _stopped_by_suffix = False
+            _stopped_by_stop_id = False
 
             # Prefill progress tracking for the fast path
             _prefill_req_id = f"fp-{id(_run)}-{int(time.monotonic()*1e6)}"
@@ -1984,6 +1988,7 @@ class BatchedEngine:
                         token_logprobs.append({"token_id": first_token, "logprob": tok_lp})
                     if first_token in stop_ids:
                         tokens.pop()
+                        _stopped_by_stop_id = True
                     else:
                         detokenizer.add_token(first_token)
                     remaining = max_tokens - 1
@@ -2003,6 +2008,7 @@ class BatchedEngine:
                                 token_logprobs.append({"token_id": int(token), "logprob": tok_lp})
                             if token in stop_ids:
                                 tokens.pop()
+                                _stopped_by_stop_id = True
                                 break
                             if stop_suffixes:
                                 detokenizer.add_token(token)
@@ -2082,6 +2088,7 @@ class BatchedEngine:
                             token_logprobs.append(entry)
                         if token in stop_ids:
                             tokens.pop()  # Exclude stop token from output
+                            _stopped_by_stop_id = True
                             break
                         if stop_suffixes:
                             detokenizer.add_token(token)
@@ -2174,13 +2181,13 @@ class BatchedEngine:
             except Exception:
                 logger.debug("inflight prefix unregister failed", exc_info=True)
 
-            return tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _itl_samples, _thinking_tokens
+            return tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id, _itl_samples, _thinking_tokens
 
         from .mlx_executor import get_mlx_executor
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         try:
-            tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run)
+            tokens, output_text, token_logprobs, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id, _itl_samples, _thinking_tokens = await loop.run_in_executor(executor, _run)
         except MemoryError:
             logger.warning("OOM during generation — returning memory_limit finish reason")
             try:
@@ -2199,6 +2206,9 @@ class BatchedEngine:
                 finish_reason="memory_limit",
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
+                error="OOM during generation",
+                ttft_ms=0.0,
+                cached_tokens=0,
             )
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
@@ -2219,6 +2229,9 @@ class BatchedEngine:
                     finish_reason="memory_limit",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
+                    error=str(e),
+                    ttft_ms=0.0,
+                    cached_tokens=0,
                 )
             try:
                 from .inflight_prefix_sharing import get_inflight_tracker
@@ -2273,12 +2286,12 @@ class BatchedEngine:
         # Determine finish_reason.
         # Priority: cancel > stop (suffix or stop_id) > length
         # When cancel_event or timeout triggers, the loop breaks without
-        # setting _stopped_by_suffix or landing on a stop_id, so those
+        # setting _stopped_by_suffix or _stopped_by_stop_id, so those
         # tokens correctly show up as "stop" only when genuinely stopped.
         _cancelled = cancel_event is not None and cancel_event.is_set()
         if _cancelled:
             finish_reason = "stop"
-        elif _stopped_by_suffix or (tokens and tokens[-1] in stop_ids):
+        elif _stopped_by_suffix or _stopped_by_stop_id:
             finish_reason = "stop"
         else:
             finish_reason = "length"
@@ -2928,6 +2941,8 @@ class BatchedEngine:
                                 _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         except Exception:
                             logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
+                        # Emit terminal stop chunk so consumer sees finished=True
+                        _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         if _pipeline is not None:
                             _pipeline.finish()
                         if _prefill_tracker is not None:
@@ -3091,20 +3106,51 @@ class BatchedEngine:
                     item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except asyncio.TimeoutError:
                     logger.warning(f"Streaming fast path timeout: no token for {timeout_seconds}s")
+                    # Yield terminal output so consumer sees finished=True
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="error",
+                        error=f"Streaming timeout: no token for {timeout_seconds}s",
+                        ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                        cached_tokens=_cached_tokens_box[0],
+                        reasoning_tokens=_reasoning_tokens,
+                    )
                     break
                 if item is _sentinel:
                     break
                 if isinstance(item, BaseException):
                     err_msg = str(item).lower()
                     is_oom = isinstance(item, MemoryError) or "memory" in err_msg
-                    if is_oom and accumulated:
+                    if is_oom:
                         yield GenerationOutput(
-                            text=_clean_special_tokens(accumulated),
+                            text=_clean_special_tokens(accumulated) if accumulated else "",
                             new_text="",
                             prompt_tokens=prompt_tokens,
                             completion_tokens=n_tok,
                             finished=True,
                             finish_reason="memory_limit",
+                            error=str(item),
+                            ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                            cached_tokens=_cached_tokens_box[0],
+                            reasoning_tokens=_reasoning_tokens,
+                        )
+                    else:
+                        # Non-OOM exception: yield terminal error output
+                        yield GenerationOutput(
+                            text=_clean_special_tokens(accumulated) if accumulated else "",
+                            new_text="",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=n_tok,
+                            finished=True,
+                            finish_reason="error",
+                            error=str(item),
+                            ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
+                            cached_tokens=_cached_tokens_box[0],
+                            reasoning_tokens=_reasoning_tokens,
                         )
                     break
                 if len(item) >= 6:
@@ -3630,6 +3676,7 @@ class BatchedEngine:
                 finish_reason="memory_limit",
                 prompt_tokens=len(input_ids),
                 completion_tokens=0,
+                error="OOM during speculative generation",
             )
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
@@ -3644,6 +3691,7 @@ class BatchedEngine:
                     finish_reason="memory_limit",
                     prompt_tokens=len(input_ids),
                     completion_tokens=0,
+                    error=str(e),
                 )
             raise
         except Exception as e:
@@ -3675,13 +3723,24 @@ class BatchedEngine:
             except Exception:
                 logger.debug("TTFT prometheus recording failed in spec decode path", exc_info=True)
 
+        # Determine finish_reason with cancel awareness
+        _cancelled = cancel_event is not None and cancel_event.is_set()
+        if _cancelled:
+            _finish_reason = "stop"
+        elif hit_stop:
+            _finish_reason = "stop"
+        elif len(token_ids) < max_tokens:
+            _finish_reason = "stop"
+        else:
+            _finish_reason = "length"
+
         return GenerationOutput(
             text=text,
             new_text=text,
             prompt_tokens=len(input_ids),
             completion_tokens=len(token_ids),
             finished=True,
-            finish_reason="stop" if hit_stop or len(token_ids) < max_tokens else "length",
+            finish_reason=_finish_reason,
             reasoning_tokens=0,
             cached_tokens=0,
             logprobs=_logprobs,
@@ -4122,6 +4181,8 @@ class BatchedEngine:
             ids = mx.array(input_ids)
             tokens = []
             ttft_s = 0.0
+            _stopped_by_stop_id = False
+            _stopped_by_suffix = False
 
             # Prefill with KV prefix cache
             prefix_cache = self._kv_prefix_cache
@@ -4159,12 +4220,13 @@ class BatchedEngine:
                         break
 
                     if first_logits is None:
-                        return tokens, "", [], time.perf_counter() - gen_t0, 0
+                        return tokens, "", [], time.perf_counter() - gen_t0, matched, False, False
 
                     ttft_s = time.perf_counter() - gen_t0
 
-                    # Get first token from the model
-                    first_token = int(mx.argmax(first_logits, axis=-1).flatten()[0])
+                    # Get first token — use the sampler-applied token from generate_step,
+                    # not argmax (which would ignore temperature/top_p/top_k settings).
+                    first_token = int(token)
                     tokens.append(first_token)
                     all_token_ids.append(first_token)
 
@@ -4172,6 +4234,10 @@ class BatchedEngine:
                     remaining = max_tokens - 1
                     while remaining > 0:
                         if cancel_event is not None and cancel_event.is_set():
+                            break
+                        # Stop check: break outer loop if stop token was hit in
+                        # a previous iteration's accepted/bonus tokens.
+                        if _stopped_by_stop_id or _stopped_by_suffix:
                             break
                         # Propose K draft tokens via N-gram
                         # Use adaptive K if controller is active, else use proposer default
@@ -4194,9 +4260,11 @@ class BatchedEngine:
                                 remaining -= 1
                                 if token_id in stop_ids:
                                     tokens.pop()
+                                    _stopped_by_stop_id = True
                                     break
                                 detokenizer.add_token(token_id)
                                 if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    _stopped_by_suffix = True
                                     break
                             continue
 
@@ -4224,10 +4292,12 @@ class BatchedEngine:
                             if tid in stop_ids:
                                 tokens.pop()
                                 _stopped = True
+                                _stopped_by_stop_id = True
                                 break
                             detokenizer.add_token(tid)
                             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                 _stopped = True
+                                _stopped_by_suffix = True
                                 break
                             # Advance sampler's grammar constraint to stay in sync
                             if _grammar_constraint is not None:
@@ -4243,10 +4313,13 @@ class BatchedEngine:
                             tokens.append(bonus)
                             all_token_ids.append(bonus)
                             remaining -= 1
-                            if bonus not in stop_ids:
+                            if bonus in stop_ids:
+                                tokens.pop()
+                                _stopped_by_stop_id = True
+                            else:
                                 detokenizer.add_token(bonus)
                             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                pass
+                                _stopped_by_suffix = True
                             # Advance sampler's grammar constraint for bonus token
                             if _grammar_constraint is not None:
                                 try:
@@ -4268,14 +4341,14 @@ class BatchedEngine:
 
                 output_text = tokenizer.decode(tokens, skip_special_tokens=True)
                 mx.synchronize()
-                return tokens, output_text, [], ttft_s, matched
+                return tokens, output_text, [], ttft_s, matched, _stopped_by_suffix, _stopped_by_stop_id
             finally:
                 _unregister_inflight()
 
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         try:
-            tokens, output_text, _, ttft_s, cached_tokens = await loop.run_in_executor(executor, _run)
+            tokens, output_text, _, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id = await loop.run_in_executor(executor, _run)
         except MemoryError:
             logger.warning("OOM during N-gram spec generation — returning memory_limit finish reason")
             try:
@@ -4288,6 +4361,9 @@ class BatchedEngine:
                 finish_reason="memory_limit",
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
+                error="OOM during N-gram spec generation",
+                ttft_ms=0.0,
+                cached_tokens=0,
             )
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
@@ -4302,13 +4378,24 @@ class BatchedEngine:
                     finish_reason="memory_limit",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
+                    error=str(e),
+                    ttft_ms=0.0,
+                    cached_tokens=0,
                 )
             raise
         except Exception as e:
             logger.error(f"Unexpected error during N-gram spec generation: {e}", exc_info=True)
             raise
 
-        finish_reason = "stop" if tokens and tokens[-1] in stop_ids else "length"
+        # Determine finish_reason with cancel awareness.
+        # Stop tokens are popped from `tokens`, so check the flags instead.
+        _cancelled = cancel_event is not None and cancel_event.is_set()
+        if _cancelled:
+            finish_reason = "stop"
+        elif _stopped_by_suffix or _stopped_by_stop_id:
+            finish_reason = "stop"
+        else:
+            finish_reason = "length"
         output_text = _clean_special_tokens(output_text)
 
         # Build logprobs from generated tokens
@@ -4827,6 +4914,9 @@ class BatchedEngine:
                 finish_reason="memory_limit",
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
+                error="OOM during MTP generation",
+                ttft_ms=0.0,
+                cached_tokens=0,
             )
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
@@ -4841,6 +4931,9 @@ class BatchedEngine:
                     finish_reason="memory_limit",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
+                    error=str(e),
+                    ttft_ms=0.0,
+                    cached_tokens=0,
                 )
             raise
         except Exception as e:
@@ -4851,15 +4944,23 @@ class BatchedEngine:
         # Truncate at stop tokens (exclude stop token from output)
         hit_stop = False
         hit_suffix = False
+        _mtp_completion_count = len(token_ids)  # Track actual completion count
         for i, tid in enumerate(token_ids):
             if tid in eos_ids:
                 token_ids = token_ids[:i]
+                _mtp_completion_count = i
                 hit_stop = True
                 break
             detokenizer.add_token(tid)
             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                # Truncate token_ids to exclude tokens after the suffix match
+                _mtp_completion_count = i + 1
+                token_ids = token_ids[:i + 1]
                 hit_suffix = True
                 break
+        else:
+            # No stop/suffix hit — completion count is all tokens
+            _mtp_completion_count = len(token_ids)
         detokenizer.finalize()
         output_text = _clean_special_tokens(detokenizer.text)
 
@@ -4870,7 +4971,14 @@ class BatchedEngine:
                     output_text = output_text[:-len(s)]
                     break
 
-        finish_reason = "stop" if hit_stop or hit_suffix else "length"
+        # Determine finish_reason with cancel awareness
+        _cancelled = cancel_event is not None and cancel_event.is_set()
+        if _cancelled:
+            finish_reason = "stop"
+        elif hit_stop or hit_suffix:
+            finish_reason = "stop"
+        else:
+            finish_reason = "length"
 
         # Record MTP stats + TTFT in Prometheus
         try:
@@ -4900,7 +5008,7 @@ class BatchedEngine:
             text=output_text,
             new_text=output_text,
             prompt_tokens=prompt_tokens,
-            completion_tokens=len(token_ids),
+            completion_tokens=_mtp_completion_count,
             finished=True,
             finish_reason=finish_reason,
             reasoning_tokens=0,
@@ -5460,6 +5568,9 @@ class BatchedEngine:
                 finish_reason="memory_limit",
                 prompt_tokens=num_prompt_tokens,
                 completion_tokens=0,
+                error=f"Memory guard rejected: {reason}",
+                ttft_ms=0.0,
+                cached_tokens=0,
             )
         return None
 
