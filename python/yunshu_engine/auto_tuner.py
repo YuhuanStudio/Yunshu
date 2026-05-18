@@ -135,6 +135,7 @@ class TuningDecision:
     after_metrics: Optional[StepMetrics] = None
     improvement: float = 0.0  # positive = better
     is_regression: bool = False
+    reverted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -577,9 +578,9 @@ class AdaptiveBatchSizer:
             batch = max(self._min_batch, min(batch, queue_depth))
             batch = max(self._min_batch, min(batch, self._max_batch))
 
-            # Track SLO compliance
+            # Track SLO compliance (missing latency is NOT counted as SLO-met)
             self._slo_total_count += 1
-            if current_latency_ms <= slo_latency_ms or current_latency_ms <= 0:
+            if current_latency_ms > 0 and current_latency_ms <= slo_latency_ms:
                 self._slo_met_count += 1
 
             if batch != old_batch:
@@ -636,9 +637,14 @@ class AutoTuner:
     _STEPS: dict[str, Any] = {
         "batch_size": 2,
         "prefill_chunk_size": 256,
-        "kv_quantization_bits": 4,
+        "kv_quantization_bits": 2,
         "spec_draft_length": 1,
         "num_parallel_requests": 2,
+    }
+
+    # Valid values for parameters that have discrete allowed values
+    _VALID_VALUES: dict[str, list[int]] = {
+        "kv_quantization_bits": [2, 4, 8, 16],
     }
 
     def __init__(
@@ -717,8 +723,21 @@ class AutoTuner:
                 )
 
             step = self._STEPS.get(param_name, 1)
+            valid = self._VALID_VALUES.get(param_name)
 
-            if direction == "increase":
+            if valid:
+                # Discrete parameter: snap to next valid value
+                try:
+                    idx = valid.index(old_value)
+                except ValueError:
+                    idx = 0
+                if direction == "increase":
+                    new_value = valid[min(idx + 1, len(valid) - 1)]
+                elif direction == "decrease":
+                    new_value = valid[max(idx - 1, 0)]
+                else:
+                    new_value = old_value
+            elif direction == "increase":
                 new_value = old_value + step
             elif direction == "decrease":
                 new_value = old_value - step
@@ -796,12 +815,16 @@ class AutoTuner:
                 decision.is_regression = True
                 self._regressions += 1
                 logger.warning(
-                    "AutoTuner regression detected: %s %s->%s, improvement=%.2f%%",
+                    "AutoTuner regression detected: %s %s->%s, improvement=%.2f%% — reverting",
                     decision.param_name,
                     decision.old_value,
                     decision.new_value,
                     improvement * 100,
                 )
+                # Revert the parameter to its pre-tuning value
+                setattr(self._params, decision.param_name, decision.old_value)
+                self._params.clamp()
+                decision.reverted = True
             elif improvement > 0:
                 self._improvements += 1
 

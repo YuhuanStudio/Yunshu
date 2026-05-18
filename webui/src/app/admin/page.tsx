@@ -85,7 +85,7 @@ function ModelSettings() {
     models.forEach((m) => {
       fetch(`/api/v1/admin/models/${encodeURIComponent(m.id)}/settings`)
         .then((r) => r.json())
-        .then((d) => setSettings((prev) => ({ ...prev, [m.id]: d.settings || d })))
+        .then((d) => setSettings((prev) => ({ ...prev, [m.id]: d.settings ?? {} })))
         .catch(() => {});
     });
   }, [models]);
@@ -294,7 +294,7 @@ function ApiKeyManager() {
 // ── Log Viewer ──
 
 function LogViewer() {
-  const [logs, setLogs] = useState<string[]>([]);
+  const [logs, setLogs] = useState<{timestamp?: string; level?: string; message?: string; logger?: string}[]>([]);
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [level, setLevel] = useState("all");
@@ -327,12 +327,20 @@ function LogViewer() {
     return () => clearInterval(id);
   }, [autoRefresh, fetchLogs]);
 
-  const getLogColor = (line: string) => {
-    if (line.includes(" ERROR ") || line.includes(" CRITICAL ")) return "text-[var(--color-danger)]";
-    if (line.includes(" WARNING ") || line.includes(" WARN ")) return "text-[var(--color-warning)]";
-    if (line.includes(" INFO ")) return "text-[var(--color-text-primary)]";
-    if (line.includes(" DEBUG ")) return "text-[var(--color-text-secondary)]";
+  const getLogColor = (entry: {level?: string}) => {
+    const lvl = entry.level?.toLowerCase() ?? "";
+    if (lvl === "error" || lvl === "critical") return "text-[var(--color-danger)]";
+    if (lvl === "warning" || lvl === "warn") return "text-[var(--color-warning)]";
+    if (lvl === "info") return "text-[var(--color-text-primary)]";
+    if (lvl === "debug") return "text-[var(--color-text-secondary)]";
     return "text-[var(--color-text-secondary)]";
+  };
+
+  const formatLogLine = (entry: {timestamp?: string; level?: string; logger?: string; message?: string}) => {
+    const ts = entry.timestamp ?? "";
+    const lvl = (entry.level ?? "").toUpperCase().padEnd(8);
+    const logger = entry.logger ? `[${entry.logger}] ` : "";
+    return `${ts} ${lvl} ${logger}${entry.message ?? ""}`;
   };
 
   return (
@@ -360,9 +368,9 @@ function LogViewer() {
           {logs.length === 0 ? (
             <div className="text-[var(--color-text-secondary)]">No logs available.</div>
           ) : (
-            logs.map((line, i) => (
-              <div key={i} className={`${getLogColor(line)} whitespace-pre-wrap break-all leading-5`}>
-                {line}
+            logs.map((entry, i) => (
+              <div key={i} className={`${getLogColor(entry)} whitespace-pre-wrap break-all leading-5`}>
+                {formatLogLine(entry)}
               </div>
             ))
           )}

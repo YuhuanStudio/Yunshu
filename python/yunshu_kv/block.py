@@ -12,7 +12,10 @@ Inspired by vLLM's BlockPool but adapted for Apple Silicon UMA:
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from .cache_events import CacheEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +129,12 @@ class BlockPool:
         num_blocks: int,
         block_size: int,
         enable_caching: bool = True,
+        event_bus: CacheEventBus | None = None,
     ) -> None:
         self.num_blocks = num_blocks
         self.block_size = block_size
         self.enable_caching = enable_caching
+        self._event_bus = event_bus
 
         # All blocks
         self.blocks = [KVBlock(block_id=i) for i in range(num_blocks)]
@@ -195,6 +200,13 @@ class BlockPool:
         block.block_hash = block_hash
         block.last_access_time = time.monotonic()
         self._hash_to_block[block_hash] = block
+        if self._event_bus is not None:
+            from .cache_events import CacheEvent
+            self._event_bus.publish(CacheEvent(
+                "block_cached",
+                block_hash=block_hash,
+                block_ids=[block.block_id],
+            ))
 
     def lookup_hash(self, block_hash: int) -> Optional[KVBlock]:
         """Find a cached block by hash."""
@@ -214,12 +226,21 @@ class BlockPool:
         current = self._hash_to_block.get(block.block_hash)
         if current is block:
             self._hash_to_block.pop(block.block_hash, None)
+        # Snapshot hash before clearing — needed for the event.
+        evicted_hash = block.block_hash
         # Always clear the requesting block's hash, even if the hash
         # map pointed to a different block.  Leaving a stale block_hash
         # on an allocated block causes _evict_cached_block to do
         # redundant work on the next allocation and can mislead callers
         # that check block_hash for cache membership.
         block.reset_hash()
+        if self._event_bus is not None and current is block:
+            from .cache_events import CacheEvent
+            self._event_bus.publish(CacheEvent(
+                "block_evicted",
+                block_hash=evicted_hash,
+                block_ids=[block.block_id],
+            ))
         return current is block
 
     def get_cached_blocks(self) -> list[KVBlock]:

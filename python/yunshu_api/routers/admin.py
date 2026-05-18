@@ -9,6 +9,8 @@ System monitoring: hardware status, server metrics, prefill progress, model disc
 
 
 import logging
+import threading
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -709,6 +711,50 @@ async def get_memory_guard_stats(_=Depends(require_permission("can_view_admin"))
 # ---------------------------------------------------------------------------
 
 
+class _InMemoryLogHandler(logging.Handler):
+    """Thread-safe log handler that keeps recent entries for the Admin UI."""
+
+    _MAX_ENTRIES = 2000
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._entries: deque[dict] = deque(maxlen=self._MAX_ENTRIES)
+        self._lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = {
+                "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+                "level": record.levelname.lower(),
+                "logger": record.name,
+                "message": self.format(record),
+            }
+            with self._lock:
+                self._entries.append(entry)
+        except Exception:
+            pass
+
+    def get_entries(self) -> list[dict]:
+        with self._lock:
+            return list(self._entries)
+
+
+# Module-level: attach handler to the yunshu logger once
+_admin_log_handler: _InMemoryLogHandler | None = None
+
+
+def _ensure_log_handler() -> _InMemoryLogHandler:
+    global _admin_log_handler
+    if _admin_log_handler is None:
+        logger = logging.getLogger("yunshu")
+        handler = _InMemoryLogHandler()
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        _admin_log_handler = handler
+    return _admin_log_handler
+
+
 @router.get("/logs")
 async def get_admin_logs(
     level: str = "info",
@@ -716,21 +762,16 @@ async def get_admin_logs(
     _=Depends(require_permission("can_view_admin")),
 ):
     """Return recent log entries (WebUI Admin logs tab)."""
-    import logging
-
-    logger = logging.getLogger("yunshu")
-    if not hasattr(logger, 'recent_logs'):
-        return {"logs": [], "total": 0, "level": level}
-
-    logs = getattr(logger, 'recent_logs', [])
-    filtered = [l for l in logs if level == "all" or l.get("level", "").lower() == level]
+    handler = _ensure_log_handler()
+    all_entries = handler.get_entries()
+    filtered = [e for e in all_entries if level == "all" or e.get("level", "") == level.lower()]
     return {"logs": filtered[-lines:], "total": len(filtered), "level": level}
 
 
 @router.get("/cache/status")
 async def get_cache_status(_=Depends(require_permission("can_view_admin"))):
     """Return KV cache status (WebUI Admin cache tab)."""
-    from ..engine import get_engine, get_model_manager
+    from yunshu_gateway.engine import get_engine, get_model_manager
 
     caches = []
     manager = get_model_manager()
@@ -757,7 +798,7 @@ async def get_cache_status(_=Depends(require_permission("can_view_admin"))):
 @router.post("/cache/clear")
 async def clear_cache(_=Depends(require_permission("can_load_models"))):
     """Clear KV caches (WebUI Admin cache tab)."""
-    from ..engine import get_engine, get_model_manager
+    from yunshu_gateway.engine import get_engine, get_model_manager
 
     cleared = 0
 

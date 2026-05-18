@@ -341,11 +341,14 @@ class TokenPipeline:
                     logger.debug("Previous stage3 task failed", exc_info=True)
                     self._completed_token = None
             else:
-                # First token: no previous result to return yet.
-                # Run current stage3 synchronously so we have something
-                # to return on the next call.
+                # First token: no previous stage3 was running. Complete the
+                # current stage3 immediately so the first token is not lost.
                 self._completed_token = await stage3_task
                 stage3_task = None  # Already awaited
+
+                # Return the first token right away instead of returning None
+                result = self._completed_token
+                self._completed_token = None
 
             self._prev_stage3_task = stage3_task
             self._current = None
@@ -969,4 +972,12 @@ def _softmax(x: np.ndarray) -> np.ndarray:
     """Numerically stable softmax."""
     shifted = x - np.max(x)
     exp_x = np.exp(shifted)
-    return exp_x / (np.sum(exp_x) + 1e-12)
+    total = np.sum(exp_x)
+    if total == 0.0 or np.isnan(total):
+        # All logits are -inf: fall back to uniform over top-k or argmax
+        flat = x.ravel()
+        idx = np.argmax(flat)
+        result = np.zeros_like(x)
+        result.ravel()[idx] = 1.0
+        return result
+    return exp_x / (total + 1e-12)

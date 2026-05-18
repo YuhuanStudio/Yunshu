@@ -2,6 +2,7 @@
 
 from .block import BlockPool, KVBlock
 from .block_table import BlockTable
+from .cache_events import CacheEvent, CacheEventBus
 from .compression import KVTier, TierConfig, compute_compression_ratio
 from .hash import compute_block_hash, compute_prompt_hashes
 from .manager import KVCacheConfig, KVCacheManager, compute_num_blocks
@@ -15,6 +16,8 @@ __all__ = [
     "BackgroundSSDFlush",
     "BlockPool",
     "BlockTable",
+    "CacheEvent",
+    "CacheEventBus",
     "KVBlock",
     "KVCacheConfig",
     "KVCacheManager",

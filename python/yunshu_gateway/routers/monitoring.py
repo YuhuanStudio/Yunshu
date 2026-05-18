@@ -929,3 +929,58 @@ async def memory_pressure_stats() -> dict[str, Any]:
     if not results:
         return {"active": False}
     return {"active": True, "models": results}
+
+
+# ---------------------------------------------------------------------------
+# Aggregated endpoint — single HTTP call for all monitoring data
+# ---------------------------------------------------------------------------
+
+_ENDPOINT_MAP: dict[str, Any] = {}
+
+
+@router.get("/all")
+async def all_monitoring_stats() -> dict[str, Any]:
+    """Aggregate all monitoring stats into a single response.
+
+    Returns all monitoring data in one HTTP call, reducing the WebUI
+    from 31 parallel fetches to 3-4.
+    """
+    result: dict[str, Any] = {}
+    for key, handler in _ENDPOINT_MAP.items():
+        try:
+            result[key] = await handler()
+        except Exception:
+            result[key] = None
+    return result
+
+
+def _register_endpoints() -> None:
+    global _ENDPOINT_MAP
+    _ENDPOINT_MAP = {
+        "spec_decode": spec_decode_stats,
+        "kv_cache": kv_cache_stats,
+        "requests": requests_stats,
+        "memory_guard": memory_guard_stats,
+        "ssd_cache": ssd_cache_stats,
+        "prefill_progress": prefill_progress,
+        "data_parallel": data_parallel_stats,
+        "per_model": per_model_stats,
+        "thinking_segments": thinking_segment_stats,
+        "metal_kernels": metal_kernel_stats,
+        "ane_embeddings": ane_embedding_stats,
+        "external_prefill": external_prefill_stats,
+        "health_dashboard": health_dashboard,
+        "reasoning_tokens": reasoning_tokens_stats,
+        "response_cache": response_cache_stats,
+        "inflight_prefix_sharing": inflight_prefix_sharing_stats,
+        "request_coalescer": request_coalescer_stats,
+        "token_scheduler": token_scheduler_stats,
+        "kv_migration": kv_migration_stats,
+        "attention_eviction": attention_eviction_stats,
+        "batch_size": batch_size_stats,
+        "auto_tuner": auto_tuner_stats,
+        "memory_pressure": memory_pressure_stats,
+    }
+
+
+_register_endpoints()

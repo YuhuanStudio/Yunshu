@@ -109,38 +109,16 @@ export default function MonitoringPage() {
     mounted.current = true;
     const fetchData = async () => {
       try {
-        const [sysRes, engRes, gwSysRes, specRes, kvRes, reqRes, mgRes, ssdRes, ppRes, radixRes, hwRes, meshRes, tuningRes, modelsRes, dpRes, perModelRes, thinkRes, metalRes, aneRes, extPfRes, healthRes, reasonRes, rcRes, inflightRes, coalRes, tsRes, kvMigRes, attnEvRes, bsRes, atRes, mpRes] = await Promise.all([
+        // Use aggregated endpoint to reduce 31 fetches to 4
+        const [sysRes, engRes, gwSysRes, allRes, radixRes, hwRes, meshRes, modelsRes] = await Promise.all([
           fetch("/api/v1/monitoring/system").catch(() => null),
           fetch("/api/v1/monitoring/engine").catch(() => null),
           fetch("/api/v1/gw/monitoring/system").catch(() => null),
-          fetch("/api/v1/gw/monitoring/spec-decode").catch(() => null),
-          fetch("/api/v1/gw/monitoring/kv-cache").catch(() => null),
-          fetch("/api/v1/gw/monitoring/requests").catch(() => null),
-          fetch("/api/v1/gw/monitoring/memory-guard").catch(() => null),
-          fetch("/api/v1/gw/monitoring/ssd-cache").catch(() => null),
-          fetch("/api/v1/gw/monitoring/prefill-progress").catch(() => null),
+          fetch("/api/v1/gw/monitoring/all").catch(() => null),
           fetch("/api/v1/admin/radix-tree").catch(() => null),
           fetch("/api/v1/admin/hardware-profile").catch(() => null),
           fetch("/api/v1/mesh/status").catch(() => null),
-          fetch("/v1/profile/engine").catch(() => null),
           fetch("/v1/models").catch(() => null),
-          fetch("/api/v1/gw/monitoring/data-parallel").catch(() => null),
-          fetch("/api/v1/gw/monitoring/per-model").catch(() => null),
-          fetch("/api/v1/gw/monitoring/thinking-segments").catch(() => null),
-          fetch("/api/v1/gw/monitoring/metal-kernels").catch(() => null),
-          fetch("/api/v1/gw/monitoring/ane-embeddings").catch(() => null),
-          fetch("/api/v1/gw/monitoring/external-prefill").catch(() => null),
-          fetch("/api/v1/gw/monitoring/health-dashboard").catch(() => null),
-          fetch("/api/v1/gw/monitoring/reasoning-tokens").catch(() => null),
-          fetch("/api/v1/gw/monitoring/response-cache").catch(() => null),
-          fetch("/api/v1/gw/monitoring/inflight-prefix-sharing").catch(() => null),
-          fetch("/api/v1/gw/monitoring/request-coalescer").catch(() => null),
-          fetch("/api/v1/gw/monitoring/token-scheduler").catch(() => null),
-          fetch("/api/v1/gw/monitoring/kv-migration").catch(() => null),
-          fetch("/api/v1/gw/monitoring/attention-eviction").catch(() => null),
-          fetch("/api/v1/gw/monitoring/batch-size").catch(() => null),
-          fetch("/api/v1/gw/monitoring/auto-tuner").catch(() => null),
-          fetch("/api/v1/gw/monitoring/memory-pressure").catch(() => null),
         ]);
         let sysData: SystemStats | null = null;
         let engData: Record<string, unknown> | null = null;
@@ -176,29 +154,34 @@ export default function MonitoringPage() {
           engData = await engRes.json();
           if (mounted.current) setEngine(engData);
         }
-        if (specRes && specRes.ok) {
-          const specData = await specRes.json();
-          if (mounted.current) setSpecDecode(specData);
-        }
-        if (kvRes && kvRes.ok) {
-          const kvData = await kvRes.json();
-          if (mounted.current) setKvCache(kvData);
-        }
-        if (reqRes && reqRes.ok) {
-          const reqData = await reqRes.json();
-          if (mounted.current) setRequests(reqData);
-        }
-        if (mgRes && mgRes.ok) {
-          const mgData = await mgRes.json();
-          if (mounted.current) setMemoryGuard(mgData);
-        }
-        if (ssdRes && ssdRes.ok) {
-          const ssdData = await ssdRes.json();
-          if (mounted.current) setSsdCache(ssdData);
-        }
-        if (ppRes && ppRes.ok) {
-          const ppData = await ppRes.json();
-          if (mounted.current) setPrefillProgress(ppData);
+        // Unpack aggregated monitoring data
+        if (allRes && allRes.ok) {
+          const all = await allRes.json();
+          if (mounted.current) {
+            if (all.spec_decode) setSpecDecode(all.spec_decode);
+            if (all.kv_cache) setKvCache(all.kv_cache);
+            if (all.requests) setRequests(all.requests);
+            if (all.memory_guard) setMemoryGuard(all.memory_guard);
+            if (all.ssd_cache) setSsdCache(all.ssd_cache);
+            if (all.prefill_progress) setPrefillProgress(all.prefill_progress);
+            if (all.data_parallel) setDataParallel(all.data_parallel);
+            if (all.per_model) setPerModel(all.per_model);
+            if (all.thinking_segments) setThinkingSegments(all.thinking_segments);
+            if (all.metal_kernels) setMetalKernels(all.metal_kernels);
+            if (all.ane_embeddings) setAneEmbeddings(all.ane_embeddings);
+            if (all.external_prefill) setExternalPrefill(all.external_prefill);
+            if (all.health_dashboard) setHealthDashboard(all.health_dashboard);
+            if (all.reasoning_tokens) setReasoningTokens(all.reasoning_tokens);
+            if (all.response_cache) setResponseCache(all.response_cache);
+            if (all.inflight_prefix_sharing) setInflightPrefix(all.inflight_prefix_sharing);
+            if (all.request_coalescer) setRequestCoalescer(all.request_coalescer);
+            if (all.token_scheduler) setTokenScheduler(all.token_scheduler);
+            if (all.kv_migration) setKvMigration(all.kv_migration);
+            if (all.attention_eviction) setAttentionEviction(all.attention_eviction);
+            if (all.batch_size) setBatchSize(all.batch_size);
+            if (all.auto_tuner) setAutoTuner(all.auto_tuner);
+            if (all.memory_pressure) setMemoryPressure(all.memory_pressure);
+          }
         }
         if (radixRes && radixRes.ok) {
           const radixData = await radixRes.json();
@@ -212,81 +195,9 @@ export default function MonitoringPage() {
           const meshData = await meshRes.json();
           if (mounted.current) setMeshStatus(meshData);
         }
-        if (tuningRes && tuningRes.ok) {
-          const tuningData = await tuningRes.json();
-          if (mounted.current) setEngineTuning(tuningData);
-        }
         if (modelsRes && modelsRes.ok) {
           const modelsData = await modelsRes.json();
           if (mounted.current) setModelStats(modelsData);
-        }
-        if (dpRes && dpRes.ok) {
-          const dpData = await dpRes.json();
-          if (mounted.current) setDataParallel(dpData);
-        }
-        if (perModelRes && perModelRes.ok) {
-          const pmData = await perModelRes.json();
-          if (mounted.current) setPerModel(pmData);
-        }
-        if (thinkRes && thinkRes.ok) {
-          const thinkData = await thinkRes.json();
-          if (mounted.current) setThinkingSegments(thinkData);
-        }
-        if (metalRes && metalRes.ok) {
-          const metalData = await metalRes.json();
-          if (mounted.current) setMetalKernels(metalData);
-        }
-        if (aneRes && aneRes.ok) {
-          const aneData = await aneRes.json();
-          if (mounted.current) setAneEmbeddings(aneData);
-        }
-        if (extPfRes && extPfRes.ok) {
-          const extPfData = await extPfRes.json();
-          if (mounted.current) setExternalPrefill(extPfData);
-        }
-        if (healthRes && healthRes.ok) {
-          const healthData = await healthRes.json();
-          if (mounted.current) setHealthDashboard(healthData);
-        }
-        if (reasonRes && reasonRes.ok) {
-          const reasonData = await reasonRes.json();
-          if (mounted.current) setReasoningTokens(reasonData);
-        }
-        if (rcRes && rcRes.ok) {
-          const rcData = await rcRes.json();
-          if (mounted.current) setResponseCache(rcData);
-        }
-        if (inflightRes && inflightRes.ok) {
-          const inflightData = await inflightRes.json();
-          if (mounted.current) setInflightPrefix(inflightData);
-        }
-        if (coalRes && coalRes.ok) {
-          const coalData = await coalRes.json();
-          if (mounted.current) setRequestCoalescer(coalData);
-        }
-        if (tsRes && tsRes.ok) {
-          const tsData = await tsRes.json();
-          if (mounted.current) setTokenScheduler(tsData);
-        }
-        if (kvMigRes && kvMigRes.ok) {
-          const kvMigData = await kvMigRes.json();
-          if (mounted.current) setKvMigration(kvMigData);
-        }
-        if (attnEvRes && attnEvRes.ok) {
-          const attnEvData = await attnEvRes.json();
-          if (mounted.current) setAttentionEviction(attnEvData);
-        }
-        if (bsRes && bsRes.ok) {
-          const bsData = await bsRes.json();
-          if (mounted.current) setBatchSize(bsData);
-        }
-        if (atRes && atRes.ok) {
-          const atData = await atRes.json();
-          if (mounted.current) setAutoTuner(atData);
-        }
-        if (mpRes && mpRes.ok) {
-          const mpData = await mpRes.json();
-          if (mounted.current) setMemoryPressure(mpData);
         }
         if (mounted.current) {
           setLastUpdate(new Date());
@@ -298,7 +209,7 @@ export default function MonitoringPage() {
       }
     };
     fetchData();
-    const id = setInterval(fetchData, 3000);
+    const id = setInterval(fetchData, 5000);
     return () => {
       mounted.current = false;
       clearInterval(id);

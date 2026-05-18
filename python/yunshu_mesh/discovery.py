@@ -195,7 +195,14 @@ class NodeDiscovery:
             self._discovered_times[node.node_id] = time.time()
             callbacks = list(self._on_discovered_callbacks)
             # Prune stale nodes that haven't been seen in a while
-            self._prune_stale_nodes()
+            stale_nodes, stale_callbacks = self._prune_stale_nodes()
+        # Fire on_lost callbacks for stale nodes (outside lock)
+        for stale_node in stale_nodes:
+            for cb in stale_callbacks:
+                try:
+                    cb(stale_node)
+                except Exception:
+                    logger.debug("on_lost callback failed for stale node", exc_info=True)
         if is_new:
             logger.info(f"Discovered node: {node.hostname} ({node.ip}:{node.port})")
             for cb in callbacks:
@@ -216,12 +223,11 @@ class NodeDiscovery:
                 except Exception:
                     logger.debug("on_lost callback failed", exc_info=True)
 
-    def _prune_stale_nodes(self) -> None:
+    def _prune_stale_nodes(self) -> tuple[list, list]:
         """Remove nodes not seen within _stale_timeout seconds.
 
-        Must be called with _lock held. Fires on_lost callbacks for
-        each pruned node — but since callbacks are invoked after lock
-        release, we collect them first and fire afterward.
+        Must be called with _lock held. Returns (stale_nodes, callbacks)
+        so the caller can fire callbacks after releasing the lock.
         """
         now = time.time()
         stale_ids = [
@@ -229,23 +235,13 @@ class NodeDiscovery:
             if now - t > self._stale_timeout
         ]
         stale_nodes = []
-        callbacks = list(self._on_lost_callbacks)
         for nid in stale_ids:
             node = self._discovered_nodes.pop(nid, None)
             self._discovered_times.pop(nid, None)
             if node:
                 stale_nodes.append(node)
                 logger.info(f"Pruning stale node: {node.hostname} ({node.ip}:{node.port})")
-        # Fire on_lost callbacks for each stale node (outside lock context
-        # since this method is called from _add_discovered which holds the
-        # lock — we fire them synchronously here because the lock is held
-        # by our caller and callbacks should not re-enter discovery).
-        for node in stale_nodes:
-            for cb in callbacks:
-                try:
-                    cb(node)
-                except Exception:
-                    logger.debug("on_lost callback failed for stale node", exc_info=True)
+        return stale_nodes, list(self._on_lost_callbacks)
 
     def stop(self) -> None:
         self._running = False

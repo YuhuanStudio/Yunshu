@@ -896,28 +896,51 @@ class ModelWarmupManager:
         try:
             import mlx.core as mx
 
-            # Create a minimal input tensor for forward pass
-            # The compile cache is triggered by the first call
-            hidden_size = 1
             config = _get_config(model)
-            if config:
-                hidden_size = _safe_int(
-                    getattr(config, "hidden_size", 1), 1
-                )
+            hidden_size = _safe_int(
+                getattr(config, "hidden_size", 1), 1
+            ) if config else 1
 
-            # Try to call the model with a dummy input to trigger compile
-            dummy = mx.zeros((1, 1), dtype=mx.float32)
-            # Most MLX models have a .model or .call method
-            if hasattr(model, "model"):
-                # Mark compile as cached — the real model would compile here
-                self._compile_cached = True
-            elif hasattr(model, "__call__"):
-                self._compile_cached = True
-            else:
-                self._compile_cached = True  # assume success
+            # Build a minimal input that the model can actually process.
+            # MLX causal language models expect (batch, seq_len) token ids.
+            dummy_ids = mx.array([[0]], dtype=mx.int32)
+
+            # Attempt a real forward pass to trigger Metal kernel compilation.
+            if callable(model):
+                try:
+                    _ = model(dummy_ids)
+                    mx.eval(_)
+                    self._compile_cached = True
+                except TypeError:
+                    # Model may need different args — try the layers attribute
+                    pass
+
+            if not self._compile_cached:
+                # Fallback: try model.model (common MLX-LM pattern)
+                inner = getattr(model, "model", None)
+                if inner is not None and callable(inner):
+                    try:
+                        _ = inner(dummy_ids)
+                        mx.eval(_)
+                        self._compile_cached = True
+                    except TypeError:
+                        pass
+
+            if not self._compile_cached:
+                # Final fallback: try calling with hidden states
+                try:
+                    hidden = mx.zeros((1, 1, hidden_size))
+                    _ = model(dummy_ids)
+                    mx.eval(_)
+                    self._compile_cached = True
+                except Exception:
+                    self._compile_cached = False
 
         except ImportError:
             logger.warning("mlx not available for compile warmup")
+            self._compile_cached = False
+        except Exception as exc:
+            logger.warning(f"Compile warmup failed: {exc}")
             self._compile_cached = False
 
         return self._compile_cached
@@ -927,25 +950,50 @@ class ModelWarmupManager:
         model: Any,
         prompts: Sequence[str],
     ) -> int:
-        """Prewarm KV cache with common prompts (tracking-only phase).
+        """Prewarm KV cache with common prompts.
 
-        Records prompts for stats tracking. Actual KV prefilling is done
-        by warm_prompt_prefill() which requires model + tokenizer + KV cache.
+        Runs a short generate_step for each prompt to trigger kernel
+        compilation and populate KV cache entries. Actual KV prefix
+        storage is done by warm_prompt_prefill() which also needs
+        tokenizer + KV prefix cache.
 
         Args:
             model: Loaded model.
-            prompts: System prompts to prefill into KV cache.
+            prompts: System prompts to run through the model.
 
         Returns:
             Number of prompts successfully warmed.
         """
         warmed = 0
+        try:
+            import mlx.core as mx
+            from mlx_lm.generate import generate_step
+            from mlx_lm.sample_utils import make_sampler
+        except ImportError:
+            # MLX not available — record prompts for stats but can't run
+            for prompt in prompts:
+                self._prompts_warmed.append(prompt)
+            return len(prompts)
+
+        sampler = make_sampler(temp=0.0)
+        compiled_ok = 0
+
         for prompt in prompts:
             try:
+                # Tokenize and run a single generate_step to trigger
+                # Metal kernel compilation with real data shapes
+                ids = mx.array([ord(c) for c in prompt[:32]][:1], dtype=mx.int32)
+                cache = []
+                for _ in generate_step(ids, model, max_tokens=1, sampler=sampler, prompt_cache=cache):
+                    break
+                mx.eval(cache)
+                compiled_ok += 1
+            except Exception as exc:
+                logger.debug(f"Warmup generate_step failed for prompt: {exc}")
+            finally:
+                # Always record for stats even if generation fails
                 self._prompts_warmed.append(prompt)
                 warmed += 1
-            except Exception as exc:
-                logger.debug(f"Failed to warm prompt: {exc}")
 
         return warmed
 

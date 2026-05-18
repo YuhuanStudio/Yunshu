@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 from .block import BlockPool, KVBlock
 from .block_table import BlockTable
+from .cache_events import CacheEvent, CacheEventBus
 from .hash import compute_block_hash, compute_prompt_hashes
 from .warm_tier import KVWarmTier, KVTierConfig
 
@@ -89,12 +90,19 @@ class KVCacheManager:
     - Integration with MLX KV cache tensors (Phase 2)
     """
 
-    def __init__(self, config: KVCacheConfig, num_blocks: int) -> None:
+    def __init__(
+        self,
+        config: KVCacheConfig,
+        num_blocks: int,
+        event_bus: CacheEventBus | None = None,
+    ) -> None:
         self.config = config
+        self._event_bus = event_bus if event_bus is not None else CacheEventBus()
         self.block_pool = BlockPool(
             num_blocks=num_blocks,
             block_size=config.block_size,
             enable_caching=config.enable_caching,
+            event_bus=self._event_bus,
         )
         # Hit rate tracking
         self._total_lookups: int = 0
@@ -434,6 +442,15 @@ class KVCacheManager:
 
         blocks = table.clear()
         self.block_pool.free(blocks)
+
+        # Publish request_freed event for distributed cache coherency.
+        if request_id is not None:
+            block_ids = [b.block_id for b in blocks]
+            self._event_bus.publish(CacheEvent(
+                "request_freed",
+                block_ids=block_ids,
+                node_id=request_id,
+            ))
 
     def evict_for_memory(self, needed_blocks: int) -> bool:
         """Try to evict cached blocks to free up space.

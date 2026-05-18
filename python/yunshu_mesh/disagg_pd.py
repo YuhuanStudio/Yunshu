@@ -29,7 +29,10 @@ import os
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from yunshu_kv.manager import KVCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -176,11 +179,20 @@ class DisaggRouter:
     When no dedicated prefill nodes exist, all nodes act as hybrid.
     """
 
-    def __init__(self, config: DisaggConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: DisaggConfig | None = None,
+        kv_manager: KVCacheManager | None = None,
+    ) -> None:
         self._config = config or DisaggConfig.from_env()
         self._nodes: dict[str, DisaggNodeInfo] = {}
         self._pending_transfers: list[KVTransferRequest] = []
         self._stats = DisaggStats()
+        self._kv_manager = kv_manager
+        # Event relay buffers: cache coherency events collected from the
+        # local KV manager and awaiting relay to peer nodes.
+        self._pending_events: list[Any] = []
+        self._setup_cache_listeners()
 
     @property
     def config(self) -> DisaggConfig:
@@ -189,6 +201,58 @@ class DisaggRouter:
     @property
     def stats(self) -> DisaggStats:
         return self._stats
+
+    # -- Cache coherency event handling ------------------------------------
+
+    def _setup_cache_listeners(self) -> None:
+        """Subscribe to KV cache events from the local manager.
+
+        Collected events are buffered in ``_pending_events`` for relay
+        to peer nodes via the mesh layer.
+        """
+        if self._kv_manager is None:
+            return
+        bus = self._kv_manager._event_bus
+        bus.subscribe("block_cached", self._on_block_cached)
+        bus.subscribe("block_evicted", self._on_block_evicted)
+        bus.subscribe("request_freed", self._on_request_freed)
+
+    def _on_block_cached(self, event: Any) -> None:
+        """Handle a block-cached event from the local KV manager."""
+        self._pending_events.append(event)
+        logger.debug(
+            "Cache event: block_cached hash=0x%x block_ids=%s",
+            event.block_hash or 0,
+            event.block_ids,
+        )
+
+    def _on_block_evicted(self, event: Any) -> None:
+        """Handle a block-evicted event from the local KV manager."""
+        self._pending_events.append(event)
+        logger.debug(
+            "Cache event: block_evicted hash=0x%x block_ids=%s",
+            event.block_hash or 0,
+            event.block_ids,
+        )
+
+    def _on_request_freed(self, event: Any) -> None:
+        """Handle a request-freed event from the local KV manager."""
+        self._pending_events.append(event)
+        logger.debug(
+            "Cache event: request_freed node_id=%s block_ids=%s",
+            event.node_id,
+            event.block_ids,
+        )
+
+    def drain_pending_events(self) -> list[Any]:
+        """Return and clear buffered cache coherency events.
+
+        The caller (mesh relay loop) is expected to batch-send these
+        to peer nodes over the mesh connection.
+        """
+        events = list(self._pending_events)
+        self._pending_events.clear()
+        return events
 
     def add_node(
         self,
@@ -415,3 +479,4 @@ class DisaggRouter:
         """Reset all stats."""
         self._stats.reset()
         self._pending_transfers.clear()
+        self._pending_events.clear()
