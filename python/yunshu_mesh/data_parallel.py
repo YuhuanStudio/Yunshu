@@ -150,7 +150,7 @@ class DataParallelRouter:
         # Sort by node_id for stable ordering regardless of dict iteration
         sorted_avail = sorted(available, key=lambda n: n.node_id)
         idx = self._rr_index % len(sorted_avail)
-        self._rr_index += 1
+        self._rr_index = (self._rr_index + 1) % (1 << 30)
         return sorted_avail[idx].node_id
 
     def _select_least_loaded(self, available: list[NodeLoad]) -> str:
