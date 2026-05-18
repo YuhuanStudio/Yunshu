@@ -1778,7 +1778,7 @@ class EngineCore:
                 # Back-off to avoid tight loop if scheduler is persistently broken.
                 # If no requests remain after failing, the loop will idle-wait
                 # on _wake_event instead of spinning.
-                self._total_idle_time_ms += (time.monotonic() - _step_start) * 1000
+                self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
                 await asyncio.sleep(0.1)
                 continue
 

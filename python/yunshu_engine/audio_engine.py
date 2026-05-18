@@ -570,7 +570,9 @@ class ASREngine:
                     offset = 0
                     while offset + frame_samples <= len(samples):
                         frame_data = samples[offset:offset + frame_samples]
-                        vad_result = self._vad.process_frame(frame_data, sample_rate=self._vad.sample_rate)
+                        # EnergyVAD.process_frame expects raw int16 bytes
+                        frame_bytes = (frame_data * 32768.0).astype(np.int16).tobytes()
+                        vad_result = self._vad.process_frame(frame_bytes, sample_rate=self._vad.sample_rate)
                         if vad_result.is_speech:
                             speech_detected = True
                             break

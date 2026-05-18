@@ -159,7 +159,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         with self._key_lock:
             if key_name in self._key_buckets:
                 if self._key_buckets[key_name].capacity != rpm:
-                    self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
+                    old_bucket = self._key_buckets[key_name]
+                    new_bucket = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
+                    if old_bucket.capacity > 0:
+                        ratio = min(old_bucket.tokens / old_bucket.capacity, 1.0)
+                        new_bucket.tokens = ratio * rpm
+                    self._key_buckets[key_name] = new_bucket
                 else:
                     self._key_buckets.move_to_end(key_name)
                 return self._key_buckets[key_name]

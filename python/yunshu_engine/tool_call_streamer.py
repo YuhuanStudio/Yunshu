@@ -347,10 +347,24 @@ class ToolCallStreamer:
                     brace_start = args_match.end() - 1
                     depth = 0
                     args_str = "{}"
+                    in_string = False
+                    escape_next = False
                     for ci in range(brace_start, len(json_text)):
-                        if json_text[ci] == '{':
+                        ch = json_text[ci]
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if ch == '\\' and in_string:
+                            escape_next = True
+                            continue
+                        if ch == '"':
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
+                        if ch == '{':
                             depth += 1
-                        elif json_text[ci] == '}':
+                        elif ch == '}':
                             depth -= 1
                             if depth == 0:
                                 args_str = json_text[brace_start:ci + 1]

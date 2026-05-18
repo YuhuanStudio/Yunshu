@@ -180,11 +180,12 @@ class SSDCacheStore:
             logger.warning(f"Failed to write SSD cache block: {e}")
             return False
 
+        header_size = 4 + 4 * len(shape) + 4  # ndim + shape dims + CRC32
         entry = SSDCacheEntry(
             block_hash=block_hash,
             block_index=block_index,
             num_tokens=num_tokens,
-            size_bytes=len(raw_bytes),
+            size_bytes=header_size + len(raw_bytes),
             last_access=time.monotonic(),
         )
         self._index[block_hash] = entry

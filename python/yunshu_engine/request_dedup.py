@@ -94,9 +94,16 @@ class RequestDeduplicator:
         **kwargs,
     ) -> str:
         """Compute content hash for deduplication."""
+        import json
+        # Deterministic serialization: json.dumps with sort_keys for
+        # list[dict] (chat messages) to avoid key-ordering variance.
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            prompt_str = json.dumps(prompt, sort_keys=True, ensure_ascii=False)
+        else:
+            prompt_str = str(prompt) if isinstance(prompt, list) else prompt
         parts = [
             model,
-            str(prompt) if isinstance(prompt, list) else prompt,
+            prompt_str,
             f"t={temperature}",
             f"p={top_p}",
             f"m={max_tokens}",

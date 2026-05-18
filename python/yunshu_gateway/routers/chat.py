@@ -1487,14 +1487,14 @@ async def _stream_vlm_response(
     except MemoryError:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
-        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error', 'code': 'memory_error'}})}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
         logger.error("VLM streaming error", exc_info=True)
-        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error', 'code': 'server_error'}})}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
@@ -1849,14 +1849,14 @@ async def _stream_response_multi(
     except MemoryError:
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
-        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error', 'code': 'memory_error'}})}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
         logger.error("Chat multi-choice streaming error", exc_info=True)
-        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error', 'code': 'server_error'}})}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
@@ -2270,14 +2270,14 @@ async def _stream_response(
     except MemoryError:
         if _cancel_evt is not None:
             _cancel_evt.set()
-        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error'}})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': {'message': 'Out of GPU memory', 'type': 'memory_error', 'code': 'memory_error'}})}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
-        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error'}})}\n\n".encode("utf-8")
+        yield f"data: {json.dumps({'error': {'message': 'Internal server error', 'type': 'server_error', 'code': 'server_error'}})}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
