@@ -82,7 +82,10 @@ class TestKVLifecycleManager:
         mgr.admit(1, 1024)
         mgr.share(1)
         mgr.release(1)
-        assert mgr.get_block(1) is None  # evicted
+        # release() no longer auto-evicts — block stays alive at ref_count=0
+        block = mgr.get_block(1)
+        assert block is not None
+        assert block.ref_count == 0
 
     def test_release_non_shared_kept(self):
         mgr = KVLifecycleManager()

@@ -48,7 +48,11 @@ class ModelRegistry:
             if mid in self._owners:
                 ref, owner_id = self._owners[mid]
                 owner = ref()
-                if owner is not None and owner_id != engine_id:
+                # Compare by object identity, not engine_id string.
+                # Two different engine instances may share the same
+                # engine_id string (e.g., after restart), but they must
+                # not both own the same model object concurrently.
+                if owner is not None and owner is not engine:
                     if force:
                         logger.warning(
                             "Model ownership transfer: %s -> %s",

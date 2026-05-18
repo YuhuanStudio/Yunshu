@@ -397,12 +397,13 @@ class TokenLevelScheduler:
             remaining_budget = decode_budget
             for i, req in enumerate(requests):
                 # Allocate proportional to weight, but respect remaining budget.
-                # Use floor division so total does not systematically exceed budget.
                 raw = int(decode_budget * weights[i] / total_w)
-                # Floor at 1 only when budget remains; otherwise 0 to prevent
-                # over-allocation when there are more requests than budget tokens.
                 tokens = min(raw, remaining_budget) if remaining_budget > 0 else 0
-                tokens = max(tokens, 1) if remaining_budget >= 1 else tokens
+                # Floor at 1 only when we still have budget. Without this
+                # guard, max(tokens, 1) would over-allocate beyond budget when
+                # there are more requests than remaining tokens.
+                if tokens < 1 and remaining_budget >= 1:
+                    tokens = 1
                 allocations.append(
                     TokenBudgetAllocation(
                         request_id=req.request_id,

@@ -92,9 +92,16 @@ class FreeBlockQueue:
         return blocks
 
     def append(self, block: KVBlock) -> None:
-        """Add a freed block at tail (most recently freed."""
-        # Detach from old position if already in the list
-        if block.prev is not None or (block.next is not None and self._head is block):
+        """Add a freed block at tail (most recently freed)."""
+        # Detach from old position if already in the list.
+        # A block in the free list has both prev and next set (they are
+        # never None for list members — only unlinked blocks have None).
+        if block.prev is not None or block.next is not None:
+            # Guard: skip _remove if block is a sentinel node.
+            if block is self._head or block is self._tail:
+                self._push_back(block)
+                self.num_free_blocks += 1
+                return
             self._remove(block)
             self.num_free_blocks -= 1
         self._push_back(block)
@@ -106,8 +113,11 @@ class FreeBlockQueue:
 
     def remove(self, block: KVBlock) -> None:
         """Remove a specific block from the free list."""
-        if block.prev is None and block.next is None and self._head is not block:
+        if block.prev is None and block.next is None:
             return  # Not in the free list
+        # Don't remove sentinel nodes
+        if block is self._head or block is self._tail:
+            return
         self._remove(block)
         self.num_free_blocks -= 1
 

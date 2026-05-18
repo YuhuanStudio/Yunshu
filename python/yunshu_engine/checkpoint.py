@@ -58,6 +58,7 @@ class InferenceState:
 
     # Model metadata
     model_name: str = ""
+    lora_adapter_id: str | None = None  # Active LoRA adapter for this request
 
     # Timing
     timestamp: float = field(default_factory=time.monotonic)

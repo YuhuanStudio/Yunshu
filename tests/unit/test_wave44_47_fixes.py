@@ -176,7 +176,10 @@ class TestWave46KVLifecycleAdmitRelease:
         assert mgr.admit(1, size_bytes=4096, prefix_hash="abc")
         assert mgr.get_stats()["tier_blocks"].get("HOT", 0) == 1
         mgr.release(1)
-        assert mgr.get_stats()["total_blocks"] == 0
+        # release() no longer auto-evicts — block stays at ref_count=0
+        block = mgr.get_block(1)
+        assert block is not None
+        assert block.ref_count == 0
 
     def test_admit_rejects_when_full(self):
         from yunshu_engine.kv_lifecycle import KVLifecycleManager, KVTier, KVTierConfig

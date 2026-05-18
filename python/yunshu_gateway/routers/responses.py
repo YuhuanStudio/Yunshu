@@ -235,6 +235,8 @@ async def create_response(req: ResponsesRequest, request: Request):
             spec_decode=req.spec_decode,
             n=req.n,
             stream=req.stream,
+            stream_options=req.stream_options,
+            logits_processors=req.logits_processors,
             response_format=chat_response_format,
             grammar=req.grammar,
             xtc_probability=req.xtc_probability,

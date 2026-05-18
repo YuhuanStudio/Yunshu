@@ -126,7 +126,10 @@ class TestRequestDeduplicator:
         dedup.register("r1", h1)
         dedup.register("r2", h2)
         assert len(dedup._entries) == 2
-        dedup.register("r3", h3)  # should evict oldest
+        # Complete h1 so it becomes evictable (in-flight entries are
+        # protected from eviction to avoid orphaning shadow requests).
+        dedup.complete(h1)
+        dedup.register("r3", h3)  # should evict oldest completed entry
         assert len(dedup._entries) == 2
         assert dedup.get_entry(h1) is None  # evicted
 

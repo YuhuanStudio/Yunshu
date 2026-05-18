@@ -66,8 +66,10 @@ class TestInflightPrefixTracker:
     def test_ttl_expiry(self):
         tracker = InflightPrefixTracker(max_entries=8, ttl_seconds=100.0)
         tracker.register("req-1", [1, 2, 3], object(), "model")
-        # Simulate time passage by manipulating created_at
-        tracker._entries["req-1"].created_at = time.monotonic() - 200
+        # Simulate time passage by manipulating both timestamps
+        old_time = time.monotonic() - 200
+        tracker._entries["req-1"].created_at = old_time
+        tracker._entries["req-1"].last_updated_at = old_time
         tracker.register("req-2", [4, 5, 6], object(), "model")
         assert "req-1" not in tracker._entries
         stats = tracker.get_stats()

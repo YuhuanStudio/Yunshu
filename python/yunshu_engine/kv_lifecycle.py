@@ -137,13 +137,19 @@ class KVLifecycleManager:
             block.is_shared = True
 
     def release(self, block_id: int) -> None:
-        """Decrement reference count. Evict if zero and not actively shared."""
+        """Decrement reference count. Does NOT auto-evict on ref_count=0.
+
+        Blocks at ref_count=0 are kept alive (like BlockPool's cache_only
+        flag) and are only evicted during explicit _evict_for_space() or
+        optimize() calls. Premature auto-eviction here diverged from
+        BlockPool's contract and caused use-after-evict when a block was
+        released by one request but still needed by inflight prefix sharing.
+        """
         block = self._blocks.get(block_id)
         if block:
             block.ref_count = max(0, block.ref_count - 1)
             if block.ref_count == 0:
                 block.is_shared = False
-                self._evict_block(block)
 
     def migrate(self, block_id: int, target_tier: KVTier) -> bool:
         """Migrate a block to a different tier."""

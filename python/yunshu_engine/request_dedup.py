@@ -215,15 +215,23 @@ class RequestDeduplicator:
     def _evict_oldest(self) -> None:
         if not self._entries:
             return
-        # Prefer evicting completed entries to avoid orphaning in-flight shadows
+        # Only evict completed entries. Evicting an in-flight primary
+        # would orphan its shadow requests — they hold references to an
+        # entry that no longer exists, breaking fan-out delivery.
         completed = [
             h for h, e in self._entries.items() if e.completed_at is not None
         ]
         if completed:
             oldest_hash = min(completed, key=lambda h: self._entries[h].created_at)
-        else:
-            oldest_hash = min(self._entries, key=lambda h: self._entries[h].created_at)
-        del self._entries[oldest_hash]
+            del self._entries[oldest_hash]
+            return
+        # All entries are in-flight — cannot safely evict any of them.
+        # Log a warning instead of orphaning shadows.
+        logger.warning(
+            "Dedup capacity reached with %d in-flight entries — "
+            "skipping eviction to avoid orphaning shadow requests",
+            len(self._entries),
+        )
 
     def get_entry(self, content_hash: str) -> DeduplicationEntry | None:
         with self._lock:

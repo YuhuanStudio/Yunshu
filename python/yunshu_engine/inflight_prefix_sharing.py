@@ -34,6 +34,7 @@ class InflightEntry:
     kv_cache_ref: object  # Reference to the MLX prompt cache
     last_update_len: int = 0
     created_at: float = field(default_factory=time.monotonic)
+    last_updated_at: float = field(default_factory=time.monotonic)
     model_name: str = ""
     # Track all prefix tuples indexed for this request so _deindex_prefix
     # can clean up every entry, including intermediate prefixes added by update().
@@ -104,6 +105,7 @@ class InflightPrefixTracker:
             old_len = len(entry.token_ids)
             entry.token_ids = list(new_token_ids)
             entry.last_update_len = len(new_token_ids)
+            entry.last_updated_at = time.monotonic()
             # Update prefix index with new tokens at checkpoint boundaries only.
             # This avoids the O(n) per-update blowup that caused memory leaks
             # when update() indexed every intermediate position but _deindex_prefix
@@ -240,7 +242,7 @@ class InflightPrefixTracker:
         now = time.monotonic()
         expired = [
             rid for rid, entry in self._entries.items()
-            if now - entry.created_at > self._ttl_seconds
+            if now - entry.last_updated_at > self._ttl_seconds
         ]
         for rid in expired:
             self.unregister(rid)

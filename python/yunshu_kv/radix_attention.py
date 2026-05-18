@@ -274,11 +274,11 @@ class RadixTree:
                 # split_node now holds the shared prefix
                 # Recurse: insert remaining new tokens as child of split_node
                 remaining_new = token_ids[match_len:]
-                # Convert token offset to block offset for slicing.
-                # Ceiling division: same logic as _split_node so that the
-                # boundary block stays with the prefix (split_node), not
-                # the remaining new tokens.
-                match_block_idx = (match_len + self._block_size - 1) // self._block_size
+                # Use floor division matching _split_node so that boundary
+                # blocks stay with the prefix (split_node), not the remaining
+                # new tokens. Ceiling division was assigning the boundary block
+                # to the new tokens, causing double-counting of the same block.
+                match_block_idx = match_len // self._block_size
                 remaining_blocks = blocks[match_block_idx:]
                 remaining_hashes = block_hashes[match_block_idx:]
                 return self.insert(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
