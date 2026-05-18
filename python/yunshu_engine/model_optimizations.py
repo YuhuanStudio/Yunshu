@@ -200,10 +200,18 @@ class RoPEScalingOptimizer:
         context_length: int,
         scaling_type: RopeScalingType,
         scaling_factor: float = 1.0,
+        *,
+        low_freq_factor: float = 1.0,
+        high_freq_factor: float = 4.0,
+        original_max_position: int = 8192,
+        yarn_beta_fast: float = 32.0,
+        yarn_beta_slow: float = 1.0,
     ) -> list[float]:
         """Compute the RoPE frequency tensor (inverse wavelengths).
 
         Returns list of ``head_dim // 2`` frequency values.
+        These are the per-dimension base values used by RoPE; the actual
+        angular frequency for dim *i* is ``1 / freq[i]``.
         """
         half_dim = max(head_dim // 2, 1)
         base_freqs: list[float] = [
@@ -222,32 +230,61 @@ class RoPEScalingOptimizer:
             return [new_base ** (2 * i / head_dim) for i in range(half_dim)]
 
         if scaling_type == RopeScalingType.YARN:
-            # YaRN: combined NTK + attention scaling
+            # YaRN: NTK-interpolated base + frequency-dependent smoothing mask
+            # Matches mlx_lm YarnRoPE implementation.
             ntk_base = base_freq * (scaling_factor ** (head_dim / (head_dim - 2)))
-            freqs = [ntk_base ** (2 * i / head_dim) for i in range(half_dim)]
-            # YaRN applies extra smoothing for high frequencies
-            return freqs
+            freq_extra = [ntk_base ** (2 * i / head_dim) for i in range(half_dim)]
+            freq_inter = [f * scaling_factor for f in freq_extra]
+
+            # Correction range based on beta_fast / beta_slow
+            def _yarn_correction_dim(num_rotations: float) -> float:
+                return (
+                    head_dim
+                    * math.log(original_max_position / (num_rotations * 2 * math.pi))
+                ) / (2 * math.log(base_freq))
+
+            low_corr = max(math.floor(_yarn_correction_dim(yarn_beta_fast)), 0)
+            high_corr = min(math.ceil(_yarn_correction_dim(yarn_beta_slow)), half_dim - 1)
+
+            # Linear ramp mask: 0 at low_corr, 1 at high_corr
+            if low_corr == high_corr:
+                high_corr += 0.001  # Prevent singularity
+            result: list[float] = []
+            for i in range(half_dim):
+                mask_val = max(0.0, min(1.0, (i - low_corr) / (high_corr - low_corr)))
+                mask = 1.0 - mask_val  # 1 for low-dim (high-freq), 0 for high-dim
+                # Blend between interpolated and extra frequencies
+                f = (freq_inter[i] * freq_extra[i]) / (
+                    freq_inter[i] * mask + freq_extra[i] * (1 - mask)
+                )
+                result.append(f)
+            return result
 
         if scaling_type == RopeScalingType.LLAMA3:
-            # Llama-3 style: scale low frequencies, keep high frequencies
-            low_factor = 1.0
-            high_factor = 4.0 * scaling_factor
-            orig_max_pos = 8192
+            # Llama-3 style: scale low frequencies, keep high frequencies.
+            # Matches mlx_lm Llama3RoPE implementation.
+            # "wavelen" here = 2*pi*freq (proportional to inverse angular freq).
+            # Large wavelen → low angular frequency → needs scaling.
+            low_freq_wavelen = original_max_position / low_freq_factor
+            high_freq_wavelen = original_max_position / high_freq_factor
+
             result: list[float] = []
             for f in base_freqs:
-                wavelength = 2 * math.pi / f
-                if wavelength < orig_max_pos / high_factor:
-                    # High frequency: keep as-is
+                wavelen = 2 * math.pi * f
+                if wavelen > low_freq_wavelen:
+                    # Low angular frequency: multiply by factor
+                    result.append(f * scaling_factor)
+                elif wavelen < high_freq_wavelen:
+                    # High angular frequency: keep as-is
                     result.append(f)
-                elif wavelength > orig_max_pos / low_factor:
-                    # Low frequency: scale
-                    result.append(f / scaling_factor)
                 else:
-                    # Smooth interpolation
+                    # Medium: smooth interpolation
                     smooth = (
-                        orig_max_pos / wavelength - low_factor
-                    ) / (high_factor - low_factor)
-                    result.append((1 - smooth) * f / scaling_factor + smooth * f)
+                        (original_max_position / wavelen - low_freq_factor)
+                        / (high_freq_factor - low_freq_factor)
+                    )
+                    # MLX formula: freq / ((1-smooth)/factor + smooth)
+                    result.append(f / ((1 - smooth) / scaling_factor + smooth))
             return result
 
         if scaling_type == RopeScalingType.LONGROPE:

@@ -71,6 +71,20 @@ class VoicePipeline:
             return engine
         return None
 
+    @staticmethod
+    def _messages_to_prompt(engine, messages: list[dict]) -> str:
+        """Convert messages to a string prompt for non-batched engines.
+
+        Tries apply_chat_template first, falls back to simple concatenation.
+        """
+        tokenizer = getattr(engine, '_tokenizer', None)
+        if tokenizer and hasattr(tokenizer, 'apply_chat_template'):
+            return tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+        # Fallback: concatenate message content
+        return "\n".join(m.get("content", str(m)) for m in messages)
+
     async def process(
         self,
         audio_path: str,
@@ -108,8 +122,10 @@ class VoicePipeline:
             )
             response_text = result.text
         else:
+            # Non-batched engines require a string prompt — apply chat template
+            prompt_text = self._messages_to_prompt(llm, messages)
             state = await llm.generate(
-                prompt=messages,
+                prompt=prompt_text,
                 max_tokens=cfg.llm_max_tokens,
                 temperature=cfg.llm_temperature,
             )
@@ -176,8 +192,10 @@ class VoicePipeline:
                     full_response.append(output.new_text)
                     yield VoicePipelineEvent(stage="llm_token", data=output.new_text)
         else:
+            # Non-batched engines require a string prompt
+            prompt_text = self._messages_to_prompt(llm, messages)
             async for output in llm.generate_stream(
-                prompt=messages,
+                prompt=prompt_text,
                 max_tokens=cfg.llm_max_tokens,
                 temperature=cfg.llm_temperature,
             ):

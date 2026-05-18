@@ -155,8 +155,8 @@ class STSEngine:
         if not self._running:
             self.start()
 
-        enhance_method = method or self._config.enhance_method
-        noise_floor = noise_floor_db or self._config.noise_floor_db
+        enhance_method = method if method is not None else self._config.enhance_method
+        noise_floor = noise_floor_db if noise_floor_db is not None else self._config.noise_floor_db
 
         def _enhance_sync():
             audio_data, sr = self._load_audio(audio_input)
@@ -204,7 +204,7 @@ class STSEngine:
         if not self._running:
             self.start()
 
-        sep_method = method or self._config.separation_method
+        sep_method = method if method is not None else self._config.separation_method
 
         def _separate_sync():
             audio_data, sr = self._load_audio(audio_input)
@@ -247,8 +247,8 @@ class STSEngine:
         if not self._running:
             self.start()
 
-        pitch = pitch_shift or self._config.pitch_shift_semitones
-        formant = formant_ratio or self._config.formant_ratio
+        pitch = pitch_shift if pitch_shift is not None else self._config.pitch_shift_semitones
+        formant = formant_ratio if formant_ratio is not None else self._config.formant_ratio
 
         def _transform_sync():
             audio_data, sr = self._load_audio(audio_input)

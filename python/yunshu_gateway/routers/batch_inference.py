@@ -341,10 +341,18 @@ async def upload_batch_csv(
         prompt = row.get("prompt", "")
         messages_json = row.get("messages_json", "")
         system_prompt = row.get("system_prompt", "")
-        row_max_tokens = int(row.get("max_tokens", max_tokens))
+        row_max_tokens_raw = row.get("max_tokens", "")
+        try:
+            row_max_tokens = int(row_max_tokens_raw) if row_max_tokens_raw.strip() else max_tokens
+        except (ValueError, TypeError):
+            row_max_tokens = max_tokens
         if row_max_tokens < 1:
             row_max_tokens = max_tokens
-        row_temp = float(row.get("temperature", 0.7))
+        row_temp_raw = row.get("temperature", "")
+        try:
+            row_temp = float(row_temp_raw) if row_temp_raw.strip() else 0.7
+        except (ValueError, TypeError):
+            row_temp = 0.7
         if row_temp < 0:
             row_temp = 0.7
 

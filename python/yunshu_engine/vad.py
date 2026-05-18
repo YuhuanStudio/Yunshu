@@ -129,6 +129,20 @@ class WebRTCVAD(VADBase):
             energy = EnergyVAD._compute_energy(audio_bytes)
             return VADResult(is_speech=energy > 0.01, energy=energy)
 
+        # WebRTC VAD only accepts frames of 10, 20, or 30 ms duration.
+        # Validate frame size to avoid silent fallback on every call.
+        n_samples = len(audio_bytes) // 2  # 16-bit audio
+        frame_duration_ms = (n_samples / sample_rate) * 1000 if sample_rate > 0 else 0
+        valid_durations = {10, 20, 30}
+        if frame_duration_ms not in valid_durations:
+            logger.warning(
+                "WebRTC VAD requires frame duration of 10/20/30 ms, got %.1f ms "
+                "(%d samples at %d Hz). Falling back to energy-based.",
+                frame_duration_ms, n_samples, sample_rate,
+            )
+            energy = EnergyVAD._compute_energy(audio_bytes)
+            return VADResult(is_speech=energy > 0.01, energy=energy)
+
         try:
             is_speech = self._vad.is_speech(audio_bytes, sample_rate)
             energy = EnergyVAD._compute_energy(audio_bytes)

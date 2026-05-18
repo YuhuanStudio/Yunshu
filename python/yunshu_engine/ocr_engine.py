@@ -82,7 +82,11 @@ class OCREngine:
                 ],
             }
         ]
-        return self._processor.apply_chat_template(
+        # Use tokenizer for apply_chat_template — the processor may not expose it
+        tmpl = self._tokenizer
+        if tmpl is None:
+            tmpl = self._processor
+        return tmpl.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
 
@@ -113,6 +117,7 @@ class OCREngine:
         current_ids = inputs["input_ids"]
 
         tokens = []
+        eos_token_id = getattr(self._tokenizer, "eos_token_id", None)
         for step in range(4096):
             kwargs = {"cache": cache}
             if step == 0:
@@ -127,7 +132,7 @@ class OCREngine:
             next_token = mx.argmax(logits[:, -1, :], axis=-1)
             tok_id = next_token.item()
 
-            if tok_id == self._tokenizer.eos_token_id:
+            if eos_token_id is not None and tok_id == eos_token_id:
                 break
 
             tokens.append(tok_id)

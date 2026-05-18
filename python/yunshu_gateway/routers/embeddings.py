@@ -273,4 +273,10 @@ def _extract_hidden(output) -> "mx.array":
         return output[0]
     if hasattr(output, 'last_hidden_state'):
         return output.last_hidden_state
-    return output[0] if isinstance(output, (tuple, list)) else output
+    if hasattr(output, 'logits'):
+        return output.logits
+    # Fallback: try indexing, then return as-is
+    try:
+        return output[0]
+    except (TypeError, IndexError, KeyError):
+        return output
