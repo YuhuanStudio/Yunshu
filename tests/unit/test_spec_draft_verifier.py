@@ -18,7 +18,6 @@ from yunshu_engine.spec_draft_verifier import (
     SpecDraftVerifier,
     VerifyResult,
     _find_acceptance_boundary,
-    _compute_bonus_token,
     _trim_cache,
 )
 
@@ -153,26 +152,6 @@ class TestFindAcceptanceBoundary:
         assert accepted == []
         assert rej is None
 
-
-class TestComputeBonusToken:
-    """Tests for _compute_bonus_token."""
-
-    def test_rejection_gives_model_pick(self):
-        # Rejection at position 2, model pick was 99
-        bonus = _compute_bonus_token([5, 10, 99, 20, 25], 2, 5)
-        assert bonus == 99
-
-    def test_all_accepted_gives_last_pick(self):
-        bonus = _compute_bonus_token([5, 10, 15], None, 3)
-        assert bonus == 15
-
-    def test_empty_returns_none(self):
-        bonus = _compute_bonus_token([], None, 0)
-        assert bonus is None
-
-    def test_rejection_at_0(self):
-        bonus = _compute_bonus_token([42, 10, 15], 0, 3)
-        assert bonus == 42
 
 
 # ── SpecDraftVerifier.verify() tests ──

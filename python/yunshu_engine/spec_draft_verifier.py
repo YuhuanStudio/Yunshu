@@ -428,24 +428,6 @@ def _find_acceptance_boundary(
     return accepted_tokens, rejection_position
 
 
-def _compute_bonus_token(
-    model_picks: list[int],
-    rejection_position: int | None,
-    K: int,
-) -> int | None:
-    """Compute the bonus token from the rejection point or last position.
-
-    At the rejection point, the model's pick is a "free" correct token.
-    When all drafts accepted, the last position's prediction is the bonus.
-    """
-    if K == 0:
-        return None
-    if rejection_position is not None:
-        return model_picks[rejection_position]
-    # All accepted: bonus is from the last model pick
-    return model_picks[-1]
-
-
 def _trim_cache(prompt_cache: list, num_tokens: int) -> int:
     """Trim KV cache entries.
 
