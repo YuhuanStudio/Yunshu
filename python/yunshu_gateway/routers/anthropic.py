@@ -28,7 +28,6 @@ from pydantic import BaseModel, Field, model_validator
 from ..engine import get_engine
 from .chat import _apply_lora_adapter, _release_lora_adapter
 from ..streaming import (
-    format_anthropic_chunk,
     with_sse_keepalive,
 )
 

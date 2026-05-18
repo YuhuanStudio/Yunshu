@@ -153,7 +153,6 @@ def _get_model_status() -> list[dict[str, Any]]:
 def _get_active_requests() -> dict[str, Any]:
     """Return active request statistics."""
     from ..engine import get_engine, get_model_manager
-    from ..middleware.metrics import get_metrics
 
     active = 0
     waiting = 0
@@ -740,7 +739,6 @@ async def token_scheduler_stats() -> dict[str, Any]:
     inversion detection/resolution counts.
     """
     try:
-        from yunshu_engine.engine_core import EngineCore
         # Access the singleton engine core's scheduler stats
         engine = None
         try:

@@ -10,9 +10,7 @@ The gateway routers use get_engine_for_model() which works in all modes.
 
 
 import logging
-import os
 from pathlib import Path
-from typing import Optional
 
 from yunshu_engine.batched_engine import BatchedEngine as Engine
 from yunshu_engine.types import EngineConfig

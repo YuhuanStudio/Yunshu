@@ -27,7 +27,6 @@ from pydantic import BaseModel, Field, model_validator
 from ..engine import get_engine, get_model_manager
 from ..streaming import (
     extract_thinking,
-    extract_tool_calls_v2 as extract_tool_calls,
     extract_tool_calls_model_aware,
     clean_tool_call_markup,
     format_openai_chunk,

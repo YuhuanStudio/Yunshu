@@ -36,12 +36,6 @@ logger = logging.getLogger(__name__)
 # Re-use the KV transfer wire format from the engine layer.
 from yunshu_engine.kv_transfer import (
     KVBlockData,
-    KVTransferConfig,
-    KVTransferHeader,
-    KVTransferMessage,
-    KVTransferProtocol,
-    KVTransferResult,
-    KVTransferStats,
     TransferStatus,
 )
 

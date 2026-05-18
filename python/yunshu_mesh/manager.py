@@ -15,7 +15,6 @@ Lifecycle:
 import asyncio
 import logging
 import os
-import time
 from typing import Any, Optional
 
 import mlx.core as mx

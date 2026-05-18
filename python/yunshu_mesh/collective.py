@@ -23,8 +23,6 @@ from typing import Optional, Sequence
 
 import mlx.core as mx
 
-from .topology import MeshTopology
-
 logger = logging.getLogger(__name__)
 
 

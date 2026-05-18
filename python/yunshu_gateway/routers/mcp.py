@@ -15,11 +15,10 @@ through a standardized protocol, enabling tool-calling workflows.
 import asyncio
 import json
 import logging
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 

@@ -19,7 +19,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Optional
+
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse

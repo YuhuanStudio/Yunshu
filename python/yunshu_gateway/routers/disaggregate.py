@@ -357,7 +357,6 @@ async def prefill(req: PrefillRequest, request: Request):
         # ── KV Transfer: send KV blocks to remote decode node ──
         if disagg_router is not None and disagg_router.config.enabled:
             try:
-                from yunshu_engine.external_prefill import ExternalPrefiller as _EP
                 model_name = getattr(engine, '_model_name', '') or ''
                 # Count layers from model config
                 layer_count = 0

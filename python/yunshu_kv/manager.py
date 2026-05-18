@@ -13,8 +13,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-import mlx.core as mx
-
 logger = logging.getLogger(__name__)
 
 from .block import BlockPool, KVBlock

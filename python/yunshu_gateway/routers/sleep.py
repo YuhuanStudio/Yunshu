@@ -6,7 +6,6 @@ from __future__ import annotations
 - L1 (unload): Unload model weights, keep KV cache
 - L2 (deep): Unload everything — minimum memory footprint
 """
-import asyncio
 import logging
 import os
 import threading

@@ -15,7 +15,7 @@ Following SGLang's parallel_state pattern but adapted for mx.distributed.
 
 import logging
 import threading
-from enum import Enum, auto
+from enum import Enum
 from typing import Optional
 
 from .node import MeshNode

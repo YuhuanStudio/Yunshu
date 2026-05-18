@@ -15,10 +15,9 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 

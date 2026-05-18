@@ -26,7 +26,6 @@ from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
 from ..streaming import (
-    format_openai_chunk,
     format_responses_created,
     format_responses_in_progress,
     format_responses_output_item_added,
