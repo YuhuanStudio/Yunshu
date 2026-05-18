@@ -194,35 +194,41 @@ class TestInvertAll:
 
 class TestVerifyRoundtrip:
     def test_returns_nonnegative_float(self):
-        state = mx.random.normal((1, 2, 4, 4)).astype(mx.float32)
+        state_before = mx.random.normal((1, 2, 4, 4)).astype(mx.float32)
+        state_after = mx.random.normal((1, 2, 4, 4)).astype(mx.float32)
         g = mx.ones((1, 2)) * 0.95
         beta = mx.ones((1, 2)) * 0.05
         k = mx.random.normal((1, 2, 4)).astype(mx.float32)
         v = mx.random.normal((1, 2, 4)).astype(mx.float32)
-        error = DeltaNetInverter.verify_roundtrip(state, g, beta, k, v)
+        error = DeltaNetInverter.verify_roundtrip(
+            state_before, state_after, g, beta, k, v,
+        )
         assert isinstance(error, float)
         assert error >= 0
 
     def test_shape_mismatch_returns_inf(self):
-        # Create entry where recovered shape differs from input state
-        state = mx.zeros((1, 2, 4, 4))
+        # Create entry where recovered shape differs from state_before
+        state_before = mx.zeros((2, 3, 4, 4))  # Different shape
+        state_after = mx.zeros((1, 2, 4, 4))
         g = mx.ones((1, 2))
         beta = mx.ones((1, 2)) * 0.1
         k = mx.random.normal((1, 2, 4))
         v = mx.random.normal((1, 2, 4))
-        error = DeltaNetInverter.verify_roundtrip(state, g, beta, k, v)
-        assert isinstance(error, float)
+        error = DeltaNetInverter.verify_roundtrip(
+            state_before, state_after, g, beta, k, v,
+        )
+        assert error == float('inf')
 
     def test_with_known_forward(self):
         entry, original = _apply_forward_and_make_entry(dtype=mx.float32)
         error = DeltaNetInverter.verify_roundtrip(
-            entry.state_after, entry.gate, entry.beta, entry.key, entry.value,
+            original, entry.state_after, entry.gate, entry.beta, entry.key, entry.value,
         )
-        # verify_roundtrip inverts state_after, then compares against state_after itself
-        # So error measures: max|invert(state_after) - state_after|
-        # which is NOT zero (invert recovers state_old, not state_after)
+        # verify_roundtrip inverts state_after, then compares recovered state
+        # against the known original state_before. Error should be small.
         assert isinstance(error, float)
         assert error >= 0
+        assert error < 1e-4, f"Roundtrip error too large: {error}"
 
 
 class TestRegisterHooks:

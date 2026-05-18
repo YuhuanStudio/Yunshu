@@ -157,12 +157,18 @@ class DeltaNetInverter:
         # For vectorized g: r_gw = sum_dk(g_dk * state_old_dv_dk * k_dk)
         beta_kk = (beta * k_sq[:, :, 0])[..., None]  # [B, Hv, 1]
         denom = 1.0 - beta_kk  # [B, Hv, 1]
+        # Guard against near-zero denominator (beta*||k||² close to 1).
+        # Clamp to a small epsilon to avoid inf/nan in the division.
+        eps = mx.array(1e-6, dtype=denom.dtype)
+        denom = mx.where(mx.abs(denom) < eps, mx.sign(denom) * eps, denom)
         r_gw = (r_new - beta_kk * v) / denom  # [B, Hv, Dv]
 
         # Step 4: state_old = (state_new - k * beta * (v - r_gw)) / g
         delta_v = v - r_gw  # [B, Hv, Dv]
         correction = beta_expanded * delta_v[:, :, :, None] * k_expanded  # [B, Hv, Dv, Dk]
-        state_old = (state_new - correction) / g_expanded
+        # Guard against near-zero gate (g ≈ 0 means heavy decay, inversion is unstable).
+        g_safe = mx.where(mx.abs(g_expanded) < eps, mx.sign(g_expanded) * eps, g_expanded)
+        state_old = (state_new - correction) / g_safe
 
         return state_old.astype(orig_dtype)
 
@@ -259,18 +265,32 @@ class DeltaNetInverter:
             self._hooked_classes.clear()
 
     @staticmethod
-    def verify_roundtrip(state: mx.array, gate: mx.array, beta: mx.array,
-                         key: mx.array, value: mx.array) -> float:
+    def verify_roundtrip(
+        state_before: mx.array,
+        state_after: mx.array,
+        gate: mx.array,
+        beta: mx.array,
+        key: mx.array,
+        value: mx.array,
+    ) -> float:
         """Verify inversion accuracy on a single layer.
 
-        Returns max absolute error between original and recovered state.
-        Useful for testing whether float32 precision is sufficient.
+        Args:
+            state_before: The state BEFORE the forward step (ground truth).
+            state_after: The state AFTER the forward step (= state_new).
+            gate, beta, key, value: Intermediate values from the forward step.
+
+        Returns max absolute error between original (state_before) and
+        recovered state.  Useful for testing whether float32 precision
+        is sufficient.
         """
         entry = DeltaNetInversionEntry(
-            gate=gate, beta=beta, key=key, value=value, state_after=state,
+            gate=gate, beta=beta, key=key, value=value, state_after=state_after,
         )
         inverter = DeltaNetInverter()
         recovered = inverter.invert_state(entry)
-        if state.shape != recovered.shape:
+        if state_before.shape != recovered.shape:
             return float('inf')
-        return float(mx.max(mx.abs(state.astype(mx.float32) - recovered.astype(mx.float32))).item())
+        return float(mx.max(mx.abs(
+            state_before.astype(mx.float32) - recovered.astype(mx.float32)
+        )).item())

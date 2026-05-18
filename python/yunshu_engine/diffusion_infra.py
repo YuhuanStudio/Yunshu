@@ -199,15 +199,29 @@ class DiffusionScheduler:
         ]
         # Deduplicate (can happen with very few inference steps) and sort
         timesteps = sorted(set(timesteps))
-        # If deduplication reduced the count, backfill with nearby values
-        while len(timesteps) < self.num_inference_steps:
+        # If deduplication reduced the count, backfill with nearby values.
+        # Guard: break if no new unique value was added in the last iteration
+        # to prevent an infinite loop when all gaps are too small to split.
+        max_attempts = self.num_inference_steps  # bound iterations
+        attempts = 0
+        while len(timesteps) < self.num_inference_steps and attempts < max_attempts:
+            attempts += 1
+            prev_len = len(timesteps)
             # Insert midpoints between consecutive timesteps
             gaps = [(timesteps[i + 1] - timesteps[i], i) for i in range(len(timesteps) - 1)]
+            if not gaps:
+                break
             gaps.sort(reverse=True)
             gap_size, gap_idx = gaps[0]
+            if gap_size <= 1:
+                # All gaps are 0 or 1 — cannot add more unique timesteps
+                break
             mid = timesteps[gap_idx] + gap_size // 2
             timesteps.append(mid)
             timesteps = sorted(set(timesteps))
+            if len(timesteps) == prev_len:
+                # No new value added — stop to avoid infinite loop
+                break
         return list(reversed(timesteps))
 
     def _compute_sigmas(self) -> list[float]:

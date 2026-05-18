@@ -600,6 +600,7 @@ def _normalize_finish_reason(reason: str | None) -> str:
 
 async def _build_multi_choice(
     engine, req, messages, completion_id, is_batched, json_schema,
+    cancel_event=None,
 ):
     """Build n > 1 completions by running parallel generation calls."""
     import asyncio
@@ -638,6 +639,7 @@ async def _build_multi_choice(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                cancel_event=cancel_event,
                 timeout_seconds=req.timeout,
             )
             text = result.text
@@ -675,6 +677,7 @@ async def _build_multi_choice(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                cancel_event=cancel_event,
                 timeout_seconds=req.timeout,
             )
             text = state.generated_text
@@ -896,12 +899,25 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
         )
 
     # Non-streaming with disconnect guard (oMLX pattern)
+    # Register with request tracker for cancellation support
+    _ns_tracker = None
+    _ns_gen = None
+    _ns_cancel_event = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _ns_tracker = get_request_tracker()
+        _ns_gen = _ns_tracker.register(completion_id, req.model)
+        _ns_cancel_event = _ns_gen.cancel_event
+    except Exception:
+        _ns_tracker = None
+
     async def _build_response():
         loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
         try:
             if req.n > 1:
                 return await _build_multi_choice(
                     engine, req, messages, completion_id, is_batched, json_schema,
+                    cancel_event=_ns_cancel_event,
                 )
 
             try:
@@ -933,6 +949,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         xtc_threshold=req.xtc_threshold,
                         priority=req.priority,
                         logits_processors=req.logits_processors,
+                        cancel_event=_ns_cancel_event,
                         timeout_seconds=req.timeout,
                     )
                     raw_text = result.text
@@ -972,6 +989,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         top_logprobs=req.top_logprobs,
                         priority=req.priority,
                         logits_processors=req.logits_processors,
+                        cancel_event=_ns_cancel_event,
                         timeout_seconds=req.timeout,
                     )
                     raw_text = state.generated_text
@@ -1060,7 +1078,14 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
         finally:
             _release_lora_adapter(engine, loaded_adapter)
 
-    return await run_with_disconnect_guard(request, _build_response())
+    try:
+        return await run_with_disconnect_guard(request, _build_response())
+    finally:
+        if _ns_tracker is not None:
+            try:
+                _ns_tracker.unregister(completion_id)
+            except Exception:
+                pass
 
 
 async def _handle_vlm_chat(

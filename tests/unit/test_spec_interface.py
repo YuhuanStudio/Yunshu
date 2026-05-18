@@ -383,12 +383,30 @@ class TestCompositeStrategy:
         assert proposal.tokens == []
         assert "empty" in proposal.strategy_name
 
-    def test_accept_forwards_to_all_children(self):
+    def test_accept_forwards_only_to_proposer(self):
+        """accept() should only update the strategy that actually proposed."""
+        s = self._make_composite()
+        # First, call draft() so the composite knows which strategy proposed
+        tokens = _repeating_tokens(30)
+        proposal = s.draft(tokens, n=5)
+        # Now accept — only the proposing strategy should be updated
+        s.accept(proposal.tokens if proposal.tokens else [1, 2, 3], verified_up_to=2)
+        # Only one strategy should have acceptance stats
+        proposers = [c for c in s._strategies if c.stats()["total_accepted"] > 0]
+        assert len(proposers) == 1, (
+            f"Expected exactly 1 strategy with accept stats, got {len(proposers)}"
+        )
+        proposer = proposers[0]
+        assert proposer.stats()["total_accepted"] == 1
+        assert proposer.stats()["total_accepted_tokens"] == 2
+
+    def test_accept_without_draft_is_safe(self):
+        """accept() without a prior draft() should not crash or corrupt state."""
         s = self._make_composite()
         s.accept([1, 2, 3], verified_up_to=2)
+        # No strategy should have inflated stats
         for child in s._strategies:
-            assert child.stats()["total_accepted"] == 1
-            assert child.stats()["total_accepted_tokens"] == 2
+            assert child.stats()["total_accepted"] == 0
 
     def test_stats_aggregates_children(self):
         s = self._make_composite()

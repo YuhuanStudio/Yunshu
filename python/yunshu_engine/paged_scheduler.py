@@ -96,13 +96,29 @@ class PagedScheduler(Scheduler):
             (request.sampling_params.max_tokens + self._kv_manager.block_size - 1) // self._kv_manager.block_size,
             16,
         )
-        total_needed = needed_blocks + decode_reserve
 
-        if self._kv_manager.num_free_blocks < total_needed:
-            if not self._kv_manager.evict_for_memory(total_needed):
+        # Estimate prefix cache savings: if the RadixTree has a matching
+        # prefix, those blocks don't need to be allocated from the free pool.
+        # Without this, the admission check rejects requests that would fit
+        # due to prefix reuse (false rejection).
+        cached_blocks_estimate = 0
+        if hasattr(self._kv_manager, '_radix_tree') and self._kv_manager.config.enable_caching:
+            try:
+                bs = self._kv_manager.block_size
+                if len(token_ids) >= bs:
+                    matched_node, _ = self._kv_manager._radix_tree.match(token_ids)
+                    cached_tokens = matched_node.total_tokens()
+                    cached_blocks_estimate = cached_tokens // bs
+            except Exception:
+                pass  # Best-effort estimate
+        effective_needed = max(0, needed_blocks - cached_blocks_estimate) + decode_reserve
+
+        if self._kv_manager.num_free_blocks < effective_needed:
+            if not self._kv_manager.evict_for_memory(effective_needed):
                 logger.warning(
                     f"Rejecting request {request.request_id}: "
-                    f"need {total_needed} blocks, only {self._kv_manager.num_free_blocks} free"
+                    f"need {effective_needed} blocks (of which {cached_blocks_estimate} cached), "
+                    f"only {self._kv_manager.num_free_blocks} free"
                 )
                 request.status = RequestStatus.FINISHED_ERROR
                 request.finish_reason = "kv_cache_full"

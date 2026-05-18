@@ -457,6 +457,7 @@ class CompositeStrategy(SpecStrategy):
         self._request_id: Optional[str] = None
         self._total_drafts = 0
         self._total_used: dict[str, int] = {}  # strategy name -> times used
+        self._last_proposer: Optional[str] = None  # name of strategy that proposed
 
     @property
     def name(self) -> str:
@@ -474,18 +475,26 @@ class CompositeStrategy(SpecStrategy):
 
     def draft(self, tokens: list[int], n: int) -> DraftProposal:
         self._total_drafts += 1
+        self._last_proposer = None
         for s in self._strategies:
             proposal = s.draft(tokens, n)
             if proposal.tokens:
                 self._total_used[s.name] = self._total_used.get(s.name, 0) + 1
+                self._last_proposer = s.name
                 return proposal
         # All strategies returned empty
         return DraftProposal(tokens=[], strategy_name="composite(empty)")
 
     def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
-        # Forward accept to all children so they can update their state
-        for s in self._strategies:
-            s.accept(draft_tokens, verified_up_to)
+        # Only forward accept to the strategy that actually proposed the draft.
+        # Forwarding to ALL children would inflate acceptance stats for
+        # non-participating strategies.
+        if self._last_proposer is not None:
+            for s in self._strategies:
+                if s.name == self._last_proposer:
+                    s.accept(draft_tokens, verified_up_to)
+                    break
+        self._last_proposer = None
 
     def stats(self) -> dict:
         child_stats = [s.stats() for s in self._strategies]
