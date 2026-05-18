@@ -22,6 +22,7 @@ import gc
 import io
 import logging
 import struct
+import threading
 import time
 from typing import Any
 
@@ -154,6 +155,12 @@ class TTSEngine:
         self._running = False
         from .mlx_executor import get_mlx_executor
         self._executor = get_mlx_executor()
+        # Metrics (protected by _stats_lock for thread safety)
+        self._stats_lock = threading.Lock()
+        self._synth_count = 0
+        self._stream_count = 0
+        self._total_synth_ms = 0.0
+        self._total_stream_ms = 0.0
 
     @property
     def model_name(self) -> str:
@@ -260,8 +267,14 @@ class TTSEngine:
             audio = np.concatenate(audio_chunks, axis=0)
             return _audio_to_wav_bytes(audio, int(sample_rate))
 
+        t0 = time.monotonic()
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, _synthesize_sync)
+        result = await loop.run_in_executor(self._executor, _synthesize_sync)
+        elapsed = time.monotonic() - t0
+        with self._stats_lock:
+            self._synth_count += 1
+            self._total_synth_ms += elapsed * 1000.0
+        return result
 
     async def synthesize_stream(
         self,
@@ -270,6 +283,7 @@ class TTSEngine:
         speed: float = 1.0,
         temperature: float | None = None,
         instruct: str | None = None,
+        cancel_event: asyncio.Event | None = None,
         **kwargs,
     ):
         """Streaming TTS synthesis — yields audio chunks as they're produced.
@@ -278,6 +292,10 @@ class TTSEngine:
         - "audio": WAV bytes for this chunk
         - "text": Text segment that was synthesized
         - "is_final": True for the last chunk
+
+        Args:
+            cancel_event: Optional asyncio.Event — when set, aborts the TTS
+                generation loop mid-stream.
         """
         if self._model is None:
             raise RuntimeError("Engine not started")
@@ -307,37 +325,37 @@ class TTSEngine:
 
         queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=64)
         sample_rate = getattr(model, "sample_rate", DEFAULT_SAMPLE_RATE)
+        # Thread-safe cancel flag — asyncio.Event.is_set() reads a bool but
+        # calling it from the executor thread is technically unsafe in older
+        # Python.  Mirror the state into a threading.Event for safe cross-thread
+        # access.
+        _cancel = threading.Event()
+        if cancel_event is not None and cancel_event.is_set():
+            _cancel.set()
 
         def _stream_sync():
             try:
-                # Use native stream_generate when available (chatterbox_turbo, pocket_tts)
-                if hasattr(model, 'stream_generate') and callable(model.stream_generate):
-                    for result in model.stream_generate(**gen_kwargs):
-                        audio = np.array(result.audio)
-                        wav = _audio_to_wav_bytes(audio, int(sample_rate))
-                        segment_text = getattr(result, "text", "")
-                        try:
-                            queue.put_nowait({
-                                "audio": wav,
-                                "text": segment_text,
-                                "is_final": False,
-                            })
-                        except asyncio.QueueFull:
-                            logger.warning("TTS stream queue full, dropping chunk")
-                else:
-                    results = model.generate(**gen_kwargs)
-                    for result in results:
-                        audio = np.array(result.audio)
-                        wav = _audio_to_wav_bytes(audio, int(sample_rate))
-                        segment_text = getattr(result, "text", "")
-                        try:
-                            queue.put_nowait({
-                                "audio": wav,
-                                "text": segment_text,
-                                "is_final": False,
-                            })
-                        except asyncio.QueueFull:
-                            logger.warning("TTS stream queue full, dropping chunk")
+                gen_fn = (
+                    model.stream_generate
+                    if hasattr(model, 'stream_generate') and callable(model.stream_generate)
+                    else model.generate
+                )
+                for result in gen_fn(**gen_kwargs):
+                    # Check cancel flag between chunks (thread-safe)
+                    if _cancel.is_set():
+                        logger.info("TTS stream cancelled mid-generation")
+                        break
+                    audio = np.array(result.audio)
+                    wav = _audio_to_wav_bytes(audio, int(sample_rate))
+                    segment_text = getattr(result, "text", "")
+                    try:
+                        queue.put_nowait({
+                            "audio": wav,
+                            "text": segment_text,
+                            "is_final": False,
+                        })
+                    except asyncio.QueueFull:
+                        logger.warning("TTS stream queue full, dropping chunk")
                 # Send is_final sentinel — drain one item if full so the client
                 # always receives the completion marker and doesn't hang.
                 try:
@@ -370,8 +388,13 @@ class TTSEngine:
         loop = asyncio.get_running_loop()
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
+        stream_t0 = time.monotonic()
         try:
             while True:
+                # Propagate cancel_event to the thread-safe flag so the
+                # executor thread can pick it up without touching asyncio.
+                if cancel_event is not None and cancel_event.is_set():
+                    _cancel.set()
                 chunk = await queue.get()
                 if chunk is None:
                     break
@@ -379,6 +402,12 @@ class TTSEngine:
                 if chunk.get("is_final"):
                     break
         finally:
+            # Signal the executor thread to stop (in case it hasn't yet)
+            _cancel.set()
+            stream_elapsed = time.monotonic() - stream_t0
+            with self._stats_lock:
+                self._stream_count += 1
+                self._total_stream_ms += stream_elapsed * 1000.0
             if not stream_task.done():
                 stream_task.cancel()
                 try:
@@ -405,10 +434,20 @@ class TTSEngine:
         return list(DEFAULT_VOICES)
 
     def get_stats(self) -> dict:
+        with self._stats_lock:
+            synth_count = self._synth_count
+            stream_count = self._stream_count
+            total_synth_ms = self._total_synth_ms
+            total_stream_ms = self._total_stream_ms
         return {
             "model": self._model_path,
             "loaded": self.is_loaded,
             "running": self._running,
+            "synth_count": synth_count,
+            "stream_count": stream_count,
+            "total_synth_ms": round(total_synth_ms, 1),
+            "total_stream_ms": round(total_stream_ms, 1),
+            "avg_synth_ms": round(total_synth_ms / synth_count, 1) if synth_count > 0 else 0.0,
         }
 
 
@@ -430,6 +469,10 @@ class ASREngine:
         # Wave 43: VAD for voice activity detection
         from .vad import create_vad
         self._vad = create_vad()
+        # Metrics (protected by _stats_lock for thread safety)
+        self._stats_lock = threading.Lock()
+        self._transcribe_count = 0
+        self._total_transcribe_ms = 0.0
 
     @property
     def model_name(self) -> str:
@@ -549,14 +592,26 @@ class ASREngine:
 
             return {"text": str(result), "language": language, "segments": [], "duration": 0.0}
 
+        t0 = time.monotonic()
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, _transcribe_sync)
+        result = await loop.run_in_executor(self._executor, _transcribe_sync)
+        elapsed = time.monotonic() - t0
+        with self._stats_lock:
+            self._transcribe_count += 1
+            self._total_transcribe_ms += elapsed * 1000.0
+        return result
 
     def get_stats(self) -> dict:
+        with self._stats_lock:
+            transcribe_count = self._transcribe_count
+            total_transcribe_ms = self._total_transcribe_ms
         return {
             "model": self._model_path,
             "loaded": self.is_loaded,
             "running": self._running,
+            "transcribe_count": transcribe_count,
+            "total_transcribe_ms": round(total_transcribe_ms, 1),
+            "avg_transcribe_ms": round(total_transcribe_ms / transcribe_count, 1) if transcribe_count > 0 else 0.0,
         }
 
 

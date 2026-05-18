@@ -310,10 +310,26 @@ class VideoEngine:
         h = height or cfg.height
         nf = num_frames or cfg.num_frames
         ns = num_steps or cfg.num_steps
-        gs = guide_scale or cfg.guide_scale
+        gs = guide_scale if guide_scale is not None else cfg.guide_scale
         f = fps or cfg.fps
         s = seed if seed is not None else cfg.seed
         sched = scheduler or cfg.scheduler
+
+        # Validate num_frames for Wan2.2 (must be 4n+1)
+        if self._model_type == "wan_2_2" and (nf - 1) % 4 != 0:
+            corrected = ((nf - 1) // 4) * 4 + 1
+            logger.warning(
+                f"Wan2.2 requires num_frames=4n+1, adjusting {nf} -> {corrected}"
+            )
+            nf = corrected
+
+        # Validate dimensions are positive and even
+        if w < 1 or h < 1:
+            raise ValueError(f"width and height must be >= 1, got {w}x{h}")
+        if w % 2 != 0 or h % 2 != 0:
+            w = (w // 2) * 2
+            h = (h // 2) * 2
+            logger.warning(f"Adjusted dimensions to even: {w}x{h}")
 
         def _gen_sync() -> VideoGenOutput:
             return self._run_generation(
@@ -466,6 +482,7 @@ class VideoEngine:
         scheduler: str,
     ) -> str | None:
         """Run video generation via mlx-video library."""
+        output_path = None
         try:
             import tempfile
             fd, output_path = tempfile.mkstemp(suffix=".mp4")
@@ -522,13 +539,33 @@ class VideoEngine:
                     )
                 except (ImportError, AttributeError) as e:
                     logger.error(f"Unsupported model type {self._model_type}: {e}")
+                    # Clean up temp file on early return
+                    if output_path and os.path.exists(output_path):
+                        try:
+                            os.unlink(output_path)
+                        except OSError:
+                            pass
                     return None
 
             return output_path
 
         except ImportError:
             logger.error("mlx-video not installed. Install with: pip install mlx-video")
+            # Clean up temp file on error
+            if output_path and os.path.exists(output_path):
+                try:
+                    os.unlink(output_path)
+                except OSError:
+                    pass
             return None
+        except Exception:
+            # Clean up temp file on any error — caller won't get the path
+            if output_path and os.path.exists(output_path):
+                try:
+                    os.unlink(output_path)
+                except OSError:
+                    pass
+            raise
 
     def _generate_with_native_pipeline(
         self,

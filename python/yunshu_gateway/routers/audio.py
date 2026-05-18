@@ -48,8 +48,18 @@ async def _extract_audio_from_video(video_path: str) -> str:
         )
         await proc.wait()
         if proc.returncode != 0:
+            # Clean up the empty/invalid temp file before raising
+            try:
+                os.unlink(audio_path)
+            except OSError:
+                pass
             raise RuntimeError(f"ffmpeg extraction failed with code {proc.returncode}")
     except FileNotFoundError:
+        # Clean up temp file before raising HTTPException
+        try:
+            os.unlink(audio_path)
+        except OSError:
+            pass
         raise HTTPException(status_code=501, detail="ffmpeg not installed — cannot extract audio from video")
 
     return audio_path
@@ -295,6 +305,7 @@ async def stream_speech(req: TTSRequest, request: Request):
                 speed=req.speed,
                 temperature=req.temperature,
                 instruct=stream_instruct,
+                cancel_event=_tts_gen.cancel_event,
                 top_k=req.top_k,
                 top_p=req.top_p,
                 repetition_penalty=req.repetition_penalty,
@@ -402,12 +413,12 @@ async def create_transcription(
     raw_suffix = os.path.splitext(file.filename or "audio.wav")[1].lower()
 
     fd, tmp_path = tempfile.mkstemp(suffix=raw_suffix if raw_suffix in _SAFE_AUDIO | _VIDEO_EXTENSIONS else ".wav")
+    asr_path = tmp_path  # Initialize before try so finally can always access it
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
 
         # If video file, extract audio track via ffmpeg
-        asr_path = tmp_path
         if raw_suffix in _VIDEO_EXTENSIONS:
             asr_path = await _extract_audio_from_video(tmp_path)
 

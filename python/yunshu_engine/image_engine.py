@@ -30,6 +30,7 @@ import glob
 import json
 import logging
 import math
+import threading
 import time
 from pathlib import Path
 
@@ -1242,6 +1243,8 @@ def _compute_sigmas(
 
     For Turbo models: linear spacing with resolution-dependent mu-shift.
     """
+    if num_steps < 1:
+        raise ValueError(f"num_steps must be >= 1, got {num_steps}")
     sigmas = mx.linspace(1.0, 1.0 / num_steps, num_steps).astype(mx.float32)
 
     if requires_sigma_shift:
@@ -1678,6 +1681,13 @@ class ImageGenEngine:
 
         queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=64)
 
+        # Thread-safe cancel flag for the executor thread.
+        # asyncio.Event.is_set() is not safe to call from non-event-loop
+        # threads; mirror into a threading.Event instead.
+        _cancel = threading.Event()
+        if cancel_event is not None and cancel_event.is_set():
+            _cancel.set()
+
         def _should_preview(step: int, total: int) -> bool:
             if preview_interval <= 0:
                 return False
@@ -1714,10 +1724,13 @@ class ImageGenEngine:
                 sigmas = _compute_sigmas(num_inference_steps, width, height)
 
                 for t in range(num_inference_steps):
-                    # Check cancel before each expensive diffusion step
-                    if cancel_event is not None and cancel_event.is_set():
+                    # Check cancel before each expensive diffusion step (thread-safe)
+                    if _cancel.is_set():
                         logger.info("Image stream cancelled at step %d/%d", t + 1, num_inference_steps)
-                        queue.put_nowait(None)
+                        try:
+                            queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            pass
                         return
 
                     sigma_t = sigmas[t].reshape((1,))
@@ -1738,34 +1751,47 @@ class ImageGenEngine:
                         mx.eval(image)
                         preview_png = self._to_png(image)
 
-                    queue.put_nowait({
-                        "step": step_num,
-                        "total_steps": num_inference_steps,
-                        "progress": progress,
-                        "image": preview_png,
-                        "is_final": False,
-                    })
+                    try:
+                        queue.put_nowait({
+                            "step": step_num,
+                            "total_steps": num_inference_steps,
+                            "progress": progress,
+                            "image": preview_png,
+                            "is_final": False,
+                        })
+                    except asyncio.QueueFull:
+                        logger.warning("Image stream queue full — consumer likely gone, stopping")
+                        return
 
                 # Final decode
                 image = self._vae.decode(latents)
                 mx.eval(image)
                 png = self._to_png(image)
-                queue.put_nowait({
-                    "step": num_inference_steps,
-                    "total_steps": num_inference_steps,
-                    "progress": 1.0,
-                    "image": png,
-                    "is_final": True,
-                })
+                try:
+                    queue.put_nowait({
+                        "step": num_inference_steps,
+                        "total_steps": num_inference_steps,
+                        "progress": 1.0,
+                        "image": png,
+                        "is_final": True,
+                    })
+                except asyncio.QueueFull:
+                    pass
             except Exception as e:
                 logger.error(f"Image stream error: {e}", exc_info=True)
-                queue.put_nowait(None)
+                try:
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         loop = asyncio.get_running_loop()
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
         try:
             while True:
+                # Propagate cancel_event to the thread-safe flag
+                if cancel_event is not None and cancel_event.is_set():
+                    _cancel.set()
                 chunk = await queue.get()
                 if chunk is None:
                     break
@@ -1773,6 +1799,8 @@ class ImageGenEngine:
                 if chunk.get("is_final"):
                     break
         finally:
+            # Signal the executor thread to stop
+            _cancel.set()
             if not stream_task.done():
                 stream_task.cancel()
                 try:
