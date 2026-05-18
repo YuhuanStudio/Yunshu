@@ -41,7 +41,6 @@ Performance characteristics (vs JsonSchemaConstraint allowlist approach):
 import json
 import logging
 import os
-import re
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)

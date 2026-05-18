@@ -29,7 +29,6 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from enum import auto
 from typing import Any, AsyncIterator, Optional
 
 import mlx.core as mx

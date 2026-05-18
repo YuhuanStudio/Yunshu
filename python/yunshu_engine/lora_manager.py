@@ -18,7 +18,6 @@ Architecture:
 
 import json
 import logging
-import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -307,7 +306,7 @@ class LoRAAdapterManager:
 
         try:
             import mlx.nn as nn
-            from mlx.utils import tree_flatten, tree_unflatten
+            from mlx.utils import tree_unflatten
             from mlx_lm.tuner.lora import LoRALinear
 
             merged_layers = []

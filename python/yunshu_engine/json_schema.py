@@ -23,9 +23,7 @@ where the sampler is invoked per-token.
 """
 
 
-import json
 import logging
-import re
 from enum import Enum, auto
 from typing import Any, Callable
 

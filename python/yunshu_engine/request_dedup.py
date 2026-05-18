@@ -169,7 +169,7 @@ class RequestDeduplicator:
                 # The original primary is still in-flight.  Create a new
                 # entry with a different hash (append a nonce) so both
                 # inferences run independently.
-                import hashlib as _hl
+                import hashlib
                 nonce = hashlib.sha256(
                     (content_hash + request_id).encode()
                 ).hexdigest()[:16]

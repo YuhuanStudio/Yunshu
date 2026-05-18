@@ -325,8 +325,6 @@ class LLMProposer:
         Returns:
             Sampled token ID.
         """
-        import mlx.nn as nn
-
         if logits.ndim > 1:
             logits = logits.squeeze(0)
 

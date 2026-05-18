@@ -10,7 +10,6 @@ import logging
 from .utils.hardware import (
     HardwareInfo,
     detect_hardware,
-    format_bytes,
     get_system_memory_gb,
 )
 

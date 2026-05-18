@@ -2761,7 +2761,6 @@ class ImageGenEngine:
 
             # Register with LoRA offloader if active
             if self._lora_offloader is not None:
-                import sys
                 adapter_id = adapter_path.rsplit("/", 1)[-1] if "/" in adapter_path else adapter_path
                 # Estimate memory: rank * (in + out) * 4 bytes per layer
                 est_bytes = applied * _rank * (256 + 256) * 4  # rough estimate

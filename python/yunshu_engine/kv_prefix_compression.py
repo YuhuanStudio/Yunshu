@@ -26,12 +26,6 @@ from typing import Any
 
 import numpy as np
 
-try:
-    import mlx.core as mx
-    HAS_MLX = True
-except ImportError:
-    HAS_MLX = False
-
 logger = logging.getLogger(__name__)
 
 

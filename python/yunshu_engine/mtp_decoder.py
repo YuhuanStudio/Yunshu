@@ -132,7 +132,6 @@ class MTPDecoder:
         Returns:
             List of generated token IDs.
         """
-        import asyncio
         max_tokens = max_tokens or self.config.max_tokens
         if isinstance(prompt, str):
             ids = self.tokenizer.encode(prompt)
