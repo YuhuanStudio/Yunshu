@@ -1543,8 +1543,9 @@ class EngineCore:
                 self._total_idle_time_ms += (time.monotonic() - _idle_start) * 1000
                 continue
 
+            _step_start = time.monotonic()
+
             try:
-                _step_start = time.monotonic()
                 # Cache hardware info once per step (avoid 3+ repeated syscalls per step)
                 _hw_info = None
                 _total_mem_bytes = 0
@@ -1665,8 +1666,12 @@ class EngineCore:
 
                 # MON-2/4/5: Track monitoring gauges for Prometheus export
                 try:
+                    # _step_wall_ms measures GPU-bound scheduler.step() time only.
+                    # Use this for per-step wall time (TTFT/ITL estimation) but
+                    # accumulate total active time from _step_start to capture
+                    # output distribution + profiler overhead as well, otherwise
+                    # compute_utilization overestimates GPU fraction.
                     self._last_step_wall_ms = _step_wall_ms
-                    self._total_step_time_ms += self._last_step_wall_ms
                     self._last_batch_size = len(scheduler_output.outputs) if hasattr(scheduler_output, 'outputs') else 0
                     self._last_queue_depth = len(self.scheduler.waiting)
                     # Record batch size in ServerMetrics for histogram distribution
@@ -1992,6 +1997,13 @@ class EngineCore:
                             logger.debug("spec prefill attempt failed", exc_info=True)
                 except Exception:
                     logger.debug("memory telemetry collection failed", exc_info=True)
+
+            # Accumulate total active time (GPU step + output distribution
+            # + profiler overhead).  This must happen after all post-step
+            # processing so compute_utilization accurately reflects the
+            # fraction of wall time spent doing useful work (not just the
+            # GPU kernel time).
+            self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
 
             await asyncio.sleep(0)
     def _compute_prefix_hash_for_request(self, req_id: str, prompt_token_ids: list[int]) -> int | None:
