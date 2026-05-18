@@ -86,6 +86,6 @@ def sync_and_clear_cache() -> None:
             if stream is not None:
                 mx.synchronize(stream)
     except RuntimeError:
-        pass
+        logger.debug("generation_stream synchronize failed, falling back to global sync", exc_info=True)
     mx.synchronize()
     mx.clear_cache()

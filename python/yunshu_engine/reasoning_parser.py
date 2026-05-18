@@ -62,6 +62,9 @@ class ReasoningParser(ABC):
         pos = 0
 
         for m in self._OPEN_RE.finditer(text):
+            # Skip matches inside already-processed regions
+            if m.start() < pos:
+                continue
             # Everything before this open tag is content
             content_parts.append(text[pos:m.start()])
             think_start = m.end()

@@ -191,23 +191,24 @@ class JsonSchemaConstraint:
         state = self._state
 
         if state == JsonState.START:
+            ws = {' ', '\t', '\n', '\r'}
             if self._top_level_type == "array":
-                return {'['}
+                return {'['} | ws
             if self._top_level_type == "string":
-                return {'"'}
+                return {'"'} | ws
             if self._top_level_type == "boolean":
-                return {'t', 'f'}
+                return {'t', 'f'} | ws
             if self._top_level_type == "null":
-                return {'n'}
+                return {'n'} | ws
             if self._top_level_type in ("number", "integer"):
-                return {'-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'}
+                return {'-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'} | ws
             if isinstance(self._top_level_type, list):
                 # Multiple types possible
                 chars = set()
                 for t in self._top_level_type:
                     chars.update(self._type_to_start_chars(t))
-                return chars
-            return {'{'}  # default: object
+                return chars | ws
+            return {'{', ' ', '\t', '\n', '\r'}  # default: object
 
         if state == JsonState.OBJECT_OPEN:
             # After `{`, expect `"` (key) or `}`
@@ -255,9 +256,27 @@ class JsonSchemaConstraint:
             # Must provide hex digits
             return _HEX_CHARS
 
-        if state in (JsonState.NUMBER, JsonState.NUMBER_FRACTION,
-                     JsonState.NUMBER_EXPONENT):
-            return None  # digits and number chars handled separately
+        if state == JsonState.NUMBER:
+            # After first digit, may continue with more digits, decimal point,
+            # exponent, or terminate with structural chars / whitespace.
+            chars = set(_DIGIT_CHARS)
+            chars.add('.')
+            chars.update('eE')
+            chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
+            return chars
+
+        if state == JsonState.NUMBER_FRACTION:
+            # After decimal point, digits, exponent, or terminate.
+            chars = set(_DIGIT_CHARS)
+            chars.update('eE')
+            chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
+            return chars
+
+        if state == JsonState.NUMBER_EXPONENT:
+            # After 'e'/'E', may have sign or digits.
+            chars = set(_DIGIT_CHARS)
+            chars.update('+-')
+            return chars
 
         if state == JsonState.NUMBER_EXPONENT_SIGN:
             # After e+/e-, only digits are valid

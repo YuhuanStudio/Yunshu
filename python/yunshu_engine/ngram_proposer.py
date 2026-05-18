@@ -56,10 +56,9 @@ def _find_longest_ngram_and_propose(
 ) -> list[int]:
     """Find longest N-gram match and propose K tokens following it.
 
-    Uses KMP LPS algorithm on reversed tokens for O(n) matching.
-    When a suffix of the sequence matches a previous N-gram (length
-    in [min_n, max_n]), the tokens following that match are proposed
-    as draft tokens.
+    Searches from longest to shortest ngram length. For each length n,
+    takes the suffix of the sequence and scans for an earlier occurrence.
+    When found, returns up to K tokens following that occurrence.
 
     Args:
         token_ids: Full context (prompt + generated tokens).
@@ -72,48 +71,22 @@ def _find_longest_ngram_and_propose(
         List of proposed token IDs (may be empty if no match).
     """
     total = len(token_ids)
-    if total < min_n:
+    if total < min_n + 1:
         return []
 
     k = min(k, max_model_len - total)
     if k <= 0:
         return []
 
-    # Reverse tokens — matching suffix becomes matching prefix
-    tokens = token_ids[::-1]
+    for n in range(min(max_n, total - 1), min_n - 1, -1):
+        suffix = token_ids[total - n:]
+        for i in range(total - n):
+            if token_ids[i:i + n] == suffix:
+                cont_start = i + n
+                cont_end = min(cont_start + k, total)
+                return token_ids[cont_start:cont_end]
 
-    # LPS array: longest proper prefix which is also a suffix
-    # for each prefix of the reversed sequence
-    lps = [0] * min(max_n, total)
-
-    longest_ngram = 0
-    position = 0
-
-    prev_lps = 0
-    i = 1
-    while i < total:
-        if tokens[prev_lps] == tokens[i]:
-            prev_lps += 1
-            if prev_lps >= longest_ngram:
-                longest_ngram = prev_lps
-                position = i
-            if i < max_n:
-                lps[i] = prev_lps
-            if prev_lps == max_n:
-                prev_lps = lps[max_n - 1]
-            i += 1
-        elif prev_lps != 0:
-            prev_lps = lps[prev_lps - 1]
-        else:
-            i += 1
-
-    if longest_ngram < min_n:
-        return []
-
-    # Convert back to original order
-    start_position = total - 1 - position + longest_ngram
-    end = min(start_position + k, total)
-    return token_ids[start_position:end]
+    return []
 
 
 class NgramHashPool:
@@ -137,10 +110,10 @@ class NgramHashPool:
         self._total_evictions = 0
 
     def update(self, token_ids: list[int]) -> None:
-        """Index all ngrams from the token sequence into the pool.
+        """Index ngrams from the token sequence into the pool.
 
-        Only indexes new tokens — call with the full sequence each time;
-        repeated entries are harmless (dict overwrites).
+        Tracks previously indexed length to avoid re-scanning the entire
+        sequence on every call. Only new positions are indexed.
         """
         min_n = self.config.min_n
         max_n = self.config.max_n
@@ -150,13 +123,16 @@ class NgramHashPool:
         if total < min_n + 1:
             return
 
+        start = max(0, getattr(self, '_indexed_len', 0) - max_n)
+        self._indexed_len = total
+
         for n in range(min_n, max_n + 1):
-            for i in range(total - n):
+            for i in range(max(0, start), total - n):
                 ngram = tuple(token_ids[i:i + n])
                 cont_start = i + n
                 cont_end = min(cont_start + k, total)
                 if cont_start < total:
-                    self._pool[ngram] = token_ids[cont_start:cont_end]
+                    self._pool[ngram] = token_ids[cont_start:cont_start + 1] if cont_end <= cont_start else token_ids[cont_start:cont_end]
                     self._total_inserts += 1
 
         # Evict oldest entries if over capacity
@@ -192,6 +168,7 @@ class NgramHashPool:
     def clear(self) -> None:
         """Clear the pool."""
         self._pool.clear()
+        self._indexed_len = 0
 
     def get_stats(self) -> dict:
         return {
@@ -253,7 +230,11 @@ class LCGHashPool:
         return (h + probe * 6364136223846793005) & self._mask
 
     def update(self, token_ids: list[int]) -> None:
-        """Index all ngrams into the circular buffer (O(1) per insert)."""
+        """Index ngrams into the circular buffer (O(1) per insert).
+
+        Tracks previously indexed length to avoid re-scanning the entire
+        sequence on every call. Only new positions are indexed.
+        """
         min_n = self._min_n
         max_n = self._max_n
         k = self._k
@@ -261,8 +242,11 @@ class LCGHashPool:
         if total < min_n + 1:
             return
 
+        start = max(0, getattr(self, '_indexed_len', 0) - max_n)
+        self._indexed_len = total
+
         for n in range(min_n, max_n + 1):
-            for i in range(total - n):
+            for i in range(max(0, start), total - n):
                 cont_start = i + n
                 if cont_start >= total:
                     break

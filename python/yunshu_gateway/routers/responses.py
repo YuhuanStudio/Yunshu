@@ -527,6 +527,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     # IDs for the output message and sequence numbering
     msg_id = f"msg-{uuid.uuid4().hex[:24]}"
     _seq = 0
+    accumulated_text = ""
 
     def _next_seq():
         nonlocal _seq
@@ -535,8 +536,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
     try:
       async def _token_source():
-        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok
-        accumulated_text = ""
+        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok, accumulated_text
         last_finish_reason = None
 
         # ── Lifecycle: response.created ──
@@ -745,11 +745,11 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             _cancel_evt.set()
         # Close open lifecycle items before reporting failure
         yield format_responses_content_part_done(
-            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            msg_id, text=accumulated_text,
             output_index=0, content_index=0, seq=_next_seq(),
         ).encode("utf-8")
         yield format_responses_output_item_done(
-            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            msg_id, text=accumulated_text,
             output_index=0, seq=_next_seq(),
         ).encode("utf-8")
         yield format_responses_failed(
@@ -764,11 +764,11 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
         # Close open lifecycle items before reporting failure
         yield format_responses_content_part_done(
-            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            msg_id, text=accumulated_text,
             output_index=0, content_index=0, seq=_next_seq(),
         ).encode("utf-8")
         yield format_responses_output_item_done(
-            msg_id, text=accumulated_text if 'accumulated_text' in dir() else "",
+            msg_id, text=accumulated_text,
             output_index=0, seq=_next_seq(),
         ).encode("utf-8")
         yield format_responses_failed(

@@ -1283,10 +1283,10 @@ class VLMEngine:
                         json_constraint = ConstraintFactory.create(gtype, grammar, self._tokenizer)
                 elif isinstance(json_schema, str) and json_schema == "json_object":
                     from .json_schema import JsonSchemaConstraint
-                    json_constraint = JsonSchemaConstraint(None, self._tokenizer)
+                    json_constraint = JsonSchemaConstraint(None)
                 else:
                     from .json_schema import JsonSchemaConstraint
-                    json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+                    json_constraint = JsonSchemaConstraint(json_schema)
             except Exception:
                 logger.warning("Grammar constraint init failed", exc_info=True)
 
@@ -1681,10 +1681,10 @@ class VLMEngine:
                         json_constraint = ConstraintFactory.create(gtype, grammar, self._tokenizer)
                 elif isinstance(json_schema, str) and json_schema == "json_object":
                     from .json_schema import JsonSchemaConstraint
-                    json_constraint = JsonSchemaConstraint(None, self._tokenizer)
+                    json_constraint = JsonSchemaConstraint(None)
                 else:
                     from .json_schema import JsonSchemaConstraint
-                    json_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+                    json_constraint = JsonSchemaConstraint(json_schema)
             except Exception:
                 logger.warning("Grammar constraint init failed (stream)", exc_info=True)
 
