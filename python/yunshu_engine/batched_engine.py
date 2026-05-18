@@ -2594,11 +2594,24 @@ class BatchedEngine:
                 # Check cancel event (gateway disconnect or internal cancel)
                 if _cancel_event is not None and _cancel_event.is_set():
                     logger.debug(f"Cancel event triggered during streaming: {request_id}")
+                    # Yield terminal stop chunk so consumer sees finished=True
+                    yield GenerationOutput(
+                        text="",
+                        new_text="",
+                        prompt_tokens=getattr(output, 'prompt_tokens', 0) if hasattr(output, 'prompt_tokens') else 0,
+                        completion_tokens=getattr(output, 'completion_tokens', 0) if hasattr(output, 'completion_tokens') else 0,
+                        finished=True,
+                        finish_reason="stop",
+                        ttft_ms=_stream_ttft_ms,
+                    )
                     break
                 cleaned = _clean_special_tokens(output.new_text)
                 finish_reason = output.finish_reason
                 if finish_reason == "memory_exceeded":
                     finish_reason = "memory_limit"
+                # Guard: finish_reason must never be None when finished=True
+                if output.finished and finish_reason is None:
+                    finish_reason = "stop"
                 # Compute TTFT on first streamed output
                 _ttft_ms = 0.0
                 if _first_token:
