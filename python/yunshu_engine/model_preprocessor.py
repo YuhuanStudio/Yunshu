@@ -609,10 +609,14 @@ class PreprocessorRegistry:
             DeepSeekOCRPreprocessor,
             WhisperSpeechPreprocessor,
             PhiVisionPreprocessor,
+            # More specific preprocessors MUST come before broader ones:
+            # InternVLVideoPreprocessor checks "internvl" + "video"
+            # and must be tried before InternVLImagePreprocessor which
+            # matches any model_type containing "internvl".
+            InternVLVideoPreprocessor,
             InternVLImagePreprocessor,
             CohereVisionPreprocessor,
             LTXVideoPreprocessor,
-            InternVLVideoPreprocessor,
         ]:
             instance = cls()
             self.register(instance)

@@ -317,6 +317,16 @@ class LoRAAdapterManager:
             if merged_layers:
                 self._base_model.update_modules(tree_unflatten(merged_layers))
 
+            # After merge, the model no longer has LoRA wrappers.
+            # Update the saved base copy so that future _restore_base
+            # calls restore to this post-merge state rather than the
+            # pre-merge state (which still had LoRA layers).
+            if self._base_model is not None:
+                import mlx.core as mx
+                self._base_model_copy = mx.tree_map(
+                    lambda x: x, self._base_model.parameters()
+                )
+
             with self._lock:
                 entry.is_merged = True
             logger.info(f"Merged LoRA adapter: {adapter_id}")

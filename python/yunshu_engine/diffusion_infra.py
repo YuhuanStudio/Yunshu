@@ -284,18 +284,22 @@ class DiffusionScheduler:
     def scale_model_input(self, sample: Any, step_index: int) -> Any:
         """Scale the model input for the given step (scheduler-specific).
 
-        Returns scaling parameters. In production, operates on mx.arrays.
+        Returns the scaled sample.  For Euler/ancestral schedulers the input
+        is divided by (sigma + 1) to keep the magnitude in a stable range.
+        For DDIM/DPM++/LMS no scaling is applied.
         """
         if step_index >= len(self._sigmas):
             return sample
         sigma = self._sigmas[step_index]
 
-        if self.scheduler_type == SchedulerType.DDIM:
-            # DDIM: no scaling
-            return sample
-        elif self.scheduler_type == SchedulerType.EULER:
-            # Euler: c_skip, c_out, c_in
-            return sigma / (sigma + 1)
+        if self.scheduler_type in (
+            SchedulerType.EULER,
+            SchedulerType.EULER_ANCESTRAL,
+        ):
+            # Euler / Euler-ancestral: scale by c_in = 1 / (sigma^2 + 1)^0.5
+            c_in = 1.0 / math.sqrt(sigma ** 2 + 1)
+            return sample * c_in if not isinstance(sample, (int, float)) else c_in
+        # DDIM, DPM++, LMS: no scaling
         return sample
 
 
@@ -402,9 +406,8 @@ class DiffusionLoRAOffloader:
                       adapters assigned to this step.
 
         Returns:
-            List of adapter IDs that were loaded.
+            List of adapter IDs that are currently loaded after this call.
         """
-        loaded = []
         target_ids = lora_ids if lora_ids is not None else self._adapters_for_step(step)
 
         for lora_id in target_ids:
@@ -413,7 +416,6 @@ class DiffusionLoRAOffloader:
                 logger.warning(f"Unknown LoRA adapter: {lora_id}")
                 continue
             if adapter.loaded:
-                loaded.append(lora_id)
                 continue
 
             # Check if we need to evict to make room
@@ -423,9 +425,10 @@ class DiffusionLoRAOffloader:
                     continue
 
             self._load(lora_id)
-            loaded.append(lora_id)
 
-        return loaded
+        # Return IDs that are actually loaded right now (may exclude
+        # previously-loaded adapters that were evicted for a later target).
+        return self.loaded_adapters
 
     def unload_after_step(self, step: int) -> list[str]:
         """Unload adapters that are no longer needed after a step.

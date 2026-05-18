@@ -149,6 +149,12 @@ async def create_batch(req: BatchRequest):
 
     try:
         done, pending = await asyncio.wait(task_handles, timeout=req.timeout)
+    except asyncio.CancelledError:
+        # Request cancelled (e.g., client disconnect) — propagate CancelledError
+        for task in task_handles:
+            task.cancel()
+        _batch_store[batch_id]["status"] = "cancelled"
+        raise
     except Exception as exc:
         # Cancel everything before raising
         for task in task_handles:
@@ -586,7 +592,7 @@ async def _execute_completion(body: dict) -> dict:
         text = result.text
         prompt_tokens = result.prompt_tokens
         completion_tokens = result.completion_tokens
-        finish_reason = result.finish_reason
+        finish_reason = result.finish_reason or "stop"
     else:
         state = await engine.generate(
             prompt=prompt,
