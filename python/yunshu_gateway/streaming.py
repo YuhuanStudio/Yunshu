@@ -259,11 +259,13 @@ class ThinkingParser:
                 self.thinking_text += self.buffer
                 result = self.buffer
             else:
-                # Check for partial tag at the end — don't emit as visible
+                # Check for partial tag at the end — at stream end, any
+                # partial tag is just text, not a real tag marker.
                 emit, retain = self._retain_tail(self.buffer)
-                if emit:
-                    self.visible_text += emit
-                    result = emit
+                full_emit = emit + retain
+                if full_emit:
+                    self.visible_text += full_emit
+                    result = full_emit
                 self.buffer = ""
         return {"visible": result if not self.in_thinking else "",
                 "thinking": result if self.in_thinking else "",

@@ -553,14 +553,24 @@ class ASREngine:
                 with open(audio_path, "rb") as f:
                     raw = f.read()
                 # Try to detect WAV header and extract raw PCM
-                if raw[:4] == b"RIFF" and len(raw) > 44:
-                    pcm = raw[44:]
+                if raw[:4] == b"RIFF":
+                    # Find the 'data' chunk — skip any extra chunks
+                    data_offset = raw.find(b"data")
+                    if data_offset != -1 and len(raw) > data_offset + 8:
+                        data_size = int.from_bytes(raw[data_offset+4:data_offset+8], "little")
+                        pcm = raw[data_offset+8:data_offset+8+data_size]
+                    else:
+                        pcm = raw
                 else:
                     pcm = raw
                 samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                if len(samples) > 0 and not self._vad.is_speech(samples):
-                    logger.debug("VAD: no speech detected, skipping transcription")
-                    return {"text": "", "language": language or "und", "segments": [], "duration": 0.0}
+                if len(samples) > 0:
+                    frame_size = int(self._vad.sample_rate * self._vad.frame_duration_ms / 1000) * 2
+                    raw_pcm = pcm[:frame_size]
+                    vad_result = self._vad.process_frame(raw_pcm, sample_rate=24000)
+                    if not vad_result.is_speech:
+                        logger.debug("VAD: no speech detected, skipping transcription")
+                        return {"text": "", "language": language or "und", "segments": [], "duration": 0.0}
             except Exception:
                 logger.debug("VAD pre-check failed, continuing with transcription", exc_info=True)
 

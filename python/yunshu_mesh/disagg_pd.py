@@ -391,13 +391,9 @@ class DisaggRouter:
             # Prune completed/failed transfers to prevent unbounded growth.
             # Keep only pending transfers (capped at 500) and recent completions.
             if len(self._pending_transfers) > 200:
-                self._pending_transfers = [
-                    t for t in self._pending_transfers
-                    if t.status == "pending"
-                ] + [
-                    t for t in self._pending_transfers
-                    if t.status != "pending"
-                ][-100:]
+                active = [t for t in self._pending_transfers if t.status in ("pending", "transferring")]
+                terminal = [t for t in self._pending_transfers if t.status not in ("pending", "transferring")]
+                self._pending_transfers = active + terminal[-100:]
 
     def get_pending_transfers(self) -> list[KVTransferRequest]:
         """Get all pending KV transfers."""
@@ -458,13 +454,14 @@ class DisaggRouter:
         active_decodes: int | None = None,
     ) -> None:
         """Update a node's current load for routing decisions."""
-        if node_id not in self._nodes:
-            return
-        node = self._nodes[node_id]
-        if active_prefills is not None:
-            node.active_prefills = active_prefills
-        if active_decodes is not None:
-            node.active_decodes = active_decodes
+        with self._lock:
+            if node_id not in self._nodes:
+                return
+            node = self._nodes[node_id]
+            if active_prefills is not None:
+                node.active_prefills = active_prefills
+            if active_decodes is not None:
+                node.active_decodes = active_decodes
 
     def compute_utilization(self) -> None:
         """Compute pool utilization for stats."""
@@ -506,6 +503,7 @@ class DisaggRouter:
 
     def reset(self) -> None:
         """Reset all stats."""
-        self._stats.reset()
-        self._pending_transfers.clear()
-        self._pending_events.clear()
+        with self._lock:
+            self._stats.reset()
+            self._pending_transfers.clear()
+            self._pending_events.clear()

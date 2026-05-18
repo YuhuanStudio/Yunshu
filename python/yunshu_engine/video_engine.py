@@ -1123,7 +1123,7 @@ class VideoEngine:
             try:
                 import mlx.core as mx
                 self._base_model_weights = mx.tree_map(
-                    lambda x: x, self._model.parameters()
+                    lambda x: mx.array(x), self._model.parameters()
                 )
             except Exception as e:
                 logger.warning(f"Could not save base model weights: {e}")
@@ -1251,11 +1251,11 @@ class VideoEngine:
         import mlx.nn as nn
         from mlx_lm.tuner.lora import LoRALinear
 
-        applied = 0
+        applied_layers = set()
         for name, module in self._model.named_modules():
             if not isinstance(module, nn.Linear):
                 continue
-            if applied >= num_layers:
+            if len(applied_layers) >= num_layers:
                 break
             # Apply LoRA to attention Q/V projections
             if any(k in name for k in ("q_proj", "v_proj", "query", "value", "to_q", "to_v")):
@@ -1273,6 +1273,8 @@ class VideoEngine:
                     for part in parts[0].split("."):
                         parent = getattr(parent, part)
                     setattr(parent, parts[1], lora_layer)
-                applied += 1
+                # Track by transformer block index to count layers, not projections
+                block_key = name.rsplit(".", 2)[0] if "." in name else name
+                applied_layers.add(block_key)
 
         logger.info(f"Applied LoRA to {applied} layers in video model")
