@@ -2841,10 +2841,17 @@ class BatchedEngine:
         # Thread-safe bridge: executor puts via call_soon_threadsafe so the
         # event loop's async consumer is woken for every token.
         _sentinel = object()
-        _q: asyncio.Queue = asyncio.Queue()
+        _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
 
         def _put(item):
+            # Bounded queue: drop oldest item if full to prevent OOM
+            # from a stalled consumer.
+            if _q.full():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         # Inflight prefix sharing: defined at _run level so it's accessible
@@ -4599,12 +4606,19 @@ class BatchedEngine:
         )
 
         _sentinel = object()
-        _q: asyncio.Queue = asyncio.Queue()
+        _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
         from .streaming_optimizer import StreamingBackpressureController
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
+            # Bounded queue: drop oldest item if full to prevent OOM
+            # from a stalled consumer.
+            if _q.full():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         # Inflight prefix sharing for streaming n-gram spec
@@ -5241,12 +5255,19 @@ class BatchedEngine:
                 logger.debug("MTP inflight prefix unregister failed", exc_info=True)
 
         _sentinel = object()
-        _q: asyncio.Queue = asyncio.Queue()
+        _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
         from .streaming_optimizer import StreamingBackpressureController
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
+            # Bounded queue: drop oldest item if full to prevent OOM
+            # from a stalled consumer.
+            if _q.full():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         def _run():

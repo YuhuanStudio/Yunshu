@@ -122,6 +122,12 @@ async def create_embedding(req: EmbeddingRequest):
 
         # Truncate to requested dimensions (Matryoshka embedding support)
         if req.dimensions is not None and req.dimensions > 0:
+            if len(emb) < req.dimensions:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Requested dimensions {req.dimensions} exceeds model's "
+                           f"native embedding dimension {len(emb)}",
+                )
             emb = emb[:req.dimensions]
             # Re-normalize after truncation to maintain unit vector property
             norm = math.sqrt(sum(x * x for x in emb))
@@ -276,10 +282,19 @@ def _extract_hidden(output) -> "mx.array":
         return output[0]
     if hasattr(output, 'last_hidden_state'):
         return output.last_hidden_state
+    if hasattr(output, 'hidden_states') and output.hidden_states:
+        return output.hidden_states[-1]
     if hasattr(output, 'logits'):
+        # For causal LMs, the logits tensor IS the last layer output (before
+        # softmax).  This is a reasonable approximation for models that don't
+        # expose explicit hidden states, but it is not optimal — the logits
+        # have been projected through the vocabulary head which distorts the
+        # embedding space.
+        logger.warning(
+            "Using logits as embedding — model may not produce optimal embeddings. "
+            "Consider using a model with explicit hidden state outputs."
+        )
         return output.logits
-    # Fallback: try indexing, then return as-is
-    try:
-        return output[0]
-    except (TypeError, IndexError, KeyError):
-        return output
+    raise ValueError(
+        "Model output has no hidden states or logits — cannot generate embeddings"
+    )

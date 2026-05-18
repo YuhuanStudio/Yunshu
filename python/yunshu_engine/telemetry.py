@@ -140,12 +140,17 @@ class TelemetryCollector:
         """Internal flush — caller must hold ``self._lock``.
 
         Serializes metrics to JSON and POSTs to the OTLP endpoint.
-        Falls back to logging on failure.
+        Falls back to logging on failure.  The batch is cleared only
+        after the payload has been fully serialised so that a POST
+        failure does not lose data (the payload variable holds the
+        complete snapshot).
         """
         count = len(self._batch)
         if count == 0:
             return 0
 
+        # Snapshot batch into payload *before* clearing so that POST
+        # failures do not lose data.
         payload = [
             {
                 "name": m.name,
@@ -156,7 +161,7 @@ class TelemetryCollector:
             for m in self._batch
         ]
 
-        # Release lock before I/O
+        # Clear the batch after snapshotting into payload.
         self._batch.clear()
 
         # Send to endpoint (non-blocking best-effort)

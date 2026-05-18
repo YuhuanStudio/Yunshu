@@ -105,14 +105,12 @@ async def create_batch(req: BatchRequest):
     batch_id = f"batch_{uuid.uuid4().hex[:24]}"
     total = len(req.requests)
 
-    # Initialize progress tracking
+    # Initialize progress tracking — counters are computed lazily from
+    # per-item results to avoid race conditions with concurrent tasks.
     _batch_store[batch_id] = {
         "id": batch_id,
         "status": "in_progress",
         "total": total,
-        "completed": 0,
-        "succeeded": 0,
-        "failed": 0,
         "started_at": time.time(),
         "results": [None] * total,
     }
@@ -129,18 +127,15 @@ async def create_batch(req: BatchRequest):
             result = {"error": str(exc)}
             status = "error"
 
-        # Update progress in real-time
+        # Store per-item result — counters are derived on demand in status()
         processed[index] = {
             "custom_id": req.requests[index].custom_id,
             "status": status,
             "response": result if status == "success" else None,
             "error": result.get("error") if status == "error" else None,
         }
-        _batch_store[batch_id]["completed"] += 1
-        if status == "success":
-            _batch_store[batch_id]["succeeded"] += 1
-        else:
-            _batch_store[batch_id]["failed"] += 1
+        # Also update the shared store so status endpoint reflects progress
+        _batch_store[batch_id]["results"][index] = processed[index]
 
         return index, result, status
 
@@ -206,9 +201,6 @@ async def create_batch(req: BatchRequest):
 
     _batch_store[batch_id].update({
         "status": final_status,
-        "completed": total,
-        "succeeded": succeeded,
-        "failed": failed,
         "timed_out": timed_out,
         "results": processed,
         "finished_at": time.time(),
@@ -226,13 +218,18 @@ async def get_batch_status(batch_id: str):
     info = _batch_store.get(batch_id)
     if info is None:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    # Derive counters from per-item results to avoid race conditions
+    results = info.get("results", [])
+    completed = sum(1 for r in results if r is not None)
+    succeeded = sum(1 for r in results if r is not None and r.get("status") == "success")
+    failed = sum(1 for r in results if r is not None and r.get("status") == "error")
     summary = {
         "id": info["id"],
         "status": info["status"],
         "total": info["total"],
-        "completed": info["completed"],
-        "succeeded": info["succeeded"],
-        "failed": info["failed"],
+        "completed": completed,
+        "succeeded": succeeded,
+        "failed": failed,
     }
     if "finished_at" in info:
         summary["elapsed_s"] = round(info["finished_at"] - info["started_at"], 2)
@@ -249,12 +246,16 @@ async def get_batch_results(batch_id: str):
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
     if info["status"] == "in_progress":
         raise HTTPException(status_code=409, detail="Batch is still in progress")
+    # Derive counters from per-item results
+    results = info.get("results", [])
+    succeeded = sum(1 for r in results if r is not None and r.get("status") == "success")
+    failed = sum(1 for r in results if r is not None and r.get("status") == "error")
     return JSONResponse({
         "id": info["id"],
         "status": info["status"],
         "total": info["total"],
-        "succeeded": info["succeeded"],
-        "failed": info["failed"],
+        "succeeded": succeeded,
+        "failed": failed,
         "results": info["results"],
     })
 

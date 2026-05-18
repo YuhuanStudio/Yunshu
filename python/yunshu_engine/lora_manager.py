@@ -286,6 +286,11 @@ class LoRAAdapterManager:
         The merged model has zero LoRA inference overhead.
         Base weights are saved only once (before the first merge) to
         prevent memory leaks from repeated save_base_weights calls.
+
+        Thread safety: _gpu_lock is held for the entire duration of the
+        merge to prevent unload_adapter() from corrupting model state
+        while GPU work is in progress.  After re-acquiring _lock, the
+        entry is re-fetched to guard against concurrent unload.
         """
         with self._lock:
             if adapter_id not in self._adapters:
@@ -304,36 +309,47 @@ class LoRAAdapterManager:
         # Save base weights once (idempotent — only saves if not already saved)
         self.save_base_weights()
 
-        try:
-            import mlx.nn as nn
-            from mlx.utils import tree_unflatten
-            from mlx_lm.tuner.lora import LoRALinear
+        # Serialize GPU mutations with unload_adapter so it cannot
+        # restore base weights while we are mid-merge.
+        with self._gpu_lock:
+            try:
+                import mlx.nn as nn
+                from mlx.utils import tree_unflatten
+                from mlx_lm.tuner.lora import LoRALinear
 
-            merged_layers = []
-            for name, module in self._base_model.named_modules():
-                if isinstance(module, LoRALinear):
-                    merged_layers.append((name, module.linear))
+                merged_layers = []
+                for name, module in self._base_model.named_modules():
+                    if isinstance(module, LoRALinear):
+                        merged_layers.append((name, module.linear))
 
-            if merged_layers:
-                self._base_model.update_modules(tree_unflatten(merged_layers))
+                if merged_layers:
+                    self._base_model.update_modules(tree_unflatten(merged_layers))
 
-            # After merge, the model no longer has LoRA wrappers.
-            # Update the saved base copy so that future _restore_base
-            # calls restore to this post-merge state rather than the
-            # pre-merge state (which still had LoRA layers).
-            if self._base_model is not None:
-                import mlx.core as mx
-                self._base_model_copy = mx.tree_map(
-                    lambda x: x, self._base_model.parameters()
-                )
+                # After merge, the model no longer has LoRA wrappers.
+                # Update the saved base copy so that future _restore_base
+                # calls restore to this post-merge state rather than the
+                # pre-merge state (which still had LoRA layers).
+                if self._base_model is not None:
+                    import mlx.core as mx
+                    self._base_model_copy = mx.tree_map(
+                        lambda x: x, self._base_model.parameters()
+                    )
 
-            with self._lock:
-                entry.is_merged = True
-            logger.info(f"Merged LoRA adapter: {adapter_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True)
-            return False
+                # Re-fetch entry under _lock — adapter may have been
+                # unloaded while we were doing GPU work.
+                with self._lock:
+                    if adapter_id not in self._adapters:
+                        logger.warning(
+                            "Adapter %s was unregistered during merge", adapter_id
+                        )
+                        return False
+                    entry = self._adapters[adapter_id]
+                    entry.is_merged = True
+                logger.info(f"Merged LoRA adapter: {adapter_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True)
+                return False
 
     def list_adapters(self) -> list[dict]:
         """List all registered adapters with their status."""

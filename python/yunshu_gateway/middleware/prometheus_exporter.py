@@ -108,11 +108,14 @@ class _Gauge:
 class _Histogram:
     """Thread-safe labelled histogram.
 
-    Stores individual observations and computes Prometheus-style buckets
-    plus sum and count on serialisation.
+    Stores observations and maintains running bucket counters so that
+    ``format()`` is O(B) instead of O(N*B) per label series.
     """
 
-    __slots__ = ("_name", "_help", "_lock", "_observations", "_buckets")
+    __slots__ = (
+        "_name", "_help", "_lock", "_observations",
+        "_bucket_counts", "_sums", "_counts", "_buckets",
+    )
 
     # Default Prometheus-style exponential buckets (seconds).
     DEFAULT_BUCKETS = (
@@ -129,18 +132,37 @@ class _Histogram:
         self._name = name
         self._help = help_text
         self._lock = Lock()
-        # key = frozenset of label pairs, value = list of observed floats
-        self._observations: dict[frozenset[tuple[str, str]], list[float]] = defaultdict(list)
         self._buckets = buckets or self.DEFAULT_BUCKETS
+        # key = frozenset of label pairs
+        self._observations: dict[frozenset[tuple[str, str]], list[float]] = defaultdict(list)
+        # Running bucket counters — updated incrementally in observe().
+        # Each value is a list aligned with self._buckets.
+        self._bucket_counts: dict[frozenset[tuple[str, str]], list[int]] = defaultdict(lambda: [0] * len(self._buckets))
+        self._sums: dict[frozenset[tuple[str, str]], float] = defaultdict(float)
+        self._counts: dict[frozenset[tuple[str, str]], int] = defaultdict(int)
 
     def observe(self, value: float, labels: Optional[dict[str, str]] = None) -> None:
         key = frozenset((labels or {}).items())
         with self._lock:
             lst = self._observations[key]
             lst.append(value)
+            # Increment running counters.
+            self._sums[key] += value
+            self._counts[key] += 1
+            bc = self._bucket_counts[key]
+            for i, upper in enumerate(self._buckets):
+                if value <= upper:
+                    bc[i] += 1
             # Cap per-label-series to prevent unbounded growth.
             if len(lst) > 100_000:
+                dropped = lst[:-50_000]
                 self._observations[key] = lst[-50_000:]
+                # Recompute bucket_counts from remaining observations.
+                remaining = self._observations[key]
+                self._bucket_counts[key] = [
+                    sum(1 for v in remaining if v <= upper)
+                    for upper in self._buckets
+                ]
 
     def format(self) -> str:
         lines: list[str] = []
@@ -148,26 +170,25 @@ class _Histogram:
         lines.append(f"# TYPE {self._name} histogram")
         with self._lock:
             for key in sorted(self._observations, key=_label_sort_key):
-                values = self._observations[key]
-                if not values:
+                count = self._counts.get(key, 0)
+                if count == 0:
                     continue
                 label_str = _format_labels(key)
-                # Compute bucket counts.
-                count = len(values)
-                total = sum(values)
+                total = self._sums.get(key, 0.0)
+                bc = self._bucket_counts.get(key, [0] * len(self._buckets))
                 # Build the label portion for bucket lines.  Prometheus format
                 # requires the le= label mixed with other labels, e.g.
                 #   metric_bucket{le="0.1",method="POST"} 5
                 extra = label_str[1:-1] if label_str else ""
-                for upper in self._buckets:
-                    in_bucket = sum(1 for v in values if v <= upper)
+                for i, upper in enumerate(self._buckets):
+                    bucket_val = bc[i]
                     if extra:
                         lines.append(
-                            f'{self._name}_bucket{{le="{upper}",{extra}}} {in_bucket}'
+                            f'{self._name}_bucket{{le="{upper}",{extra}}} {bucket_val}'
                         )
                     else:
                         lines.append(
-                            f'{self._name}_bucket{{le="{upper}"}} {in_bucket}'
+                            f'{self._name}_bucket{{le="{upper}"}} {bucket_val}'
                         )
                 # +Inf bucket.
                 if extra:
