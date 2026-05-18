@@ -184,9 +184,16 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
     # Register with request tracker for cancellation support
     import uuid as _uuid
     _img_id = f"img-{_uuid.uuid4().hex[:24]}"
-    from yunshu_engine.request_tracker import get_request_tracker
-    _img_tracker = get_request_tracker()
-    _img_gen = _img_tracker.register(_img_id, req.model)
+    _img_tracker = None
+    _img_gen = None
+    _cancel_event = None
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _img_tracker = get_request_tracker()
+        _img_gen = _img_tracker.register(_img_id, req.model)
+        _cancel_event = _img_gen.cancel_event
+    except Exception:
+        _img_tracker = None
 
     async def _progress_stream():
         async for chunk in img_engine.generate_image_stream(
@@ -197,7 +204,7 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
             seed=req.seed,
             preview_interval=req.preview_interval,
         ):
-            if _img_gen.cancel_event.is_set():
+            if _cancel_event is not None and _cancel_event.is_set():
                 yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
                 return
             if chunk.get("is_final") and chunk.get("image"):
@@ -216,7 +223,7 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
             async for event in with_sse_keepalive(
                 _progress_stream(),
                 http_request=request,
-                cancel_event=_img_gen.cancel_event,
+                cancel_event=_cancel_event,
             ):
                 yield event.encode("utf-8") if isinstance(event, str) else event
         except MemoryError:
@@ -225,7 +232,11 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
             logger.error(f"Image streaming error: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': {'message': 'Image generation failed', 'type': 'server_error'}})}\n\n".encode("utf-8")
         finally:
-            _img_tracker.unregister(_img_id)
+            if _img_tracker is not None:
+                try:
+                    _img_tracker.unregister(_img_id)
+                except Exception:
+                    pass
 
     return StreamingResponse(
         _wrapped_stream(),
