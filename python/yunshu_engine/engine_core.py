@@ -2127,11 +2127,15 @@ class EngineCore:
             self._kv_migration.unregister_block(_block_id)
         except Exception:
             logger.debug("kv_migration unregister failed", exc_info=True)
-        # Dedup
+        # Dedup: only the primary request calls complete(). Shadows
+        # are fanned-out by the engine loop before reaching here, so
+        # calling complete() again would be redundant (and the entry
+        # may already be removed by TTL pruning).
         if self._request_dedup is not None:
             content_hash = self._dedup_hashes.pop(request_id, None)
+            is_shadow = request_id in self._dedup_shadows
             self._dedup_shadows.pop(request_id, None)
-            if content_hash:
+            if content_hash and not is_shadow:
                 self._request_dedup.complete(content_hash)
         # Checkpoint
         if self._checkpoint_mgr is not None:

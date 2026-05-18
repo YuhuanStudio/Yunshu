@@ -13,7 +13,7 @@ Written from scratch for Yunshu, importing from our request module.
 
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import ClassVar, Optional
 
 from .request import RequestOutput
 
@@ -28,7 +28,7 @@ class RequestOutputCollector:
     Aggregation merges consecutive outputs when producer gets ahead.
     """
 
-    _waiting_consumers: int = 0
+    _waiting_consumers: ClassVar[int] = 0
 
     def __init__(self, aggregate: bool = True):
         self.output: Optional[RequestOutput] = None

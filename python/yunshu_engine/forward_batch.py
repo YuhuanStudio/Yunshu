@@ -249,7 +249,13 @@ class ForwardBatch:
                     if slot.is_prefill:
                         pos.extend(range(length))
                     else:
-                        start = slot.num_prompt_tokens + len(slot.generated_tokens) - 1
+                        # First decode step: generated_tokens is empty, so
+                        # the position for the first generated token is
+                        # num_prompt_tokens (not num_prompt_tokens - 1).
+                        if len(slot.generated_tokens) == 0:
+                            start = slot.num_prompt_tokens
+                        else:
+                            start = slot.num_prompt_tokens + len(slot.generated_tokens) - 1
                         pos.extend(range(start, start + length))
                 position_ids = mx.array(pos, dtype=mx.int32)
             except ImportError:

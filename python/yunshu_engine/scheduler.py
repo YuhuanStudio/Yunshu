@@ -2051,13 +2051,21 @@ class Scheduler:
                 )
 
                 # Update tracking: each insert() returns a new UID.
-                # Remove the old UID mapping (from the previous chunk) so
-                # abort/preemption always operates on the latest UID. Also
-                # update req.batch_uid so abort_request() and
-                # _preempt_request() reference the correct BatchGenerator entry.
+                # Remove the old UID from both the scheduler mapping AND
+                # the BatchGenerator itself.  If we only remove from
+                # _uid_to_req, the old UID stays in BatchGenerator and
+                # causes silent token loss (the old chunk's forward pass
+                # produces output for a UID nobody tracks).
                 old_uid = getattr(req, 'batch_uid', None)
                 if old_uid is not None and old_uid != uids[0]:
                     self._uid_to_req.pop(old_uid, None)
+                    try:
+                        self._batch_gen.remove([old_uid])
+                    except Exception:
+                        logger.debug(
+                            "Failed to remove old chunked UID %s from BatchGenerator",
+                            old_uid, exc_info=True,
+                        )
                 req.batch_uid = uids[0]
                 self._uid_to_req[uids[0]] = req_id
                 chunks_fed += 1
