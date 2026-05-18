@@ -258,6 +258,179 @@ def _has_image_blocks(content: str | list[dict] | None) -> bool:
     )
 
 
+def _convert_anthropic_messages(
+    messages_input: list[AnthropicMessage],
+    has_images: bool = False,
+    temp_files: list[str] | None = None,
+) -> tuple[list[dict], list[str]]:
+    """Convert Anthropic messages to OpenAI-compatible format.
+
+    Properly handles:
+    - tool_use blocks -> assistant messages with tool_calls
+    - tool_result blocks -> tool role messages with tool_call_id
+    - image blocks -> OpenAI image_url content parts (VLM path)
+    - text blocks -> plain text content
+
+    Returns (messages, temp_files) where temp_files tracks any image temp files
+    created during conversion.
+    """
+    if temp_files is None:
+        temp_files = []
+
+    # Phase 1: Convert each Anthropic message to intermediate form
+    # We need to split assistant messages with tool_use into separate messages:
+    # the text part stays as assistant, and each tool_use gets its own entry.
+    intermediate: list[dict] = []
+
+    for m in messages_input:
+        content = m.content
+        role = m.role
+
+        if not isinstance(content, list):
+            # Simple string or None content — no block processing needed
+            intermediate.append({"role": role, "content": content or ""})
+            continue
+
+        # Check for tool_use and tool_result blocks
+        has_tool_use = any(
+            isinstance(b, dict) and b.get("type") == "tool_use"
+            for b in content
+        )
+        has_tool_result = any(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in content
+        )
+
+        if has_tool_use and role == "assistant":
+            # Convert tool_use blocks to OpenAI tool_calls format
+            text_parts = []
+            tool_calls = []
+            for block in content:
+                if not isinstance(block, dict):
+                    text_parts.append(str(block))
+                    continue
+                bt = block.get("type", "")
+                if bt == "text":
+                    text_parts.append(block.get("text", ""))
+                elif bt == "tool_use":
+                    tool_id = block.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+                    tool_name = block.get("name", "unknown")
+                    tool_input = block.get("input", {})
+                    tool_calls.append({
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input),
+                        },
+                    })
+                else:
+                    text_parts.append(_extract_text_from_content([block]))
+
+            msg: dict = {"role": "assistant", "content": "\n".join(text_parts).strip()}
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            intermediate.append(msg)
+
+        elif has_tool_result and role == "user":
+            # Convert each tool_result block to a separate tool role message
+            # This is how OpenAI format represents tool results
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                bt = block.get("type", "")
+                if bt == "tool_result":
+                    tool_use_id = block.get("tool_use_id", f"toolu_unknown")
+                    inner = block.get("content", "")
+                    if isinstance(inner, list):
+                        inner_text = _extract_text_from_content(inner)
+                    else:
+                        inner_text = str(inner) if inner is not None else ""
+                    intermediate.append({
+                        "role": "tool",
+                        "content": inner_text,
+                        "tool_call_id": tool_use_id,
+                    })
+                elif bt == "text":
+                    intermediate.append({"role": "user", "content": block.get("text", "")})
+                elif bt == "image" and has_images:
+                    # Handle image blocks in VLM path
+                    _convert_image_block(block, intermediate, temp_files)
+                else:
+                    text = _extract_text_from_content([block])
+                    if text:
+                        intermediate.append({"role": "user", "content": text})
+
+        elif has_images:
+            # VLM path: preserve image blocks as OpenAI-style content parts
+            converted_parts = []
+            for block in content:
+                if not isinstance(block, dict):
+                    converted_parts.append({"type": "text", "text": str(block)})
+                    continue
+                bt = block.get("type", "")
+                if bt == "text":
+                    converted_parts.append({"type": "text", "text": block.get("text", "")})
+                elif bt == "image":
+                    source = block.get("source", {})
+                    media_type = source.get("media_type", "unknown")
+                    data = source.get("data")
+                    if data and source.get("type") == "base64":
+                        import base64 as _b64
+                        import tempfile as _tf
+                        try:
+                            raw = _b64.b64decode(data, validate=False)
+                        except Exception:
+                            logger.debug("base64 decode failed, trying with padding", exc_info=True)
+                            raw = _b64.b64decode(data + "==", validate=False)
+                        ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+                        ext = ext_map.get(media_type, "png")
+                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+                        tmp.write(raw)
+                        tmp.close()
+                        temp_files.append(tmp.name)
+                        converted_parts.append({"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}})
+                    else:
+                        converted_parts.append({"type": "text", "text": f"[Image: {media_type}]"})
+                else:
+                    text = _extract_text_from_content([block])
+                    converted_parts.append({"type": "text", "text": text})
+            intermediate.append({"role": role, "content": converted_parts})
+
+        else:
+            # Standard content: flatten to text
+            content_text = _extract_text_from_content(content)
+            intermediate.append({"role": role, "content": content_text})
+
+    return intermediate, temp_files
+
+
+def _convert_image_block(block: dict, intermediate: list[dict], temp_files: list[str]) -> None:
+    """Convert an Anthropic image block and append to intermediate messages."""
+    source = block.get("source", {})
+    media_type = source.get("media_type", "unknown")
+    data = source.get("data")
+    if data and source.get("type") == "base64":
+        import base64 as _b64
+        import tempfile as _tf
+        try:
+            raw = _b64.b64decode(data, validate=False)
+        except Exception:
+            raw = _b64.b64decode(data + "==", validate=False)
+        ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+        ext = ext_map.get(media_type, "png")
+        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)
+        tmp.write(raw)
+        tmp.close()
+        temp_files.append(tmp.name)
+        intermediate.append({
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}}],
+        })
+    else:
+        intermediate.append({"role": "user", "content": f"[Image: {media_type}]"})
+
+
 def _extract_cache_control_hints(system: str | list[dict] | None) -> list[dict]:
     """Extract cache_control hints from system messages.
 
@@ -343,45 +516,12 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     has_images = any(_has_image_blocks(m.content) for m in req.messages)
 
-    for m in req.messages:
-        if has_images and isinstance(m.content, list):
-            # VLM path: preserve image blocks as OpenAI-style content parts
-            converted_parts = []
-            for block in m.content:
-                if not isinstance(block, dict):
-                    converted_parts.append({"type": "text", "text": str(block)})
-                    continue
-                bt = block.get("type", "")
-                if bt == "text":
-                    converted_parts.append({"type": "text", "text": block.get("text", "")})
-                elif bt == "image":
-                    source = block.get("source", {})
-                    media_type = source.get("media_type", "unknown")
-                    data = source.get("data")
-                    if data and source.get("type") == "base64":
-                        import base64 as _b64
-                        import tempfile as _tf
-                        try:
-                            raw = _b64.b64decode(data, validate=False)
-                        except Exception:
-                            logger.debug("base64 decode failed, trying with padding", exc_info=True)
-                            raw = _b64.b64decode(data + "==", validate=False)
-                        ext_map = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
-                        ext = ext_map.get(media_type, "png")
-                        tmp = _tf.NamedTemporaryFile(suffix=f".{ext}", delete=False)
-                        tmp.write(raw)
-                        tmp.close()
-                        _temp_files.append(tmp.name)
-                        converted_parts.append({"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}})
-                    else:
-                        converted_parts.append({"type": "text", "text": f"[Image: {media_type}]"})
-                else:
-                    text = _extract_text_from_content([block])
-                    converted_parts.append({"type": "text", "text": text})
-            messages.append({"role": m.role, "content": converted_parts})
-        else:
-            content = _extract_text_from_content(m.content)
-            messages.append({"role": m.role, "content": content})
+    # Convert Anthropic messages to OpenAI-compatible format
+    # This properly handles tool_use/tool_result blocks instead of flattening them
+    converted_msgs, _temp_files = _convert_anthropic_messages(
+        req.messages, has_images=has_images, temp_files=_temp_files,
+    )
+    messages.extend(converted_msgs)
 
     stop = req.stop_sequences or []
 

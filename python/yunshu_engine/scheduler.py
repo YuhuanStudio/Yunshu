@@ -545,6 +545,10 @@ class SchedulerConfig:
     chunked_prefill_budget: int = 4     # Max chunks per scheduling round (fairness)
     chunked_prefill_timeout_seconds: float = 30.0  # Per-request prefill timeout (0 = no timeout)
     chunked_prefill_abort_on_timeout: bool = True  # Abort request on timeout (vs force-feed)
+    # Concurrent partial prefill control (GAP 1.3)
+    max_num_partial_prefills: int = 1   # Max partial (chunked) prefills in-flight at once
+    max_long_partial_prefills: int = 1  # Max long partial prefills in-flight at once
+    long_prefill_token_threshold: int = 4096  # Token count above which a prefill is "long"
     # Request retraction (C14: SGLang pattern)
     enable_retraction: bool = True     # Temporarily evict decode for prefill under pressure
     retraction_memory_threshold: float = 0.90  # Retract when memory utilization exceeds this
@@ -792,6 +796,9 @@ class Scheduler:
         self._chunked_prefill_enqueued_at: dict[str, float] = {}  # req_id -> time.monotonic()
         self._chunked_prefill_budget_used: int = 0  # Chunks consumed this scheduling round
         self._chunked_prefill_failed_ids: list[str] = []  # Requests that failed during chunked prefill
+
+        # Concurrent partial prefill control (GAP 1.3)
+        self._active_partial_prefills: int = 0  # Count of in-flight partial prefills
 
         # Batch-path SpecPrefill (attention-based sparse prefill for long prompts)
         import os as _os
@@ -1360,6 +1367,21 @@ class Scheduler:
             ]
             self._batch_composer.compose(pending_slots, active_slots)
 
+        # ── GAP 1.3: Short-prompt fast path ──
+        # When partial prefills are in-flight, short prompts (< threshold) should
+        # jump ahead of long partial prefills. Reorder so short requests are
+        # scheduled first, avoiding head-of-line blocking by long prefills.
+        if (
+            self._active_partial_prefills > 0
+            and len(to_insert) > 1
+        ):
+            _threshold = self.config.long_prefill_token_threshold
+            def _short_prompt_priority(r: Request) -> int:
+                """0 = short (schedule first), 1 = long."""
+                n = len(r.prompt_token_ids) if r.prompt_token_ids else 0
+                return 1 if n > _threshold else 0
+            to_insert.sort(key=_short_prompt_priority)
+
         for req in to_insert:
             try:
                 # ── External prefill path ──
@@ -1419,6 +1441,11 @@ class Scheduler:
                 #    prefill_chunk_size, chunk to avoid monopolising the batch.
                 #    This interleaves prefill chunks with decode even without
                 #    the full Sarathi mode, reducing head-of-line blocking.
+                #
+                # GAP 1.3: Concurrent partial prefill control caps how many
+                # chunked prefills can be in-flight at once. Short prompts
+                # (< long_prefill_token_threshold) can jump ahead of long
+                # partial prefills that are monopolizing the prefill budget.
                 tokens_to_insert = req.prompt_token_ids
                 effective_chunk_size = 0
                 should_chunk = False
@@ -1442,6 +1469,31 @@ class Scheduler:
                     # running decode requests for multiple consecutive steps.
                     effective_chunk_size = self.config.prefill_chunk_size
                     should_chunk = True
+
+                # ── GAP 1.3: Enforce concurrent partial prefill caps ──
+                if should_chunk:
+                    num_tokens = len(tokens_to_insert)
+                    is_long = num_tokens > self.config.long_prefill_token_threshold
+
+                    if self._active_partial_prefills >= self.config.max_num_partial_prefills:
+                        # Total cap reached — defer this request
+                        logger.debug(
+                            f"Partial prefill cap reached ({self._active_partial_prefills}/"
+                            f"{self.config.max_num_partial_prefills}), deferring {req.request_id}"
+                        )
+                        self.waiting.push_front(req, priority=req.sampling_params.priority)
+                        continue
+
+                    if is_long and self._active_partial_prefills >= self.config.max_long_partial_prefills:
+                        # Long prefill cap reached — defer this long request
+                        logger.debug(
+                            f"Long partial prefill cap reached ({self._active_partial_prefills}/"
+                            f"{self.config.max_long_partial_prefills}), deferring long request {req.request_id}"
+                        )
+                        self.waiting.push_front(req, priority=req.sampling_params.priority)
+                        continue
+
+                    self._active_partial_prefills += 1
 
                 if should_chunk and effective_chunk_size > 0:
                     chunk = tokens_to_insert[:effective_chunk_size]
@@ -1751,7 +1803,7 @@ class Scheduler:
             self._detokenizers.pop(request.request_id, None)
             self._thinking_processors.pop(request.request_id, None)
             self._thinking_state.pop(request.request_id, None)
-            self._pending_prefill.pop(request.request_id, None)
+            self._pop_pending_prefill(request.request_id)
             self._cleanup_spec_state(request.request_id)
 
             # H2O: Log attention-based eviction order for debugging.
@@ -1840,6 +1892,16 @@ class Scheduler:
             retracted += 1
 
         return retracted
+
+    def _pop_pending_prefill(self, req_id: str) -> None:
+        """Remove a request from _pending_prefill and decrement the active counter.
+
+        Helper for GAP 1.3: ensures _active_partial_prefills stays in sync
+        whenever a partial prefill is removed outside of _process_pending_prefill's
+        normal completion/errored cleanup path.
+        """
+        if self._pending_prefill.pop(req_id, None) is not None:
+            self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
     def _process_pending_prefill(self) -> None:
         """Process pending partial prefill chunks with production hardening.
@@ -2125,16 +2187,19 @@ class Scheduler:
                 errored_ids.append(req_id)
 
         # ── Cleanup completed and errored requests ──
+        # GAP 1.3: Decrement active partial prefill counter for each completed/errored request.
         for rid in completed_ids:
             self._pending_prefill.pop(rid, None)
             self._chunked_prefill_fairness.pop(rid, None)
             self._chunked_prefill_enqueued_at.pop(rid, None)
+            self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
         for rid in errored_ids:
             self._pending_prefill.pop(rid, None)
             self._chunked_prefill_fairness.pop(rid, None)
             self._chunked_prefill_enqueued_at.pop(rid, None)
             self._chunked_prefill_failed_ids.append(rid)
+            self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
         # ── Prometheus observation ──
         try:
@@ -2378,7 +2443,7 @@ class Scheduler:
                 self._cleanup_spec_state(req_id)
                 # Clean up chunked prefill state (request may finish while
                 # still in the middle of chunked prefill, e.g. thinking budget overflow)
-                self._pending_prefill.pop(req_id, None)
+                self._pop_pending_prefill(req_id)
                 # H2O: Remove attention score tracking for finished request
                 if self._attention_score_tracker is not None:
                     self._attention_score_tracker.remove_request(req_id)
@@ -2501,7 +2566,7 @@ class Scheduler:
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)
             self._thinking_state.pop(req_id, None)
-            self._pending_prefill.pop(req_id, None)
+            self._pop_pending_prefill(req_id)
             self._cleanup_spec_state(req_id)
             # H2O: cleanup attention score tracking
             if self._attention_score_tracker is not None:
@@ -2657,7 +2722,7 @@ class Scheduler:
                 # Clean up chunked prefill state for finished/aborted requests.
                 # Without this, _pending_prefill leaks when a request finishes
                 # while still in the middle of chunked prefill.
-                self._pending_prefill.pop(req_id, None)
+                self._pop_pending_prefill(req_id)
                 # §12.2: Evict encoder cache entry for finished request.
                 # The encoder output is no longer needed once the decoder
                 # has completed generation.
@@ -3359,6 +3424,7 @@ class Scheduler:
         self._chunked_prefill_enqueued_at.clear()
         self._chunked_prefill_budget_used = 0
         self._chunked_prefill_failed_ids.clear()
+        self._active_partial_prefills = 0
         self._spec_decoder = None
         self._spec_head_info = None
         self._mtp_decoder = None
@@ -3418,6 +3484,10 @@ class Scheduler:
             "chunked_prefill_budget_used": self._chunked_prefill_budget_used,
             "chunked_prefill_timeout_seconds": self.config.chunked_prefill_timeout_seconds,
             "chunked_prefill_abort_on_timeout": self.config.chunked_prefill_abort_on_timeout,
+            "active_partial_prefills": self._active_partial_prefills,
+            "max_num_partial_prefills": self.config.max_num_partial_prefills,
+            "max_long_partial_prefills": self.config.max_long_partial_prefills,
+            "long_prefill_token_threshold": self.config.long_prefill_token_threshold,
         }
         # Attention-score-based eviction (H2O) stats
         if self._attention_score_tracker is not None:

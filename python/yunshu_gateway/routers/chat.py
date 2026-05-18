@@ -43,6 +43,15 @@ from yunshu_engine.gateway_optimizer import get_streaming_buffer
 logger = logging.getLogger(__name__)
 
 
+def _generate_tool_call_id() -> str:
+    """Generate a consistent tool call ID in OpenAI format.
+
+    Uses format: call_{uuid_hex[:24]} — consistent across all code paths
+    (LLM, VLM, multi-choice, streaming).
+    """
+    return f"call_{uuid.uuid4().hex[:24]}"
+
+
 async def _try_execute_mcp_tools(
     tool_calls: list[dict],
     request: Request,
@@ -705,7 +714,7 @@ async def _build_multi_choice(
         if tool_calls:
             from ..streaming import _sanitize_arguments
             message["tool_calls"] = [
-                {"id": f"call_{idx}_{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": _sanitize_arguments(tc.get("arguments", {}))}}
+                {"id": _generate_tool_call_id(), "type": "function", "function": {"name": tc["name"], "arguments": _sanitize_arguments(tc.get("arguments", {}))}}
                 for i, tc in enumerate(tool_calls)
             ]
 
@@ -1261,7 +1270,7 @@ async def _handle_vlm_chat(
         if data["tool_calls"]:
             from ..streaming import _sanitize_arguments
             message["tool_calls"] = [
-                {"id": f"call_vlm_{idx}_{i:x}", "type": "function", "function": {"name": tc["name"], "arguments": _sanitize_arguments(tc.get("arguments", {}))}}
+                {"id": _generate_tool_call_id(), "type": "function", "function": {"name": tc["name"], "arguments": _sanitize_arguments(tc.get("arguments", {}))}}
                 for i, tc in enumerate(data["tool_calls"])
             ]
         choices.append({

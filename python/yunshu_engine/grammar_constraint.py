@@ -39,6 +39,7 @@ class RegexConstraint:
         self._compiled = re.compile(pattern)
         self._text_buffer = ""
         self._done = False
+        self._valid_chars_cache: dict[str, set[str] | None] = {}
 
     @property
     def state(self) -> str:
@@ -61,6 +62,9 @@ class RegexConstraint:
         """Compute characters that can follow the current partial match.
 
         Returns None if any character is valid, or a set of valid chars.
+        Results are cached per accumulated text state so repeated calls
+        for the same state are O(1).
+
         Uses a three-pronged check:
           1. fullmatch(candidate) — char completes the pattern
           2. match(candidate) consuming ALL of candidate — candidate is a
@@ -69,6 +73,11 @@ class RegexConstraint:
         """
         if self._done:
             return set()
+
+        # Cache hit: same accumulated text always produces the same valid set
+        cache_key = self._text_buffer
+        if cache_key in self._valid_chars_cache:
+            return self._valid_chars_cache[cache_key]
 
         # Try extending with each printable ASCII char + common whitespace
         # + common Unicode ranges (CJK, Hangul, Hiragana/Katakana)
@@ -102,8 +111,11 @@ class RegexConstraint:
         # If >90% of tested chars are valid, treat as unrestricted.
         # This avoids false negatives for permissive patterns like ".*".
         if len(valid) > total_tested * 0.9:
-            return None
-        return valid
+            result = None
+        else:
+            result = valid
+        self._valid_chars_cache[cache_key] = result
+        return result
 
     def get_allowed_tokens(self, tokenizer: Any, generated_token_ids: list[int]) -> list[int]:
         if self._done:
@@ -147,6 +159,7 @@ class RegexConstraint:
     def reset(self) -> None:
         self._text_buffer = ""
         self._done = False
+        self._valid_chars_cache.clear()
 
     def get_stats(self) -> dict[str, Any]:
         return {
@@ -154,6 +167,7 @@ class RegexConstraint:
             "pattern": self._pattern,
             "buffer_len": len(self._text_buffer),
             "is_done": self._done,
+            "cache_size": len(self._valid_chars_cache),
         }
 
 

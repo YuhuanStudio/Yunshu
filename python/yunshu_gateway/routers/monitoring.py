@@ -281,6 +281,36 @@ async def prometheus_export() -> str:
                 pm.set_gauge("spec_enabled",
                     1 if (spec_enabled or ngram_proposer is not None) else 0)
 
+                # Cross-model speculative decoder stats (SpeculativeDecoder._stats)
+                spec_decoder = getattr(entry.engine, '_spec_decoder', None)
+                if spec_decoder is not None:
+                    sd_stats = spec_decoder.get_stats()
+                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0))
+                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0))
+                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0))
+                    pm.set_gauge("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0))
+                    pm.set_gauge("spec_effective_speedup", sd_stats.get("effective_speedup", 0.0))
+                else:
+                    pm.set_gauge("spec_draft_tokens", 0)
+                    pm.set_gauge("spec_accepted_tokens", 0)
+                    pm.set_gauge("spec_acceptance_rate", 0.0)
+                    pm.set_gauge("spec_bonus_tokens", 0)
+                    pm.set_gauge("spec_effective_speedup", 0.0)
+
+                # MTP speculative decoding stats
+                mtp_decoder = getattr(entry.engine, '_mtp_decoder', None)
+                if mtp_decoder is not None and hasattr(mtp_decoder, 'stats'):
+                    ms = mtp_decoder.stats
+                    mtp_total = ms.accepts + ms.rejects
+                    pm.set_gauge("spec_mtp_accepts", ms.accepts)
+                    pm.set_gauge("spec_mtp_rejects", ms.rejects)
+                    pm.set_gauge("spec_mtp_acceptance_rate",
+                        ms.accepts / mtp_total if mtp_total > 0 else 0.0)
+                else:
+                    pm.set_gauge("spec_mtp_accepts", 0)
+                    pm.set_gauge("spec_mtp_rejects", 0)
+                    pm.set_gauge("spec_mtp_acceptance_rate", 0.0)
+
                 # ITL stats from ServerMetrics
                 try:
                     from yunshu_engine.server_metrics import get_server_metrics

@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
@@ -799,7 +800,7 @@ def format_openai_non_stream(
     if tool_calls:
         message["tool_calls"] = [
             {
-                "id": f"call_{i:x}",
+                "id": f"call_{uuid.uuid4().hex[:24]}",
                 "type": "function",
                 "function": {
                     "name": tc["name"],
