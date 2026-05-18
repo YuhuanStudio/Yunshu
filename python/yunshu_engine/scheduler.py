@@ -1632,7 +1632,8 @@ class Scheduler:
                 self._failed_insert_ids.append(req.request_id)
                 # Clean up partial prefill tracking if we incremented the counter
                 # but never added to self.running (which _cleanup_finished skips).
-                if should_chunk and self._pending_prefill.pop(req.request_id, None) is not None:
+                if should_chunk:
+                    self._pending_prefill.pop(req.request_id, None)
                     self._active_partial_prefills -= 1
 
     def _run_external_prefill(self, req: Request) -> bool:
@@ -1848,6 +1849,11 @@ class Scheduler:
             request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens)
             request.batch_uid = None
             request.num_preemptions += 1
+            # Clear stale output tokens from pre-preemption generation.
+            # When re-scheduled, the prompt is re-prefilled and generation
+            # restarts from scratch — old tokens are invalid.
+            request.output_token_ids = []
+            request.output_text = ""
 
             self.waiting.push_front(request, priority=request.sampling_params.priority)
 
@@ -1958,8 +1964,8 @@ class Scheduler:
             return
 
         _now = time.monotonic()
-        completed_ids: list[str] = []
-        errored_ids: list[str] = []
+        completed_ids: set[str] = set()
+        errored_ids: set[str] = set()
         chunks_fed = 0
         budget = self.config.chunked_prefill_budget
         timeout_seconds = self.config.chunked_prefill_timeout_seconds
@@ -2009,7 +2015,7 @@ class Scheduler:
                         f"(pending for {pending_duration:.1f}s, "
                         f"{len(state.get('remaining_tokens', []))} tokens remaining)"
                     )
-                errored_ids.append(req_id)
+                errored_ids.add(req_id)
             else:
                 # Force-feed: dump all remaining tokens in one shot
                 remaining = state.get('remaining_tokens', [])
@@ -2067,14 +2073,14 @@ class Scheduler:
                             req = self.running.get(req_id)
                             if req is not None:
                                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
-                            errored_ids.append(req_id)
+                            errored_ids.add(req_id)
                 # Only mark as completed if force-feed succeeded or there are no remaining tokens.
                 # If force-feed failed (but not errored — e.g., req was None or batch_gen missing),
                 # mark as errored to prevent the request from being silently dropped.
                 if force_fed or not remaining:
-                    completed_ids.append(req_id)
+                    completed_ids.add(req_id)
                 else:
-                    errored_ids.append(req_id)
+                    errored_ids.add(req_id)
 
         # ── Fairness: sort pending requests by chunks served (ascending) ──
         # Requests that have received fewer chunks are processed first,
@@ -2092,17 +2098,17 @@ class Scheduler:
 
             remaining = state['remaining_tokens']
             if not remaining:
-                completed_ids.append(req_id)
+                completed_ids.add(req_id)
                 continue
 
             # Check if the request was aborted
             if req_id in self._pending_abort_ids:
-                completed_ids.append(req_id)
+                completed_ids.add(req_id)
                 continue
 
             req = self.running.get(req_id)
             if req is None:
-                completed_ids.append(req_id)
+                completed_ids.add(req_id)
                 continue
 
             # Skip actual insertion if BatchGenerator is not ready
@@ -2226,7 +2232,7 @@ class Scheduler:
                     )
 
                 if not state['remaining_tokens']:
-                    completed_ids.append(req_id)
+                    completed_ids.add(req_id)
                     # Remove from progress tracker — prefill complete
                     if self._prefill_tracker is not None:
                         self._prefill_tracker.remove(req_id)
@@ -2250,7 +2256,7 @@ class Scheduler:
                 # ── Error handling: abort entire request on chunk failure ──
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
                 self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
-                errored_ids.append(req_id)
+                errored_ids.add(req_id)
 
         # ── Cleanup completed and errored requests ──
         # GAP 1.3: Decrement active partial prefill counter for each completed/errored request.
@@ -2784,6 +2790,10 @@ class Scheduler:
             if RequestStatus.is_finished(req.status):
                 self.running.pop(req_id, None)
                 self.finished_ids.add(req_id)
+                # Clean up UID mapping to prevent stale lookups
+                uid = getattr(req, 'batch_uid', None)
+                if uid is not None:
+                    self._uid_to_req.pop(uid, None)
                 self._kv_prefix_hashes.pop(req_id, None)
                 # Clean up chunked prefill state for finished/aborted requests.
                 # Without this, _pending_prefill leaks when a request finishes
@@ -3285,8 +3295,12 @@ class Scheduler:
             # Fallback to [-n_draft:] if start_pos is not tracked.
             n_draft = len(draft_ids)
             start_pos = self._spec_draft_start_pos.get(rid)
-            if start_pos is not None and start_pos + n_draft <= len(actual_tokens):
-                recent_actual = actual_tokens[start_pos:start_pos + n_draft]
+            if start_pos is not None and start_pos < len(actual_tokens):
+                n_available = min(n_draft, len(actual_tokens) - start_pos)
+                recent_actual = actual_tokens[start_pos:start_pos + n_available]
+            elif start_pos is not None:
+                # No tokens generated at start_pos yet — nothing to compare
+                recent_actual = []
             else:
                 recent_actual = actual_tokens[-n_draft:] if n_draft > 0 else []
             n_compare = min(len(draft_ids), len(recent_actual))
