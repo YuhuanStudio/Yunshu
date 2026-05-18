@@ -681,11 +681,12 @@ class SSDKVCache:
         with self._lock:
             hot_bytes = 0
             disk_bytes = 0
-            for hex_hash in self._hot_cache:
-                if hex_hash in self._index:
-                    hot_bytes += self._index[hex_hash].file_size
-            for meta in self._index.values():
-                disk_bytes += meta.file_size
+            hot_set = set(self._hot_cache.keys())
+            for hex_hash, meta in self._index.items():
+                if hex_hash in hot_set:
+                    hot_bytes += meta.file_size
+                else:
+                    disk_bytes += meta.file_size
 
             return SSDCacheStats(
                 hot_cache_entries=len(self._hot_cache),

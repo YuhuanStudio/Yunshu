@@ -190,6 +190,7 @@ class OverlapScheduler:
 
         # Previous step's CPU post-processing work (to overlap)
         self._prev_cpu_work: list[Any] = []
+        self._prev_cpu_overlap_ms: float = 0.0
 
     @property
     def config(self) -> OverlapConfig:
@@ -224,9 +225,13 @@ class OverlapScheduler:
 
         self._step_start_time = time.perf_counter()
 
-        # Process previous step's CPU work while GPU is idle
+        # Measure overlap: how much CPU work from the previous step
+        # runs during GPU time
+        self._prev_cpu_overlap_ms = 0.0
         if self._prev_cpu_work:
+            cpu_start = time.perf_counter()
             self._run_cpu_postprocess(self._prev_cpu_work)
+            self._prev_cpu_overlap_ms = (time.perf_counter() - cpu_start) * 1000
             self._prev_cpu_work = []
 
         # Launch scheduler step — GPU work begins
@@ -269,8 +274,8 @@ class OverlapScheduler:
         cpu_only_ms = (cpu_end - cpu_start) * 1000
 
         # Calculate overlap: CPU work from previous step ran during GPU
-        had_overlap = len(self._prev_cpu_work) > 0 or cpu_only_ms > 0
-        cpu_overlap_ms = max(0, gpu_time_ms - cpu_only_ms) if had_overlap else 0
+        had_overlap = self._prev_cpu_overlap_ms > 0
+        cpu_overlap_ms = self._prev_cpu_overlap_ms if had_overlap else 0
 
         self._metrics.record_step(
             gpu_time_ms=gpu_time_ms,

@@ -46,6 +46,7 @@ class RequestSlot:
     num_prompt_tokens: int = 0
     enable_thinking: bool = False
     thinking_budget: int | None = None
+    eos_token_ids: list[int] = field(default_factory=lambda: [2])
 
     @property
     def total_tokens(self) -> int:
@@ -59,7 +60,7 @@ class RequestSlot:
     def is_finished(self) -> bool:
         if len(self.generated_tokens) >= self.max_tokens:
             return True
-        if self.generated_tokens and self.generated_tokens[-1] in (0, 2):
+        if self.generated_tokens and self.eos_token_ids and self.generated_tokens[-1] in self.eos_token_ids:
             return True
         return False
 
@@ -243,12 +244,13 @@ class ForwardBatch:
             try:
                 import mlx.core as mx
                 input_ids = mx.array(all_tokens, dtype=mx.int32)
-                # Position IDs: cumulative within each request
                 pos = []
-                offset = 0
-                for length in request_lengths:
-                    pos.extend(range(offset, offset + length))
-                    offset += length
+                for length, slot in zip(request_lengths, batch.slots):
+                    if slot.is_prefill:
+                        pos.extend(range(length))
+                    else:
+                        start = slot.num_prompt_tokens + len(slot.generated_tokens) - 1
+                        pos.extend(range(start, start + length))
                 position_ids = mx.array(pos, dtype=mx.int32)
             except ImportError:
                 pass

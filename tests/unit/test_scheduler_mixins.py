@@ -124,9 +124,13 @@ class TestMetricsMixin:
         m.post_step(None, FakeOutput([FakeReqOutput()]))
         assert len(m._throughput_window) == 2  # old pruned + new + current
 
-    def test_on_finish_increments_requests(self):
+    def test_on_finish_does_not_double_count(self):
         m = MetricsMixin()
-        m.on_finish(None, "r1", None)
+        finished_out = FakeReqOutput(finished=True)
+        m.pre_step(None)
+        m.post_step(None, FakeOutput([finished_out]))
+        assert m._total_requests == 1
+        m.on_finish(None, "r1", finished_out)
         assert m._total_requests == 1
 
     def test_latency_percentiles(self):

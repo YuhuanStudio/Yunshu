@@ -99,12 +99,15 @@ class PrefillProgressTracker:
 
 # Module-level singleton
 _tracker: PrefillProgressTracker | None = None
+_tracker_lock = threading.Lock()
 
 
 def get_prefill_tracker() -> PrefillProgressTracker:
     global _tracker
     if _tracker is None:
-        _tracker = PrefillProgressTracker()
+        with _tracker_lock:
+            if _tracker is None:
+                _tracker = PrefillProgressTracker()
     return _tracker
 
 

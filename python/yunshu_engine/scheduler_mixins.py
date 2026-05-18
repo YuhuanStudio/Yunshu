@@ -104,7 +104,7 @@ class MetricsMixin(SchedulerMixin):
         ]
 
     def on_finish(self, scheduler: Any, request_id: str, output: Any) -> None:
-        self._total_requests += 1
+        pass
 
     def get_stats(self) -> dict:
         now = time.monotonic()

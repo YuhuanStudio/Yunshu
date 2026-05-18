@@ -860,6 +860,7 @@ class KVOffloadManager:
                     self._stats.total_promotions += 1
                     self._stats.total_blocks_promoted += 1
                     self._stats.total_promotion_hits += 1
+                    self._stats.total_bytes_promoted += self._bytes_per_block
                     self._stats.promotion_latencies.append(latency)
                     if len(self._stats.promotion_latencies) > 1000:
                         self._stats.promotion_latencies = self._stats.promotion_latencies[-500:]
@@ -876,6 +877,7 @@ class KVOffloadManager:
                     self._stats.total_promotions += 1
                     self._stats.total_blocks_promoted += 1
                     self._stats.total_promotion_hits += 1
+                    self._stats.total_bytes_promoted += self._bytes_per_block
                     self._stats.promotion_latencies.append(latency)
                     if len(self._stats.promotion_latencies) > 1000:
                         self._stats.promotion_latencies = self._stats.promotion_latencies[-500:]

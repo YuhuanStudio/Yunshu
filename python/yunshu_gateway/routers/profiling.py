@@ -71,6 +71,7 @@ async def stop_profile():
             "elapsed_seconds": round(elapsed, 3),
         })
     except Exception as e:
+        _profiling_active = False
         raise HTTPException(status_code=500, detail=f"Failed to stop profiling: {e}")
 
 
