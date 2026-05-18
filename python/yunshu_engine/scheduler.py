@@ -1932,6 +1932,11 @@ class Scheduler:
                                 samplers=[sampler],
                                 state_machines=[sm],
                             )
+                            # Update UID tracking (force-feed creates a new UID)
+                            old_uid = getattr(req, 'batch_uid', None)
+                            if old_uid is not None and old_uid != uids[0]:
+                                self._uid_to_req.pop(old_uid, None)
+                            req.batch_uid = uids[0]
                             self._uid_to_req[uids[0]] = req_id
                             self._chunked_prefill_chunks_processed += 1
                             chunks_fed += 1
@@ -2044,7 +2049,15 @@ class Scheduler:
                     state_machines=[sm],
                 )
 
-                # Update tracking
+                # Update tracking: each insert() returns a new UID.
+                # Remove the old UID mapping (from the previous chunk) so
+                # abort/preemption always operates on the latest UID. Also
+                # update req.batch_uid so abort_request() and
+                # _preempt_request() reference the correct BatchGenerator entry.
+                old_uid = getattr(req, 'batch_uid', None)
+                if old_uid is not None and old_uid != uids[0]:
+                    self._uid_to_req.pop(old_uid, None)
+                req.batch_uid = uids[0]
                 self._uid_to_req[uids[0]] = req_id
                 chunks_fed += 1
                 self._chunked_prefill_chunks_processed += 1
