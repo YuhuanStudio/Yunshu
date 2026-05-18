@@ -1004,20 +1004,21 @@ class KVOffloadManager:
                 offloaded = False
 
                 if request.source_tier == KVTier.HOT and request.dest_tier == KVTier.WARM:
-                    # Hot → Warm: demote via warm tier
+                    # Hot → Warm: demote via warm tier, then free hot block
                     if warm_tier is not None:
-                        # Extract KV data from hot cache for this block
                         kv_data = self._extract_hot_kv(hot_mgr, block_hash)
                         if kv_data is not None:
                             if warm_tier.demote(block_hash, kv_data):
+                                self._free_hot_block(hot_mgr, block_hash)
                                 offloaded = True
 
                 elif request.source_tier == KVTier.HOT and request.dest_tier == KVTier.SSD:
-                    # Hot → SSD: persist directly
+                    # Hot → SSD: persist directly, then free hot block
                     if ssd_store is not None:
                         kv_data = self._extract_hot_kv(hot_mgr, block_hash)
                         if kv_data is not None:
                             if ssd_store.store(block_hash, kv_data, num_tokens=0):
+                                self._free_hot_block(hot_mgr, block_hash)
                                 offloaded = True
 
                 elif request.source_tier == KVTier.WARM and request.dest_tier == KVTier.SSD:
@@ -1112,6 +1113,27 @@ class KVOffloadManager:
                 logger.debug("Direct KV extraction failed", exc_info=True)
 
         return None
+
+    def _free_hot_block(self, hot_mgr: Any, block_hash: int) -> None:
+        """Evict and free a hot-tier block after successful offload.
+
+        Without this, the block remains in the hot tier consuming memory
+        even though its data has been safely moved to a lower tier.
+        """
+        if hot_mgr is None:
+            return
+        pool = getattr(hot_mgr, 'block_pool', None)
+        if pool is None:
+            return
+        block = pool.lookup_hash(block_hash)
+        if block is None:
+            return
+        # Only free if block has no active request references
+        if block.ref_count > 1:
+            return
+        pool._evict_cached_block(block)
+        if block.ref_count == 1:
+            pool.free([block])
 
     async def _wait_for_completion(self, request_id: str) -> OffloadResult:
         """Wait for an offload request to complete.

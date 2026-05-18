@@ -674,9 +674,17 @@ class JsonSchemaConstraint:
                     i += 1
                     continue
                 # Number ended — transition to completed state.
-                # But NUMBER_EXPONENT / NUMBER_EXPONENT_SIGN without digits is
-                # invalid JSON; we still transition to avoid a stuck state and
-                # let downstream validation catch the issue.
+                # Validate that required digits were produced:
+                # NUMBER_FRACTION requires at least one digit after '.'
+                # NUMBER_EXPONENT requires at least one digit after 'e'/'E'
+                # NUMBER_EXPONENT_SIGN requires at least one digit after 'e+/e-'
+                if self._state in (JsonState.NUMBER_FRACTION,
+                                   JsonState.NUMBER_EXPONENT,
+                                   JsonState.NUMBER_EXPONENT_SIGN):
+                    # Invalid: no digit after '.', 'e', or 'e+/e-'.
+                    # Force the number to end by appending '0' to avoid
+                    # invalid JSON output.
+                    self._text_buffer += '0'
                 self._value_completed()
                 # Re-process the terminating char in the new state
                 # (e.g., ',' or '}' or ']')
