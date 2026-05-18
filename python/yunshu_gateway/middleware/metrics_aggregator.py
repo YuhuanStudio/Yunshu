@@ -49,12 +49,8 @@ class MetricsAggregator:
         self._lock = Lock()
         self._max_window = max_window_seconds
         self._points: list[_DataPoint] = []
-        # Quick-access indices for numeric fields.
-        self._field_index: dict[str, dict[str, list[float]]] = {
-            "duration_ms": defaultdict(list),
-            "tokens_in": defaultdict(list),
-            "tokens_out": defaultdict(list),
-        }
+        # Track min/max timestamps for efficient pruning.
+        self._oldest_ts: float = 0.0
 
     # ------------------------------------------------------------------
     # Recording
@@ -81,12 +77,9 @@ class MetricsAggregator:
             tokens_out=tokens_out,
         )
         with self._lock:
+            if not self._points:
+                self._oldest_ts = now
             self._points.append(dp)
-            # Also store in field indices keyed by path for faster querying.
-            key = f"{method}:{path}"
-            self._field_index["duration_ms"][key].append(duration_ms)
-            self._field_index["tokens_in"][key].append(float(tokens_in))
-            self._field_index["tokens_out"][key].append(float(tokens_out))
             # Prune expired entries.
             self._prune(now)
 
@@ -147,10 +140,10 @@ class MetricsAggregator:
 
         Valid metric names: duration_ms, tokens_in, tokens_out.
         """
+        if metric not in ("duration_ms", "tokens_in", "tokens_out"):
+            return self._empty_percentiles()
         cutoff = time.time() - window_seconds
         with self._lock:
-            if metric not in self._field_index:
-                return self._empty_percentiles()
             # Collect values from points within the window.
             values = sorted(
                 p_duration
@@ -202,6 +195,9 @@ class MetricsAggregator:
 
     def _prune(self, now: float) -> None:
         """Remove data points older than the max window. Caller holds lock."""
+        # Fast path: if oldest point is still within window, nothing to prune.
+        if self._oldest_ts > 0 and self._oldest_ts >= now - self._max_window:
+            return
         cutoff = now - self._max_window
         # Find first index within window.
         idx = 0
@@ -213,14 +209,7 @@ class MetricsAggregator:
             idx = len(self._points)
         if idx > 0:
             self._points = self._points[idx:]
-            # Rebuild field indices (simpler than incremental pruning).
-            for field_name in self._field_index:
-                self._field_index[field_name].clear()
-            for p in self._points:
-                key = f"{p.method}:{p.path}"
-                self._field_index["duration_ms"][key].append(p.duration_ms)
-                self._field_index["tokens_in"][key].append(float(p.tokens_in))
-                self._field_index["tokens_out"][key].append(float(p.tokens_out))
+        self._oldest_ts = self._points[0].timestamp if self._points else 0.0
 
     @staticmethod
     def _percentile(sorted_values: list[float], pct: int) -> float:

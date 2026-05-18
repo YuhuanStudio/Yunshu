@@ -893,40 +893,50 @@ _tracer: Optional[InferenceTracer] = None
 _structured_logger: Optional[StructuredLogger] = None
 _metrics_v2: Optional[MetricsAggregatorV2] = None
 _health_dashboard: Optional[HealthDashboard] = None
+_singleton_lock = threading.Lock()
 
 
 def get_inference_tracer() -> InferenceTracer:
     global _tracer
     if _tracer is None:
-        _tracer = InferenceTracer()
+        with _singleton_lock:
+            if _tracer is None:
+                _tracer = InferenceTracer()
     return _tracer
 
 
 def get_structured_logger() -> StructuredLogger:
     global _structured_logger
     if _structured_logger is None:
-        _structured_logger = StructuredLogger()
+        with _singleton_lock:
+            if _structured_logger is None:
+                _structured_logger = StructuredLogger()
     return _structured_logger
 
 
 def get_metrics_v2() -> MetricsAggregatorV2:
     global _metrics_v2
     if _metrics_v2 is None:
-        _metrics_v2 = MetricsAggregatorV2()
+        with _singleton_lock:
+            if _metrics_v2 is None:
+                _metrics_v2 = MetricsAggregatorV2()
     return _metrics_v2
 
 
 def get_health_dashboard() -> HealthDashboard:
     global _health_dashboard
     if _health_dashboard is None:
-        _health_dashboard = HealthDashboard()
+        with _singleton_lock:
+            if _health_dashboard is None:
+                _health_dashboard = HealthDashboard()
     return _health_dashboard
 
 
 def reset_tracing() -> None:
     """Reset all singletons (for testing)."""
     global _tracer, _structured_logger, _metrics_v2, _health_dashboard
-    _tracer = None
-    _structured_logger = None
-    _metrics_v2 = None
-    _health_dashboard = None
+    with _singleton_lock:
+        _tracer = None
+        _structured_logger = None
+        _metrics_v2 = None
+        _health_dashboard = None

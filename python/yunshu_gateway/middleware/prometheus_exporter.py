@@ -419,16 +419,24 @@ class PrometheusMetrics:
         """Generate Prometheus exposition format text."""
         sections: list[str] = []
 
+        # Snapshot metric dicts under the outer lock, then release it
+        # before calling format() (which acquires each metric's own lock).
+        # This avoids holding the outer lock while doing I/O-heavy work
+        # (histogram bucket computation), so writers are not blocked.
         with self._lock:
-            # Counters first.
-            for name in sorted(self._counters):
-                sections.append(self._counters[name].format())
-            # Gauges.
-            for name in sorted(self._gauges):
-                sections.append(self._gauges[name].format())
-            # Histograms.
-            for name in sorted(self._histograms):
-                sections.append(self._histograms[name].format())
+            counters = list(self._counters.values())
+            gauges = list(self._gauges.values())
+            histograms = list(self._histograms.values())
+
+        # Counters first.
+        for c in sorted(counters, key=lambda m: m._name):
+            sections.append(c.format())
+        # Gauges.
+        for g in sorted(gauges, key=lambda m: m._name):
+            sections.append(g.format())
+        # Histograms.
+        for h in sorted(histograms, key=lambda m: m._name):
+            sections.append(h.format())
 
         # Append an uptime gauge.
         sections.append("# HELP yunshu_exporter_uptime_seconds Prometheus exporter uptime")

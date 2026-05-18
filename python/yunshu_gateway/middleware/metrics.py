@@ -24,6 +24,23 @@ from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 
+# Known API prefixes — anything beyond the first two segments is collapsed
+# to prevent unbounded label cardinality (unique request IDs, model names, etc.)
+_MAX_LABEL_SEGMENTS = 3
+
+
+def _normalize_endpoint(path: str) -> str:
+    """Collapse path beyond the first few segments to bound label cardinality.
+
+    E.g. /v1/chat/completions/req-abc123 -> /v1/chat/completions/{id}
+        /health -> /health
+        /v1/models -> /v1/models
+    """
+    parts = path.strip("/").split("/")
+    if len(parts) <= _MAX_LABEL_SEGMENTS:
+        return path
+    return "/" + "/".join(parts[:_MAX_LABEL_SEGMENTS]) + "/{id}"
+
 
 @dataclass
 class _Metrics:
@@ -255,8 +272,12 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         latency = time.monotonic() - t0
 
+        # Normalize endpoint for label cardinality bounding — raw paths like
+        # /v1/chat/completions/req-abc123 would create unbounded label series.
+        normalized_ep = _normalize_endpoint(request.url.path)
+
         _metrics.record_request(
-            endpoint=request.url.path,
+            endpoint=normalized_ep,
             method=request.method,
             status=response.status_code,
             latency=latency,
@@ -268,7 +289,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             from .metrics_aggregator import get_metrics_aggregator
             get_metrics_aggregator().record_request(
                 method=request.method,
-                path=request.url.path,
+                path=normalized_ep,
                 status=response.status_code,
                 duration_ms=latency * 1000,
             )
@@ -281,10 +302,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             pm.inc_counter("request_total", {
                 "method": request.method,
                 "status": str(response.status_code),
-                "endpoint": request.url.path,
+                "endpoint": normalized_ep,
             })
             pm.observe_histogram("request_duration_seconds", latency, {
-                "endpoint": request.url.path,
+                "endpoint": normalized_ep,
             })
         except Exception:
             logger.debug("prometheus recording failed", exc_info=True)
