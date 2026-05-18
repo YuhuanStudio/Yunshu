@@ -118,11 +118,16 @@ async def with_sse_keepalive(
             if task.done():
                 try:
                     result = task.result()
-                except Exception as e:
-                    error_data = {"error": {"message": str(e), "type": "server_error"}}
-                    yield f"data: {json.dumps(error_data)}\n\n"
-                    yield "data: [DONE]\n\n"
+                except asyncio.CancelledError:
                     return
+                except StopAsyncIteration:
+                    return
+                except Exception as e:
+                    # Re-raise so the calling router (OpenAI/Anthropic) can
+                    # emit a protocol-correct error event.  Yielding OpenAI-
+                    # style data: [DONE] here breaks Anthropic streaming which
+                    # uses event: message_stop instead.
+                    raise
                 if result is _KEEPALIVE_SENTINEL:
                     return
                 yield result
