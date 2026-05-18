@@ -290,15 +290,23 @@ class TieredKVCacheManager:
         block_size = self.hot.block_size
         remaining = match.unmatched_token_ids
 
-        # Check warm tier for each block-sized chunk
+        # Check warm tier for each block-sized chunk.
+        # Chain hashing: each block's hash depends on the parent hash,
+        # so we must continue the chain from the hot tier's last matched
+        # block (or None if there was no match).
         warm_promoted_blocks: list[KVBlock] = []
         if self.warm:
             warm_loaded = 0
+            # Derive parent hash from the last hot-tier matched block
+            parent_hash = None
+            if match.matched_blocks:
+                last_hot = match.matched_blocks[-1]
+                parent_hash = last_hot.block_hash
             for i in range(0, len(remaining), block_size):
                 chunk = remaining[i:i + block_size]
                 if len(chunk) < block_size:
                     break
-                h = compute_block_hash(None, chunk, (model_hash,))
+                h = compute_block_hash(parent_hash, chunk, (model_hash,))
                 if self.warm.contains(h):
                     # Promote from warm tier back to hot
                     kv_data = self.warm.promote(h)
@@ -324,6 +332,7 @@ class TieredKVCacheManager:
                         self.hot.block_pool.cache_block(new_block, h)
                         warm_promoted_blocks.append(new_block)
                         warm_loaded += 1
+                        parent_hash = h  # chain: next block uses this as parent
                     else:
                         break
                 else:
@@ -341,11 +350,18 @@ class TieredKVCacheManager:
         ssd_promoted_blocks: list[KVBlock] = []
         if self.ssd and remaining:
             ssd_loaded = 0
+            # Continue the chain hash from the last matched block
+            # (warm-promoted blocks extend the chain; if no warm hits,
+            # fall back to the hot tier's last matched block).
+            parent_hash = None
+            all_matched = match.matched_blocks
+            if all_matched:
+                parent_hash = all_matched[-1].block_hash
             for i in range(0, len(remaining), block_size):
                 chunk = remaining[i:i + block_size]
                 if len(chunk) < block_size:
                     break
-                h = compute_block_hash(None, chunk, (model_hash,))
+                h = compute_block_hash(parent_hash, chunk, (model_hash,))
                 if self.ssd.contains(h):
                     # Load from SSD into hot cache
                     kv_data = self.ssd.load(h)
@@ -372,6 +388,7 @@ class TieredKVCacheManager:
                         self.hot.block_pool.cache_block(new_block, h)
                         ssd_promoted_blocks.append(new_block)
                         ssd_loaded += 1
+                        parent_hash = h  # chain: next block uses this as parent
                     else:
                         break
                 else:
