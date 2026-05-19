@@ -37,6 +37,13 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 259 — Scheduler Priority + SSD Atomicity)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 259: Cache-locality 覆蓋 aging 排序 | _reorder_by_cache_locality 按 KV hash 分組後忽略跨組優先級。改為按最高優先級成員排序分組 | 高優先級請求不被延遲 |
+| Wave 259: Boundary snapshot 撕裂寫入 | 直接寫入最終路徑，並行 load() 可能讀到部分寫入。改為 .tmp + os.replace() 原子寫入 | SSD 快照讀取一致性 |
+
 ### 已完成修復 (2026-05-19 Wave 258 — Scheduler GPU Efficiency + KV Correctness)
 
 | 修復 | 描述 | 影響 |
