@@ -37,6 +37,15 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 258 — Scheduler GPU Efficiency + KV Correctness)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 258: Scheduler GPU 浪費 | 完成請求 UID 未從 BatchGenerator 移除，decode 步驟持續 forward pass。立即加入 _uids_to_remove + 行內 remove | GPU 不再浪費在完成請求上 |
+| Wave 258: Warm tier peek-then-pop | promote() 先 pop 再反量化，並行 demote 導致數據丟失。改為先反量化成功再 pop | 溫層晉升數據不丟失 |
+| Wave 258: Tiered total_tokens | 假設所有 block 都滿，最後部分 block 膨脹計數。改為 (n-1)*block_size | KV 層級 token 計數正確 |
+| Wave 258: Cache 事件自動退訂 | 失敗回調永不退訂，持續產生異常日誌。連續失敗 10 次自動退訂 | 事件匯流排自癒 |
+
 ### 已完成修復 (2026-05-19 Wave 257 — API Compliance + Thread Safety)
 
 | 修復 | 描述 | 影響 |
