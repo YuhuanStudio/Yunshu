@@ -1374,12 +1374,12 @@ async def _stream_vlm_response(
     except Exception:
         _vlm_tracker = None
     _vlm_cancel_evt = _vlm_gen.cancel_event if _vlm_gen is not None else None
+    vlm_prompt_tok = 0
+    vlm_completion_tok = 0
 
     async def _token_source():
-        nonlocal loaded_adapter, done_emitted
+        nonlocal loaded_adapter, done_emitted, vlm_prompt_tok, vlm_completion_tok
         first_chunk = True
-        vlm_prompt_tok = 0
-        vlm_completion_tok = 0
         vlm_reasoning_tok = 0
         vlm_cached_tok = 0
         vlm_last_finish_reason = None
@@ -1416,7 +1416,7 @@ async def _stream_vlm_response(
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
         async for output in vlm_engine.generate_stream(**stream_kwargs):
-            if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+            if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                 vlm_completion_tok = output.completion_tokens
             elif hasattr(output, 'token_text') and output.token_text:
                 vlm_completion_tok += 1
@@ -1513,6 +1513,12 @@ async def _stream_vlm_response(
       if _vlm_tracker is not None:
           try:
               _vlm_tracker.unregister(completion_id)
+          except Exception:
+              pass
+      # Fallback metrics recording if generator raised before completing
+      if vlm_prompt_tok > 0 or vlm_completion_tok > 0:
+          try:
+              _record_metrics(vlm_prompt_tok, vlm_completion_tok)
           except Exception:
               pass
 
@@ -1648,7 +1654,7 @@ async def _stream_response_multi(
                     if hasattr(output, 'cached_tokens') and output.cached_tokens:
                         total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = output.new_text
-                    if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                    if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                         choice_completion_tok = output.completion_tokens
                     elif token_text:
                         choice_completion_tok += 1
@@ -1744,7 +1750,7 @@ async def _stream_response_multi(
                     if hasattr(output, 'cached_tokens') and output.cached_tokens:
                         total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = getattr(output, 'token_text', '')
-                    if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                    if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                         choice_completion_tok = output.completion_tokens
                     elif token_text:
                         choice_completion_tok += 1

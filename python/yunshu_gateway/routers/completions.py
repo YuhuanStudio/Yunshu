@@ -390,7 +390,7 @@ async def _stream_completion(
     n = max(req.n, 1)
 
     async def _stream_choice(choice_idx: int):
-        nonlocal prompt_tok, completion_tok, cached_tok
+        nonlocal prompt_tok, cached_tok
         choice_finish_reason = None
         # Per-choice text offset tracker for logprobs text_offset field.
         # When echo=True, the prompt text is emitted first, so the completion
@@ -435,7 +435,7 @@ async def _stream_completion(
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'completion_tokens') and output.completion_tokens:
+                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                     completion_tok_per_choice[choice_idx] = output.completion_tokens
                 elif output.new_text:
                     completion_tok_per_choice[choice_idx] = completion_tok_per_choice.get(choice_idx, 0) + 1
@@ -491,7 +491,7 @@ async def _stream_completion(
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'completion_tokens') and output.completion_tokens:
+                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                     completion_tok_per_choice[choice_idx] = output.completion_tokens
                 elif output.token_text:
                     completion_tok_per_choice[choice_idx] = completion_tok_per_choice.get(choice_idx, 0) + 1

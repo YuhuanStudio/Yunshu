@@ -420,8 +420,9 @@ async def bench_model(req: Request, bench_req: ModelBenchRequest):
 
 
 @router.post("/batch")
-async def bench_batch(concurrency: int = 4, num_requests: int = 8, prompt_tokens: int = 128, max_tokens: int = 32):
+async def bench_batch(req: Request, concurrency: int = 4, num_requests: int = 8, prompt_tokens: int = 128, max_tokens: int = 32):
     """Run batch benchmark measuring concurrent request throughput."""
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
@@ -467,12 +468,13 @@ class RooflineModelRequest(BaseModel):
 
 
 @router.post("/roofline-model")
-async def bench_roofline_model(request: RooflineModelRequest):
+async def bench_roofline_model(req: Request, bench_req: RooflineModelRequest):
     """Analyze compute vs memory boundedness using the roofline model.
 
     Uses Yunshu's RooflineModel engine module for analytical throughput
     prediction based on Apple Silicon chip parameters.
     """
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
@@ -481,14 +483,14 @@ async def bench_roofline_model(request: RooflineModelRequest):
     try:
         from yunshu_engine.roofline import RooflineModel
 
-        chip = request.chip
+        chip = bench_req.chip
         if chip == "auto":
             from yunshu_engine.utils.hardware import get_chip_name
             chip = get_chip_name()
 
         rm = RooflineModel(chip)
         results = []
-        for m, n, k in request.gemm_sizes:
+        for m, n, k in bench_req.gemm_sizes:
             report = rm.compute_gemm_roofline(M=m, N=n, K=k)
             results.append({
                 "gemm_size": [m, n, k],
@@ -525,12 +527,13 @@ class BFCLEvalRequest(BaseModel):
 
 
 @router.post("/bfcl-eval")
-async def bench_bfcl_eval(request: BFCLEvalRequest):
+async def bench_bfcl_eval(req: Request, bench_req: BFCLEvalRequest):
     """Run BFCL function calling evaluation against the loaded model.
 
     Evaluates tool/function calling accuracy using the BFCLEvaluator
     from yunshu_engine. Requires a loaded model with tool calling support.
     """
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
@@ -547,8 +550,8 @@ async def bench_bfcl_eval(request: BFCLEvalRequest):
 
         config = BFCLEvalConfig(
             model_name=engine.model_name or "unknown",
-            test_categories=[c for c in request.categories if c in ("simple", "parallel", "multiple", "parallel_multiple")],
-            max_samples=request.max_samples,
+            test_categories=[c for c in bench_req.categories if c in ("simple", "parallel", "multiple", "parallel_multiple")],
+            max_samples=bench_req.max_samples,
         )
         evaluator = BFCLEvaluator(config, engine=engine)
 

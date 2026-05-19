@@ -740,13 +740,17 @@ def create_app() -> FastAPI:
     # Startup warnings
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         logger.warning(
-            "AUTH IS DISABLED — all endpoints are publicly accessible. "
-            "Set YUNSHU_AUTH_TOKEN or remove YUNSHU_AUTH_DISABLED for production."
+            "SECURITY: AUTH IS DISABLED — all endpoints (including admin, profiling, "
+            "dashboard, benchmarks) are publicly accessible without any authentication. "
+            "This is INSECURE and should ONLY be used in development. "
+            "Set YUNSHU_AUTH_TOKEN=<secret> or remove YUNSHU_AUTH_DISABLED for production."
         )
-    if not os.environ.get("YUNSHU_AUTH_TOKEN") and not os.environ.get("YUNSHU_AUTH_DISABLED"):
+    elif not os.environ.get("YUNSHU_AUTH_TOKEN"):
         logger.warning(
-            "No YUNSHU_AUTH_TOKEN set — requests require no authentication by default. "
-            "Set YUNSHU_AUTH_TOKEN=<secret> to enable Bearer token auth."
+            "SECURITY: No YUNSHU_AUTH_TOKEN set — admin endpoints (profiling, sleep/wake, "
+            "model load/unload, benchmarks, dashboard) are DENIED by default. "
+            "Inference endpoints (chat/completions) remain accessible without auth. "
+            "Set YUNSHU_AUTH_TOKEN=<secret> to enable full Bearer token auth."
         )
 
     # Import routers lazily to reduce startup memory

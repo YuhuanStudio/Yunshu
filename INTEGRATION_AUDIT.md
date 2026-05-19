@@ -53,6 +53,11 @@
 | Wave 261: TieredKV total_tokens 錯誤 | allocate_for_prefill 用 (all_blocks-1)*block_size 計算，包含未填充新 block。改為 match.num_matched_tokens | KV token 追蹤準確 |
 | Wave 261: GrammarBitmaskEngine 類級共享狀態 | _checkpoint_stack 為 class attribute，所有實例共享。改為 instance attribute | 防止跨實例 checkpoint 污染 |
 | Wave 261: img2img source image 被丟棄 | _generate_variation 只用 source image 做種子，像素從未進入擴散過程。重寫為 VAE encode + partial denoising | img2img/edits/variations 真正使用源圖 (HIGH) |
+| Wave 261: MeshNode 線程安全 | state 字段無鎖保護，多線程寫入造成競態。加入 threading.Lock + set_state/mark_healthy/mark_unhealthy | 防止 mesh 節點狀態損壞 (CRITICAL) |
+| Wave 261: OFFLINE→READY 狀態機缺口 | 節點可直接從 OFFLINE 跳到 READY。加入 RECOVERING 中間狀態 + 健康驗證 | 節點健康驗證 (CRITICAL) |
+| Wave 261: Gateway 認證警告 + benchmark RBAC | 啟動時認證警告不精確；benchmark 端點缺 RBAC 檢查。改為精確警告 + _check_permission | 安全改進 |
+| Wave 261: Streaming completion_tok 被重置為 0 | output.completion_tokens=0 時覆蓋實際 token 計數。加入 > 0 guard | token 計數準確 |
+| Wave 261: VLM fallback metrics | VLM generator 拋出異常時 metrics 未記錄。加入 fallback _record_metrics | 監控完整性 |
 
 ### 已完成修復 (2026-05-19 Wave 260 — KV Block Dedup + LRU Eviction)
 

@@ -108,7 +108,13 @@ class LoRAAdapterManager:
         logger.info("LoRA manager shut down, all adapters and base model released")
 
     def save_base_weights(self) -> None:
-        """Save a deep copy of base model weights before merging adapters."""
+        """Save a deep copy of base model weights before merging adapters.
+
+        IMPORTANT: Must be called BEFORE any LoRALinear layers are applied.
+        If called after, the saved copy would include LoRA parameters, and
+        future restores would re-inject stale LoRA weights into the model.
+        This method is idempotent — only the first call actually saves.
+        """
         if self._base_model is not None and self._base_model_copy is None:
             import mlx.core as mx
             self._base_model_copy = mx.tree_map(lambda x: mx.array(x), self._base_model.parameters())
@@ -323,14 +329,19 @@ class LoRAAdapterManager:
                 return True  # Already merged
             needs_load = not entry.is_loaded
 
+            # CRITICAL: Save base weights BEFORE loading any adapter.
+            # If saved after load_adapter(), the copy would include LoRA
+            # parameters (lora_a, lora_b) from the active LoRALinear layers.
+            # Later _restore_base() would then re-inject stale LoRA params
+            # into the structurally-unwrapped model, corrupting it.
+            # Idempotent — only the first call actually saves.
+            self.save_base_weights()
+
         # Load outside lock to avoid holding _lock during GPU work;
         # load_adapter takes its own _lock (RLock, reentrant-safe).
         if needs_load:
             if not self.load_adapter(adapter_id):
                 return False
-
-        # Save base weights once (idempotent — only saves if not already saved)
-        self.save_base_weights()
 
         # Hold _lock throughout to prevent AB/BA deadlock with unload_adapter
         # (_lock is RLock so reentrant for load_adapter's nested acquisition).

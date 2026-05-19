@@ -2258,6 +2258,20 @@ class Scheduler:
                         state_machines=[sm],
                     )
 
+                # Guard: BatchGenerator may return empty UIDs (e.g., batch full).
+                # Without this guard, uids[0] raises IndexError, which is caught
+                # by the outer except but leaves the old UID in BatchGenerator.
+                if not uids:
+                    logger.error(
+                        "BatchGenerator.insert returned empty UIDs for chunked "
+                        "prefill of %s (chunk %d tokens)",
+                        req_id, len(chunk),
+                    )
+                    req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
+                    self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                    errored_ids.add(req_id)
+                    continue
+
                 # Update tracking: each insert() returns a new UID.
                 # Remove the old UID from both the scheduler mapping AND
                 # the BatchGenerator itself.  If we only remove from
@@ -2322,7 +2336,19 @@ class Scheduler:
                 )
                 # ── Error handling: abort entire request on chunk failure ──
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
-                self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                failed_uid = getattr(req, 'batch_uid', None)
+                self._uid_to_req.pop(failed_uid, None)
+                # Remove the failed UID from BatchGenerator to prevent GPU
+                # memory leak (the old chunk's KV cache stays allocated
+                # until explicitly removed).
+                if failed_uid is not None and self._batch_gen is not None:
+                    try:
+                        self._batch_gen.remove([failed_uid])
+                    except Exception:
+                        logger.debug(
+                            "Failed to remove failed-chunk UID %s from BatchGenerator",
+                            failed_uid, exc_info=True,
+                        )
                 errored_ids.add(req_id)
 
         # ── Cleanup completed and errored requests ──
