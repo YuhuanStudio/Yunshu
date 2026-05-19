@@ -578,8 +578,14 @@ class PriorityInversionGuard:
         if not running_requests or not waiting_requests:
             return []
 
-        # Expire old boosts
-        self._expire_boosts()
+        # Expire old boosts and reset effective_priority on request objects
+        expired = self._expire_boosts()
+        if expired:
+            running_map = {r.request_id: r for r in running_requests}
+            for rid, original in expired:
+                req = running_map.get(rid)
+                if req is not None:
+                    req.effective_priority = original
 
         inversions: list[InversionEvent] = []
         now = time.monotonic()
@@ -593,7 +599,7 @@ class PriorityInversionGuard:
             if running.request_id in self._active_boosts:
                 continue
 
-            priority_gap = (highest_waiting.effective_priority if hasattr(highest_waiting, 'effective_priority') else highest_waiting.priority) - running.priority
+            priority_gap = (highest_waiting.effective_priority if hasattr(highest_waiting, 'effective_priority') else highest_waiting.priority) - (running.effective_priority if hasattr(running, 'effective_priority') else running.priority)
             if priority_gap < self.min_priority_gap:
                 continue
 
@@ -759,16 +765,17 @@ class PriorityInversionGuard:
         """Manually clear a priority boost for a request."""
         self._active_boosts.pop(request_id, None)
 
-    def _expire_boosts(self) -> None:
-        """Remove expired priority boosts."""
+    def _expire_boosts(self) -> list[tuple[str, int]]:
+        """Remove expired priority boosts, returning (request_id, original_priority) pairs."""
         now = time.monotonic()
         expired = [
-            rid
-            for rid, (_, _, t) in self._active_boosts.items()
+            (rid, original)
+            for rid, (_, original, t) in self._active_boosts.items()
             if now - t > self.max_boost_duration
         ]
-        for rid in expired:
+        for rid, _ in expired:
             self._active_boosts.pop(rid, None)
+        return expired
 
     def get_stats(self) -> dict:
         """Return priority inversion statistics."""

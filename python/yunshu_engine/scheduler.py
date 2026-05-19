@@ -589,10 +589,10 @@ class _LogitsProcessorSampler:
     so we intercept and apply processors first.
     """
 
-    def __init__(self, base_sampler, logits_processors):
+    def __init__(self, base_sampler, logits_processors, prompt_token_ids=None):
         self._base_sampler = base_sampler
         self._logits_processors = logits_processors
-        self._tokens: list[int] = []
+        self._tokens: list[int] = list(prompt_token_ids) if prompt_token_ids else []
 
     def __call__(self, logits):
         # Apply logits processors: each takes (tokens, logits) -> logits
@@ -1409,7 +1409,7 @@ class Scheduler:
                     )
                     continue
 
-                sampler = self._make_sampler(sp)
+                sampler = self._make_sampler(sp, req.prompt_token_ids)
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # ── Thinking-segment KV lookup before prefill (§3.6 / Δ-6) ──
@@ -1517,9 +1517,11 @@ class Scheduler:
                     tokens_to_insert = chunk
 
                 # C16: Try KV prefix cache hit for batch-path acceleration
+                # Must run BEFORE should_chunk adds to _pending_prefill, otherwise
+                # the first chunk of a chunked prefill never benefits from caching.
                 cached_kv = None
                 remaining_tokens = tokens_to_insert
-                if self._prefix_cache is not None and not self._pending_prefill.get(req.request_id):
+                if self._prefix_cache is not None and not should_chunk:
                     try:
                         import mlx.core as mx
                         ids_arr = mx.array(tokens_to_insert)
@@ -2043,7 +2045,7 @@ class Scheduler:
                         )
                         try:
                             sp = req.sampling_params
-                            sampler = self._make_sampler(sp)
+                            sampler = self._make_sampler(sp, state.get('all_prompt_tokens'))
                             sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
                             # Use insert_segments for KV continuity if cache available
                             prev_kv = state.get('kv_cache')
@@ -2175,7 +2177,7 @@ class Scheduler:
 
             try:
                 sp = req.sampling_params
-                sampler = self._make_sampler(sp)
+                sampler = self._make_sampler(sp, state.get('all_prompt_tokens'))
                 sm = self._make_state_machine(sp.stop, sp.stop_token_ids)
 
                 # KV continuity: if we have a cached KV from a previous chunk,
@@ -2830,7 +2832,7 @@ class Scheduler:
         detok.reset()
         return detok
 
-    def _make_sampler(self, sp: SamplingParams):
+    def _make_sampler(self, sp: SamplingParams, prompt_token_ids: list[int] | None = None):
         from mlx_lm.sample_utils import make_sampler, make_logits_processors
         # Seed handling: mlx-lm's make_sampler() does NOT accept a seed parameter.
         # Instead, we set the MLX global RNG seed before sampler creation so that
@@ -2871,7 +2873,7 @@ class Scheduler:
             # Wrap sampler to apply logits processors before sampling.
             # Logits processors take (tokens, logits) and return modified logits.
             # We store generated tokens per-request via _generation_tokens.
-            sampler = _LogitsProcessorSampler(base_sampler, logits_processors)
+            sampler = _LogitsProcessorSampler(base_sampler, logits_processors, prompt_token_ids)
         else:
             sampler = base_sampler
 

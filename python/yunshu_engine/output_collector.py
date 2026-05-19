@@ -57,6 +57,7 @@ class RequestOutputCollector:
             self.ready.clear()
             return output
         if self._sentinel:
+            self.ready.clear()
             return None
         return None
 

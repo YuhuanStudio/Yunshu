@@ -524,7 +524,7 @@ class TestHealthMonitorFailureDetection:
         mon.register_node(node)
 
         # Simulate heartbeat received long ago
-        mon._node_status["node-0"].last_heartbeat = time.time() - 10
+        mon._node_status["node-0"].last_heartbeat = time.monotonic() - 10
 
         # Detect failures
         timed_out = mon._detect_failures()
@@ -559,7 +559,7 @@ class TestHealthMonitorFailureDetection:
         )
 
         # First failure: below threshold
-        mon._node_status["node-0"].last_heartbeat = time.time() - 10
+        mon._node_status["node-0"].last_heartbeat = time.monotonic() - 10
         mon.on_node_failure("node-0")
         assert len(failover_called) == 1
 
@@ -702,7 +702,7 @@ class TestHealthMonitorAsync:
         mon.register_node(node)
 
         # Make heartbeat stale
-        mon._node_status["node-0"].last_heartbeat = time.time() - 10
+        mon._node_status["node-0"].last_heartbeat = time.monotonic() - 10
 
         await mon.start_monitoring()
         await asyncio.sleep(0.3)  # Allow health check to run

@@ -987,7 +987,7 @@ async def _stream_anthropic(
     async def _token_source():
         nonlocal input_tokens, output_tokens, block_index, cached_tokens
         nonlocal thinking_block_started, text_block_started, tool_use_block_started
-        nonlocal accumulated_text, matched_stop, _message_start_emitted
+        nonlocal accumulated_text, matched_stop, _message_start_emitted, _streaming_finish_reason
 
         if is_batched:
             async for output in engine.stream_chat(

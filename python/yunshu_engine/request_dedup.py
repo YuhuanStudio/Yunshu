@@ -182,11 +182,11 @@ class RequestDeduplicator:
                         (content_hash + request_id).encode()
                     ).hexdigest()[:16]
                     if nonce not in self._entries:
+                        content_hash = nonce
                         break
                     content_hash = nonce + request_id[:8]
                 else:
-                    content_hash = nonce
-                content_hash = nonce
+                    content_hash = nonce + request_id[:8]
 
             # Check capacity
             if len(self._entries) >= self._max_entries:

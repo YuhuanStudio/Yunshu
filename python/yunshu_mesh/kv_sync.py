@@ -69,8 +69,8 @@ class PrefixHashEntry:
     source_node_id: str = ""
     model_name: str = ""
     num_tokens: int = 0
-    computed_at: float = field(default_factory=time.time)
-    last_verified: float = field(default_factory=time.time)
+    computed_at: float = field(default_factory=time.monotonic)
+    last_verified: float = field(default_factory=time.monotonic)
 
 
 @dataclass
@@ -90,7 +90,7 @@ class TransferRequest:
     requestor_node_id: str = ""
     target_node_id: str = ""
     model_name: str = ""
-    timestamp: float = field(default_factory=time.time)
+    timestamp: float = field(default_factory=time.monotonic)
 
 
 @dataclass
@@ -188,7 +188,7 @@ class NodeHealthStatus:
     """
     node_id: str = ""
     healthy: bool = True
-    last_heartbeat: float = field(default_factory=time.time)
+    last_heartbeat: float = field(default_factory=time.monotonic)
     metadata: NodeHealthMetadata = field(default_factory=NodeHealthMetadata)
     consecutive_failures: int = 0
     state: MeshNodeState = MeshNodeState.READY
@@ -205,7 +205,7 @@ class RebalanceEvent:
     """
     event_type: str = ""  # "node_join" or "node_failure"
     node_id: str = ""
-    timestamp: float = field(default_factory=time.time)
+    timestamp: float = field(default_factory=time.monotonic)
 
 
 # ── KVSynchronizationService ─────────────────────────────────────────
@@ -434,7 +434,7 @@ class KVSynchronizationService:
                     "model_name": e.model_name,
                     "num_tokens": e.num_tokens,
                 } for h, e in entries.items()},
-                "timestamp": time.time(),
+                "timestamp": time.monotonic(),
             }
 
         results: dict[str, bool] = {}
@@ -818,7 +818,7 @@ class MeshHealthMonitor:
                 self._node_status[node.node_id] = NodeHealthStatus(
                     node_id=node.node_id,
                     healthy=True,
-                    last_heartbeat=time.time(),
+                    last_heartbeat=time.monotonic(),
                     state=node.state,
                 )
 
@@ -849,7 +849,7 @@ class MeshHealthMonitor:
                 return False
 
             status = self._node_status[node_id]
-            status.last_heartbeat = time.time()
+            status.last_heartbeat = time.monotonic()
             status.healthy = True
             status.consecutive_failures = 0
             if metadata:
@@ -913,7 +913,7 @@ class MeshHealthMonitor:
             List of node IDs that are currently healthy but whose last
             heartbeat exceeds the timeout.
         """
-        now = time.time()
+        now = time.monotonic()
         timed_out: list[str] = []
 
         with self._lock:
@@ -996,7 +996,7 @@ class MeshHealthMonitor:
             if status:
                 status.healthy = True
                 status.state = MeshNodeState.READY
-                status.last_heartbeat = time.time()
+                status.last_heartbeat = time.monotonic()
                 status.consecutive_failures = 0
 
             self._rebalance_events.append(RebalanceEvent(
@@ -1182,7 +1182,7 @@ class MeshHealthMonitor:
                         "healthy": s.healthy,
                         "state": s.state.name,
                         "last_heartbeat_age": round(
-                            time.time() - s.last_heartbeat, 2
+                            time.monotonic() - s.last_heartbeat, 2
                         ),
                         "consecutive_failures": s.consecutive_failures,
                         "gpu_utilization": s.metadata.gpu_utilization,

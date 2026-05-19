@@ -2115,6 +2115,7 @@ class BatchedEngine:
                             if thinking_tokens_used >= thinking_budget and think_end_token is not None:
                                 _thinking_tokens.append(token)
                                 _in_thinking = False
+                                detokenizer.add_token(think_end_token)
                                 tokens.append(think_end_token)
                                 break
                         # Progressive KV quantization (C6: keep memory flat during generation)
@@ -3115,6 +3116,11 @@ class BatchedEngine:
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
                             _thinking_tokens.append(token)
                             _in_thinking = False
+                            # Emit the closing think tag so consumers see a properly closed block
+                            detokenizer.add_token(think_end_token)
+                            _end_text = detokenizer.last_segment
+                            if _end_text:
+                                _put((_end_text, n_tok, None, len(_thinking_tokens), None, "normal"))
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
