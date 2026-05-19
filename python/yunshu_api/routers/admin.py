@@ -88,8 +88,16 @@ def require_permission(permission: str):
             # Static token auth — admin-equivalent, allow
             return
 
-        # No auth configured — allow but this is unusual in production
-        return
+        # No auth configured and AUTH_DISABLED not set — deny by default
+        # unless explicitly opted in via YUNSHU_AUTH_DISABLED=true
+        logger.warning(
+            "Admin API access with no authentication configured. "
+            "Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true to control access."
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+        )
     return _check
 
 

@@ -119,13 +119,13 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
     """
     results = []
     # Primary pattern: fullwidth pipe markers with special token boundaries
-    pattern = r'｜tool▁callBegin｜function｜tool_sep｜([\w.\-]+)\s*```json\s*'
+    pattern = r'｜tool▁callBegin｜function｜tool_sep｜([\w.\/\-:]+)\s*```json\s*'
     # Fallback: halfwidth variants
     if not re.search(pattern, text):
-        pattern = r'[･|]tool_callBegin[･|]function[･|]tool_sep[･|]([\w.\-]+)\s*```json\s*'
+        pattern = r'[･|]tool_callBegin[･|]function[･|]tool_sep[･|]([\w.\/\-:]+)\s*```json\s*'
     # Last fallback: plain function form
     if not re.search(pattern, text):
-        pattern = r'function\s*:\s*([\w.\-]+)\s*```json\s*'
+        pattern = r'function\s*:\s*([\w.\/\-:]+)\s*```json\s*'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
         brace_start = text.find('{', match.end())
@@ -146,7 +146,7 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse GLM-style tool calls: <|tool_call_block_begin|>name\n```json\n{...}\n```"""
     results = []
-    pattern = r'<\|tool_call_block_begin\|>\s*([\w.\-]+)\s*```(?:json)?\s*'
+    pattern = r'<\|tool_call_block_begin\|>\s*([\w.\/\-:]+)\s*```(?:json)?\s*'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):
         name = match.group(1)
         brace_start = text.find('{', match.end())
@@ -167,7 +167,7 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
 def parse_llama_tool_calls(text: str) -> list[ToolCallResult]:
     """Parse Llama-style: [TOOL_CALL] name arguments_json [/TOOL_CALL]"""
     results = []
-    tag_re = re.compile(r'\[TOOL_CALL\]\s*([\w.\-]+)\s*', re.DOTALL)
+    tag_re = re.compile(r'\[TOOL_CALL\]\s*([\w.\/\-:]+)\s*', re.DOTALL)
     for i, match in enumerate(tag_re.finditer(text)):
         name = match.group(1)
         brace_start = text.find('{', match.end())

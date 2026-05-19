@@ -1062,15 +1062,12 @@ async def _stream_anthropic(
                 elif _token_text:
                     # Visible text content
                     if thinking_block_started and not text_block_started:
-                        # Close thinking block, open text block
+                        # Close thinking block, but defer opening text block
+                        # until we confirm there's actual text to emit (not just
+                        # tool call markup that will be handled separately).
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                         block_index += 1
                         thinking_block_started = False
-                        text_block_started = True
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                    elif not text_block_started:
-                        text_block_started = True
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
 
                     # Once a stop sequence was already matched, suppress all further text
                     if matched_stop:
@@ -1096,6 +1093,9 @@ async def _stream_anthropic(
                         _safe_len = len(accumulated_text) - _prev_len
                         if _safe_len > 0:
                             _safe_delta = _token_text[:_safe_len]
+                            if not text_block_started:
+                                text_block_started = True
+                                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"
                     else:
                         # If tools are defined, try to detect and emit tool-use deltas
@@ -1103,7 +1103,7 @@ async def _stream_anthropic(
                             tool_calls = _try_parse_tool_call_delta(accumulated_text)
                             if tool_calls:
                                 if not tool_use_block_started:
-                                    # Close the text block, open a tool_use block
+                                    # Close the text block if it was opened, open a tool_use block
                                     if text_block_started:
                                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                         block_index += 1
@@ -1121,7 +1121,10 @@ async def _stream_anthropic(
                                     _anth_gen.cancel_event.set()
                                 break  # tool calls emitted; stop normal text streaming
 
-                        # Normal text delta
+                        # Normal text delta — lazily open text block
+                        if not text_block_started:
+                            text_block_started = True
+                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
         else:
             async for output in engine.generate_stream(
