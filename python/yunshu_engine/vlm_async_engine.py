@@ -76,6 +76,7 @@ class _VLMRequestState:
     finished_event: asyncio.Event
     start_time: float = 0.0
     done: bool = False
+    aborted: bool = False
 
 
 class VLMAsyncEngineCore:
@@ -260,7 +261,7 @@ class VLMAsyncEngineCore:
             self._stats["active_requests"] = max(
                 0, self._stats["active_requests"] - 1
             )
-            if not failed:
+            if not failed and not state.aborted:
                 self._stats["completed_requests"] += 1
 
     async def _process_non_streaming(self, state: _VLMRequestState) -> None:
@@ -396,7 +397,12 @@ class VLMAsyncEngineCore:
         state = self._requests.get(request_id)
         if state is not None:
             state.done = True
+            state.aborted = True
             state.finished_event.set()
+            # Cancel the underlying task to free GPU resources immediately
+            task = self._tasks.get(request_id)
+            if task is not None and not task.done():
+                task.cancel()
             try:
                 await state.output_queue.put(
                     VLMStreamChunk(finish_reason="abort")

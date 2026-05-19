@@ -2062,6 +2062,7 @@ class BatchedEngine:
                             if stop_suffixes:
                                 detokenizer.add_token(token)
                                 if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
                                     break
                     cleanup_rope(model)
@@ -2146,6 +2147,7 @@ class BatchedEngine:
                         if stop_suffixes:
                             detokenizer.add_token(token)
                             if any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                tokens.pop()  # Exclude suffix-triggering token from count
                                 _stopped_by_suffix = True
                                 break
 
@@ -3110,6 +3112,9 @@ class BatchedEngine:
                     new_text = "" if stop_hit else detokenizer.last_segment
                     if suffix_hit:
                         new_text = ""  # Don't emit suffix text
+                    # Exclude stop/suffix-triggering token from completion count
+                    if stop_hit or suffix_hit:
+                        n_tok -= 1
                     # Thinking budget enforcement in streaming
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1

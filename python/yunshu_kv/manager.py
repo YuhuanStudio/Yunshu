@@ -314,24 +314,38 @@ class KVCacheManager:
         num_matched_tokens: int,
         token_ids: list[int],
     ) -> tuple[BlockTable, PrefixMatch]:
-        """Build a BlockTable from RadixTree-matched blocks."""
+        """Build a BlockTable from RadixTree-matched blocks.
+
+        Handles the "gap" when a radix tree split occurs at a non-block-aligned
+        position: floor division in _split_node assigns only fully-contained
+        blocks to the prefix, so matched_blocks may cover fewer tokens than
+        num_matched_tokens. The gap tokens need fresh blocks and re-prefill.
+        """
+        bs = self.config.block_size
+        covered_tokens = len(matched_blocks) * bs
+        gap = num_matched_tokens - covered_tokens
+
         remaining_tokens = token_ids[num_matched_tokens:]
-        num_new_blocks = (len(remaining_tokens) + self.config.block_size - 1) // self.config.block_size
+        num_new_blocks = (gap + len(remaining_tokens) + bs - 1) // bs
 
         new_blocks = []
         if num_new_blocks > 0:
             new_blocks = self.block_pool.allocate(num_new_blocks)
 
-        table = BlockTable(self.config.block_size)
+        table = BlockTable(bs)
         for block in matched_blocks:
             table.append_block(block)
         for block in new_blocks:
             table.append_block(block)
 
+        # num_matched_tokens stays as-is so the caller knows how many tokens
+        # matched in the tree, but the PrefixMatch must indicate that
+        # prefill should start from covered_tokens (not num_matched_tokens)
+        # to re-fill the gap.
         prefix_match = PrefixMatch(
             matched_blocks=matched_blocks,
-            num_matched_tokens=num_matched_tokens,
-            unmatched_token_ids=remaining_tokens,
+            num_matched_tokens=covered_tokens,  # Only count fully-covered tokens
+            unmatched_token_ids=token_ids[covered_tokens:],
         )
         return table, prefix_match
 
@@ -529,16 +543,6 @@ class KVCacheManager:
             # reactivated this block between snapshot and now.
             if block.ref_count > 0:
                 continue  # actively referenced, do not recycle
-
-            if block.cache_only and block.ref_count == 0:
-                # Block is cache-only (was freed by its request and is now
-                # only held by the prefix cache). Safe to recycle.
-                block.cache_only = False
-                if block.prev is None and block.next is None:
-                    self.block_pool.free_queue.append(block)
-            elif block.ref_count == 0:
-                # Already in free queue with stale hash — just clearing above is enough.
-                pass
 
         freed_block_count = self.block_pool.get_free_block_count() - initial_free
 

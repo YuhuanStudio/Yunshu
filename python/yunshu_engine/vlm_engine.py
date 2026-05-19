@@ -702,8 +702,14 @@ class VLMEngine:
             self._num_requests_processed += 1
             self._total_reasoning_tokens += reasoning_tokens
 
-            prompt_text = self._format_prompt(messages)
-            prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
+            # Use VLM template for vision path (includes image placeholders),
+            # plain _format_prompt for text-only path
+            if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
+                _vlm_prompt = self._apply_vlm_template_with_cache(messages, enable_thinking=_enable_thinking)
+                prompt_tokens = len(self._tokenizer.encode(_vlm_prompt)) if self._tokenizer else 0
+            else:
+                prompt_text = self._format_prompt(messages)
+                prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
             # Determine correct finish_reason based on exit condition
             if stop_hit:
                 _finish_reason = "stop"
