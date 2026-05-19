@@ -1910,6 +1910,8 @@ class VLMEngine:
 
             if not is_eos:
                 if has_detokenizer:
+                    # Record text length before adding token so we can trim
+                    _text_len_before = len(detokenizer.text)
                     detokenizer.add_token(token_id)
                     # Check stop suffixes AFTER add_token so detokenizer.text
                     # includes the current token's decoded text
@@ -1942,13 +1944,12 @@ class VLMEngine:
                 if has_detokenizer:
                     remaining = detokenizer.finalize()
                     if remaining:
-                        # When a stop suffix was hit, the remaining text from
-                        # finalize() includes the suffix — trim it.
-                        if suffix_hit:
-                            for s in stop_suffixes:
-                                if remaining.endswith(s):
-                                    remaining = remaining[:-len(s)]
-                                    break
+                        # When a stop suffix was hit, trim everything from
+                        # the suffix position onward. _text_len_before marks
+                        # the safe boundary before the suffix-triggering token.
+                        if suffix_hit and '_text_len_before' in dir():
+                            safe = remaining[:_text_len_before]
+                            remaining = safe.rstrip()
                     if remaining:
                         queue.put_nowait(RequestOutput(
                             request_id=req_id,

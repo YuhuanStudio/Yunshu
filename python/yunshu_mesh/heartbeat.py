@@ -79,14 +79,16 @@ class HeartbeatMonitor:
 
     def stop(self) -> None:
         self._running = False
+        # Wait for threads to exit BEFORE closing the socket to prevent
+        # OSError: Bad file descriptor during concurrent send/recv.
+        for t in (self._send_thread, self._recv_thread, self._check_thread):
+            if t:
+                t.join(timeout=3)
         if self._socket:
             try:
                 self._socket.close()
             except Exception:
                 logger.debug("failed to close heartbeat socket", exc_info=True)
-        for t in (self._send_thread, self._recv_thread, self._check_thread):
-            if t:
-                t.join(timeout=3)
         logger.info("Heartbeat monitor stopped")
 
     def _send_loop(self) -> None:

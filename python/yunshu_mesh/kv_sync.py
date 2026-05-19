@@ -713,13 +713,18 @@ class KVSynchronizationService:
     # ── Internal ─────────────────────────────────────────────────────
 
     def _evict_oldest(self, registry: dict) -> None:
-        """Evict the least-recently-verified entries from a hash registry."""
-        # Sort by last_verified (LRU) and remove the 10% least recently used
-        sorted_entries = sorted(
-            registry.items(), key=lambda x: x[1].last_verified
+        """Evict the least-recently-verified entries from a hash registry.
+
+        Uses heapq.nsmallest for O(n log k) instead of sorted() O(n log n).
+        """
+        import heapq
+        to_remove = max(1, len(registry) // 10)
+        oldest = heapq.nsmallest(
+            to_remove,
+            registry.items(),
+            key=lambda x: x[1].last_verified,
         )
-        to_remove = max(1, len(sorted_entries) // 10)
-        for key, _ in sorted_entries[:to_remove]:
+        for key, _ in oldest:
             registry.pop(key, None)
 
     def _trim_history(self) -> None:

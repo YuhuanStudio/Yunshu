@@ -352,9 +352,11 @@ class TTSEngine:
                     pcm = (audio * 32767).astype(np.int16)
                     raw_bytes = pcm.tobytes()
                     if _first_chunk:
-                        # Send a single WAV header in the first chunk, then raw PCM afterward
+                        # Send a WAV header with a large-but-valid data_size.
+                        # Using 0xFFFFFFFF overflows the RIFF chunk size field.
+                        # Clients handle unknown-length via the stream ending.
                         wav_header = make_wav_header(
-                            data_size=0xFFFFFFFF,  # Unknown length sentinel
+                            data_size=0x7FFFFF00,  # Large valid size, avoids 32-bit overflow
                             sample_rate=int(sample_rate),
                             num_channels=1,
                         )
@@ -564,6 +566,17 @@ class ASREngine:
                 else:
                     pcm = raw
                 samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                # Resample to VAD's expected sample rate if different
+                # (VAD models typically expect 16kHz)
+                vad_sr = self._vad.sample_rate
+                file_sr = self._sample_rate if hasattr(self, '_sample_rate') and self._sample_rate else 16000
+                if file_sr != vad_sr and file_sr > 0 and len(samples) > 0:
+                    try:
+                        import scipy.signal
+                        num_samples = int(len(samples) * vad_sr / file_sr)
+                        samples = scipy.signal.resample(samples, num_samples)
+                    except ImportError:
+                        pass  # No scipy — proceed with native rate, VAD may be less accurate
                 if len(samples) > 0:
                     frame_samples = int(self._vad.sample_rate * self._vad.frame_duration_ms / 1000)
                     speech_detected = False

@@ -88,10 +88,12 @@ class ToolCallStreamer:
         self,
         flush_threshold: int = 20,
         call_id_prefix: str = "call_",
+        json_buffer_limit: int = 65536,
     ) -> None:
         self._flush_threshold = flush_threshold
         self._call_id_prefix = call_id_prefix
         self._call_counter = 0
+        self._json_buffer_limit = json_buffer_limit
 
         self._state = StreamState.TEXT
         self._buffer = ""
@@ -259,6 +261,15 @@ class ToolCallStreamer:
         """
         results: list[StreamOutput] = []
         self._json_buffer += token
+
+        # Guard against unbounded growth — if no closing tag ever arrives,
+        # force-emit what we have as text once the buffer exceeds the limit.
+        if len(self._json_buffer) > self._json_buffer_limit:
+            text = self._json_buffer
+            self._json_buffer = ""
+            self._state = StreamState.TEXT
+            results.append(StreamOutput(text=text, state=self._state))
+            return results
 
         # Check for closing tag
         close_idx = self._json_buffer.find(TOOL_CALL_CLOSE)

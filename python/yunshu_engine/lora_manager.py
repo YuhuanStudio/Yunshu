@@ -514,14 +514,19 @@ class LoRAAdapterManager:
         rank = lora_params.get("rank", 8)
         scale = lora_params.get("scale", 20.0)
 
-        # Apply LoRA to attention layers only
+        # Apply LoRA to all eligible linear projection layers
         from mlx_lm.tuner.lora import LoRALinear
 
         lora_layers = []
         for name, module in self._base_model.named_modules():
             if isinstance(module, nn.Linear) and num_layers > 0:
-                # Apply LoRA to Q and V projection layers
-                if any(k in name for k in ("q_proj", "v_proj", "query", "value")):
+                # Apply LoRA to attention projections AND MLP layers
+                if any(k in name for k in (
+                    "q_proj", "k_proj", "v_proj", "o_proj",
+                    "query", "key", "value", "dense",
+                    "gate_proj", "up_proj", "down_proj",
+                    "gate", "up", "down",
+                )):
                     lora_layer = LoRALinear(
                         module.in_features,
                         module.out_features,

@@ -138,6 +138,9 @@ class BatchSampler:
 
         for params in params_list:
             temp = params.get("temperature", 0.7)
+            # Clamp negative temperatures to 0 (greedy)
+            if temp < 0:
+                temp = 0.0
             temperatures.append(temp)
             top_k_values.append(params.get("top_k", 0))
             top_p_values.append(params.get("top_p", 1.0))

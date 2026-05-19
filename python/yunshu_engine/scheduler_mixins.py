@@ -24,7 +24,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 import collections
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,7 +62,7 @@ class MetricsMixin(SchedulerMixin):
     def __init__(self, window_size: int = 100) -> None:
         self._window_size = window_size
         self._step_times: collections.deque[float] = collections.deque(maxlen=window_size)
-        self._batch_sizes: list[int] = []
+        self._batch_sizes: deque[int] = deque(maxlen=self._window_size)
         self._throughput_window: list[tuple[float, int]] = []
         self._total_tokens = 0
         self._total_requests = 0
@@ -76,8 +76,6 @@ class MetricsMixin(SchedulerMixin):
         now = time.monotonic()
         step_latency = now - self._step_start if hasattr(self, '_step_start') else 0.0
         self._step_times.append(step_latency)
-        if len(self._batch_sizes) > self._window_size:
-            self._batch_sizes.pop(0)
 
         batch_size = 0
         tokens = 0
@@ -90,8 +88,6 @@ class MetricsMixin(SchedulerMixin):
                     finished += 1
 
         self._batch_sizes.append(batch_size)
-        if len(self._batch_sizes) > self._window_size:
-            self._batch_sizes.pop(0)
 
         self._throughput_window.append((now, tokens))
         self._total_tokens += tokens
@@ -171,7 +167,7 @@ class ProfilingMixin(SchedulerMixin):
     ) -> None:
         self._sample_rate = sample_rate
         self._max_samples = max_samples
-        self._samples: list[ProfilingSample] = []
+        self._samples: deque[ProfilingSample] = deque(maxlen=self._max_samples)
         self._step_counter = 0
         self._enabled = True
 
@@ -219,8 +215,6 @@ class ProfilingMixin(SchedulerMixin):
             memory_peak_bytes=peak_mem,
         )
         self._samples.append(sample)
-        if len(self._samples) > self._max_samples:
-            self._samples.pop(0)
 
     def get_stats(self) -> dict:
         if not self._samples:
@@ -431,7 +425,7 @@ class SpecDecodeMixin(SchedulerMixin):
         self._max_draft_length = max_draft_length
         self._min_draft_length = min_draft_length
         self._acceptance_window = acceptance_window
-        self._acceptances: list[bool] = []
+        self._acceptances: deque[bool] = deque(maxlen=self._acceptance_window)
         self._total_drafts = 0
         self._total_accepted = 0
         self._total_rejected = 0
@@ -449,8 +443,6 @@ class SpecDecodeMixin(SchedulerMixin):
             spec_accepted = getattr(o, 'spec_accepted', None)
             if spec_accepted is not None:
                 self._acceptances.append(spec_accepted)
-                if len(self._acceptances) > self._acceptance_window:
-                    self._acceptances.pop(0)
                 if spec_accepted:
                     self._total_accepted += 1
                 else:
@@ -556,6 +548,11 @@ class MemoryPressureMixin(SchedulerMixin):
                 else:
                     self._current_state = "warning"
                 self._admission_paused = False
+            elif self._current_state == "warning" and fraction < self._warning_threshold:
+                # Hysteresis: only exit warning when below warning - hysteresis
+                if fraction < self._warning_threshold - self._hysteresis:
+                    self._current_state = "normal"
+                    self._admission_paused = False
             else:
                 self._current_state = "normal"
                 self._admission_paused = False

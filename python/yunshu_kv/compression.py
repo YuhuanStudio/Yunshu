@@ -89,6 +89,12 @@ def quantize_kv_4bit(
     # Reshape back: [..., tokens, effective_dim]
     flat = quantized_uint.reshape(batch_dims + [num_tokens, effective_dim])
 
+    # Pad to even length if head_dim is odd
+    if effective_dim % 2 != 0:
+        pad_shape = list(flat.shape)
+        pad_shape[-1] = 1
+        flat = np.concatenate([flat, np.zeros(pad_shape, dtype=np.uint8)], axis=-1)
+
     # Pack: 2 values per byte
     even_vals = flat[..., 0::2]
     odd_vals = flat[..., 1::2]
