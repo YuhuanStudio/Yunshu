@@ -396,13 +396,10 @@ class SpecDraftVerifier:
         rejected_count = K - accepted_count
 
         # Step 6: Trim KV cache.
-        # After step 1 (rollback -1) and step 2 (forward K+1), net entries = K.
-        # Keep: 1 (last_token) + accepted_count entries from the forward pass.
-        # Trim: K - (1 + accepted_count) = rejected_count - 1.
-        # The rejected_count includes all unaccepted drafts, but since the
-        # forward pass starts from last_token (which we want to keep), only
-        # rejected_count - 1 entries beyond the accepted ones need trimming.
-        trim_count = max(0, rejected_count - 1)
+        # After step 1 (rollback -1) and step 2 (forward K+1), net new = K.
+        # Want to keep: 1 (last_token) + accepted_count entries = accepted_count+1.
+        # Total forward entries: K+1.  Trim: (K+1) - (accepted_count+1) = rejected_count.
+        trim_count = rejected_count
         cache_trimmed = 0
         if trim_count > 0 and prompt_cache is not None:
             cache_trimmed = _trim_cache(prompt_cache, trim_count)

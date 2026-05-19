@@ -453,11 +453,11 @@ class KVCacheManager:
         if remaining_tokens:
             # Insert new nodes for the unmatched portion
             bs = self.config.block_size
-            # Floor division: the boundary block that straddles the split
-            # point stays with the matched prefix, matching _split_node's
-            # floor division.  Ceiling division was losing the boundary
-            # block's tokens from the radix tree.
-            new_start_block = matched_len // bs
+            # Ceiling division: the boundary block that straddles the split
+            # point stays with the matched prefix in the tree.  Only blocks
+            # fully beyond the match boundary are assigned to the remaining
+            # tokens, avoiding misaligned KV data.
+            new_start_block = (matched_len + bs - 1) // bs
             if new_start_block > len(blocks):
                 return  # Defensive: matched more than we have blocks for
             new_blocks = blocks[new_start_block:]

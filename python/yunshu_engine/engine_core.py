@@ -1565,8 +1565,18 @@ class EngineCore:
 
     async def abort_all_requests(self) -> None:
         """Abort all active requests (error recovery)."""
+        from .request import RequestOutput
         failed_ids = self.scheduler.fail_all_requests()
         for req_id in failed_ids:
+            collector = self._output_collectors.get(req_id)
+            if collector is not None:
+                collector.put(RequestOutput(
+                    request_id=req_id,
+                    finished=True,
+                    finish_reason="abort",
+                    error="All requests aborted",
+                ))
+                collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
 

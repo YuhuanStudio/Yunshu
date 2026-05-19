@@ -34,6 +34,8 @@ def _make_engine():
     engine._model_name = "test-vlm"
     engine._config = {"model_type": "qwen2_vl"}
     engine._temp_files = []
+    import threading
+    engine._temp_files_lock = threading.Lock()
     engine._is_vlm = True
     engine._has_vision = True
     engine._active_count = 0

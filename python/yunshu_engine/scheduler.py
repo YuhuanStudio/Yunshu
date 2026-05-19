@@ -2387,11 +2387,15 @@ class Scheduler:
             self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
         for rid in errored_ids:
-            self._pending_prefill.pop(rid, None)
+            popped = self._pending_prefill.pop(rid, None)
             self._chunked_prefill_fairness.pop(rid, None)
             self._chunked_prefill_enqueued_at.pop(rid, None)
             self._chunked_prefill_failed_ids.append(rid)
-            self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+            # Only decrement if this entry was still in _pending_prefill.
+            # The timeout path pops directly and relies on this loop for the
+            # single decrement — skip if already popped by timeout handler.
+            if popped is not None:
+                self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
         # ── Prometheus observation ──
         try:

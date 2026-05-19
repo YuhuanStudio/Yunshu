@@ -138,7 +138,8 @@ class RequestPriorityQueue(Generic[T]):
         meaningful (same as ``peek()``).  Provided for backward-compat with
         test code that used ``deque[0]``.
         """
-        return self._extract_item(self._heap[index])
+        with self._lock:
+            return self._extract_item(self._heap[index])
 
 
 def make_waiting_queue(policy) -> RequestPriorityQueue:

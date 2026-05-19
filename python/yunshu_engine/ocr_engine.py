@@ -61,7 +61,10 @@ class OCREngine:
         self._executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self.load)
-        self._running = True
+        if self._model is not None:
+            self._running = True
+        else:
+            logger.error("OCR engine failed to load model %s", self._model_path)
 
     async def stop(self) -> None:
         """Stop and release model."""

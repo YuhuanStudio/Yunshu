@@ -267,6 +267,8 @@ class TestVLMEnginePromptTokens:
         engine._has_vision = False
         engine._is_vlm = False
         engine._temp_files = None
+        import threading
+        engine._temp_files_lock = threading.Lock()
         engine._mrope_info = MagicMock(enabled=False)
         engine._rope_delta_manager = None
         engine._vision_cache = None

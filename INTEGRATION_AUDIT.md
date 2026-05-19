@@ -35,7 +35,24 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6681 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-19 Wave 266 — 8-Agent Deep Audit: Engine Core, BatchedEngine, Gateway, KV, Scheduler, Spec Decode, Mesh, Multimodal)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 266: abort_all_requests 缺少 sentinel | 未放入 error output + sentinel，消費者永遠掛在 stream_outputs() | 消費者死鎖 (CRITICAL) |
+| Wave 266: RTT 路由器節點從未註冊 + 健康狀態不同步 | add_node/mark_healthy/mark_unhealthy 從未在 RTT router 上調用，路由永遠返回 None 或路由到死節點 | 路由完全失效 (CRITICAL) |
+| Wave 266: KV cache_to_radix_tree 非塊對齊分配錯誤 | matched_len//block_size 使用 floor 除法，邊界塊 KV 數據與 token 範圍不對齊 | KV 注意力數據損壞 (CRITICAL) |
+| Wave 266: spec verify_with_last_token 不足修剪 1 個 | trim_count = rejected_count-1 少修剪 1 個條目，拒絕時留下過期 KV 狀態 | KV 緩存狀態損壞 (HIGH) |
+| Wave 266: MTP streaming 未發送 length 終止塊 | max_tokens 耗盡時 while 循環退出但未 emit finished=True | 客戶端永遠收不到終止信號 (HIGH) |
+| Wave 266: NgramStrategy.begin() 未重置 proposer 狀態 | 跨請求 _indexed_len 殘留，後續請求前綴跳過索引 | 推測解碼品質下降 (HIGH) |
+| Wave 266: VLM _temp_files 競態條件 | 並行請求共用 list 無鎖，_temp_offset 指向錯誤條目導致文件丟失 | 暫存文件洩漏/丟失 (CRITICAL) |
+| Wave 266: Scheduler _active_partial_prefills 雙重遞減 | timeout abort 路徑先 pop 再加入 errored_ids，清理循環再次遞減 | 計數器為負，繞過並發限制 (HIGH) |
+| Wave 266: Priority queue __getitem__ 無鎖 | 與 push/pop 並行訪問可能觀察部分修改狀態 | 線程安全 (LOW) |
+| Wave 266: OCR _running=True 當 load 失敗 | load() 靜默失敗但 start() 仍設 _running=True，健康檢查誤報 | 運維誤判 (HIGH) |
+| Wave 266: STS 噪聲閾值計算反轉 | noise_floor_db 為負值時乘以 10^(db/20) 得到小於 1 的乘數 | 幾乎所有信號被當作噪聲 (HIGH) |
+| Wave 266: Video frame_dir 推導脆弱 | mkstemp + rsplit("_") 在隨機部分包含 "_" 時解析錯誤 | ffmpeg 找不到幀文件 (HIGH) |
 
 ### 已完成修復 (2026-05-19 Wave 263 — 6-Agent Deep Audit: Scheduler, Streaming, Metrics, Request, Spec Decode, Mesh)
 

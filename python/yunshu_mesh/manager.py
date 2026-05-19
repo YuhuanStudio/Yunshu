@@ -232,6 +232,8 @@ class MeshManager:
         self._dp_router = DataParallelRouter(strategy=strategy)
         for n in self._topology.nodes:
             self._dp_router.add_node(n.node_id, n.rank)
+            # Register node in RTT router for latency-aware routing
+            self._rtt_router.add_node(n.node_id, max_requests=100)
             # Set node capacity for C17 memory-proportional routing
             if hasattr(n, 'capabilities') and n.capabilities:
                 self._dp_router.set_node_capacity(
@@ -366,6 +368,7 @@ class MeshManager:
                     memory_gb=caps.total_memory_gb if caps else 0.0,
                     gpu_cores=caps.gpu_cores if caps else 0,
                 )
+            self._rtt_router.add_node(node.node_id, max_requests=100)
             _event = ("node_join", node.node_id, {
                 "hostname": node.hostname,
                 "rank": rank,
@@ -389,6 +392,7 @@ class MeshManager:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
+            self._rtt_router.mark_unhealthy(node.node_id)
             _event = ("node_leave", node.node_id, {"hostname": node.hostname})
             logger.info(f"Peer lost: {node.hostname}")
         if _event:
@@ -406,6 +410,7 @@ class MeshManager:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
+            self._rtt_router.mark_unhealthy(node.node_id)
             _failure_id = node.node_id
         if _failure_id:
             self.handle_node_failure(_failure_id)
@@ -432,6 +437,7 @@ class MeshManager:
                     gpu_cores=caps.gpu_cores if caps and hasattr(caps, 'gpu_cores') else 0,
                 )
                 self._disagg_router.mark_available(node.node_id)
+            self._rtt_router.mark_healthy(node.node_id)
             _event = ("node_state_change", node.node_id, {
                 "new_state": "ready",
                 "reason": "heartbeat_recovered",

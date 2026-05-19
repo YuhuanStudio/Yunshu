@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import threading
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -36,6 +37,7 @@ def _make_vlm_engine():
     engine._has_vision = False
     engine._is_vlm = False
     engine._temp_files = None
+    engine._temp_files_lock = threading.Lock()
     engine._mrope_info = MagicMock(enabled=False)
     engine._rope_delta_manager = None
     engine._vision_cache = None

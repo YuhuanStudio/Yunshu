@@ -5674,7 +5674,12 @@ class BatchedEngine:
                         primary = v0
                         primary_h = verify_h[:, 0:1, :]
 
+                # Emit "length" finish chunk when max_tokens exhausted
                 detokenizer.finalize()
+                _remaining = detokenizer.last_segment
+                if _remaining:
+                    _put((_remaining, len(generated), None, None))
+                _put(("", len(generated), "length", None))
             except Exception as e:
                 logger.error(f"MTP streaming generation failed: {e}", exc_info=True)
                 try:

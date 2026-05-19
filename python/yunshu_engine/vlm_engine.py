@@ -270,6 +270,7 @@ class VLMEngine:
         self._has_vision = False
         self._is_vlm = False
         self._temp_files: list[str] | None = None
+        self._temp_files_lock = threading.Lock()
 
         # mRoPE state (detected during load)
         self._mrope_info = None
@@ -577,7 +578,10 @@ class VLMEngine:
         _enable_thinking = enable_thinking
 
         self._active_count += 1
-        _temp_offset = len(self._temp_files) if self._temp_files else 0
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            _temp_offset = len(self._temp_files)
         try:
             # Run through MultimodalPipelineCoordinator for preprocessing tracking
             try:
@@ -758,9 +762,10 @@ class VLMEngine:
                 "completion_tokens": completion_token_count,
             }
         finally:
-            _mine = (self._temp_files or [])[_temp_offset:]
-            if _mine and self._temp_files is not None:
-                del self._temp_files[_temp_offset:]
+            with self._temp_files_lock:
+                _mine = (self._temp_files or [])[_temp_offset:]
+                if _mine and self._temp_files is not None:
+                    del self._temp_files[_temp_offset:]
             self._cleanup_temp_files(_mine)
 
     async def generate_stream(
@@ -797,7 +802,10 @@ class VLMEngine:
             )
 
         # Extract images/audio once, reuse for both pipeline and generation
-        _temp_offset = len(self._temp_files) if self._temp_files else 0
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            _temp_offset = len(self._temp_files)
         image_paths = await self._extract_images(messages)
         audio_paths = await self._extract_audio(messages)
         video_frames = await self._extract_video_frames(messages)
@@ -1136,9 +1144,10 @@ class VLMEngine:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            _mine = (self._temp_files or [])[_temp_offset:]
-            if _mine and self._temp_files is not None:
-                del self._temp_files[_temp_offset:]
+            with self._temp_files_lock:
+                _mine = (self._temp_files or [])[_temp_offset:]
+                if _mine and self._temp_files is not None:
+                    del self._temp_files[_temp_offset:]
             self._cleanup_temp_files(_mine)
 
     def _generate_vlm_vision(
@@ -2387,9 +2396,10 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
         tmp.write(base64.b64decode(data))
         tmp.close()
-        if self._temp_files is None:
-            self._temp_files = []
-        self._temp_files.append(tmp.name)
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            self._temp_files.append(tmp.name)
         return tmp.name
 
     async def _save_base64_image(self, data_url: str) -> str:
@@ -2399,9 +2409,10 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
         tmp.write(base64.b64decode(data))
         tmp.close()
-        if self._temp_files is None:
-            self._temp_files = []
-        self._temp_files.append(tmp.name)
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            self._temp_files.append(tmp.name)
         return tmp.name
 
     async def _download_image(self, url: str) -> str:
@@ -2414,9 +2425,10 @@ class VLMEngine:
 
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
         # Register temp file eagerly so cleanup happens even if download fails
-        if self._temp_files is None:
-            self._temp_files = []
-        self._temp_files.append(tmp.name)
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            self._temp_files.append(tmp.name)
         try:
             ctx = ssl.create_default_context()
             req = urllib.request.Request(url, headers={"User-Agent": "Yunshu/1.0"})
@@ -2557,11 +2569,12 @@ class VLMEngine:
             if f.startswith("frame_") and f.endswith(".jpg")
         )
 
-        if self._temp_files is None:
-            self._temp_files = []
-        self._temp_files.append(tmpdir)
-        for f in frames:
-            self._temp_files.append(f)
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            self._temp_files.append(tmpdir)
+            for f in frames:
+                self._temp_files.append(f)
 
         return frames
 
@@ -2570,9 +2583,10 @@ class VLMEngine:
         tmp = tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False)
         tmp.write(base64.b64decode(data))
         tmp.close()
-        if self._temp_files is None:
-            self._temp_files = []
-        self._temp_files.append(tmp.name)
+        with self._temp_files_lock:
+            if self._temp_files is None:
+                self._temp_files = []
+            self._temp_files.append(tmp.name)
         return tmp.name
 
     # ── Helpers ──

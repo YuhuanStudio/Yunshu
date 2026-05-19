@@ -409,7 +409,9 @@ class STSEngine:
 
         # Estimate noise from first N frames
         noise_spectrum = np.mean(np.abs(frames[:noise_frames]), axis=0)
-        noise_threshold = noise_spectrum * (10 ** (noise_floor_db / 20))
+        # noise_floor_db is negative (e.g., -40). Negate so threshold is
+        # ABOVE the noise estimate: 10^(-noise_floor_db/20) > 1.
+        noise_threshold = noise_spectrum * (10 ** (-noise_floor_db / 20))
 
         # Gate: suppress bins below threshold
         gate_factor = 0.1  # attenuation factor for noise bins

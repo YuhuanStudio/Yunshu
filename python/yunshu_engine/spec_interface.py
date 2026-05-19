@@ -151,6 +151,7 @@ class NgramStrategy(SpecStrategy):
 
     def begin(self, request_id: str) -> None:
         self._request_id = request_id
+        self._proposer.reset()  # Clear cross-request pool state
 
     def draft(self, tokens: list[int], n: int) -> DraftProposal:
         proposed = self._proposer.propose(tokens)
