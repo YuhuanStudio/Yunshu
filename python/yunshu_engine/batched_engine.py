@@ -2900,7 +2900,10 @@ class BatchedEngine:
             # are dropped silently corrupt structured output (JSON, tool
             # calls) because the SSE client sees a gap with no error.
             if _q.qsize() > 400:  # 78% of 512
-                time.sleep(0.01)  # backpressure: give consumer 10ms to drain
+                # Yield to let the consumer thread drain the queue.
+                # time.sleep on the GPU thread blocks ALL GPU work, but
+                # this is only hit under extreme backpressure.
+                time.sleep(0.001)
             if _q.full():
                 # Queue is still full after backpressure — drop this token.
                 # NOTE: We do NOT call _q.get_nowait() here because this

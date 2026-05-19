@@ -348,6 +348,7 @@ class MeshManager:
 
     def _on_peer_discovered(self, node: MeshNode) -> None:
         """Callback: new peer discovered."""
+        _event = None
         with self._node_lock:
             rank = self._topology.add_node(node)
             if self._dp_router:
@@ -365,20 +366,22 @@ class MeshManager:
                     memory_gb=caps.total_memory_gb if caps else 0.0,
                     gpu_cores=caps.gpu_cores if caps else 0,
                 )
-            self._publish_event("node_join", node.node_id, {
+            _event = ("node_join", node.node_id, {
                 "hostname": node.hostname,
                 "rank": rank,
                 "capabilities": node.capabilities.__dict__ if hasattr(node.capabilities, '__dict__') else {},
             })
             logger.info(f"Peer discovered: {node.hostname} rank={rank}")
+        if _event:
+            self._publish_event(_event[0], _event[1], _event[2])
 
     def _on_peer_lost(self, node: MeshNode) -> None:
         """Callback: peer disappeared."""
+        _event = None
         with self._node_lock:
             if node.state == MeshNodeState.OFFLINE:
                 return
             node.state = MeshNodeState.OFFLINE
-            # Also update the topology's copy of this node
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
                 topo_node.state = MeshNodeState.OFFLINE
@@ -386,31 +389,35 @@ class MeshManager:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
-            self._publish_event("node_leave", node.node_id, {
-                "hostname": node.hostname,
-            })
+            _event = ("node_leave", node.node_id, {"hostname": node.hostname})
             logger.info(f"Peer lost: {node.hostname}")
+        if _event:
+            self._publish_event(_event[0], _event[1], _event[2])
 
     def _on_node_timeout(self, node: MeshNode) -> None:
         """Callback: heartbeat timeout."""
+        _failure_id = None
         with self._node_lock:
             # Guard: skip if already handled by _on_peer_lost or a prior timeout
             if node.state == MeshNodeState.OFFLINE:
                 return
-            self.handle_node_failure(node.node_id)
+            node.state = MeshNodeState.OFFLINE
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
+            _failure_id = node.node_id
+        if _failure_id:
+            self.handle_node_failure(_failure_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
+        _event = None
         with self._node_lock:
             # Guard: skip if node is already READY (duplicate recovery callback)
             if node.state == MeshNodeState.READY:
                 return
             node.state = MeshNodeState.READY
-            # Also update the topology's copy of this node
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
                 topo_node.state = MeshNodeState.READY
@@ -424,18 +431,18 @@ class MeshManager:
                     gpu_cores=caps.gpu_cores if caps and hasattr(caps, 'gpu_cores') else 0,
                 )
                 self._disagg_router.mark_available(node.node_id)
-            self._publish_event("node_state_change", node.node_id, {
+            _event = ("node_state_change", node.node_id, {
                 "new_state": "ready",
                 "reason": "heartbeat_recovered",
             })
-            # Re-evaluate topology — a recovered node may allow upgrading
-            # (e.g., RING -> FULLY_CONNECTED when enough JACCL nodes return).
             if self._topology.size > 1:
                 new_type = self._topology.auto_select()
                 if new_type != self._topology.topo_type:
                     self._topology.topo_type = new_type
                     logger.info(f"Topology changed to {new_type.value} after node recovery")
             logger.info(f"Node recovered: {node.hostname}")
+        if _event:
+            self._publish_event(_event[0], _event[1], _event[2])
 
     # ── C22: Event Sourcing Helpers ──
 
