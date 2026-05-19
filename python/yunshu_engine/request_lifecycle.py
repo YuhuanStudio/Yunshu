@@ -354,9 +354,10 @@ class RequestLifecycleOrchestrator:
             self._total_completed += 1
             self._model_counts[state.model]["completed"] += 1
             self._concurrency.report_success(state)
-        else:
+        elif finish_reason in ("error",):
             self._total_rejected += 1
             self._model_counts[state.model]["rejected"] += 1
+        # "abort" and "timeout" are counted by their respective handlers
 
         # Do NOT auto-promote pending requests here. Promotion via
         # on_prefill_start() increments _active_count, but the promoted

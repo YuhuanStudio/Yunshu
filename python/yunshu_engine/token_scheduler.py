@@ -585,7 +585,7 @@ class PriorityInversionGuard:
         now = time.monotonic()
 
         # Find highest-priority waiting request
-        highest_waiting = max(waiting_requests, key=lambda r: r.priority)
+        highest_waiting = max(waiting_requests, key=lambda r: r.effective_priority if hasattr(r, 'effective_priority') else r.priority)
 
         # Find running requests with lower priority
         for running in running_requests:
@@ -593,12 +593,14 @@ class PriorityInversionGuard:
             if running.request_id in self._active_boosts:
                 continue
 
-            priority_gap = highest_waiting.priority - running.priority
+            priority_gap = (highest_waiting.effective_priority if hasattr(highest_waiting, 'effective_priority') else highest_waiting.priority) - running.priority
             if priority_gap < self.min_priority_gap:
                 continue
 
-            # Check running time threshold
-            if running.wait_time < self.running_time_threshold:
+            # Check running time threshold — use output_length as proxy
+            # for time spent decoding (wait_time is queue wait, not run time)
+            running_time_proxy = running.output_length if running.output_length > 0 else running.wait_time
+            if running_time_proxy < self.running_time_threshold:
                 continue
 
             # Inversion detected

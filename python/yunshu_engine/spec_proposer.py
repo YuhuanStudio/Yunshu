@@ -106,6 +106,7 @@ class CompositeSpecProposer(SpecProposer):
 
     def __init__(self, proposers: list[SpecProposer]) -> None:
         self._proposers = proposers
+        self._last_winning_proposer: SpecProposer | None = None
 
     def begin(self, all_token_ids: list[int]) -> None:
         for p in self._proposers:
@@ -113,15 +114,20 @@ class CompositeSpecProposer(SpecProposer):
 
     def draft(self, all_token_ids: list[int], k: int = 5) -> SpecProposal:
         best = SpecProposal(token_ids=[], proposer_type="composite")
+        self._last_winning_proposer = None
         for p in self._proposers:
             proposal = p.draft(all_token_ids, k)
             if len(proposal.token_ids) > len(best.token_ids):
                 best = proposal
+                self._last_winning_proposer = p
         return best
 
     def accept(self, n_accepted: int) -> None:
-        for p in self._proposers:
-            p.accept(n_accepted)
+        if self._last_winning_proposer is not None:
+            self._last_winning_proposer.accept(n_accepted)
+        else:
+            for p in self._proposers:
+                p.accept(n_accepted)
 
     @property
     def proposer_type(self) -> str:

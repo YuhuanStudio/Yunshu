@@ -202,6 +202,8 @@ class SuffixProposer:
         self._windows: dict[str, list[int]] = {}
         # Per-request generated token tracking
         self._generated: dict[str, list[int]] = {}
+        # Track the most recently begun request for single-request draft()
+        self._last_active_request: str | None = None
 
         # Global statistics
         self._total_proposals: int = 0
@@ -215,6 +217,7 @@ class SuffixProposer:
         Args:
             request_id: Unique identifier for the request.
         """
+        self._last_active_request = request_id
         self._tries[request_id] = SuffixTrie(
             max_depth=self.config.max_trie_depth,
         )
@@ -358,12 +361,16 @@ class SuffixProposer:
         self._tries.pop(request_id, None)
         self._windows.pop(request_id, None)
         self._generated.pop(request_id, None)
+        if self._last_active_request == request_id:
+            self._last_active_request = next(reversed(self._tries)) if self._tries else None
 
     def _find_active_request(self) -> str | None:
         """Find the most recently active request ID."""
-        # Return the last request that was begun
+        if self._last_active_request and self._last_active_request in self._tries:
+            return self._last_active_request
         if self._tries:
-            return next(reversed(self._tries))
+            self._last_active_request = next(reversed(self._tries))
+            return self._last_active_request
         return None
 
     def get_stats(self) -> dict:

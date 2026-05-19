@@ -1147,10 +1147,10 @@ class KVOffloadManager:
         if block is None:
             return
         # Only free if block has no active request references
-        if block.ref_count > 1:
+        if block.ref_count > 0:
             return
         pool._evict_cached_block(block)
-        if block.ref_count == 1:
+        if block.ref_count == 0 and not block.cache_only:
             pool.free([block])
         elif block.ref_count == 0 and block.cache_only:
             # Block is already in free queue as cache_only; eviction above

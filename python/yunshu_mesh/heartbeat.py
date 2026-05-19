@@ -131,7 +131,7 @@ class HeartbeatMonitor:
                             recovered_node = node
                 # Fire recovery callbacks outside lock to prevent deadlock
                 if recovered_node is not None:
-                    for cb in self._on_recovery_callbacks:
+                    for cb in list(self._on_recovery_callbacks):
                         try:
                             cb(recovered_node)
                         except Exception:
@@ -157,7 +157,7 @@ class HeartbeatMonitor:
                             timed_out_nodes.append(node)
             # Fire timeout callbacks outside lock to prevent deadlock
             for node in timed_out_nodes:
-                for cb in self._on_timeout_callbacks:
+                for cb in list(self._on_timeout_callbacks):
                     try:
                         cb(node)
                     except Exception:

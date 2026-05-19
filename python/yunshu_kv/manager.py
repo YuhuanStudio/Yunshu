@@ -528,14 +528,18 @@ class KVCacheManager:
             if block.cache_only and block.ref_count == 0:
                 # Block is cache-only (was freed by its request and is now
                 # only held by the prefix cache). Safe to recycle.
+                # Guard: if block is already in the free queue (prev/next set),
+                # skip — double-append would corrupt the queue.
                 block.cache_only = False
-                self.block_pool.free_queue.append(block)
+                if block.prev is None and block.next is None:
+                    self.block_pool.free_queue.append(block)
             elif block.ref_count == 1 and block.block_hash is None:
                 # Block was prefix-cache-only with ref_count=1.
                 # Eviction cleared its hash above. Decrement and recycle.
                 block.ref_count = 0
                 block.cache_only = False
-                self.block_pool.free_queue.append(block)
+                if block.prev is None and block.next is None:
+                    self.block_pool.free_queue.append(block)
             elif block.ref_count == 0:
                 # Already in free queue with stale hash — just clearing above is enough.
                 pass
@@ -614,12 +618,14 @@ class KVCacheManager:
 
             if block.cache_only and block.ref_count == 0:
                 block.cache_only = False
-                self.block_pool.free_queue.append(block)
+                if block.prev is None and block.next is None:
+                    self.block_pool.free_queue.append(block)
                 evicted += 1
             elif block.ref_count == 1 and block.block_hash is None:
                 block.ref_count = 0
                 block.cache_only = False
-                self.block_pool.free_queue.append(block)
+                if block.prev is None and block.next is None:
+                    self.block_pool.free_queue.append(block)
                 evicted += 1
 
         # Prune stale radix tree nodes (Bug 1: evict() was never called,

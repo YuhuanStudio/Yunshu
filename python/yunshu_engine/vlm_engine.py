@@ -669,9 +669,10 @@ class VLMEngine:
                         if not _in_thinking and token_id == think_start_id:
                             _in_thinking = True
                         elif _in_thinking:
-                            _thinking_tokens += 1
                             if token_id == think_end_id:
                                 _in_thinking = False
+                            else:
+                                _thinking_tokens += 1
                     if token_id in stop_ids:
                         _stop_hit = True
                         break
@@ -910,9 +911,10 @@ class VLMEngine:
                         if not _in_thinking and token_id == think_start_id:
                             _in_thinking = True
                         elif _in_thinking:
-                            _thinking_tokens += 1
                             if token_id == think_end_id:
                                 _in_thinking = False
+                            else:
+                                _thinking_tokens += 1
 
                     # Thinking budget enforcement
                     if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget and think_end_id is not None:
@@ -1380,9 +1382,10 @@ class VLMEngine:
                     if not _in_thinking and tok_id == think_start_id:
                         _in_thinking = True
                     elif _in_thinking:
-                        _thinking_tokens += 1
                         if tok_id == think_end_id:
                             _in_thinking = False
+                        else:
+                            _thinking_tokens += 1
                 # Thinking budget enforcement — cap thinking tokens
                 if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
                     # Append closing tag to keep output well-formed
@@ -1829,9 +1832,10 @@ class VLMEngine:
                 if not _in_thinking and token_id == think_start_id:
                     _in_thinking = True
                 elif _in_thinking:
-                    _thinking_tokens += 1
                     if token_id == think_end_id:
                         _in_thinking = False
+                    else:
+                        _thinking_tokens += 1
             # Thinking budget enforcement in VLM streaming
             if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
                 _state = "reasoning" if _in_thinking else "normal"

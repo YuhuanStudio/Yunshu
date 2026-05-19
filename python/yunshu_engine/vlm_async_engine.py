@@ -331,7 +331,7 @@ class VLMAsyncEngineCore:
             first_token = False
 
             chunk = VLMStreamChunk(
-                token_text=getattr(output, "token_text", ""),
+                token_text=getattr(output, "new_text", getattr(output, "token_text", "")),
                 token_id=getattr(output, "token_id", 0),
                 finish_reason=getattr(output, "finish_reason", None),
                 ttft_ms=ttft,

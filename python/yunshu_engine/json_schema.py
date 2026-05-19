@@ -684,9 +684,11 @@ class JsonSchemaConstraint:
                     i += 1
                     if self._state == JsonState.NUMBER_ZERO:
                         # Leading zero followed by digit is invalid JSON (e.g., "007").
-                        # Insert a decimal point to autocorrect: "007" → "0.07"
-                        self._text_buffer = self._text_buffer[:-1] + "0." + ch
-                        self._state = JsonState.NUMBER_FRACTION
+                        # Complete the current number and start a new value with this digit.
+                        self._value_completed()
+                        self._enter_value()
+                        self._state = JsonState.NUMBER
+                        self._text_buffer += ch
                     elif self._state == JsonState.NUMBER_FRACTION:
                         # After digit in fraction, exponent is now allowed.
                         # Transition to NUMBER so _get_expected_chars includes 'eE'.

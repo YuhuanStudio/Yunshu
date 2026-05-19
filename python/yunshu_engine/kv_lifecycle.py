@@ -164,7 +164,7 @@ class KVLifecycleManager:
                 return False
 
         source_tier = block.tier
-        self._tier_usage[source_tier] -= block.size_bytes
+        self._tier_usage[source_tier] = max(0, self._tier_usage[source_tier] - block.size_bytes)
         block.tier = target_tier
         self._tier_usage[target_tier] += block.size_bytes
 
@@ -231,7 +231,7 @@ class KVLifecycleManager:
 
     def _evict_block(self, block: KVBlock) -> None:
         """Evict a single block."""
-        self._tier_usage[block.tier] -= block.size_bytes
+        self._tier_usage[block.tier] = max(0, self._tier_usage[block.tier] - block.size_bytes)
         self._blocks.pop(block.block_id, None)
         self._evictions += 1
 

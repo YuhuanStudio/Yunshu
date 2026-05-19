@@ -1365,7 +1365,7 @@ async def _stream_vlm_response(
     _vlm_cancel_evt = _vlm_gen.cancel_event if _vlm_gen is not None else None
 
     async def _token_source():
-        nonlocal loaded_adapter
+        nonlocal loaded_adapter, done_emitted
         first_chunk = True
         vlm_prompt_tok = 0
         vlm_completion_tok = 0
@@ -1579,7 +1579,7 @@ async def _stream_response_multi(
     total_cached_tok = 0
 
     async def _token_source():
-        nonlocal total_prompt_tok, total_completion_tok, total_reasoning_tok, total_cached_tok
+        nonlocal total_prompt_tok, total_completion_tok, total_reasoning_tok, total_cached_tok, done_emitted
         for choice_idx in range(req.n):
             if _multi_cancel_evt is not None and _multi_cancel_evt.is_set():
                 yield _format_choice_chunk(
@@ -2016,7 +2016,7 @@ async def _stream_response(
         logger.debug("StreamingResponseBuffer creation failed", exc_info=True)
 
     async def _token_source():
-        nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok, reasoning_tok, cached_tok
+        nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok, reasoning_tok, cached_tok, done_emitted
         first_chunk = True
         last_finish_reason = None  # track actual finish_reason from engine
 

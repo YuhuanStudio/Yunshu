@@ -103,8 +103,8 @@ class MeshNode:
     port: int = 8000
     state: MeshNodeState = MeshNodeState.INITIALIZING
     capabilities: NodeCapabilities = field(default_factory=NodeCapabilities)
-    joined_at: float = field(default_factory=time.time)
-    last_heartbeat: float = field(default_factory=time.time)
+    joined_at: float = field(default_factory=time.monotonic)
+    last_heartbeat: float = field(default_factory=time.monotonic)
     rank: int = -1  # Assigned rank in the distributed group
 
     # Runtime

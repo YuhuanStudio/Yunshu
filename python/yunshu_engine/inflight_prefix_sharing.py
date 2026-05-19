@@ -150,6 +150,9 @@ class InflightPrefixTracker:
                         # Model isolation: only share within same model
                         if model_name and entry.model_name and model_name != entry.model_name:
                             continue
+                        # Skip entries without a KV cache ref (not yet prefilled)
+                        if entry.kv_cache_ref is None:
+                            continue
                         # Verify full prefix match
                         entry_prefix = entry.token_ids[:check_len]
                         if entry_prefix == token_ids[:check_len] and check_len > best_len:
