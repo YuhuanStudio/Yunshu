@@ -475,6 +475,7 @@ class TestRequestPreemption:
         req.status = RequestStatus.RUNNING
         req.batch_uid = 42
         req.prompt_token_ids = list(range(128))
+        req.num_prompt_tokens = 128
         req.num_computed_tokens = 128
 
         sched.running["block-preempt"] = req
@@ -502,6 +503,7 @@ class TestRequestPreemption:
         req.status = RequestStatus.RUNNING
         req.batch_uid = 42
         req.prompt_token_ids = list(range(128))
+        req.num_prompt_tokens = 128
         req.num_computed_tokens = 128
 
         sched.running["no-cache"] = req
@@ -531,6 +533,7 @@ class TestRequestPreemption:
         req.status = RequestStatus.RUNNING
         req.batch_uid = 42
         req.prompt_token_ids = list(range(256))
+        req.num_prompt_tokens = 256
         req.num_computed_tokens = 100
 
         sched.running["partial"] = req

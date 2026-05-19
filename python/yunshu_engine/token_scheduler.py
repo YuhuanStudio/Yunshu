@@ -641,12 +641,12 @@ class PriorityInversionGuard:
         Returns:
             The amount of priority boost applied.
         """
-        boost_amount = high_req.priority - low_req.effective_priority
+        boost_amount = (high_req.effective_priority if hasattr(high_req, 'effective_priority') else high_req.priority) - low_req.effective_priority
         if boost_amount <= 0:
             return 0
 
         original_priority = low_req.priority
-        boosted_priority = high_req.priority
+        boosted_priority = high_req.effective_priority if hasattr(high_req, 'effective_priority') else high_req.priority
         now = time.monotonic()
 
         low_req.effective_priority = boosted_priority

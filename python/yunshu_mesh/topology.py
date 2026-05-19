@@ -75,19 +75,15 @@ class MeshTopology:
             return rank
 
     def remove_node(self, node_id: str) -> bool:
-        """Remove a node by node_id. Re-ranks remaining nodes."""
+        """Remove a node by node_id. Leaves rank gaps intact."""
         with self._lock:
             for i, n in enumerate(self._nodes):
                 if n.node_id == node_id:
                     self._nodes.pop(i)
+                    self._rank_map.pop(n.rank, None)
                     break
             else:
                 return False
-            # Re-rank
-            self._rank_map.clear()
-            for i, n in enumerate(self._nodes):
-                n.rank = i
-                self._rank_map[i] = n
             return True
 
     def get_node(self, rank: int) -> Optional[MeshNode]:

@@ -138,7 +138,7 @@ class TestMeshTopology:
         assert topo.remove_node("n1")
         assert topo.size == 2
         assert topo.nodes[0].rank == 0
-        assert topo.nodes[1].rank == 1
+        assert topo.nodes[1].rank == 2  # rank gap preserved
 
     def test_pipeline_send_recv_pairs(self):
         from yunshu_mesh.topology import MeshTopology, TopologyType

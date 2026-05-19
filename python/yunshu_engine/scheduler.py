@@ -1861,7 +1861,8 @@ class Scheduler:
 
             request.status = RequestStatus.PREEMPTED
             # Preserve cached prefix tokens — only reset beyond cache boundary
-            request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens)
+            prompt_len = getattr(request, 'num_prompt_tokens', 0) or len(request.prompt_token_ids)
+            request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens, prompt_len)
             request.batch_uid = None
             request.num_preemptions += 1
             # Clear stale output tokens from pre-preemption generation.

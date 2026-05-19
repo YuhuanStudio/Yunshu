@@ -99,7 +99,7 @@ class TestMeshTopology:
         assert topo.remove_node("n2")
         assert topo.size == 2
         assert topo.get_rank("n1") == 0
-        assert topo.get_rank("n3") == 1
+        assert topo.get_rank("n3") == 2  # rank gap preserved, not re-ranked
 
 
 class TestPipelineParallel:

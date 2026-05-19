@@ -185,4 +185,6 @@ class MeshNode:
             capabilities=caps,
             _loaded_models=data.get("loaded_models", []),
             _active_requests=data.get("active_requests", 0),
+            joined_at=0.0,
+            last_heartbeat=0.0,
         )

@@ -196,7 +196,7 @@ class LCGHashPool:
     """
 
     __slots__ = (
-        "_capacity", "_mask", "_keys", "_values",
+        "_capacity", "_mask", "_keys", "_ngrams", "_values",
         "_total_inserts", "_total_lookups", "_total_hits", "_total_evictions",
         "_min_n", "_max_n", "_k", "_max_model_len",
         "_indexed_len",
@@ -213,6 +213,7 @@ class LCGHashPool:
         self._capacity = cap
         self._mask = cap - 1
         self._keys = [0] * cap
+        self._ngrams: list[tuple[int, ...] | None] = [None] * cap
         self._values: list[tuple[int, ...] | None] = [None] * cap
         self._total_inserts = 0
         self._total_lookups = 0
@@ -257,20 +258,22 @@ class LCGHashPool:
                 cont_end = min(cont_start + k, total)
                 continuation = tuple(token_ids[cont_start:cont_end])
                 h = self._hash_ngram(ngram)
-                self._insert(h, continuation)
+                self._insert(h, ngram, continuation)
                 self._total_inserts += 1
 
-    def _insert(self, h: int, value: tuple[int, ...]) -> None:
+    def _insert(self, h: int, ngram: tuple[int, ...], value: tuple[int, ...]) -> None:
         """Open-addressing insert with LCG probing."""
         for probe in range(8):
             slot = self._slot(h, probe)
-            if self._keys[slot] == 0 or self._keys[slot] == h:
+            if self._keys[slot] == 0 or (self._keys[slot] == h and self._ngrams[slot] == ngram):
                 self._keys[slot] = h
+                self._ngrams[slot] = ngram
                 self._values[slot] = value
                 return
         # All probes occupied — overwrite last probe slot (oldest by collision)
         slot = self._slot(h, 7)
         self._keys[slot] = h
+        self._ngrams[slot] = ngram
         self._values[slot] = value
         self._total_evictions += 1
 
@@ -287,7 +290,7 @@ class LCGHashPool:
         for n in range(min(max_n, total), min_n - 1, -1):
             suffix = tuple(token_ids[-n:])
             h = self._hash_ngram(suffix)
-            result = self._lookup(h)
+            result = self._lookup(h, suffix)
             if result is not None:
                 self._total_hits += 1
                 k = min(self._k, self._max_model_len - total)
@@ -297,13 +300,13 @@ class LCGHashPool:
 
         return []
 
-    def _lookup(self, h: int) -> tuple[int, ...] | None:
-        """Open-addressing lookup with LCG probing."""
+    def _lookup(self, h: int, ngram: tuple[int, ...]) -> tuple[int, ...] | None:
+        """Open-addressing lookup with LCG probing and ngram verification."""
         for probe in range(8):
             slot = self._slot(h, probe)
             if self._keys[slot] == 0:
-                return None  # Empty slot — key not present
-            if self._keys[slot] == h:
+                return None
+            if self._keys[slot] == h and self._ngrams[slot] == ngram:
                 return self._values[slot]
         return None
 
@@ -311,6 +314,7 @@ class LCGHashPool:
         """Clear the pool in O(capacity)."""
         for i in range(self._capacity):
             self._keys[i] = 0
+            self._ngrams[i] = None
             self._values[i] = None
         self._indexed_len = 0
 
