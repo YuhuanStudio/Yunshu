@@ -38,6 +38,7 @@ References:
   - oMLX speculative decoding patterns
 """
 
+import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
@@ -624,8 +625,11 @@ class SpeculativeDecoder:
         draft_sampler = make_sampler(temp=self.config.draft_temperature)
 
         while len(generated_tokens) < max_tokens:
-            # Cooperative cancellation check
-            if cancel_event is not None and cancel_event.is_set():
+            # Cooperative cancellation check (thread-safe for asyncio.Event)
+            if cancel_event is not None and (
+                cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                else cancel_event.is_set()
+            ):
                 break
 
             # Snapshot draft cache before drafting (reference-based, no copy)
@@ -638,7 +642,10 @@ class SpeculativeDecoder:
             d_input = mx.array([[last_tok]])
             for _ in range(K):
                 # Check cancellation inside draft loop too
-                if cancel_event is not None and cancel_event.is_set():
+                if cancel_event is not None and (
+                    cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                    else cancel_event.is_set()
+                ):
                     break
                 d_out = self.draft(d_input, cache=draft_cache)
                 d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
