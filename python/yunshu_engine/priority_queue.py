@@ -127,7 +127,8 @@ class RequestPriorityQueue(Generic[T]):
 
     def __contains__(self, item: object) -> bool:
         """Linear scan — only used for test assertions, not hot path."""
-        return any(self._extract_item(e) is item for e in self._heap)
+        with self._lock:
+            return any(self._extract_item(e) is item for e in self._heap)
 
     def __getitem__(self, index: int) -> T:
         """Support ``queue[0]`` for peek-style access in tests.

@@ -222,7 +222,13 @@ class RequestDeduplicator:
             h for h, e in self._entries.items()
             if e.completed_at and (now - e.completed_at) > self._ttl
         ]
-        for h in expired:
+        # Also evict stuck in-flight entries that have been running for 10x TTL.
+        # These are likely orphaned (primary crashed without calling complete()).
+        stuck = [
+            h for h, e in self._entries.items()
+            if e.completed_at is None and (now - e.created_at) > self._ttl * 10
+        ]
+        for h in expired + stuck:
             del self._entries[h]
 
     def _evict_oldest(self) -> None:
