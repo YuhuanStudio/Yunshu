@@ -196,21 +196,11 @@ class KVCacheSerializer:
         val_bytes = val_np.tobytes()
         parts.append(struct.pack(">II", len(key_bytes), len(val_bytes)))
 
-        # Raw data (with optional compression)
-        if self.compression == "safetensors":
-            import json as _json
-            header = _json.dumps({
-                "key": {"dtype": str(key_np.dtype), "shape": list(key_np.shape), "data_offsets": [0, len(key_bytes)]},
-                "value": {"dtype": str(val_np.dtype), "shape": list(val_np.shape), "data_offsets": [len(key_bytes), len(key_bytes) + len(val_bytes)]},
-            }).encode()
-            header_padded = header + b"\x00" * (8 - len(header) % 8) if len(header) % 8 else header
-            parts.insert(0, struct.pack(">Q", len(header_padded)))
-            parts.insert(1, header_padded)
-            parts.append(key_bytes)
-            parts.append(val_bytes)
-        else:
-            parts.append(key_bytes)
-            parts.append(val_bytes)
+        # Raw data — always use the same flat layout so deserialize_block can
+        # parse it without knowing the compression mode.  (Safetensors framing
+        # is handled at the table level by the compress/decompress dispatch.)
+        parts.append(key_bytes)
+        parts.append(val_bytes)
 
         return b"".join(parts)
 

@@ -60,6 +60,9 @@ class BoundarySnapshotSSDStore:
         self._writer_thread.start()
 
     def stop(self) -> None:
+        # Flush any remaining writes before signalling shutdown so that
+        # in-flight data is not silently dropped.
+        self._flush_pending()
         self._shutdown = True
         if self._writer_thread is not None:
             self._writer_thread.join(timeout=5.0)
@@ -98,7 +101,7 @@ class BoundarySnapshotSSDStore:
             self._write_queue.append((str(filepath), data))
             # Block if too many pending writes
             if len(self._write_queue) > _MAX_PENDING_WRITES:
-                self._flush_pending()
+                self._flush_pending_unlocked()
 
         return filepath
 
@@ -256,7 +259,15 @@ class BoundarySnapshotSSDStore:
                     result[key] = struct.unpack("<q", raw)[0]
                 else:
                     result[key] = struct.unpack("<d", raw)[0]
-            elif shape:
+            elif isinstance(shape, list):
+                # ndarray entry (including 0-D arrays with shape=[])
+                np_dtype = np.dtype(dtype)
+                if shape:
+                    arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape).copy()
+                else:
+                    # 0-D scalar array
+                    arr = np.frombuffer(raw, dtype=np_dtype).copy()
+                result[key] = arr
                 np_dtype = np.dtype(dtype)
                 arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape).copy()
                 result[key] = arr
@@ -280,14 +291,18 @@ class BoundarySnapshotSSDStore:
             else:
                 time.sleep(0.05)
 
-    def _flush_pending(self) -> None:
-        """Flush all pending writes synchronously."""
-        with self._write_lock:
-            items = self._write_queue[:]
-            self._write_queue.clear()
+    def _flush_pending_unlocked(self) -> None:
+        """Flush all pending writes synchronously. Caller MUST hold _write_lock."""
+        items = self._write_queue[:]
+        self._write_queue.clear()
 
         for filepath_str, data in items:
             try:
                 Path(filepath_str).write_bytes(data)
             except Exception as e:
                 logger.warning(f"Boundary snapshot flush failed: {e}")
+
+    def _flush_pending(self) -> None:
+        """Flush all pending writes synchronously (acquires lock)."""
+        with self._write_lock:
+            self._flush_pending_unlocked()

@@ -177,7 +177,7 @@ class PerformanceProfiler:
         """Begin periodic profiling."""
         with self._lock:
             self._profiling = True
-            self._profile_start = time.time()
+            self._profile_start = time.monotonic()
         logger.info("Performance profiling started")
 
     def stop_profiling(self) -> None:
@@ -702,10 +702,10 @@ class AutoTuner:
         """
         with self._lock:
             # Rate limit: don't tune more frequently than _min_tuning_interval
-            now = time.time()
-            if now - self._last_tuning_time < self._min_tuning_interval:
+            now_mono = time.monotonic()
+            if now_mono - self._last_tuning_time < self._min_tuning_interval:
                 return TuningDecision(
-                    timestamp=now,
+                    timestamp=time.time(),
                     param_name=param_name,
                     old_value=getattr(self._params, param_name, None),
                     new_value=getattr(self._params, param_name, None),
@@ -767,7 +767,7 @@ class AutoTuner:
 
             self._history.append(decision)
             self._total_tunings += 1
-            self._last_tuning_time = time.time()
+            self._last_tuning_time = time.monotonic()
 
             logger.info(
                 "AutoTuner: %s %s %s -> %s (%s)",

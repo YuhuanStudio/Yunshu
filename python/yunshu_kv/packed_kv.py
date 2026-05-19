@@ -200,6 +200,10 @@ class PackedKVCache:
         head_dim = keys.shape[-1]
         padded_dim = self._config.compute_padded_head_dim(head_dim)
 
+        # Record original byte sizes BEFORE padding (for accurate stats)
+        original_key_bytes = keys.nbytes
+        original_val_bytes = values.nbytes
+
         # Pad to SIMD width
         if padded_dim > head_dim:
             keys = self.pad_head_dim(keys, padded_dim)
@@ -214,9 +218,9 @@ class PackedKVCache:
             packed = mx.concatenate([keys, values], axis=0)
 
         self._stats.total_conversions += 1
-        self._stats.total_bytes_standard += keys.nbytes + values.nbytes
+        self._stats.total_bytes_standard += original_key_bytes + original_val_bytes
         self._stats.total_bytes_packed += packed.nbytes
-        self._stats.total_pad_overhead_bytes += packed.nbytes - (keys.nbytes + values.nbytes)
+        self._stats.total_pad_overhead_bytes += packed.nbytes - (original_key_bytes + original_val_bytes)
 
         return packed
 
