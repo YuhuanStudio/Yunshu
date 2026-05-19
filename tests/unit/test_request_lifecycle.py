@@ -102,7 +102,7 @@ class TestRequestLifecycleState:
 
     def test_ttft_ms(self):
         state = RequestLifecycleState(request_id="r1")
-        state.prefill_start = 100.0
+        state.created_at = 100.0
         state.decode_start = 100.2
         assert state.ttft_ms == pytest.approx(200.0)
 
@@ -160,7 +160,7 @@ class TestAdaptiveConcurrencyController:
     def test_decrease_on_slo_violation_ttft(self):
         ctrl = AdaptiveConcurrencyController(initial=8, slo_ttft_ms=10.0)
         state = RequestLifecycleState(request_id="r1")
-        state.prefill_start = time.monotonic() - 1.0
+        state.created_at = time.monotonic() - 1.0
         state.decode_start = time.monotonic() - 0.5
         ctrl.report_success(state)
         assert ctrl.current_limit == 4  # halved

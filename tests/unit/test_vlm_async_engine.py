@@ -407,7 +407,7 @@ class TestErrorHandling:
 
         stats = core.get_stats()
         assert stats["failed_requests"] == 1
-        assert stats["completed_requests"] == 1
+        assert stats["completed_requests"] == 0  # failures not counted as completed
 
         await core.stop()
 

@@ -233,6 +233,7 @@ class VLMAsyncEngineCore:
     async def _process_request(self, state: _VLMRequestState) -> None:
         """Process a single VLM request with concurrency control."""
         config = state.config
+        failed = False
         try:
             async with self._semaphore:
                 if not self._running or state.done:
@@ -245,6 +246,7 @@ class VLMAsyncEngineCore:
 
         except Exception as e:
             logger.error(f"VLM request {config.request_id} failed: {e}")
+            failed = True
             self._stats["failed_requests"] += 1
             try:
                 await state.output_queue.put(
@@ -258,7 +260,8 @@ class VLMAsyncEngineCore:
             self._stats["active_requests"] = max(
                 0, self._stats["active_requests"] - 1
             )
-            self._stats["completed_requests"] += 1
+            if not failed:
+                self._stats["completed_requests"] += 1
 
     async def _process_non_streaming(self, state: _VLMRequestState) -> None:
         """Process a non-streaming VLM request."""

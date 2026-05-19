@@ -195,7 +195,7 @@ class KVLifecycleManager:
             if block.tier == KVTier.HOT and block.age_seconds > 60.0 and block.ref_count == 0:
                 if self.migrate(block.block_id, KVTier.WARM):
                     migrated += 1
-            elif block.tier == KVTier.WARM and block.age_seconds > 300.0:
+            elif block.tier == KVTier.WARM and block.age_seconds > 300.0 and block.ref_count == 0:
                 cool_config = self._tier_configs.get(KVTier.COOL)
                 if cool_config:
                     if self.migrate(block.block_id, KVTier.COOL):

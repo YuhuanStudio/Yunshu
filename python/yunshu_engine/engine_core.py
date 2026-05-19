@@ -1211,7 +1211,7 @@ class EngineCore:
             from .request_dedup import RequestDeduplicator
             content_hash = RequestDeduplicator.compute_hash(
                 model=str(getattr(self.scheduler, 'model_id', '') or ''),
-                prompt=str(prompt), max_tokens=max_tokens,
+                prompt=prompt, max_tokens=max_tokens,
                 temperature=temperature, top_p=top_p,
             )
             dedup_result = self._request_dedup.check(req_id, content_hash)

@@ -305,7 +305,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             # Filter out exceptions, log them
             valid_results = []
             for r in results:
-                if isinstance(r, Exception):
+                if isinstance(r, BaseException):
                     logger.error(f"Choice generation failed: {r}", exc_info=r)
                 else:
                     valid_results.append(r)

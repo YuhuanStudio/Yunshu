@@ -70,10 +70,10 @@ class RequestLifecycleState:
 
     @property
     def ttft_ms(self) -> float | None:
-        if self.prefill_start and self.decode_start:
-            return (self.decode_start - self.prefill_start) * 1000
-        if self.prefill_start:
-            return (time.monotonic() - self.prefill_start) * 1000
+        if self.created_at and self.decode_start:
+            return (self.decode_start - self.created_at) * 1000
+        if self.created_at:
+            return (time.monotonic() - self.created_at) * 1000
         return None
 
     @property

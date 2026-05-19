@@ -77,7 +77,7 @@ class LoRAAdapterManager:
         self._base_model = None
         self._base_model_copy = None  # saved before any merge
         self._lock = threading.RLock()  # RLock to avoid deadlock with _loaded_adapters property
-        self._gpu_lock = threading.Lock()  # serializes GPU work (apply/restore)
+        self._gpu_lock = threading.RLock()  # serializes GPU work (apply/restore); RLock for reentrant LRU eviction
         self._active_adapter_id: str | None = None  # Currently applied adapter
 
     def set_base_model(self, model) -> None:

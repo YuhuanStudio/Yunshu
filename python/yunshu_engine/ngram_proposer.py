@@ -197,6 +197,7 @@ class LCGHashPool:
         "_capacity", "_mask", "_keys", "_values",
         "_total_inserts", "_total_lookups", "_total_hits", "_total_evictions",
         "_min_n", "_max_n", "_k", "_max_model_len",
+        "_indexed_len",
     )
 
     def __init__(self, config: NgramConfig) -> None:

@@ -1150,13 +1150,10 @@ class KVOffloadManager:
         if block.ref_count > 0:
             return
         pool._evict_cached_block(block)
-        if block.ref_count == 0 and not block.cache_only:
-            pool.free([block])
-        elif block.ref_count == 0 and block.cache_only:
-            # Block is already in free queue as cache_only; eviction above
-            # cleared its hash so it won't be looked up again.  No further
-            # action needed — the free queue will reclaim it on demand.
-            pass
+        if block.ref_count == 0 and block.prev is None and block.next is None:
+            # _evict_cached_block clears cache_only via reset_hash.
+            # pool.free() skips ref_count<=0 blocks, so append directly.
+            pool.free_queue.append(block)
 
     async def _wait_for_completion(self, request_id: str) -> OffloadResult:
         """Wait for an offload request to complete.

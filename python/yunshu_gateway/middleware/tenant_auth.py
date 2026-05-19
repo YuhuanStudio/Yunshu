@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 
 # Paths served by the Anthropic router — must use Anthropic error format
-_ANTHROPIC_PATHS = ("/v1/messages", "/messages")
+_ANTHROPIC_PATHS = ("/v1/messages", "/messages",
+                     "/v1/messages/count_tokens", "/messages/count_tokens")
 
 
 class _ErrorFormatter:
