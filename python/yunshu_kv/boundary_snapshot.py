@@ -13,6 +13,7 @@ Based on oMLX's boundary_snapshot_store.py pattern:
 
 import json
 import logging
+import os
 import struct
 import threading
 import time
@@ -282,7 +283,11 @@ class BoundarySnapshotSSDStore:
             if items:
                 for filepath_str, data in items:
                     try:
-                        Path(filepath_str).write_bytes(data)
+                        # Write to temp file first, then atomically rename to
+                        # prevent torn reads from a concurrent load().
+                        tmp_path = filepath_str + ".tmp"
+                        Path(tmp_path).write_bytes(data)
+                        os.replace(tmp_path, filepath_str)
                     except Exception as e:
                         logger.warning(f"Boundary snapshot write failed for {filepath_str}: {e}")
             else:
@@ -295,7 +300,11 @@ class BoundarySnapshotSSDStore:
 
         for filepath_str, data in items:
             try:
-                Path(filepath_str).write_bytes(data)
+                # Write to temp file first, then atomically rename to
+                # prevent torn reads from a concurrent load().
+                tmp_path = filepath_str + ".tmp"
+                Path(tmp_path).write_bytes(data)
+                os.replace(tmp_path, filepath_str)
             except Exception as e:
                 logger.warning(f"Boundary snapshot flush failed: {e}")
 

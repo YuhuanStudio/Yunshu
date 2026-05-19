@@ -953,6 +953,13 @@ class Scheduler:
         SGLang and vLLM sort running requests by shared KV block prefixes
         before each forward pass for the same reason.
 
+        IMPORTANT: Groups are ordered by the highest effective priority (i.e.
+        the first element's priority, since *requests* already arrives sorted
+        by effective priority from SCHED-3). Within each group the original
+        priority order is preserved. This prevents a high-priority aged request
+        with a unique prefix from being pushed behind low-priority requests
+        that share a common prefix.
+
         Args:
             requests: List of Request objects to sort.
 
@@ -967,7 +974,7 @@ class Scheduler:
         prefix_groups: dict[int, list] = {}
         no_prefix: list = []
 
-        for req in requests:
+        for idx, req in enumerate(requests):
             rid = req.request_id
             prefix_hash = self._kv_prefix_hashes.get(rid)
             if prefix_hash is not None:
@@ -975,11 +982,48 @@ class Scheduler:
             else:
                 no_prefix.append(req)
 
-        # Emit grouped first (shared prefix), then ungrouped
+        # Emit groups ordered by highest effective priority within each group.
+        # *requests* arrives pre-sorted by effective priority (SCHED-3), so the
+        # minimum index in a group corresponds to the highest-priority request.
+        # We use the minimum original index as the sort key for groups so that
+        # a group containing a high-priority request is emitted first.
+        group_min_index: dict[int, int] = {}
+        for idx, req in enumerate(requests):
+            prefix_hash = self._kv_prefix_hashes.get(req.request_id)
+            if prefix_hash is not None:
+                prev = group_min_index.get(prefix_hash)
+                if prev is None or idx < prev:
+                    group_min_index[prefix_hash] = idx
+
+        sorted_group_keys = sorted(
+            prefix_groups.keys(),
+            key=lambda h: group_min_index.get(h, 0),
+        )
+
+        # No-prefix requests keep their original relative order; they come
+        # after all grouped requests (lower cache locality benefit).
+        no_prefix_min_index = len(requests)  # sentinel — always after groups
+        for idx, req in enumerate(requests):
+            if self._kv_prefix_hashes.get(req.request_id) is None:
+                no_prefix_min_index = idx
+                break
+
         result: list = []
-        for group in prefix_groups.values():
-            result.extend(group)
-        result.extend(no_prefix)
+        if no_prefix_min_index < len(requests):
+            # Interleave: emit groups and no-prefix in priority order
+            # Merge sorted groups with no_prefix based on their min index
+            all_segments: list[tuple[int, list]] = []
+            for h in sorted_group_keys:
+                all_segments.append((group_min_index[h], prefix_groups[h]))
+            all_segments.append((no_prefix_min_index, no_prefix))
+            all_segments.sort(key=lambda seg: seg[0])
+            for _, seg_requests in all_segments:
+                result.extend(seg_requests)
+        else:
+            # No no-prefix requests — just emit groups in priority order
+            for h in sorted_group_keys:
+                result.extend(prefix_groups[h])
+
         return result
 
     def _get_external_prefiller(self) -> Any:

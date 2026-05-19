@@ -599,8 +599,14 @@ class TestCacheLocalityReordering:
         # Both should be in the output
         assert set(ids) == {"req-a", "req-b", "req-c"}
 
-    def test_reorder_no_prefix_requests_at_end(self):
-        """Requests without prefix hashes are placed at the end."""
+    def test_reorder_no_prefix_preserves_priority_order(self):
+        """Requests without prefix hashes keep their effective priority position.
+
+        The reorder must preserve the effective priority ordering from SCHED-3
+        as a secondary sort key. A no-prefix request that arrived first (higher
+        effective priority) should NOT be pushed behind a lower-priority request
+        just because the lower-priority request has a prefix hash.
+        """
         from yunshu_engine.scheduler import Scheduler, SchedulerConfig
         from yunshu_engine.request import Request
 
@@ -613,10 +619,70 @@ class TestCacheLocalityReordering:
 
         sched._kv_prefix_hashes["req-h"] = 999
 
+        # req-u (no prefix) is at index 0 — highest effective priority.
+        # req-h (has prefix) is at index 1 — lower effective priority.
+        # Priority order must be preserved even though req-h has a prefix.
         result = sched._reorder_by_cache_locality([req_unhashed, req_hashed])
 
         ids = [r.request_id for r in result]
-        assert ids == ["req-h", "req-u"]
+        assert ids == ["req-u", "req-h"]
+
+    def test_reorder_grouped_preserves_priority_across_groups(self):
+        """Groups are ordered by highest effective priority within each group.
+
+        If group A contains a higher-priority request than group B, group A
+        should be emitted first even if both groups share the same locality
+        benefit.
+        """
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+        from yunshu_engine.request import Request
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        req_a1 = Request(request_id="req-a1", prompt="test a1")
+        req_b1 = Request(request_id="req-b1", prompt="test b1")
+        req_a2 = Request(request_id="req-a2", prompt="test a2")
+
+        sched._kv_prefix_hashes["req-a1"] = 100  # group A
+        sched._kv_prefix_hashes["req-a2"] = 100  # group A
+        sched._kv_prefix_hashes["req-b1"] = 200  # group B
+
+        # Input is sorted by effective priority: a1 (highest), b1, a2 (lowest)
+        # Group A min index = 0, Group B min index = 1
+        # So group A should come first
+        result = sched._reorder_by_cache_locality([req_a1, req_b1, req_a2])
+
+        ids = [r.request_id for r in result]
+        # Group A (a1, a2) first because a1 has highest priority,
+        # then group B (b1)
+        assert ids == ["req-a1", "req-a2", "req-b1"]
+
+    def test_reorder_grouped_allows_high_priority_no_prefix_first(self):
+        """A high-priority no-prefix request can precede lower-priority groups."""
+        from yunshu_engine.scheduler import Scheduler, SchedulerConfig
+        from yunshu_engine.request import Request
+
+        model = MagicMock()
+        tokenizer = MagicMock()
+        sched = Scheduler(model, tokenizer, SchedulerConfig())
+
+        req_urgent = Request(request_id="req-urgent", prompt="urgent")
+        req_g1 = Request(request_id="req-g1", prompt="test g1")
+        req_g2 = Request(request_id="req-g2", prompt="test g2")
+
+        sched._kv_prefix_hashes["req-g1"] = 500
+        sched._kv_prefix_hashes["req-g2"] = 500
+
+        # req-urgent (no prefix, highest effective priority) is first
+        result = sched._reorder_by_cache_locality([req_urgent, req_g1, req_g2])
+
+        ids = [r.request_id for r in result]
+        # Urgent no-prefix request keeps its top position
+        assert ids[0] == "req-urgent"
+        # Grouped requests follow, preserving their internal order
+        assert ids[1:] == ["req-g1", "req-g2"]
 
     def test_set_kv_prefix_hash(self):
         """set_kv_prefix_hash stores the hash correctly."""
