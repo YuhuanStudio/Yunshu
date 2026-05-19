@@ -335,7 +335,13 @@ class ToolCallStreamer:
                     try:
                         arguments = json.loads(arguments)
                     except json.JSONDecodeError:
-                        arguments = {}
+                        # Keep as-is for the caller to handle, don't silently drop
+                        args_str = arguments
+                        return ToolCallResult(
+                            id=self._next_call_id(),
+                            name=name,
+                            arguments=args_str,
+                        )
                 args_str = json.dumps(arguments, ensure_ascii=False)
                 return ToolCallResult(
                     id=self._next_call_id(),
