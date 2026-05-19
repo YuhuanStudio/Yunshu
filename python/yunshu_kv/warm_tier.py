@@ -13,6 +13,7 @@ in Phase 2.
 
 
 import logging
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ class KVWarmTier:
         self._memory_used: int = 0
         # Flush bookkeeping
         self._last_flush: float = time.monotonic()
+        # Thread safety for concurrent access from flush/demote/promote/evict
+        self._lock = threading.Lock()
 
     # ── Properties ────────────────────────────────────────────────
 
@@ -74,32 +77,33 @@ class KVWarmTier:
         Returns:
             True if the block was stored successfully.
         """
-        if self.is_full:
-            self.evict(1)
+        with self._lock:
+            if self.is_full:
+                self._evict_unlocked(1)
 
-        try:
-            from .compression import quantize_kv_4bit
+            try:
+                from .compression import quantize_kv_4bit
 
-            packed, scales = quantize_kv_4bit(kv_data)
-            # Recover original head_dim from the kv_data shape for correct dequantize
-            head_dim = kv_data.shape[-1] if hasattr(kv_data, 'shape') else 0
-            self._store[block_hash] = (packed, scales, head_dim)
-            # Move to end (most recently used)
-            self._store.move_to_end(block_hash)
+                packed, scales = quantize_kv_4bit(kv_data)
+                # Recover original head_dim from the kv_data shape for correct dequantize
+                head_dim = kv_data.shape[-1] if hasattr(kv_data, 'shape') else 0
+                self._store[block_hash] = (packed, scales, head_dim)
+                # Move to end (most recently used)
+                self._store.move_to_end(block_hash)
 
-            # Approximate memory accounting
-            packed_nbytes = (
-                np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
-            )
-            scales_nbytes = (
-                np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
-            )
-            self._memory_used += packed_nbytes + scales_nbytes
+                # Approximate memory accounting
+                packed_nbytes = (
+                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                )
+                scales_nbytes = (
+                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                )
+                self._memory_used += packed_nbytes + scales_nbytes
 
-            return True
-        except Exception:
-            logger.warning("Failed to demote block 0x%x to warm tier", block_hash, exc_info=True)
-            return False
+                return True
+            except Exception:
+                logger.warning("Failed to demote block 0x%x to warm tier", block_hash, exc_info=True)
+                return False
 
     def promote(self, block_hash: int) -> Optional[bytes]:
         """Retrieve and decompress a KV block for promotion back to hot tier.
@@ -110,73 +114,64 @@ class KVWarmTier:
         Returns:
             Dequantized data (MLX array or numpy array), or None if not found.
         """
-        entry = self._store.pop(block_hash, None)
-        if entry is None:
-            self._misses += 1
-            return None
+        with self._lock:
+            entry = self._store.pop(block_hash, None)
+            if entry is None:
+                self._misses += 1
+                return None
 
-        self._hits += 1
-        packed, scales, head_dim = entry if len(entry) == 3 else (*entry, 0)
+            self._hits += 1
+            packed, scales, head_dim = entry if len(entry) == 3 else (*entry, 0)
 
-        # Adjust memory accounting
-        try:
-            packed_nbytes = (
-                np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
-            )
-            scales_nbytes = (
-                np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
-            )
-            self._memory_used -= packed_nbytes + scales_nbytes
-            self._memory_used = max(0, self._memory_used)
-        except Exception:
-            logger.debug("memory accounting adjustment in promote failed", exc_info=True)
-
-        try:
-            from .compression import dequantize_kv_4bit
-
-            return dequantize_kv_4bit(packed, scales, head_dim=head_dim)
-        except Exception:
-            # Dequantization failed — re-insert the raw data so it can be
-            # retried later, since the compressed data itself may be fine
-            # (the error might be transient, e.g. MLX device issue).
-            # Guard against exceeding max_blocks on re-insert by evicting
-            # if we've gone over capacity.
-            logger.warning(
-                "Failed to promote block 0x%x from warm tier — re-inserting for retry",
-                block_hash, exc_info=True,
-            )
-            # Only re-insert if a concurrent demote hasn't replaced the entry.
-            if block_hash not in self._store:
-                self._store[block_hash] = (packed, scales, head_dim)
-                self._store.move_to_end(block_hash)
-                while len(self._store) > self.config.max_blocks:
-                    self.evict(1)
-                # Re-add memory accounting since we re-inserted the popped data.
-                try:
-                    packed_nbytes = (
-                        np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
-                    )
-                    scales_nbytes = (
-                        np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
-                    )
-                    self._memory_used += packed_nbytes + scales_nbytes
-                except Exception:
-                    logger.debug("memory accounting re-insert in promote failed", exc_info=True)
-            else:
-                # A concurrent demote already inserted new data for this hash.
-                # The subtraction we did above is still correct — the old entry
-                # we popped is gone.  The concurrent demote's accounting covers
-                # the new entry, so we must NOT add memory back here.
-                logger.warning(
-                    "promote block 0x%x: concurrent demote replaced entry, "
-                    "skipping re-insert (memory subtraction preserved)",
-                    block_hash,
+            # Adjust memory accounting
+            try:
+                packed_nbytes = (
+                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
                 )
-            return None
+                scales_nbytes = (
+                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                )
+                self._memory_used -= packed_nbytes + scales_nbytes
+                self._memory_used = max(0, self._memory_used)
+            except Exception:
+                logger.debug("memory accounting adjustment in promote failed", exc_info=True)
+
+            try:
+                from .compression import dequantize_kv_4bit
+
+                return dequantize_kv_4bit(packed, scales, head_dim=head_dim)
+            except Exception:
+                logger.warning(
+                    "Failed to promote block 0x%x from warm tier — re-inserting for retry",
+                    block_hash, exc_info=True,
+                )
+                if block_hash not in self._store:
+                    self._store[block_hash] = (packed, scales, head_dim)
+                    self._store.move_to_end(block_hash)
+                    while len(self._store) > self.config.max_blocks:
+                        self._evict_unlocked(1)
+                    try:
+                        packed_nbytes = (
+                            np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                        )
+                        scales_nbytes = (
+                            np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                        )
+                        self._memory_used += packed_nbytes + scales_nbytes
+                    except Exception:
+                        logger.debug("memory accounting re-insert in promote failed", exc_info=True)
+                else:
+                    logger.warning(
+                        "promote block 0x%x: concurrent demote replaced entry, "
+                        "skipping re-insert (memory subtraction preserved)",
+                        block_hash,
+                    )
+                return None
 
     def contains(self, block_hash: int) -> bool:
         """Check whether a block is present in the warm tier."""
-        return block_hash in self._store
+        with self._lock:
+            return block_hash in self._store
 
     def evict(self, count: int) -> int:
         """Evict the oldest (least recently used) blocks.
@@ -187,11 +182,15 @@ class KVWarmTier:
         Returns:
             Actual number of blocks evicted.
         """
+        with self._lock:
+            return self._evict_unlocked(count)
+
+    def _evict_unlocked(self, count: int) -> int:
+        """Evict without acquiring the lock (caller must hold it)."""
         evicted = 0
         for _ in range(min(count, len(self._store))):
             _block_hash, entry = self._store.popitem(last=False)  # FIFO = LRU
-            packed, scales = entry[0], entry[1]  # May include head_dim as entry[2]
-            # Adjust memory accounting
+            packed, scales = entry[0], entry[1]
             try:
                 packed_nbytes = (
                     np.array(packed).nbytes
@@ -212,20 +211,21 @@ class KVWarmTier:
 
     def get_stats(self) -> dict:
         """Return warm tier statistics."""
-        total_lookups = self._hits + self._misses
-        hit_rate = (self._hits / total_lookups) if total_lookups > 0 else 0.0
-        return {
-            "num_blocks": len(self._store),
-            "max_blocks": self.config.max_blocks,
-            "memory_used_bytes": self._memory_used,
-            "memory_used_mb": round(self._memory_used / (1024 * 1024), 2),
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate": round(hit_rate, 4),
-            "utilization_pct": round(
-                len(self._store) / self.config.max_blocks * 100, 1
-            ) if self.config.max_blocks > 0 else 0.0,
-        }
+        with self._lock:
+            total_lookups = self._hits + self._misses
+            hit_rate = (self._hits / total_lookups) if total_lookups > 0 else 0.0
+            return {
+                "num_blocks": len(self._store),
+                "max_blocks": self.config.max_blocks,
+                "memory_used_bytes": self._memory_used,
+                "memory_used_mb": round(self._memory_used / (1024 * 1024), 2),
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate": round(hit_rate, 4),
+                "utilization_pct": round(
+                    len(self._store) / self.config.max_blocks * 100, 1
+                ) if self.config.max_blocks > 0 else 0.0,
+            }
 
     def flush(self) -> None:
         """Stub for SSD persistence.

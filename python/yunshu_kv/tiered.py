@@ -612,8 +612,10 @@ class BackgroundSSDFlush:
         Returns the number of blocks flushed.
         """
         flushed = 0
-        # Access the warm tier's internal store
-        for block_hash, entry in list(self._warm._store.items()):
+        # Snapshot entries under the warm tier lock
+        with self._warm._lock:
+            entries = list(self._warm._store.items())
+        for block_hash, entry in entries:
             packed, scales = entry[0], entry[1]
             head_dim = entry[2] if len(entry) > 2 else 0
             if head_dim == 0:
@@ -621,7 +623,6 @@ class BackgroundSSDFlush:
             if not self._ssd.contains(block_hash):
                 try:
                     import numpy as np
-                    # Reconstruct full data from packed+scales for SSD storage
                     from .compression import dequantize_kv_4bit
                     kv_data = dequantize_kv_4bit(packed, scales, head_dim=head_dim)
                     self._ssd.store(block_hash, mx.array(kv_data), num_tokens=0)
