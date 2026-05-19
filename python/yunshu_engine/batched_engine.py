@@ -2903,16 +2903,17 @@ class BatchedEngine:
             if _q.qsize() > 400:  # 78% of 512
                 time.sleep(0.01)  # backpressure: give consumer 10ms to drain
             if _q.full():
-                # Queue is still full after backpressure — drop oldest as
-                # last resort, but log a warning so operators know data was lost.
-                try:
-                    _q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+                # Queue is still full after backpressure — drop this token.
+                # NOTE: We do NOT call _q.get_nowait() here because this
+                # function runs on the MLX executor thread (not the asyncio
+                # event loop thread).  asyncio.Queue.get_nowait() mutates the
+                # internal deque AND calls _wakeup_next() which modifies
+                # asyncio.Future objects — neither operation is thread-safe.
                 logger.warning(
-                    "Streaming queue overflow — oldest token dropped. "
+                    "Streaming queue overflow — token dropped. "
                     "Client may see a gap in output."
                 )
+                return
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         # Inflight prefix sharing: defined at _run level so it's accessible
@@ -4724,14 +4725,13 @@ class BatchedEngine:
             if _q.qsize() > 400:  # 78% of 512
                 time.sleep(0.01)
             if _q.full():
-                try:
-                    _q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+                # Thread-safe: skip get_nowait() — see main streaming _put
+                # for rationale (executor thread must not mutate asyncio Queue).
                 logger.warning(
-                    "N-gram spec streaming queue overflow — oldest token dropped. "
+                    "N-gram spec streaming queue overflow — token dropped. "
                     "Client may see a gap in output."
                 )
+                return
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         # Inflight prefix sharing for streaming n-gram spec
@@ -5399,14 +5399,13 @@ class BatchedEngine:
             if _q.qsize() > 400:  # 78% of 512
                 time.sleep(0.01)
             if _q.full():
-                try:
-                    _q.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
+                # Thread-safe: skip get_nowait() — see main streaming _put
+                # for rationale (executor thread must not mutate asyncio Queue).
                 logger.warning(
-                    "MTP streaming queue overflow — oldest token dropped. "
+                    "MTP streaming queue overflow — token dropped. "
                     "Client may see a gap in output."
                 )
+                return
             loop.call_soon_threadsafe(_q.put_nowait, item)
 
         def _run():

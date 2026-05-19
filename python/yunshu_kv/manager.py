@@ -541,8 +541,17 @@ class KVCacheManager:
 
             # Re-check ref_count after eviction — BlockPool.touch() may have
             # reactivated this block between snapshot and now.
-            if block.ref_count > 0:
-                continue  # actively referenced, do not recycle
+            if block.ref_count > 1:
+                continue  # actively shared by multiple requests
+
+            # ref_count == 1 means cache-only block (no active request holds it).
+            # _evict_cached_block cleared its hash, so it's no longer in the
+            # prefix cache, but it's also not in the free queue. Without
+            # recycling it here, the block is orphaned forever.
+            if block.ref_count == 1:
+                block.ref_count = 0
+                block.cache_only = False
+                self.block_pool.free_queue.append(block)
 
         freed_block_count = self.block_pool.get_free_block_count() - initial_free
 
@@ -616,8 +625,15 @@ class KVCacheManager:
             self.block_pool._evict_cached_block(block)
 
             # Re-check ref_count — concurrent touch() may have reactivated
-            if block.ref_count > 0:
+            if block.ref_count > 1:
                 continue
+
+            # ref_count == 1: cache-only block orphaned after hash clear.
+            # Recycle it into the free queue.
+            if block.ref_count == 1:
+                block.ref_count = 0
+                block.cache_only = False
+                self.block_pool.free_queue.append(block)
 
         evicted = self.block_pool.get_free_block_count() - initial_free
 

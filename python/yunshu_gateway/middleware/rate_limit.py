@@ -34,18 +34,20 @@ class _TokenBucket:
         self.tokens = float(capacity)
         self.last_refill = time.monotonic()
         self.last_used = time.monotonic()
+        self._lock = threading.Lock()
 
     def consume(self, tokens: int = 1) -> bool:
-        now = time.monotonic()
-        elapsed = now - self.last_refill
-        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-        self.last_refill = now
-        self.last_used = now
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_refill
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.last_refill = now
 
-        if self.tokens >= tokens:
-            self.tokens -= tokens
-            return True
-        return False
+            if self.tokens >= tokens:
+                self.tokens -= tokens
+                self.last_used = now
+                return True
+            return False
 
     def is_expired(self, ttl: float) -> bool:
         return (time.monotonic() - self.last_used) > ttl
