@@ -68,7 +68,8 @@ class FreeBlockQueue:
     def _push_back(self, block: KVBlock) -> None:
         """Insert block at tail (most recently used)."""
         prev = self._tail.prev
-        assert prev is not None
+        if prev is None:
+            raise RuntimeError("FreeBlockQueue corrupted: tail.prev is None")
         block.prev = prev
         block.next = self._tail
         prev.next = block
@@ -76,16 +77,19 @@ class FreeBlockQueue:
 
     def popleft(self) -> KVBlock:
         """Remove and return the oldest free block (head)."""
-        assert self.num_free_blocks > 0
+        if self.num_free_blocks <= 0:
+            raise IndexError("FreeBlockQueue is empty")
         block = self._head.next
-        assert block is not None and block is not self._tail
+        if block is None or block is self._tail:
+            raise IndexError("FreeBlockQueue corrupted: head.next is sentinel")
         self._remove(block)
         self.num_free_blocks -= 1
         return block
 
     def popleft_n(self, n: int) -> list[KVBlock]:
         """Remove and return the n oldest free blocks."""
-        assert n <= self.num_free_blocks
+        if n > self.num_free_blocks:
+            raise IndexError(f"Cannot pop {n} blocks, only {self.num_free_blocks} free")
         blocks = []
         for _ in range(n):
             blocks.append(self.popleft())
@@ -121,7 +125,8 @@ class FreeBlockQueue:
 
     def _remove(self, block: KVBlock) -> None:
         prev, nxt = block.prev, block.next
-        assert prev is not None and nxt is not None
+        if prev is None or nxt is None:
+            raise RuntimeError("FreeBlockQueue corrupted: block has None prev/next")
         prev.next = nxt
         nxt.prev = prev
         block.prev = None

@@ -41,7 +41,7 @@ class TestFreeBlockQueue:
         blocks = self._make_blocks(1)
         q = FreeBlockQueue(blocks)
         q.popleft()
-        with pytest.raises(AssertionError):
+        with pytest.raises(IndexError):
             q.popleft()
 
     def test_append_and_popleft(self):

@@ -1572,7 +1572,7 @@ class Scheduler:
                     req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
                     if should_chunk:
                         self._pending_prefill.pop(req.request_id, None)
-                        self._active_partial_prefills -= 1
+                        self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
                     continue
                 req.batch_uid = uids[0]
                 req.status = RequestStatus.RUNNING

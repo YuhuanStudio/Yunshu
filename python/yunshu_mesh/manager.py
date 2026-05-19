@@ -394,6 +394,9 @@ class MeshManager:
     def _on_node_timeout(self, node: MeshNode) -> None:
         """Callback: heartbeat timeout."""
         with self._node_lock:
+            # Guard: skip if already handled by _on_peer_lost or a prior timeout
+            if node.state == MeshNodeState.OFFLINE:
+                return
             self.handle_node_failure(node.node_id)
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
@@ -403,7 +406,14 @@ class MeshManager:
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
         with self._node_lock:
+            # Guard: skip if node is already READY (duplicate recovery callback)
+            if node.state == MeshNodeState.READY:
+                return
             node.state = MeshNodeState.READY
+            # Also update the topology's copy of this node
+            topo_node = self._topology.get_node(node.rank)
+            if topo_node is not None and topo_node.node_id == node.node_id:
+                topo_node.state = MeshNodeState.READY
             if self._dp_router:
                 self._dp_router.mark_available(node.node_id)
             if self._disagg_router:
@@ -418,6 +428,13 @@ class MeshManager:
                 "new_state": "ready",
                 "reason": "heartbeat_recovered",
             })
+            # Re-evaluate topology — a recovered node may allow upgrading
+            # (e.g., RING -> FULLY_CONNECTED when enough JACCL nodes return).
+            if self._topology.size > 1:
+                new_type = self._topology.auto_select()
+                if new_type != self._topology.topo_type:
+                    self._topology.topo_type = new_type
+                    logger.info(f"Topology changed to {new_type.value} after node recovery")
             logger.info(f"Node recovered: {node.hostname}")
 
     # ── C22: Event Sourcing Helpers ──
