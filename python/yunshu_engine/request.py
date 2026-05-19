@@ -239,7 +239,15 @@ class Request:
         are silently rejected.
         """
         if RequestStatus.is_finished(self.status) and self.status != status:
-            return  # Already finished — ignore spurious re-finish
+            # Already finished with a different status — log to aid debugging.
+            # The first finish reason is authoritative; don't overwrite.
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                f"Request {self.request_id}: ignoring re-finish "
+                f"({self.status.name} -> {status.name}), "
+                f"original reason={self.finish_reason}"
+            )
+            return
         if not RequestStatus.is_finished(self.status):
             # Validate the current state is a legal predecessor for a finish.
             if self.status not in self._FINISH_VALID_PREDECESSORS:

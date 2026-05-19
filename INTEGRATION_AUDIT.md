@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-14 — Wave 30: hybrid prefill, encoder cache, VLM prefix reuse, grammar bitmask, KV transfer, metal kernels, ANE embeddings)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-19 — Wave 264: scheduler double-remove, prefill double-decrement, spec decode cache over-trim, context window message truncation, request lifecycle, prometheus metrics)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -2028,7 +2028,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 已從「已實現的技術沒有接入管線」進化為「全管線整合 + 600+ 深層修復 + 6694 測試全通」。所有死模塊已 WIRED，所有管線功能已接入，所有已知安全漏洞已修復。Waves 142-255 新增 600+ 深層修復涵蓋線程安全、token 計數、資源洩漏、API 合規、結構化輸出、推測解碼驗證、多租戶安全。測試套件 **6694 passed, 16 skipped**。
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 已從「已實現的技術沒有接入管線」進化為「全管線整合 + 600+ 深層修復 + 6694 測試全通」。所有死模塊已 WIRED，所有管線功能已接入，所有已知安全漏洞已修復。Waves 142-255 新增 600+ 深層修復涵蓋線程安全、token 計數、資源洩漏、API 合規、結構化輸出、推測解碼驗證、多租戶安全。Waves 260-264 新增: KV Block dedup+LRU eviction、LayerAllocator zero-cap、img2img VAE pipeline、TTS WAV streaming、ASR sample_rate、RBAC atomic write、MeshNode thread safety、LoRA base weight pollution、spec decode effective_K+probabilistic acceptance、EngineCore memory leak、context window message truncation、request lifecycle validation、scheduler double-remove/prefill double-decrement/cache reclamation reorder、spec decode probabilistic correction+cache over-trim、prometheus metrics fixes。測試套件 **6724 passed, 16 skipped**。
 
 ### 18.1 ~~致命 Bug: Streaming VLM 丟失圖片~~ ✅ 已修復 (M1)
 

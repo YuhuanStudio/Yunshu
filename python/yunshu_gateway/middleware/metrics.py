@@ -285,10 +285,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                         if isinstance(eng, BatchedEngine):
                             radix_stats = eng.get_radix_tree_stats()
                             ev = radix_stats.get("eviction_stats", {})
-                            pm.set_gauge("radix_evictions_lru", ev.get("lru", 0), labels=ml)
-                            pm.set_gauge("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
-                            pm.set_gauge("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
-                            pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
+                            pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
+                            pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
+                            pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
+                            pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
                             pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
                             pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
                             # Scheduler monitoring gauges from engine_core

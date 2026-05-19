@@ -326,9 +326,9 @@ async def prometheus_export(request: Request) -> str:
                 mid = entry.model_id
                 ml = {"model_id": mid}  # model_id label for multi-model safety
                 ngram_stats = getattr(entry.engine, '_ngram_stats', {})
-                pm.set_gauge("spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml)
-                pm.set_gauge("spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml)
-                pm.set_gauge("spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml)
+                pm.set_counter("spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml)
+                pm.set_counter("spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml)
+                pm.set_counter("spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml)
                 spec_enabled = getattr(entry.engine, '_spec_enabled', False)
                 ngram_proposer = getattr(entry.engine, '_ngram_proposer', None)
                 pm.set_gauge("spec_enabled",
@@ -338,16 +338,16 @@ async def prometheus_export(request: Request) -> str:
                 spec_decoder = getattr(entry.engine, '_spec_decoder', None)
                 if spec_decoder is not None:
                     sd_stats = spec_decoder.get_stats()
-                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
-                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
+                    pm.set_counter("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
+                    pm.set_counter("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
                     pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0), labels=ml)
-                    pm.set_gauge("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0), labels=ml)
+                    pm.set_counter("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0), labels=ml)
                     pm.set_gauge("spec_effective_speedup", sd_stats.get("effective_speedup", 0.0), labels=ml)
                 else:
-                    pm.set_gauge("spec_draft_tokens", 0, labels=ml)
-                    pm.set_gauge("spec_accepted_tokens", 0, labels=ml)
+                    pm.set_counter("spec_draft_tokens", 0, labels=ml)
+                    pm.set_counter("spec_accepted_tokens", 0, labels=ml)
                     pm.set_gauge("spec_acceptance_rate", 0.0, labels=ml)
-                    pm.set_gauge("spec_bonus_tokens", 0, labels=ml)
+                    pm.set_counter("spec_bonus_tokens", 0, labels=ml)
                     pm.set_gauge("spec_effective_speedup", 0.0, labels=ml)
 
                 # MTP speculative decoding stats
@@ -355,13 +355,13 @@ async def prometheus_export(request: Request) -> str:
                 if mtp_decoder is not None and hasattr(mtp_decoder, 'stats'):
                     ms = mtp_decoder.stats
                     mtp_total = ms.accepts + ms.rejects
-                    pm.set_gauge("spec_mtp_accepts", ms.accepts, labels=ml)
-                    pm.set_gauge("spec_mtp_rejects", ms.rejects, labels=ml)
+                    pm.set_counter("spec_mtp_accepts", ms.accepts, labels=ml)
+                    pm.set_counter("spec_mtp_rejects", ms.rejects, labels=ml)
                     pm.set_gauge("spec_mtp_acceptance_rate",
                         ms.accepts / mtp_total if mtp_total > 0 else 0.0, labels=ml)
                 else:
-                    pm.set_gauge("spec_mtp_accepts", 0, labels=ml)
-                    pm.set_gauge("spec_mtp_rejects", 0, labels=ml)
+                    pm.set_counter("spec_mtp_accepts", 0, labels=ml)
+                    pm.set_counter("spec_mtp_rejects", 0, labels=ml)
                     pm.set_gauge("spec_mtp_acceptance_rate", 0.0, labels=ml)
 
                 # ITL stats from ServerMetrics
@@ -381,12 +381,12 @@ async def prometheus_export(request: Request) -> str:
                     if paged.get("enabled"):
                         pm.set_gauge("kv_cache_blocks_used", paged.get("used_blocks", 0), labels=ml)
                         pm.set_gauge("kv_cache_blocks_total", paged.get("total_blocks", 0), labels=ml)
-                    # KV prefix cache gauges
+                    # KV prefix cache stats
                     prefix = kv_stats.get("prefix_cache", {})
                     if prefix:
                         pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0), labels=ml)
-                        pm.set_gauge("kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml)
-                        pm.set_gauge("kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml)
+                        pm.set_counter("kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml)
+                        pm.set_counter("kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml)
                 except Exception:
                     logger.debug("KV cache gauge population failed", exc_info=True)
 
@@ -398,10 +398,10 @@ async def prometheus_export(request: Request) -> str:
                         pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
                         # RadixTree.get_stats() returns "eviction_stats" (not "evictions")
                         ev = radix_stats.get("eviction_stats", {})
-                        pm.set_gauge("radix_evictions_lru", ev.get("lru", 0), labels=ml)
-                        pm.set_gauge("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
-                        pm.set_gauge("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
-                        pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
+                        pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
+                        pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
+                        pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
+                        pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
                 except Exception:
                     logger.debug("RadixTree gauge population failed", exc_info=True)
 
@@ -438,8 +438,8 @@ async def prometheus_export(request: Request) -> str:
                 spec_decoder = getattr(engine, '_spec_decoder', None)
                 if spec_decoder is not None:
                     sd_stats = spec_decoder.get_stats()
-                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
-                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
+                    pm.set_counter("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
+                    pm.set_counter("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
                     pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0), labels=ml)
                 core = getattr(engine, '_engine_core', None)
                 if core is not None:

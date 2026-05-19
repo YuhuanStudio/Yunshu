@@ -303,6 +303,15 @@ class ContextWindowManager:
         while window and window[0].get("role") == "tool":
             window.pop(0)
 
+        # Ensure the window doesn't end with an assistant message whose
+        # tool_calls have no matching tool responses (they were truncated).
+        # Such dangling tool_calls would cause chat template errors.
+        while window and window[-1].get("role") == "assistant" and window[-1].get("tool_calls"):
+            window.pop(-1)
+            # After removing the trailing assistant, check for new orphans
+            while window and window[0].get("role") == "tool":
+                window.pop(0)
+
         return deepcopy(system_msgs) + deepcopy(window)
 
     def _importance_aware(
@@ -512,7 +521,23 @@ class ContextWindowManager:
         """
         role = message.get("role", "user")
         content = message.get("content", "")
-        content_len = len(content) if isinstance(content, str) else 0
+        if isinstance(content, str):
+            content_len = len(content)
+        elif isinstance(content, list):
+            # Multimodal: sum text lengths + estimate for media blocks
+            content_len = 0
+            for block in content:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "")
+                    if block_type in ("image_url", "image", "video", "video_url"):
+                        content_len += self._IMAGE_TOKEN_ESTIMATE * 4  # convert back to chars
+                    content_len += len(block.get("text", ""))
+                elif isinstance(block, str):
+                    content_len += len(block)
+        elif content is None:
+            content_len = 0
+        else:
+            content_len = 0
 
         # Role component (0-1)
         role_score = self._ROLE_PRIORITY.get(role, 40) / 100.0

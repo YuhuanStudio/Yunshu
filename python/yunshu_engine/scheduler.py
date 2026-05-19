@@ -1207,6 +1207,12 @@ class Scheduler:
                 for req_id in list(self.running.keys()):
                     req = self.running.get(req_id)
                     if req is not None and req.output_token_ids:
+                        # Skip finished requests — they will be cleaned up by
+                        # _cleanup_finished.  Generating drafts for them wastes
+                        # GPU time (cross-model/MTP do forward passes) and the
+                        # drafts will never be verified.
+                        if RequestStatus.is_finished(req.status):
+                            continue
                         if req_id not in self._spec_drafts:
                             self._try_spec_decode_draft(req)
         except Exception as e:
@@ -1217,8 +1223,18 @@ class Scheduler:
                 self.deep_reset()
             return SchedulerOutput(outputs=[])
 
-        # 7. Deferred cache clearing
+        # 7. Step counter
         self._step_counter += 1
+
+        # 8. Cleanup finished FIRST — removes finished requests from
+        # self.running so that _maybe_clear_cache (below) sees the
+        # up-to-date running count.  Without this reordering, all
+        # requests could be finished but still in self.running,
+        # preventing cache reclamation for one full step.
+        self._cleanup_finished()
+
+        # 7a. Deferred cache clearing (runs after cleanup so
+        # not self.running is accurate)
         self._maybe_clear_cache()
 
         # 7b. Periodic memory pressure eviction (C12)
@@ -1236,9 +1252,6 @@ class Scheduler:
         # Evict expired encoder hidden-state entries to reclaim memory.
         if self._step_counter % 64 == 0:
             self._encoder_cache.evict_all_expired()
-
-        # 8. Cleanup finished
-        self._cleanup_finished()
 
         return SchedulerOutput(outputs=outputs)
 
@@ -1846,11 +1859,23 @@ class Scheduler:
             # SCHED-1: Save the prompt prefix portion of the KV cache to the
             # prefix cache.  Only the prompt tokens (not generated tokens) are
             # saved because the prefix cache keys off prompt token sequences.
+            #
+            # Sliding window guard: for models with sliding window attention,
+            # the KV cache may have evicted early prompt tokens.  If the
+            # request generated enough tokens to push prompt blocks outside
+            # the window, saving the full prompt KV would store stale data.
+            # Skip saving in that case.
             saved_prefix = 0
+            _sw_window = getattr(self.model, '_yunshu_swa_window', None)
+            _prompt_outside_window = (
+                isinstance(_sw_window, (int, float))
+                and request.num_output_tokens > _sw_window
+            )
             if (
                 self._prefix_cache is not None
                 and uid in extracted_caches
                 and request.prompt_token_ids
+                and not _prompt_outside_window
             ):
                 try:
                     import mlx.core as mx
@@ -2536,8 +2561,12 @@ class Scheduler:
 
             # Detect thinking-start transition (normal → reasoning)
             if is_thinking and not ts['in_thinking']:
-                ts['thinking_start_idx'] = len(req.output_token_ids) - 1
-                ts['in_thinking'] = True
+                # Only record thinking start if we actually appended a token.
+                # When is_stop=True, no token was appended, so there's nothing
+                # to mark as the start of a thinking segment.
+                if not is_stop:
+                    ts['thinking_start_idx'] = len(req.output_token_ids) - 1
+                    ts['in_thinking'] = True
 
             # Detect thinking-end transition (reasoning → normal):
             # store the completed thinking segment in the KV substore.
