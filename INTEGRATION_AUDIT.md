@@ -37,6 +37,15 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 256 — Context Window + Grammar + Mesh + Routing)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 256: 超長 prompt 錯誤回傳 | context window 檢查跳過 prompt 本身超過 max_seq_len 的情況，靜默產生垃圾輸出。新增 elif 分支返回 error RequestOutput | 超長 prompt 不再靜默失敗 |
+| Wave 256: Grammar checkpoint 堆疊 | GrammarBitmaskEngine.checkpoint() 單一狀態被覆蓋，推測解碼多 draft token 失效。改為 stack | 推測解碼嵌套 checkpoint 正確 |
+| Wave 256: Disagg KV 傳輸超時 | pending transfers 無超時清理，節點崩潰後計數器永久洩漏。新增 60s 超時清理 | KV 傳輸計數器不再洩漏 |
+| Wave 256: RTT 路由健康檢查 | route() 不檢查節點健康狀態，持續路由到死節點。新增 mark_unhealthy/healthy + 路由過濾 | 路由排除不健康節點 |
+
 ### 已完成修復 (2026-05-19 Wave 253-255 — Deep Audit: 38 Critical/High Bugs Fixed Across 8 Subsystems)
 
 | 修復 | 描述 | 影響 |
