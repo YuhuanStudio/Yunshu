@@ -37,6 +37,13 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 260 — KV Block Dedup + LRU Eviction)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 260: BlockPool.free() 重複 block 去重 | free() 傳入重複 block_id 會多次遞減 ref_count，造成提前釋放。加入 seen_ids set 防護 | 防止 KV block 損壞/泄漏 |
+| Wave 260: PackedKVCache LRU 驅逐 | _cache 使用純 dict 無大小限制，可能無限增長。改為 OrderedDict + max_cached_blocks=1000 LRU 驅逐 | 防止 PackedKV 記憶體泄漏 |
+
 ### 已完成修復 (2026-05-19 Wave 259 — Scheduler Priority + SSD Atomicity)
 
 | 修復 | 描述 | 影響 |
