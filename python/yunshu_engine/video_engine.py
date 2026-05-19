@@ -1002,6 +1002,14 @@ class VideoEngine:
 
                     proc.wait()
 
+                except Exception:
+                    if proc.poll() is None:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except Exception:
+                            proc.kill()
+                    raise
                 finally:
                     if os.path.exists(tmp_path):
                         os.unlink(tmp_path)
