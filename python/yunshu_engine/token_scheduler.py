@@ -183,6 +183,7 @@ class TokenLevelScheduler:
                 self.min_prefill_tokens * n_prefill,
                 int(total_budget * 0.6),
             )
+            prefill_budget = min(prefill_budget, total_budget)
             decode_budget = total_budget - prefill_budget
 
         allocations = []
@@ -327,8 +328,15 @@ class TokenLevelScheduler:
                                     for _, a in above_min)
                     if reducible > 0:
                         to_reduce = min(overage, reducible)
-                        for i, alloc in above_min:
-                            share = int(to_reduce * (alloc.prefill_tokens - self.min_prefill_tokens) / reducible)
+                        total_reduced = 0
+                        for idx, (i, alloc) in enumerate(above_min):
+                            frac = (alloc.prefill_tokens - self.min_prefill_tokens) / reducible
+                            if idx == len(above_min) - 1:
+                                # Last allocation gets the remainder to avoid truncation leak
+                                share = to_reduce - total_reduced
+                            else:
+                                share = int(to_reduce * frac)
+                                total_reduced += share
                             alloc.prefill_tokens = max(self.min_prefill_tokens,
                                                        alloc.prefill_tokens - share)
 

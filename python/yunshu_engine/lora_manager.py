@@ -526,19 +526,27 @@ class LoRAAdapterManager:
             self._base_model.update_modules(tree_unflatten(lora_layers))
 
     def _restore_base(self) -> None:
-        """Restore base model weights from saved copy."""
+        """Restore base model weights and structure from saved copy."""
         if self._base_model is None:
             return
 
+        # First, structurally unwrap LoRALinear back to nn.Linear
+        try:
+            from mlx_lm.tuner.utils import remove_lora_layers
+            self._base_model = remove_lora_layers(self._base_model)
+        except ImportError:
+            # Fallback: manually unwrap LoRALinear layers
+            import mlx.nn as nn
+            from mlx.utils import tree_unflatten
+            unwrapped = []
+            for name, module in self._base_model.named_modules():
+                if isinstance(module, LoRALinear):
+                    unwrapped.append((name, module.linear))
+            if unwrapped:
+                self._base_model.update_modules(tree_unflatten(unwrapped))
+
+        # Then restore original weights if we have a copy
         if self._base_model_copy is not None:
             import mlx.core as mx
-            # Restore original weights
             self._base_model.update(self._base_model_copy)
             mx.eval(self._base_model.parameters())
-        else:
-            # No copy saved — try to remove LoRA layers
-            try:
-                from mlx_lm.tuner.utils import remove_lora_layers
-                self._base_model = remove_lora_layers(self._base_model)
-            except ImportError:
-                logger.warning("Cannot restore base model — no copy and tuner utils unavailable")

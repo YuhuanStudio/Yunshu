@@ -350,14 +350,12 @@ class SpecDraftVerifier:
             bonus_token = model_picks[K]
 
         # Step 6: Trim KV cache.
-        # Cache now has K+1 new entries (last_token + K drafts).
-        # Keep: last_token (always) + accepted drafts.
-        # Trim: rejected_count drafts.
+        # After step 1 (rollback -1) and step 2 (forward K+1), net entries = K.
+        # Keep: 1 (last_token) + accepted_count = 1 + accepted_count.
+        # Trim: K - (1 + accepted_count) = rejected_count.
         cache_trimmed = 0
         if rejected_count > 0 and prompt_cache is not None:
             cache_trimmed = _trim_cache(prompt_cache, rejected_count)
-        # Add 1 for the initial rollback trim
-        cache_trimmed += 1
 
         elapsed = (time.perf_counter() - t0) * 1e6
         self._update_stats(K, accepted_count, bonus_token)

@@ -360,6 +360,16 @@ class BitmaskConstrainedSampler:
     def constraint(self) -> GrammarBitmaskEngine:
         return self._engine
 
+    def checkpoint(self) -> None:
+        """Save constraint state for potential rollback."""
+        if hasattr(self._engine, 'checkpoint'):
+            self._engine.checkpoint()
+
+    def rollback(self) -> None:
+        """Restore constraint state from last checkpoint."""
+        if hasattr(self._engine, 'rollback'):
+            self._engine.rollback()
+
 
 # ── Factory ─────────────────────────────────────────────────────────────────
 
