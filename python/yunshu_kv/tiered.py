@@ -244,18 +244,28 @@ class SSDCacheStore:
         )
         to_evict = max(1, len(sorted_entries) // 10)
 
+        # Collect entries to evict and update the in-memory index first,
+        # then persist the index, THEN unlink files on disk.
+        # If the process crashes between index save and file deletion,
+        # the orphaned files are harmless.  If we deleted files first and
+        # crashed before saving the index, the index would reference
+        # deleted blocks — a crash-consistency corruption.
+        paths_to_unlink: list[Path] = []
         for i in range(to_evict):
             entry = sorted_entries[i]
-            path = self._block_path(entry.block_index)
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            paths_to_unlink.append(self._block_path(entry.block_index))
             del self._index[entry.block_hash]
             self._current_size_bytes -= entry.size_bytes
 
         self._current_size_bytes = max(0, self._current_size_bytes)
         self._save_index()
+
+        # Index is safely persisted — now delete the block files.
+        for path in paths_to_unlink:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def get_stats(self) -> dict:
         return {

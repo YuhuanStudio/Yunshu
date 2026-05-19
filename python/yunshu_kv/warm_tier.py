@@ -145,23 +145,33 @@ class KVWarmTier:
                 "Failed to promote block 0x%x from warm tier — re-inserting for retry",
                 block_hash, exc_info=True,
             )
-            # Only re-insert if a concurrent demote hasn't replaced the entry
+            # Only re-insert if a concurrent demote hasn't replaced the entry.
             if block_hash not in self._store:
                 self._store[block_hash] = (packed, scales, head_dim)
                 self._store.move_to_end(block_hash)
-            while len(self._store) > self.config.max_blocks:
-                self.evict(1)
-            # Re-add memory accounting since we re-inserted
-            try:
-                packed_nbytes = (
-                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                while len(self._store) > self.config.max_blocks:
+                    self.evict(1)
+                # Re-add memory accounting since we re-inserted the popped data.
+                try:
+                    packed_nbytes = (
+                        np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                    )
+                    scales_nbytes = (
+                        np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                    )
+                    self._memory_used += packed_nbytes + scales_nbytes
+                except Exception:
+                    logger.debug("memory accounting re-insert in promote failed", exc_info=True)
+            else:
+                # A concurrent demote already inserted new data for this hash.
+                # The subtraction we did above is still correct — the old entry
+                # we popped is gone.  The concurrent demote's accounting covers
+                # the new entry, so we must NOT add memory back here.
+                logger.warning(
+                    "promote block 0x%x: concurrent demote replaced entry, "
+                    "skipping re-insert (memory subtraction preserved)",
+                    block_hash,
                 )
-                scales_nbytes = (
-                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
-                )
-                self._memory_used += packed_nbytes + scales_nbytes
-            except Exception:
-                logger.debug("memory accounting re-insert in promote failed", exc_info=True)
             return None
 
     def contains(self, block_hash: int) -> bool:

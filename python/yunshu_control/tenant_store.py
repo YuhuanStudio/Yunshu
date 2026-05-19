@@ -68,50 +68,56 @@ class Tenant:
     _token_count: int = 0
     _window_start: float = field(default_factory=time.time)
     _active_requests: int = 0
+    # Lock for thread-safe rate-limit checks (not persisted)
+    _rate_limit_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def check_rate_limit(self) -> bool:
         """Check if tenant is within rate limits. Returns True if allowed."""
-        now = time.time()
-        if now - self._window_start > 60:
-            self._request_count = 0
-            self._token_count = 0
-            self._window_start = now
+        with self._rate_limit_lock:
+            now = time.time()
+            if now - self._window_start > 60:
+                self._request_count = 0
+                self._token_count = 0
+                self._window_start = now
 
-        if self._request_count >= self.quota.requests_per_minute:
-            return False
-        if self._token_count >= self.quota.tokens_per_minute:
-            return False
-        if self._active_requests >= self.quota.max_concurrent:
-            return False
-        return True
+            if self._request_count >= self.quota.requests_per_minute:
+                return False
+            if self._token_count >= self.quota.tokens_per_minute:
+                return False
+            if self._active_requests >= self.quota.max_concurrent:
+                return False
+            return True
 
     def check_and_record(self, tokens: int = 0) -> bool:
         """Atomically check rate limit and record if allowed. Returns True if allowed."""
-        now = time.time()
-        if now - self._window_start > 60:
-            self._request_count = 0
-            self._token_count = 0
-            self._window_start = now
+        with self._rate_limit_lock:
+            now = time.time()
+            if now - self._window_start > 60:
+                self._request_count = 0
+                self._token_count = 0
+                self._window_start = now
 
-        if self._request_count >= self.quota.requests_per_minute:
-            return False
-        if self._token_count >= self.quota.tokens_per_minute:
-            return False
-        if self._active_requests >= self.quota.max_concurrent:
-            return False
+            if self._request_count >= self.quota.requests_per_minute:
+                return False
+            if self._token_count >= self.quota.tokens_per_minute:
+                return False
+            if self._active_requests >= self.quota.max_concurrent:
+                return False
 
-        self._request_count += 1
-        self._token_count += tokens
-        self._active_requests += 1
-        return True
+            self._request_count += 1
+            self._token_count += tokens
+            self._active_requests += 1
+            return True
 
     def record_request(self, tokens: int = 0) -> None:
-        self._request_count += 1
-        self._token_count += tokens
-        self._active_requests += 1
+        with self._rate_limit_lock:
+            self._request_count += 1
+            self._token_count += tokens
+            self._active_requests += 1
 
     def finish_request(self) -> None:
-        self._active_requests = max(0, self._active_requests - 1)
+        with self._rate_limit_lock:
+            self._active_requests = max(0, self._active_requests - 1)
 
     def to_dict(self) -> dict:
         return {
