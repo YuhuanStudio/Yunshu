@@ -364,8 +364,12 @@ class BlockPool:
                 try:
                     import mlx.core as mx
                     mx.eval(key_cache[new_block.block_id])
-                    key_cache[new_block.block_id] = key_cache[old_block.block_id]
-                    value_cache[new_block.block_id] = value_cache[old_block.block_id]
+                    if isinstance(key_cache, mx.array):
+                        key_cache = key_cache.at[new_block.block_id].set(key_cache[old_block.block_id])
+                        value_cache = value_cache.at[new_block.block_id].set(value_cache[old_block.block_id])
+                    else:
+                        key_cache[new_block.block_id] = key_cache[old_block.block_id]
+                        value_cache[new_block.block_id] = value_cache[old_block.block_id]
                 except Exception:
                     logger.debug("KV data copy in cow_block_in_table failed", exc_info=True)
             # Update the table entry

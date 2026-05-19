@@ -253,11 +253,19 @@ class KVCacheManager:
                         if self._key_cache is not None:
                             import mlx.core as mx
                             if promoted.ndim == 4 and promoted.shape[0] == 2:
-                                self._key_cache[new_block.block_id] = promoted[0]
-                                if self._value_cache is not None:
-                                    self._value_cache[new_block.block_id] = promoted[1]
+                                if isinstance(self._key_cache, mx.array):
+                                    self._key_cache = self._key_cache.at[new_block.block_id].set(promoted[0])
+                                    if self._value_cache is not None:
+                                        self._value_cache = self._value_cache.at[new_block.block_id].set(promoted[1])
+                                else:
+                                    self._key_cache[new_block.block_id] = promoted[0]
+                                    if self._value_cache is not None:
+                                        self._value_cache[new_block.block_id] = promoted[1]
                             else:
-                                self._key_cache[new_block.block_id] = promoted
+                                if isinstance(self._key_cache, mx.array):
+                                    self._key_cache = self._key_cache.at[new_block.block_id].set(promoted)
+                                else:
+                                    self._key_cache[new_block.block_id] = promoted
                     except Exception:
                         logger.debug(
                             "warm tier KV data write failed for block %d",

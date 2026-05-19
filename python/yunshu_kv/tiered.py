@@ -392,11 +392,19 @@ class TieredKVCacheManager:
                         # where dim 0 has key at [0] and value at [1].
                         if self.hot._key_cache is not None:
                             if kv_data.ndim == 4 and kv_data.shape[0] == 2:
-                                self.hot._key_cache[new_block.block_id] = kv_data[0]
-                                if self.hot._value_cache is not None:
-                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                                if isinstance(self.hot._key_cache, mx.array):
+                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                    if self.hot._value_cache is not None:
+                                        self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                                else:
+                                    self.hot._key_cache[new_block.block_id] = kv_data[0]
+                                    if self.hot._value_cache is not None:
+                                        self.hot._value_cache[new_block.block_id] = kv_data[1]
                             else:
-                                self.hot._key_cache[new_block.block_id] = kv_data
+                                if isinstance(self.hot._key_cache, mx.array):
+                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                                else:
+                                    self.hot._key_cache[new_block.block_id] = kv_data
                         # Register in prefix cache for future lookups
                         self.hot.block_pool.cache_block(new_block, h)
                         warm_promoted_blocks.append(new_block)
@@ -445,11 +453,19 @@ class TieredKVCacheManager:
                         # Packed format: [2, num_heads, block_size, head_dim]
                         if self.hot._key_cache is not None:
                             if kv_data.ndim == 4 and kv_data.shape[0] == 2:
-                                self.hot._key_cache[new_block.block_id] = kv_data[0]
-                                if self.hot._value_cache is not None:
-                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                                if isinstance(self.hot._key_cache, mx.array):
+                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                    if self.hot._value_cache is not None:
+                                        self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                                else:
+                                    self.hot._key_cache[new_block.block_id] = kv_data[0]
+                                    if self.hot._value_cache is not None:
+                                        self.hot._value_cache[new_block.block_id] = kv_data[1]
                             else:
-                                self.hot._key_cache[new_block.block_id] = kv_data
+                                if isinstance(self.hot._key_cache, mx.array):
+                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                                else:
+                                    self.hot._key_cache[new_block.block_id] = kv_data
                         # Register in prefix cache for future lookups
                         self.hot.block_pool.cache_block(new_block, h)
                         ssd_promoted_blocks.append(new_block)
