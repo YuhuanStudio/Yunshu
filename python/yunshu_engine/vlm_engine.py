@@ -1353,16 +1353,16 @@ class VLMEngine:
                         ctx = list(set(tokens[-20:]))
                         sel = logits[..., ctx]
                         sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
-                        logits[..., ctx] = sel
+                        logits = logits.at[..., mx.array(ctx)].set(sel)
                     if frequency_penalty != 0.0:
                         for tid in set(tokens):
-                            logits[..., tid] -= frequency_penalty * tokens.count(tid)
+                            logits = logits.at[..., tid].add(-frequency_penalty * tokens.count(tid))
                     if presence_penalty != 0.0:
                         for tid in set(tokens):
-                            logits[..., tid] -= presence_penalty
+                            logits = logits.at[..., tid].add(-presence_penalty)
                     if logit_bias:
                         for tid, bias in logit_bias.items():
-                            logits[..., tid] += bias
+                            logits = logits.at[..., tid].add(bias)
 
                 # JSON schema constraint masking
                 if json_constraint is not None and tokens:
@@ -1799,18 +1799,16 @@ class VLMEngine:
                     ctx = tokens_list[-20:]
                     sel = logits[..., ctx]
                     sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
-                    logits[..., ctx] = sel
+                    logits = logits.at[..., mx.array(ctx)].set(sel)
                 if frequency_penalty != 0.0:
                     for tid in set(tokens_list):
-                        logits[..., tid] -= frequency_penalty * tokens_list.count(tid)
+                        logits = logits.at[..., tid].add(-frequency_penalty * tokens_list.count(tid))
                 if presence_penalty != 0.0:
                     for tid in set(tokens_list):
-                        logits[..., tid] -= presence_penalty
+                        logits = logits.at[..., tid].add(-presence_penalty)
                 if logit_bias:
                     for tid, bias in logit_bias.items():
-                        logits[..., tid] += bias
-
-            tokens_list.append(current.item())
+                        logits = logits.at[..., tid].add(bias)
 
             # JSON schema constraint masking
             if json_constraint is not None:
@@ -1827,6 +1825,7 @@ class VLMEngine:
             token_count += 1
 
             token_id = current.item()
+            tokens_list.append(token_id)
             # Track thinking segment boundaries in VLM streaming
             if think_start_id is not None:
                 if not _in_thinking and token_id == think_start_id:

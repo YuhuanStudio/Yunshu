@@ -104,6 +104,7 @@ class JsonSchemaConstraint:
         self._number_start: int = 0
         self._number_seen_digit: bool = False  # True once at least one digit consumed
         self._number_has_dot: bool = False     # True once '.' consumed
+        self._number_exponent_digit: bool = False  # True once at least one exponent digit consumed
         self._is_first_value: bool = True  # track first value in object/array
         # Snapshot stack for rollback (speculative draft validation)
         self._snapshots: list[tuple] = []
@@ -265,7 +266,7 @@ class JsonSchemaConstraint:
                 chars.add('.')
             if self._number_seen_digit:
                 chars.update('eE')
-            chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
+                chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
             return chars
 
         if state == JsonState.NUMBER_ZERO:
@@ -285,6 +286,8 @@ class JsonSchemaConstraint:
             # After 'e'/'E', may have sign or digits.
             chars = set(_DIGIT_CHARS)
             chars.update('+-')
+            if self._number_exponent_digit:
+                chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
             return chars
 
         if state == JsonState.NUMBER_EXPONENT_SIGN:
@@ -431,6 +434,7 @@ class JsonSchemaConstraint:
             self._unicode_remaining,
             self._number_seen_digit,
             self._number_has_dot,
+            self._number_exponent_digit,
         ))
 
     def rollback(self) -> None:
@@ -451,6 +455,7 @@ class JsonSchemaConstraint:
             self._unicode_remaining,
             self._number_seen_digit,
             self._number_has_dot,
+            self._number_exponent_digit,
         ) = self._snapshots.pop()
 
     def _process_text(self, text: str) -> None:
@@ -492,6 +497,7 @@ class JsonSchemaConstraint:
                     self._number_start = buf_offset + i
                     self._number_seen_digit = ch != '-'
                     self._number_has_dot = False
+                    self._number_exponent_digit = False
                     self._schema_stack.append((JsonState.DONE, self._schema))
                 i += 1
                 continue
@@ -705,6 +711,9 @@ class JsonSchemaConstraint:
                         self._state = JsonState.NUMBER
                     elif self._state == JsonState.NUMBER_EXPONENT_SIGN:
                         self._state = JsonState.NUMBER_EXPONENT
+                        self._number_exponent_digit = True
+                    elif self._state == JsonState.NUMBER_EXPONENT:
+                        self._number_exponent_digit = True
                     elif self._state == JsonState.NUMBER and ch == '0' and not prior_seen_digit:
                         # e.g. after '-' then '0': treat as leading zero
                         self._state = JsonState.NUMBER_ZERO
@@ -716,6 +725,7 @@ class JsonSchemaConstraint:
                     continue
                 if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and self._number_seen_digit:
                     self._state = JsonState.NUMBER_EXPONENT
+                    self._number_exponent_digit = False
                     i += 1
                     continue
                 if ch in '+-' and self._state == JsonState.NUMBER_EXPONENT:
@@ -788,6 +798,7 @@ class JsonSchemaConstraint:
             self._number_start = buf_pos
             self._number_seen_digit = ch != '-'
             self._number_has_dot = False
+            self._number_exponent_digit = False
 
     def _enter_array_value(self, ch: str, buf_pos: int | None = None) -> None:
         """Enter a value state in array context."""
@@ -832,6 +843,7 @@ class JsonSchemaConstraint:
             self._number_start = buf_pos
             self._number_seen_digit = ch != '-'
             self._number_has_dot = False
+            self._number_exponent_digit = False
 
     def _value_completed(self) -> None:
         """Called when a primitive value has been fully generated."""
@@ -1011,6 +1023,7 @@ class JsonSchemaConstraint:
         self._number_start = 0
         self._number_seen_digit = False
         self._number_has_dot = False
+        self._number_exponent_digit = False
         self._is_first_value = True
         self._literal_remaining = 0
         self._unicode_remaining = 0

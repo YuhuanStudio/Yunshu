@@ -111,16 +111,11 @@ class PipelineLastLayer(nn.Module):
             )
             mx.eval(output)
 
-        # Only the last rank gathers outputs from all stages during decode.
-        # Intermediate ranks have already sent their activations to the next
-        # stage and must NOT participate in all_gather (it would deadlock or
-        # produce incorrect results).
-        #
-        # all_gather concatenates along axis 0: [stage_0_out, stage_1_out, ...]
-        # The full concatenated result is needed for correct logits on the last rank.
-        if not self.is_prefill and self.r == self.s - 1:
-            output = mx.distributed.all_gather(output, group=self.group)
-            mx.eval(output)
+        # In pipeline parallelism, the last rank's output is already the
+        # complete final result — the send/recv chain ensures activations
+        # flow correctly through all stages.  Do NOT call all_gather here:
+        # it requires ALL ranks to participate, and intermediate ranks skip
+        # this code path, causing a deadlock.
 
         return output
 
