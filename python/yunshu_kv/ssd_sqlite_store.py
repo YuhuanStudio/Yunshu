@@ -124,7 +124,7 @@ class SSDSQLiteStore:
         """
         if self._conn is None:
             return
-        now = time.time()
+        now = time.monotonic()
         with self._lock:
             try:
                 self._conn.execute(
@@ -208,7 +208,7 @@ class SSDSQLiteStore:
         """
         if self._conn is None:
             return False
-        now = time.time()
+        now = time.monotonic()
         with self._lock:
             try:
                 cursor = self._conn.execute(
@@ -239,7 +239,7 @@ class SSDSQLiteStore:
         """
         if self._conn is None or not entries:
             return 0
-        now = time.time()
+        now = time.monotonic()
         inserted = 0
         with self._lock:
             try:

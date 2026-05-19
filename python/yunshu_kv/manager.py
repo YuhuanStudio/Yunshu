@@ -334,7 +334,7 @@ class KVCacheManager:
         """
         bs = self.config.block_size
         covered_tokens = len(matched_blocks) * bs
-        gap = num_matched_tokens - covered_tokens
+        gap = max(0, num_matched_tokens - covered_tokens)
 
         remaining_tokens = token_ids[num_matched_tokens:]
         num_new_blocks = (gap + len(remaining_tokens) + bs - 1) // bs
@@ -374,7 +374,7 @@ class KVCacheManager:
         if blocks:
             last = blocks[-1]
             if last.ref_count > 1:
-                self.block_pool.cow_block_in_table(
+                _, self._key_cache, self._value_cache = self.block_pool.cow_block_in_table(
                     table, len(blocks) - 1,
                     self._key_cache, self._value_cache,
                 )
@@ -757,8 +757,17 @@ class KVCacheManager:
 
         # Write data into cache tensors at the NEW block's slot
         if self._key_cache is not None and self._value_cache is not None:
-            self._key_cache[new_block.block_id] = key_data
-            self._value_cache[new_block.block_id] = value_data
+            try:
+                import mlx.core as mx
+                if isinstance(self._key_cache, mx.array):
+                    self._key_cache = self._key_cache.at[new_block.block_id].set(key_data)
+                    self._value_cache = self._value_cache.at[new_block.block_id].set(value_data)
+                else:
+                    self._key_cache[new_block.block_id] = key_data
+                    self._value_cache[new_block.block_id] = value_data
+            except ImportError:
+                self._key_cache[new_block.block_id] = key_data
+                self._value_cache[new_block.block_id] = value_data
 
         # Register in prefix cache with the hash from disk
         if old_block.block_hash is not None:
@@ -846,8 +855,17 @@ class KVCacheManager:
 
             # Write data into cache tensors at the new block's slot
             if self._key_cache is not None and self._value_cache is not None:
-                self._key_cache[new_block.block_id] = key_data
-                self._value_cache[new_block.block_id] = value_data
+                try:
+                    import mlx.core as mx
+                    if isinstance(self._key_cache, mx.array):
+                        self._key_cache = self._key_cache.at[new_block.block_id].set(key_data)
+                        self._value_cache = self._value_cache.at[new_block.block_id].set(value_data)
+                    else:
+                        self._key_cache[new_block.block_id] = key_data
+                        self._value_cache[new_block.block_id] = value_data
+                except ImportError:
+                    self._key_cache[new_block.block_id] = key_data
+                    self._value_cache[new_block.block_id] = value_data
 
             if old_block.block_hash is not None:
                 self.block_pool.cache_block(new_block, old_block.block_hash)

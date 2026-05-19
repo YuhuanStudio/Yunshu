@@ -719,7 +719,7 @@ class JsonSchemaConstraint:
                         # e.g. after '-' then '0': treat as leading zero
                         self._state = JsonState.NUMBER_ZERO
                     continue
-                if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO):
+                if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and not self._number_has_dot:
                     self._state = JsonState.NUMBER_FRACTION
                     self._number_has_dot = True
                     i += 1
@@ -737,7 +737,7 @@ class JsonSchemaConstraint:
                 if self._state in (JsonState.NUMBER_FRACTION,
                                    JsonState.NUMBER_EXPONENT,
                                    JsonState.NUMBER_EXPONENT_SIGN):
-                    self._text_buffer += '0'
+                    self._buf_offset += 1
                 self._value_completed()
                 continue
 

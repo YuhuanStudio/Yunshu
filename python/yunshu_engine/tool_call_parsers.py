@@ -239,12 +239,25 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
     name_re = re.compile(r'"name"\s*:\s*"([^"]+)"')
     for i, match in enumerate(name_re.finditer(text)):
         name = match.group(1)
-        # Walk backward with brace-depth tracking to find the true
-        # enclosing brace (rfind would match nested braces incorrectly).
+        # Walk backward with string-aware brace-depth tracking to find
+        # the true enclosing brace.
         depth = 0
         brace_start = -1
+        in_string = False
+        escape_next = False
         for pos in range(match.start() - 1, -1, -1):
             ch = text[pos]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if ch == '}':
                 depth += 1
             elif ch == '{':
@@ -265,7 +278,7 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
             args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
             results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
         except json.JSONDecodeError:
-            results.append(ToolCallResult(id=f"call_{i}", name=name, arguments="{}"))
+            results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=block))
     return results
 
 

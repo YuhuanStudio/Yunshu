@@ -353,7 +353,7 @@ class BlockPool:
             value_cache: Value cache tensor array (shape [num_blocks, ...]).
 
         Returns:
-            The new exclusive block.
+            The new exclusive block and (possibly updated) cache tensors.
         """
         old_block = table.get_block(logical_idx)
         new_block = self.cow_block(old_block)
@@ -375,7 +375,7 @@ class BlockPool:
             # Update the table entry
             table._blocks[logical_idx] = new_block
 
-        return new_block
+        return new_block, key_cache, value_cache
 
     @property
     def cow_stats(self) -> dict:

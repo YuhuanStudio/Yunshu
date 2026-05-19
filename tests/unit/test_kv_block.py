@@ -248,7 +248,7 @@ class TestBlockPoolCOW:
         table.append_block(blocks[1])
 
         # COW the first block in the table
-        new_block = pool.cow_block_in_table(table, 0)
+        new_block = pool.cow_block_in_table(table, 0)[0]
         assert new_block is not blocks[0]
         assert table.get_block(0) is new_block
         assert table.get_block(1) is blocks[1]  # Unchanged
@@ -264,6 +264,6 @@ class TestBlockPoolCOW:
         table = BlockTable(block_size=4)
         table.append_block(blocks[0])
 
-        result = pool.cow_block_in_table(table, 0)
+        result = pool.cow_block_in_table(table, 0)[0]
         assert result is blocks[0]
         assert pool.cow_stats["cow_clones"] == 0

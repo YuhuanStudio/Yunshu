@@ -71,8 +71,16 @@ class ModelRegistry:
         mid = id(model)
         with self._lock:
             if mid in self._owners:
-                _, owner_id = self._owners[mid]
-                if owner_id == engine_id:
+                ref, owner_id = self._owners[mid]
+                owner = ref()
+                # Use object identity like acquire(), not just string comparison.
+                # A different engine instance with the same engine_id should not
+                # be able to release a model it doesn't actually own.
+                if owner is not None and owner_id == engine_id:
+                    del self._owners[mid]
+                    return True
+                if owner is None:
+                    # Weak ref died — stale entry, clean up
                     del self._owners[mid]
                     return True
         return False

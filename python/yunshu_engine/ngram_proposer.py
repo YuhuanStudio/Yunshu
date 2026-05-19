@@ -108,6 +108,7 @@ class NgramHashPool:
         self._pool: OrderedDict[tuple[int, ...], list[int]] = OrderedDict()
         self._capacity = config.hashpool_capacity
         self._total_inserts = 0
+        self._indexed_len = 0
         self._total_evictions = 0
 
     def update(self, token_ids: list[int]) -> None:

@@ -147,6 +147,8 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("messages: field is required and cannot be empty")
         if self.stop_sequences and len(self.stop_sequences) > 16:
             raise ValueError("stop_sequences: maximum 16 stop sequences")
+        if self.stop_sequences and any(not s for s in self.stop_sequences):
+            raise ValueError("stop_sequences: individual sequences must be non-empty")
         if self.stop_token_ids and len(self.stop_token_ids) > 16:
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
         # Validate thinking configuration per Anthropic spec
@@ -938,9 +940,12 @@ async def _stream_anthropic(
     _streaming_finish_reason: str | None = None
 
     # Register with request tracker for cancellation support
-    from yunshu_engine.request_tracker import get_request_tracker
-    _anth_tracker = get_request_tracker()
-    _anth_gen = _anth_tracker.register(message_id, req.model)
+    try:
+        from yunshu_engine.request_tracker import get_request_tracker
+        _anth_tracker = get_request_tracker()
+        _anth_gen = _anth_tracker.register(message_id, req.model)
+    except Exception:
+        _anth_gen = None
 
     # Track whether message_start has been emitted (deferred until first
     # engine output so we can report accurate cache token counts).
@@ -1013,7 +1018,7 @@ async def _stream_anthropic(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
-                cancel_event=_anth_gen.cancel_event,
+                cancel_event=_anth_gen.cancel_event if _anth_gen else None,
                 timeout_seconds=req.timeout,
             ):
                 # Use engine's current_state (token-level tracking) for
@@ -1108,7 +1113,7 @@ async def _stream_anthropic(
                                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                         block_index += 1
                                 # Signal engine to stop producing tokens
-                                if _anth_gen.cancel_event is not None:
+                                if _anth_gen is not None and _anth_gen.cancel_event is not None:
                                     _anth_gen.cancel_event.set()
                                 break  # tool calls emitted; stop normal text streaming
 
@@ -1140,7 +1145,7 @@ async def _stream_anthropic(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
-                cancel_event=_anth_gen.cancel_event,
+                cancel_event=_anth_gen.cancel_event if _anth_gen else None,
                 timeout_seconds=req.timeout,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens and not input_tokens:
@@ -1222,9 +1227,10 @@ async def _stream_anthropic(
                                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
-                                    if _anth_gen.cancel_event is not None:
-                                        _anth_gen.cancel_event.set()
-                                    break
+                                # Signal engine to stop producing tokens
+                                if _anth_gen is not None and _anth_gen.cancel_event is not None:
+                                    _anth_gen.cancel_event.set()
+                                break
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _token_text}})}\n\n"
 
         # If message_start was never emitted (engine produced zero outputs or
@@ -1241,8 +1247,9 @@ async def _stream_anthropic(
             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
             text_block_started = True
 
-        # Close last content block (only if one was actually started)
-        if text_block_started or thinking_block_started or tool_use_block_started:
+        # Close last content block (only if one was actually started and not
+        # already closed — tool_use blocks are closed inside the loop above).
+        if text_block_started or thinking_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
 
         # message_delta (stop + usage)
@@ -1266,7 +1273,7 @@ async def _stream_anthropic(
         async for event in with_sse_keepalive(
             _token_source(),
             http_request=request,
-            cancel_event=_anth_gen.cancel_event,
+            cancel_event=_anth_gen.cancel_event if _anth_gen else None,
         ):
             yield event.encode("utf-8") if isinstance(event, str) else event
 

@@ -203,7 +203,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     # WebSocket upgrades can't return JSON bodies; return HTTP 429
                     return Response(status_code=429, content="Rate limit exceeded")
                 # Anthropic endpoints: return Anthropic error format
-                if request.url.path.endswith(_ANTHROPIC_PATHS):
+                if request.url.path in _ANTHROPIC_PATHS:
                     return JSONResponse(
                         status_code=429,
                         content={
@@ -248,7 +248,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if is_websocket:
                 return Response(status_code=429, content="Rate limit exceeded")
             # Anthropic endpoints: return Anthropic error format
-            if request.url.path.endswith(_ANTHROPIC_PATHS):
+            if request.url.path in _ANTHROPIC_PATHS:
                 return JSONResponse(
                     status_code=429,
                     content={

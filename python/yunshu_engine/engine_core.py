@@ -1629,7 +1629,7 @@ class EngineCore:
                                     logger.debug("MemoryPressureMixin: admission paused")
                                 rec_batch = m.recommended_batch_size
                                 if 0 < rec_batch < self.config.completion_batch_size:
-                                    self.config.completion_batch_size = rec_batch
+                                    self.config.completion_batch_size = max(4, rec_batch)
                                 break
                     except Exception:
                         logger.debug("composition pre_step failed", exc_info=True)

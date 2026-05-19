@@ -577,6 +577,7 @@ class VLMEngine:
         _enable_thinking = enable_thinking
 
         self._active_count += 1
+        _temp_offset = len(self._temp_files) if self._temp_files else 0
         try:
             # Run through MultimodalPipelineCoordinator for preprocessing tracking
             try:
@@ -731,7 +732,12 @@ class VLMEngine:
                 "completion_tokens": completion_token_count,
             }
         finally:
-            self._cleanup_temp_files()
+            # Only clean up temp files created during this request, not
+            # files belonging to concurrent requests sharing the instance.
+            _mine = (self._temp_files or [])[_temp_offset:]
+            if _mine and self._temp_files is not None:
+                del self._temp_files[_temp_offset:]
+            self._cleanup_temp_files(_mine)
 
     async def generate_stream(
         self,
@@ -767,6 +773,7 @@ class VLMEngine:
             )
 
         # Extract images/audio once, reuse for both pipeline and generation
+        _temp_offset = len(self._temp_files) if self._temp_files else 0
         image_paths = await self._extract_images(messages)
         audio_paths = await self._extract_audio(messages)
         video_frames = await self._extract_video_frames(messages)
@@ -1081,7 +1088,10 @@ class VLMEngine:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-            self._cleanup_temp_files()
+            _mine = (self._temp_files or [])[_temp_offset:]
+            if _mine and self._temp_files is not None:
+                del self._temp_files[_temp_offset:]
+            self._cleanup_temp_files(_mine)
 
     def _generate_vlm_vision(
         self,
@@ -1520,7 +1530,10 @@ class VLMEngine:
                 prompt=prompt,
                 **stream_kwargs,
             ):
-                if cancel_event is not None and cancel_event.is_set():
+                if cancel_event is not None and (
+                    cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                    else cancel_event.is_set()
+                ):
                     queue.put_nowait(RequestOutput(
                         request_id=req_id,
                         new_text="",
@@ -2297,10 +2310,11 @@ class VLMEngine:
                 raise ValueError(f"Cannot download image: {e}")
         return tmp.name
 
-    def _cleanup_temp_files(self) -> None:
+    def _cleanup_temp_files(self, files: list[str] | None = None) -> None:
         import shutil
-        if self._temp_files:
-            for path in self._temp_files:
+        targets = files if files is not None else self._temp_files
+        if targets:
+            for path in targets:
                 try:
                     if os.path.isdir(path):
                         shutil.rmtree(path, ignore_errors=True)
@@ -2308,7 +2322,7 @@ class VLMEngine:
                         os.unlink(path)
                 except OSError:
                     pass
-            self._temp_files.clear()
+            targets.clear()
 
     # ── Video Frame Extraction ──
 

@@ -399,11 +399,13 @@ class EventLog:
 
     def get_node_state(self, node_id: str) -> NodeState | None:
         """Get the current state of a node."""
-        return self._node_states.get(node_id)
+        with self._lock:
+            return self._node_states.get(node_id)
 
     def get_all_states(self) -> dict[str, NodeState]:
         """Get all node states."""
-        return dict(self._node_states)
+        with self._lock:
+            return dict(self._node_states)
 
     def query_events(
         self,
@@ -442,24 +444,26 @@ class EventLog:
         where = " AND ".join(conditions) if conditions else "1=1"
         params.append(limit)
 
-        assert self._conn is not None
-        rows = self._conn.execute(
-            f"SELECT sequence, event_id, event_type, timestamp, node_id, payload "
-            f"FROM events WHERE {where} ORDER BY sequence DESC LIMIT ?",
-            params,
-        ).fetchall()
+        if self._conn is None:
+            raise RuntimeError("EventLog not initialized: connection is None")
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT sequence, event_id, event_type, timestamp, node_id, payload "
+                f"FROM events WHERE {where} ORDER BY sequence DESC LIMIT ?",
+                params,
+            ).fetchall()
 
-        return [
-            ClusterEvent(
-                sequence=row[0],
-                event_id=row[1],
-                event_type=row[2],
-                timestamp=row[3],
-                node_id=row[4],
-                payload=json.loads(row[5]),
-            )
-            for row in rows
-        ]
+            return [
+                ClusterEvent(
+                    sequence=row[0],
+                    event_id=row[1],
+                    event_type=row[2],
+                    timestamp=row[3],
+                    node_id=row[4],
+                    payload=json.loads(row[5]),
+                )
+                for row in rows
+            ]
 
     def prune_before(self, sequence: int) -> int:
         """Remove events before a given sequence number.
@@ -472,13 +476,15 @@ class EventLog:
         if not self._initialized:
             self.initialize()
 
-        assert self._conn is not None
-        cursor = self._conn.execute(
-            "DELETE FROM events WHERE sequence < ? AND event_type != ?",
-            (sequence, EventType.SNAPSHOT.value),
-        )
-        self._conn.commit()
-        pruned = cursor.rowcount
+        if self._conn is None:
+            raise RuntimeError("EventLog not initialized: connection is None")
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM events WHERE sequence < ? AND event_type != ?",
+                (sequence, EventType.SNAPSHOT.value),
+            )
+            self._conn.commit()
+            pruned = cursor.rowcount
         if pruned > 0:
             logger.info(f"Pruned {pruned} events before sequence {sequence}")
         return pruned

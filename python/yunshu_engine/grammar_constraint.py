@@ -109,8 +109,8 @@ class _RegexDFA:
 
             elif op == _sre_parse.NOT_LITERAL:
                 next_state = accept if i == len(items) - 1 else self._new_nfa_state()
-                # Match any character except av (within 0-127 for ASCII)
-                char_set = set(range(0, 127)) - {av}
+                # Match any character except av (Unicode range, matching ANY operator)
+                char_set = set(range(1, 0x110000)) - {av}
                 self._nfa_transitions.setdefault(current, []).append(
                     (char_set if char_set else None, next_state)
                 )
@@ -357,7 +357,23 @@ class _RegexDFA:
         # After consuming all characters, we're in a valid state.
         # The text is a valid prefix if the current state is an accept
         # state OR if there's any path from this state to an accept state.
-        return True  # Being in any non-dead state means prefix is valid
+        # A state is a dead-end if no accept state is reachable from it.
+        if state in self._dfa_accept_states:
+            return True
+        # Check reachability: BFS from current state to any accept state
+        visited = set()
+        queue = [state]
+        while queue:
+            s = queue.pop(0)
+            if s in visited:
+                continue
+            visited.add(s)
+            trans = self._dfa_transitions.get(s, {})
+            for target in trans.values():
+                if target in self._dfa_accept_states:
+                    return True
+                queue.append(target)
+        return False
 
     def is_full_match(self, text: str) -> bool:
         """Check if text fully matches the pattern."""

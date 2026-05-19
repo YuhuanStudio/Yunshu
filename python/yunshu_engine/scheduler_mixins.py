@@ -23,6 +23,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+import collections
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -60,7 +61,7 @@ class MetricsMixin(SchedulerMixin):
 
     def __init__(self, window_size: int = 100) -> None:
         self._window_size = window_size
-        self._step_times: list[float] = []
+        self._step_times: collections.deque[float] = collections.deque(maxlen=window_size)
         self._batch_sizes: list[int] = []
         self._throughput_window: list[tuple[float, int]] = []
         self._total_tokens = 0
@@ -75,8 +76,8 @@ class MetricsMixin(SchedulerMixin):
         now = time.monotonic()
         step_latency = now - self._step_start if hasattr(self, '_step_start') else 0.0
         self._step_times.append(step_latency)
-        if len(self._step_times) > self._window_size:
-            self._step_times.pop(0)
+        if len(self._batch_sizes) > self._window_size:
+            self._batch_sizes.pop(0)
 
         batch_size = 0
         tokens = 0
