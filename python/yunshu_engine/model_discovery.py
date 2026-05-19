@@ -61,7 +61,7 @@ def estimate_model_size(model_path: Path) -> int:
     if total == 0:
         for f in model_path.glob("**/*.safetensors"):
             total += f.stat().st_size
-    return int(total * 1.05)
+    return int(total * 1.8)
 
 
 def _is_model_dir(path: Path) -> bool:

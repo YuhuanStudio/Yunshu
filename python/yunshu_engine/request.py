@@ -238,9 +238,8 @@ class Request:
         states that are not valid predecessors (e.g. another FINISHED_* state)
         are silently rejected.
         """
-        if RequestStatus.is_finished(self.status) and self.status != status:
-            # Already finished with a different status — log to aid debugging.
-            # The first finish reason is authoritative; don't overwrite.
+        if RequestStatus.is_finished(self.status):
+            # Already finished — first reason is authoritative; don't overwrite.
             import logging as _logging
             _logging.getLogger(__name__).debug(
                 f"Request {self.request_id}: ignoring re-finish "

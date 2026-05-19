@@ -249,9 +249,8 @@ class ContextWindowManager:
     ) -> list[dict]:
         """Drop oldest messages until under budget. Always keeps system prompt.
 
-        Preserves tool call/response pairs: if an assistant message with
-        tool_calls is at the truncation boundary, also removes the following
-        tool role messages to keep the message sequence valid for chat templates.
+        Preserves original message order. Protected roles (system/developer)
+        are never removed, but retain their original positions.
 
         When even a single non-system message exceeds the budget, returns just
         the system messages (if any) rather than looping infinitely.
@@ -260,22 +259,43 @@ class ContextWindowManager:
             return []
 
         result = deepcopy(messages)
-        # Identify and protect system + developer messages
-        system_msgs = [m for m in result if m.get("role") in self._PROTECTED_ROLES]
-        non_system = [m for m in result if m.get("role") not in self._PROTECTED_ROLES]
+        # Indices of removable (non-protected) messages
+        removable_indices = [
+            i for i, m in enumerate(result)
+            if m.get("role") not in self._PROTECTED_ROLES
+        ]
 
-        # Remove oldest non-system messages first
-        prev_len = -1
-        while non_system and self._count_messages_tokens(system_msgs + non_system) > max_tokens:
-            # Guard against infinite loop: if the last iteration didn't remove
-            # anything, the remaining message(s) are simply too large for the
-            # budget.  Return just the system messages in that case.
-            if len(non_system) == prev_len:
-                return deepcopy(system_msgs) if system_msgs else []
-            prev_len = len(non_system)
-            _truncate_first_message_group(non_system)
+        # Remove oldest removable messages first (by original index order)
+        prev_count = -1
+        while removable_indices and self._count_messages_tokens(result) > max_tokens:
+            if len(removable_indices) == prev_count:
+                # Remaining messages still over budget — strip all non-protected
+                return [m for m in deepcopy(messages) if m.get("role") in self._PROTECTED_ROLES] or []
+            prev_count = len(removable_indices)
+            # Find contiguous group at start of removable_indices
+            group = [removable_indices[0]]
+            for j in range(1, len(removable_indices)):
+                if removable_indices[j] == removable_indices[j - 1] + 1:
+                    group.append(removable_indices[j])
+                else:
+                    break
+            # Also include trailing tool messages after assistant tool_calls
+            last_idx = group[-1]
+            msg = result[last_idx]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                k = last_idx + 1
+                while k < len(result) and result[k].get("role") == "tool":
+                    if k in removable_indices:
+                        group.append(k)
+                    k += 1
+            for idx in sorted(group, reverse=True):
+                result.pop(idx)
+            removable_indices = [
+                i for i, m in enumerate(result)
+                if m.get("role") not in self._PROTECTED_ROLES
+            ]
 
-        return system_msgs + non_system
+        return result
 
     def _sliding_window(
         self, messages: list[dict], max_tokens: int

@@ -1378,7 +1378,7 @@ async def _stream_vlm_response(
     vlm_completion_tok = 0
 
     async def _token_source():
-        nonlocal loaded_adapter, done_emitted, vlm_prompt_tok, vlm_completion_tok
+        nonlocal loaded_adapter, done_emitted, vlm_prompt_tok, vlm_completion_tok, metrics_recorded
         first_chunk = True
         vlm_reasoning_tok = 0
         vlm_cached_tok = 0

@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 267: PagedScheduler KV block leak, boundary snapshot memory growth, OCR RoPE leak, context window tokenizer, adaptive batch zero-pending, mesh thread safety, disagg status match)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 268: 8-agent deep audit — profiling auth bypass, tenant finish_request leak, scheduler abort finalization, set_finished overwrite, Anthropic message_stop, VLM temp files race, WebSocket RBAC, model discovery size, event sourcing TOCTOU, preemption livelock, Prometheus counter/histogram fixes)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,26 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 268 — 8-Agent Deep Audit: Auth, Scheduler, VLM, Mesh, Gateway, Prometheus, Model Discovery, Context Window)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 268: Profiling 端點認證繞過 | YUNSHU_AUTH_TOKEN 僅檢查是否設定，不驗證 Bearer token。任何人可啟動/停止 GPU capture | 認證繞過 (CRITICAL) |
+| Wave 268: Tenant finish_request() 從未調用 | check_and_record() 遞增 _active_requests 但無任何地方調用 finish_request() 遞減。租戶在 max_concurrent 後永久鎖定 | 拒絕服務 (CRITICAL) |
+| Wave 268: Scheduler waiting queue abort 請求未終結化 | _schedule_waiting 中 abort 的請求被靜默丟棄，永不標記 finished，客戶端永遠等待 | 客戶端死鎖 (CRITICAL) |
+| Wave 268: Preemption livelock | PRIORITY 策略下同一低優先級請求每步被搶佔再重新插入。加入 _MAX_PREEMPTIONS_PER_REQUEST=3 上限 | 服務不可用 (CRITICAL) |
+| Wave 268: VLM _temp_files 競態刪除 | generate/stream 的 del _temp_files[offset:] 會刪除其他並行請求的暫存文件。改為只移除自己註冊的文件 | 暫存文件丟失 (CRITICAL) |
+| Wave 268: set_finished 覆蓋 finish_reason | 同狀態再次調用 set_finished 會覆蓋原始 finish_reason。改為任何已終結狀態直接返回 | 掩蓋競態 bug (HIGH) |
+| Wave 268: Anthropic streaming error 缺少 message_stop | 異常路徑只發 error 事件不發 message_stop，Anthropic SDK 客戶端掛起 | 客戶端掛起 (HIGH) |
+| Wave 268: VLM streaming metrics_recorded nonlocal 缺失 | _token_source 中 metrics_recorded = True 創建局部變量而非修改外部，導致雙重 metrics 記錄 | 監控數據重複 (HIGH) |
+| Wave 268: WebSocket RBAC 認證繞過 | realtime 端點僅檢查 YUNSHU_AUTH_TOKEN，忽略 RBAC manager。RBAC 啟用但無靜態 token 時 WebSocket 無認證 | 認證繞過 (HIGH) |
+| Wave 268: Model discovery 尺寸估計 1.05x→1.8x | 與 model_manager 的 1.8x 不一致，低估內存需求導致 OOM | 記憶體溢出 (HIGH) |
+| Wave 268: EventLog initialize() TOCTOU 競態 | 多線程同時調用 initialize() 創建多個 SQLite 連接。加入 self._lock 保護 | 數據庫損壞 (HIGH) |
+| Wave 268: Context window 截斷重排序消息 | system_msgs + non_system 將所有系統消息移到前面，破壞原始順序。改為保留原始順序只移除可刪除消息 | 模型輸入錯誤 (HIGH) |
+| Wave 268: Prometheus counter reset 負值尖峰 | 引擎重啟後 counter 值下降，PromQL rate() 產生負值。加入 offset 追蹤使暴露值單調遞增 | 監控誤報 (HIGH) |
+| Wave 268: Prometheus histogram 截斷降低 _sum/_count | 觀測數超過 100K 時截斷導致 _sum/_count 下降，違反 Prometheus counter 語義。只截斷觀測列表 | 監控語義錯誤 (HIGH) |
+| Wave 268: Prometheus histogram dict 迭代競態 | format() 在鎖外迭代 _observations dict，並發寫入導致 RuntimeError。改為快照 keys 後逐個加鎖讀取 | 崩潰 (HIGH) |
 
 ### 已完成修復 (2026-05-20 Wave 267 — PagedScheduler KV Block Leak, Boundary Snapshot Memory, OCR RoPE, Context Window Tokenizer)
 

@@ -152,41 +152,42 @@ class EventLog:
 
     def initialize(self) -> None:
         """Create or open the event log database."""
-        if self._initialized:
-            return
+        with self._lock:
+            if self._initialized:
+                return
 
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                sequence INTEGER PRIMARY KEY,
-                event_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                node_id TEXT NOT NULL DEFAULT '',
-                payload TEXT NOT NULL DEFAULT '{}'
-            )
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_events_node ON events(node_id)
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)
-        """)
-        self._conn.commit()
+            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    sequence INTEGER PRIMARY KEY,
+                    event_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    node_id TEXT NOT NULL DEFAULT '',
+                    payload TEXT NOT NULL DEFAULT '{}'
+                )
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_events_node ON events(node_id)
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)
+            """)
+            self._conn.commit()
 
-        # Recover sequence counter from existing events
-        row = self._conn.execute(
-            "SELECT MAX(sequence) FROM events"
-        ).fetchone()
-        if row and row[0] is not None:
-            self._sequence = row[0]
-            self._stats.total_events = self._sequence
-            logger.info(f"Recovered event log: {self._sequence} existing events")
+            # Recover sequence counter from existing events
+            row = self._conn.execute(
+                "SELECT MAX(sequence) FROM events"
+            ).fetchone()
+            if row and row[0] is not None:
+                self._sequence = row[0]
+                self._stats.total_events = self._sequence
+                logger.info(f"Recovered event log: {self._sequence} existing events")
 
-        self._initialized = True
+            self._initialized = True
 
     def close(self) -> None:
         """Close the database connection."""

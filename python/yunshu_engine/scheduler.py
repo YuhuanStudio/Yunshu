@@ -1288,6 +1288,8 @@ class Scheduler:
             req = self.waiting.pop()
             if req.request_id in self._pending_abort_ids:
                 self._pending_abort_ids.discard(req.request_id)
+                req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
+                self._failed_insert_ids.append(req.request_id)
                 continue
             submit = getattr(req, '_submit_time', now)
             if timeout > 0 and (now - submit) > timeout:
@@ -1770,6 +1772,8 @@ class Scheduler:
             self.finished_ids.add(req.request_id)
             return False
 
+    _MAX_PREEMPTIONS_PER_REQUEST = 3
+
     def _preempt_lowest_priority(self, count: int) -> int:
         """Preempt the lowest-priority running requests (vLLM pattern).
 
@@ -1777,6 +1781,9 @@ class Scheduler:
         priority (ties broken by arrival_time, newest first) and preempts
         them. Preempted requests are placed back at the front of the
         waiting queue with their KV state freed.
+
+        Caps individual requests at _MAX_PREEMPTIONS_PER_REQUEST to prevent
+        livelock where the same request is preempted and re-inserted every step.
 
         Args:
             count: Number of requests to preempt.
@@ -1789,10 +1796,18 @@ class Scheduler:
             if not self.running:
                 break
 
+            # Exclude requests already preempted too many times
+            eligible = {
+                rid for rid in self.running
+                if self.running[rid].num_preemptions < self._MAX_PREEMPTIONS_PER_REQUEST
+            }
+            if not eligible:
+                break
+
             # Find lowest-priority running request, preferring prefill-stage
             # requests over decode-stage to avoid discarding generated tokens.
             prefill_candidates = [
-                rid for rid in self.running
+                rid for rid in eligible
                 if not self.running[rid].output_token_ids
             ]
             if prefill_candidates:
@@ -1804,9 +1819,9 @@ class Scheduler:
                     ),
                 )
             else:
-                # All running requests are in decode stage — last resort
+                # All eligible requests are in decode stage — last resort
                 victim_id = min(
-                    self.running.keys(),
+                    eligible,
                     key=lambda rid: (
                         self.running[rid].sampling_params.priority,
                         -self.running[rid].arrival_time,

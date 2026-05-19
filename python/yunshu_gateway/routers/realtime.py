@@ -1048,7 +1048,16 @@ async def realtime_endpoint(ws: WebSocket):
                 await ws.close(code=4003, reason="Origin not allowed")
                 return
 
-    if auth_token:
+    # Determine if auth is required
+    auth_required = bool(auth_token)
+    try:
+        rbac = getattr(ws.app.state, "rbac_manager", None)
+        if rbac and rbac.is_enabled():
+            auth_required = True
+    except Exception:
+        pass
+
+    if auth_required:
         # WebSocket doesn't go through HTTP middleware, so check auth manually.
         # Prefer header over query param to avoid token leaking into logs/history.
         import hmac
@@ -1058,21 +1067,22 @@ async def realtime_endpoint(ws: WebSocket):
         if not token:
             await ws.close(code=4001, reason="Authentication required")
             return
-        if not hmac.compare_digest(token, auth_token):
-            # Also check RBAC for ys_-prefixed keys
-            _rbac_ok = False
-            if token.startswith("ys_"):
-                try:
-                    rbac = getattr(ws.app.state, "rbac_manager", None)
-                    if rbac is not None:
-                        api_key = rbac.authenticate(token)
-                        if api_key is not None:
-                            _rbac_ok = True
-                except Exception:
-                    pass
-            if not _rbac_ok:
-                await ws.close(code=4001, reason="Invalid token")
-                return
+
+        _auth_ok = False
+        if auth_token and hmac.compare_digest(token, auth_token):
+            _auth_ok = True
+        if not _auth_ok and token.startswith("ys_"):
+            try:
+                rbac = getattr(ws.app.state, "rbac_manager", None)
+                if rbac is not None:
+                    api_key = rbac.authenticate(token)
+                    if api_key is not None:
+                        _auth_ok = True
+            except Exception:
+                pass
+        if not _auth_ok:
+            await ws.close(code=4001, reason="Invalid token")
+            return
     await ws.accept()
     session = RealtimeSession(ws)
     await session.run()

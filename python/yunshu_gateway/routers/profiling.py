@@ -7,6 +7,7 @@ MLX Metal GPU command buffer tracing (vLLM pattern).
 Security: All profiling endpoints require authentication (deny-by-default).
 Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
+import hmac
 import logging
 import os
 import threading
@@ -38,8 +39,11 @@ def _check_permission(request: Request) -> None:
     if rbac_key is not None:
         return  # Authenticated via RBAC
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
-    if auth_token is not None and auth_token:
-        return  # Static token auth
+    if auth_token:
+        # Verify the request actually provides a valid Bearer token
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and hmac.compare_digest(auth[7:], auth_token):
+            return
     raise HTTPException(
         status_code=401,
         detail="Profiling requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",

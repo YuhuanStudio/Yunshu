@@ -764,8 +764,13 @@ class VLMEngine:
         finally:
             with self._temp_files_lock:
                 _mine = (self._temp_files or [])[_temp_offset:]
-                if _mine and self._temp_files is not None:
-                    del self._temp_files[_temp_offset:]
+                # Remove only our entries, not newer ones from concurrent requests
+                if self._temp_files is not None and _mine:
+                    _keep = self._temp_files[:_temp_offset]
+                    _tail = self._temp_files[_temp_offset + len(_mine):]
+                    # Rebuild: keep prefix + tail entries not in our set
+                    _mine_set = set(_mine)
+                    self._temp_files[:] = _keep + [f for f in _tail if f not in _mine_set]
             self._cleanup_temp_files(_mine)
 
     async def generate_stream(
@@ -1146,8 +1151,11 @@ class VLMEngine:
                     break
             with self._temp_files_lock:
                 _mine = (self._temp_files or [])[_temp_offset:]
-                if _mine and self._temp_files is not None:
-                    del self._temp_files[_temp_offset:]
+                if self._temp_files is not None and _mine:
+                    _keep = self._temp_files[:_temp_offset]
+                    _tail = self._temp_files[_temp_offset + len(_mine):]
+                    _mine_set = set(_mine)
+                    self._temp_files[:] = _keep + [f for f in _tail if f not in _mine_set]
             self._cleanup_temp_files(_mine)
 
     def _generate_vlm_vision(

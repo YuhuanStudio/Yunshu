@@ -17,7 +17,8 @@ import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +161,13 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
                         request, "Rate limit exceeded", status_code=429,
                     )
                 request.state.tenant = tenant
-                return await call_next(request)
+                response = await call_next(request)
+                # Decrement active_requests when the response finishes
+                if isinstance(response, StreamingResponse):
+                    response.background = BackgroundTask(tenant.finish_request)
+                else:
+                    tenant.finish_request()
+                return response
         except Exception:
             # Catch ALL exceptions (not just ImportError) so that a broken
             # TenantManager falls through to the final 401 instead of

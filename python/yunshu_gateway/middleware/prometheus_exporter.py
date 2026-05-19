@@ -31,7 +31,7 @@ from typing import Optional
 class _Counter:
     """Thread-safe labelled counter."""
 
-    __slots__ = ("_name", "_help", "_lock", "_values")
+    __slots__ = ("_name", "_help", "_lock", "_values", "_offsets")
 
     def __init__(self, name: str, help_text: str) -> None:
         self._name = name
@@ -39,6 +39,7 @@ class _Counter:
         self._lock = Lock()
         # key = frozenset of label pairs, value = int
         self._values: dict[frozenset[tuple[str, str]], int] = defaultdict(int)
+        self._offsets: dict[frozenset[tuple[str, str]], int] = defaultdict(int)
 
     def inc(self, labels: Optional[dict[str, str]] = None, amount: int = 1) -> None:
         if amount < 0:
@@ -50,17 +51,22 @@ class _Counter:
     def set(self, value: int, labels: Optional[dict[str, str]] = None) -> None:
         """Set counter to an absolute value (for snapshot-based reporting).
 
-        Only ever increases the stored value — counters must be monotonically
-        non-decreasing.  If the new value is lower (e.g. engine restart), the
-        counter is reset to the new value to avoid Prometheus stale negatives.
+        Tracks an offset so the exposed counter is always monotonically
+        non-decreasing. If the source resets (engine restart), the offset
+        absorbs the delta so PromQL rate() never sees negative spikes.
         """
         key = frozenset((labels or {}).items())
         with self._lock:
-            if value >= self._values[key]:
-                self._values[key] = value
+            current = self._values.get(key, 0)
+            offset = self._offsets.get(key, 0)
+            if value >= current - offset:
+                # Normal: source value grew or stayed same
+                self._values[key] = offset + value
             else:
-                # Counter reset (e.g. engine restarted) — set to new value.
-                self._values[key] = value
+                # Source reset: bump offset by the drop so exposed value keeps growing
+                drop = (current - offset) - value
+                self._offsets[key] = offset + drop
+                self._values[key] = offset + drop + value
 
     def get(self, labels: Optional[dict[str, str]] = None) -> int:
         key = frozenset((labels or {}).items())
@@ -174,55 +180,53 @@ class _Histogram:
                 if value <= upper:
                     bc[i] += 1
             # Cap per-label-series to prevent unbounded growth.
+            # Keep _sums, _counts, and _bucket_counts as running totals
+            # (monotonically non-decreasing) — only truncate the observations list.
             if len(lst) > 100_000:
                 self._observations[key] = lst[-50_000:]
-                # Recompute bucket_counts from remaining observations.
-                remaining = self._observations[key]
-                self._bucket_counts[key] = [
-                    sum(1 for v in remaining if v <= upper)
-                    for upper in self._buckets
-                ]
-                # Recompute sum/count to stay consistent with remaining data.
-                self._sums[key] = sum(remaining)
-                self._counts[key] = len(remaining)
 
     def format(self) -> str:
         lines: list[str] = []
         lines.append(f"# HELP {self._name} {self._help}")
         lines.append(f"# TYPE {self._name} histogram")
         with self._lock:
-            for key in sorted(self._observations, key=_label_sort_key):
+            # Snapshot keys to avoid RuntimeError during concurrent mutation
+            keys = sorted(self._observations.keys(), key=_label_sort_key)
+        for key in keys:
+            with self._lock:
                 count = self._counts.get(key, 0)
                 if count == 0:
                     continue
                 label_str = _format_labels(key)
                 total = self._sums.get(key, 0.0)
-                bc = self._bucket_counts.get(key, [0] * len(self._buckets))
-                # Build the label portion for bucket lines.  Prometheus format
-                # requires the le= label mixed with other labels, e.g.
-                #   metric_bucket{le="0.1",method="POST"} 5
-                extra = label_str[1:-1] if label_str else ""
-                for i, upper in enumerate(self._buckets):
-                    bucket_val = bc[i]
-                    if extra:
-                        lines.append(
-                            f'{self._name}_bucket{{le="{upper}",{extra}}} {bucket_val}'
-                        )
-                    else:
-                        lines.append(
-                            f'{self._name}_bucket{{le="{upper}"}} {bucket_val}'
-                        )
-                # +Inf bucket.
+                bc = list(self._bucket_counts.get(key, [0] * len(self._buckets)))
+            if count == 0:
+                continue
+            # Build the label portion for bucket lines.  Prometheus format
+            # requires the le= label mixed with other labels, e.g.
+            #   metric_bucket{le="0.1",method="POST"} 5
+            extra = label_str[1:-1] if label_str else ""
+            for i, upper in enumerate(self._buckets):
+                bucket_val = bc[i]
                 if extra:
                     lines.append(
-                        f'{self._name}_bucket{{le="+Inf",{extra}}} {count}'
+                        f'{self._name}_bucket{{le="{upper}",{extra}}} {bucket_val}'
                     )
                 else:
                     lines.append(
-                        f'{self._name}_bucket{{le="+Inf"}} {count}'
+                        f'{self._name}_bucket{{le="{upper}"}} {bucket_val}'
                     )
-                lines.append(f"{self._name}_sum{label_str} {total}")
-                lines.append(f"{self._name}_count{label_str} {count}")
+            # +Inf bucket.
+            if extra:
+                lines.append(
+                    f'{self._name}_bucket{{le="+Inf",{extra}}} {count}'
+                )
+            else:
+                lines.append(
+                    f'{self._name}_bucket{{le="+Inf"}} {count}'
+                )
+            lines.append(f"{self._name}_sum{label_str} {total}")
+            lines.append(f"{self._name}_count{label_str} {count}")
         return "\n".join(lines)
 
 
