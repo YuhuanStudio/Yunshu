@@ -250,6 +250,7 @@ class TenantManager:
             tmp = self._persist_path + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
+            os.chmod(tmp, 0o600)
             os.replace(tmp, self._persist_path)
             logger.debug(f"Persisted {len(self._tenants)} tenants to {self._persist_path}")
         except Exception as e:

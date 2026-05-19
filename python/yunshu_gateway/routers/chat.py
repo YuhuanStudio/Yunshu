@@ -2079,7 +2079,7 @@ async def _stream_response(
                     reasoning_tok = output.reasoning_tokens
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
-                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                     completion_tok = output.completion_tokens
                 elif token_text:
                     completion_tok += 1
@@ -2167,7 +2167,7 @@ async def _stream_response(
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None:
+                if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                     completion_tok = output.completion_tokens
                 elif hasattr(output, 'token_text') and output.token_text:
                     completion_tok += 1

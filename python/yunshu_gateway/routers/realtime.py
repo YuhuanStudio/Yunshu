@@ -1059,8 +1059,22 @@ async def realtime_endpoint(ws: WebSocket):
             await ws.close(code=4001, reason="Authentication required")
             return
         if not hmac.compare_digest(token, auth_token):
-            await ws.close(code=4001, reason="Invalid token")
-            return
+            # Also check RBAC for ys_-prefixed keys
+            _rbac_ok = False
+            if token.startswith("ys_"):
+                try:
+                    from yunshu_control.role_manager import RBACManager
+                    rbac = getattr(ws.app.state, "rbac_manager", None)
+                    if rbac is None:
+                        rbac = RBACManager()
+                    api_key = rbac.authenticate(token)
+                    if api_key is not None:
+                        _rbac_ok = True
+                except Exception:
+                    pass
+            if not _rbac_ok:
+                await ws.close(code=4001, reason="Invalid token")
+                return
     await ws.accept()
     session = RealtimeSession(ws)
     await session.run()

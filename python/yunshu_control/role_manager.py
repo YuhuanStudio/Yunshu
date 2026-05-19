@@ -205,6 +205,7 @@ class RBACManager:
                 ]
             }
             self._persist_path.write_text(json.dumps(data, indent=2))
+            self._persist_path.chmod(0o600)
         except OSError as e:
             logger.warning(f"RBAC: failed to save keys to {self._persist_path}: {e}")
 

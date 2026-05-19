@@ -61,6 +61,16 @@ class ResponseCacheMiddleware:
                 return
 
             cache_key = hashlib.sha256(body).hexdigest()
+
+            # Skip caching for non-deterministic sampling (temperature > 0, no seed)
+            temperature = body_json.get("temperature", 1.0)
+            seed = body_json.get("seed")
+            if temperature > 0 and seed is None:
+                async def _nondet_receive():
+                    return {"type": "http.request", "body": body, "more_body": False}
+                await self.app(scope, _nondet_receive, send)
+                return
+
             # cache.get() is async (uses asyncio.Lock internally)
             hit = await cache.get(cache_key)
             if hit is not None:

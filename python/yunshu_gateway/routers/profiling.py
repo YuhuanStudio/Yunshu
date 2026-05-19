@@ -40,6 +40,15 @@ async def start_profile(req: ProfileRequest):
             import mlx.core as mx
             if hasattr(mx.metal, 'start_capture'):
                 output = req.output_path or "/tmp/yunshu_profile.bin"
+                # Validate output_path is under allowed directories
+                from pathlib import Path
+                resolved = Path(output).resolve()
+                allowed_dirs = [Path("/tmp").resolve()]
+                if not any(str(resolved).startswith(str(d) + "/") or resolved.parent == d for d in allowed_dirs):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"output_path must be under /tmp, got: {output}",
+                    )
                 mx.metal.start_capture(output)
                 _profiling_active = True
                 _profile_start_time = time.perf_counter()
