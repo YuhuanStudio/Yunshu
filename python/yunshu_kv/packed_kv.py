@@ -20,6 +20,7 @@ Reference:
 
 import logging
 import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -147,11 +148,19 @@ class PackedKVCache:
     - Optional quantization for memory reduction
     """
 
-    def __init__(self, config: PackedKVConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: PackedKVConfig | None = None,
+        max_cached_blocks: int = 1000,
+    ) -> None:
         self._config = config or PackedKVConfig.from_env()
+        self._max_cached_blocks = max_cached_blocks
         self._stats = PackedKVStats()
-        # Cache of converted blocks (block_hash → packed array)
-        self._cache: dict[int, mx.array] = {}
+        # LRU cache of converted blocks (block_hash → packed array).
+        # OrderedDict tracks insertion order; oldest entries evicted when
+        # the cache exceeds max_cached_blocks to prevent unbounded memory
+        # growth during long-running sessions.
+        self._cache: OrderedDict[int, mx.array] = OrderedDict()
 
     @property
     def config(self) -> PackedKVConfig:
@@ -256,13 +265,27 @@ class PackedKVCache:
         return keys, values
 
     def cache_packed_block(self, block_hash: int, packed: mx.array) -> None:
-        """Cache a converted packed block for reuse."""
+        """Cache a converted packed block for reuse.
+
+        If the cache already holds an entry for this hash, it is replaced
+        and moved to the most-recently-used position.  When the cache
+        exceeds ``max_cached_blocks``, the oldest (least recently used)
+        entry is evicted to prevent unbounded memory growth.
+        """
+        if block_hash in self._cache:
+            # Move existing entry to the end (most recently used)
+            self._cache.move_to_end(block_hash)
         self._cache[block_hash] = packed
+        # Evict oldest entries if over capacity
+        while len(self._cache) > self._max_cached_blocks:
+            self._cache.popitem(last=False)
 
     def get_cached_block(self, block_hash: int) -> Optional[mx.array]:
-        """Retrieve a cached packed block."""
+        """Retrieve a cached packed block (LRU refresh on hit)."""
         if block_hash in self._cache:
             self._stats.cache_hits += 1
+            # Move to most-recently-used position
+            self._cache.move_to_end(block_hash)
             return self._cache[block_hash]
         self._stats.cache_misses += 1
         return None

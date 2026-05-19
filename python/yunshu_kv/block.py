@@ -212,9 +212,17 @@ class BlockPool:
         When a block with a block_hash reaches ref_count 0, it is marked
         cache_only — it's in the free queue but still registered in the
         prefix cache. Eviction can safely free these blocks.
+
+        Duplicate blocks in the input list are silently skipped to prevent
+        ref_count from being decremented multiple times for the same block
+        (a caller bug that would prematurely free blocks still in use).
         """
         freed = []
+        seen_ids: set[int] = set()
         for block in blocks:
+            if block.block_id in seen_ids:
+                continue
+            seen_ids.add(block.block_id)
             if block.ref_count <= 0:
                 continue
             block.ref_count -= 1
