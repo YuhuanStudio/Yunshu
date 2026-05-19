@@ -3,12 +3,16 @@ from __future__ import annotations
 
 Provides /v1/start_profile and /v1/stop_profile endpoints for
 MLX Metal GPU command buffer tracing (vLLM pattern).
+
+Security: All profiling endpoints require authentication (deny-by-default).
+Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 import logging
+import os
 import threading
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -22,14 +26,35 @@ _profile_start_time = 0.0
 _profiling_lock = threading.Lock()
 
 
+def _check_permission(request: Request) -> None:
+    """Check auth on profiling endpoints (deny-by-default).
+
+    Profiling controls are admin-sensitive: they can cause performance
+    degradation and the output_path write is filesystem-sensitive.
+    """
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+    rbac_key = getattr(request.state, "rbac_key", None)
+    if rbac_key is not None:
+        return  # Authenticated via RBAC
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if auth_token is not None and auth_token:
+        return  # Static token auth
+    raise HTTPException(
+        status_code=401,
+        detail="Profiling requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+    )
+
+
 class ProfileRequest(BaseModel):
     duration_seconds: Optional[float] = None
     output_path: Optional[str] = None
 
 
 @router.post("/start_profile", response_model=None)
-async def start_profile(req: ProfileRequest):
+async def start_profile(req: ProfileRequest, request: Request):
     """Start Metal performance profiling capture."""
+    _check_permission(request)
     global _profiling_active, _profile_start_time
 
     with _profiling_lock:
@@ -66,8 +91,9 @@ async def start_profile(req: ProfileRequest):
 
 
 @router.post("/stop_profile", response_model=None)
-async def stop_profile():
+async def stop_profile(request: Request):
     """Stop Metal performance profiling capture."""
+    _check_permission(request)
     global _profiling_active
 
     with _profiling_lock:
@@ -89,7 +115,9 @@ async def stop_profile():
 
 
 @router.get("/profile/status", response_model=None)
-async def profile_status():
+async def profile_status(request: Request):
+    """Get profiling status."""
+    _check_permission(request)
     """Get profiling status."""
     elapsed = time.perf_counter() - _profile_start_time if _profiling_active else 0
     return JSONResponse({
@@ -99,7 +127,9 @@ async def profile_status():
 
 
 @router.get("/profile/engine", response_model=None)
-async def engine_profiling_stats():
+async def engine_profiling_stats(request: Request):
+    """Get engine-level profiling stats from PerformanceProfiler + ProfilingMixin."""
+    _check_permission(request)
     """Get engine-level profiling stats from PerformanceProfiler + ProfilingMixin."""
     from ..engine import get_engine, get_model_manager
     from yunshu_engine.batched_engine import BatchedEngine

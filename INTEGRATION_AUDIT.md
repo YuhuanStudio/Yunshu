@@ -35,7 +35,24 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6681 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-19 Wave 261 — 8-Agent Deep Audit: Mesh, Audio, RBAC, KV, Grammar)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 261: LayerAllocator 零容量節點 | 無容量節點仍接收層分配，造成負載不均。加入 capable_mask 過濾 | 零容量節點不再接收層 (CRITICAL) |
+| Wave 261: _compute_stats ZeroDivision | 所有 stage num_layers=0 時 min/max 除零。提前返回 balance_ratio=0.0 | 避免崩潰 (HIGH) |
+| Wave 261: 單節點群集不必要 water-filling | 1 節點進入完整 water-filling 迴圈。加入快速路徑直接返回 | 效率優化 |
+| Wave 261: TTS WAV header 溢出 | streaming 使用假 data_size=0x7FFFFF00。改為 data_size=0 + streaming 模式 | WAV 格式正確 |
+| Wave 261: ASR _sample_rate 從未設置 | always fallback 到 16000Hz。改為從 WAV fmt chunk 讀取實際 sample_rate | ASR 重採樣正確 |
+| Wave 261: RBAC 非原子寫入 | _save() 直接 write_text()，崩潰時丟失所有 API key。改為 .tmp + os.replace() | RBAC 持久化安全 |
+| Wave 261: RBAC 懶初始化無持久化 | admin/realtime 路徑每次創建空 RBACManager。改為 startup 時統一初始化 | RBAC key 存活重啟 |
+| Wave 261: WebSocket ephemeral RBAC | 每個 WebSocket 連線創建新 RBACManager。改為從 app.state 讀取 | WebSocket 認證正確 |
+| Wave 261: TenantManager.authenticate 無鎖 | 並行 API 請求可能撕裂讀取。加入 self._lock | 線程安全 |
+| Wave 261: TieredKV total_tokens 錯誤 | allocate_for_prefill 用 (all_blocks-1)*block_size 計算，包含未填充新 block。改為 match.num_matched_tokens | KV token 追蹤準確 |
+| Wave 261: GrammarBitmaskEngine 類級共享狀態 | _checkpoint_stack 為 class attribute，所有實例共享。改為 instance attribute | 防止跨實例 checkpoint 污染 |
+| Wave 261: img2img source image 被丟棄 | _generate_variation 只用 source image 做種子，像素從未進入擴散過程。重寫為 VAE encode + partial denoising | img2img/edits/variations 真正使用源圖 (HIGH) |
 
 ### 已完成修復 (2026-05-19 Wave 260 — KV Block Dedup + LRU Eviction)
 

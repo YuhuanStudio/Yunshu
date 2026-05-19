@@ -93,14 +93,18 @@ class TestRBACKeyManagement:
     """Test admin key management endpoints."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self):
+    def _setup(self, tmp_path):
         from yunshu_gateway.engine import set_engine
         self._engine = Engine(EngineConfig())
         self._engine._model = object()
         self._engine._model_name = "test-model"
         self._engine._running = True
         set_engine(self._engine)
-        self._auth_env = patch.dict(os.environ, {"YUNSHU_AUTH_DISABLED": "true"})
+        self._rbac_path = str(tmp_path / "test_rbac_keys.json")
+        self._auth_env = patch.dict(os.environ, {
+            "YUNSHU_AUTH_DISABLED": "true",
+            "YUNSHU_RBAC_PATH": self._rbac_path,
+        })
         self._auth_env.start()
 
     def teardown_method(self):

@@ -17,20 +17,37 @@ logger = logging.getLogger(__name__)
 
 
 def _check_permission(request: Request, permission: str) -> None:
-    """Check RBAC permission on dashboard endpoints."""
+    """Check RBAC permission on dashboard endpoints.
+
+    Security (deny-by-default):
+    1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in)
+    2. If rbac_key is set, check has_permission()
+    3. If YUNSHU_AUTH_TOKEN is set (static token), allow (admin-equivalent)
+    4. If no auth configured and not disabled — DENY access (secure default)
+    """
     import os
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
     rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is None:
-        # Static token auth or no auth configured
-        if os.environ.get("YUNSHU_AUTH_TOKEN") is not None:
-            return  # Static token = admin
-        # No auth configured — allow for dev convenience
+    if rbac_key is not None:
+        if not rbac_key.has_permission(permission):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
         return
-    if not rbac_key.has_permission(permission):
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    # No RBAC key — check if static token auth is active
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if auth_token is not None and auth_token:
+        return  # Static token = admin
+    # No auth configured and not explicitly disabled — deny by default
+    logger.warning(
+        "Dashboard endpoint access denied: no auth configured. "
+        "Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true to control access."
+    )
+    from fastapi import HTTPException
+    raise HTTPException(
+        status_code=401,
+        detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+    )
 
 
 class DashboardConfig(BaseModel):

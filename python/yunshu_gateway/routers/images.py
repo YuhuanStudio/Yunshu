@@ -351,6 +351,7 @@ class ImageEditsRequest(BaseModel):
     response_format: str = "b64_json"
     num_inference_steps: int = Field(default=4, ge=1, le=100)
     seed: Optional[int] = None
+    denoise_strength: float = Field(default=0.8, ge=0.0, le=1.0, description="How much to re-denoise (1.0=full, 0.0=keep source)")
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -418,6 +419,7 @@ async def create_image_edit(req: ImageEditsRequest) -> JSONResponse:
                 image=image_bytes,
                 width=width,
                 height=height,
+                denoise_strength=req.denoise_strength,
             )
             if isinstance(result, list):
                 images.extend(result)

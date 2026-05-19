@@ -1063,13 +1063,11 @@ async def realtime_endpoint(ws: WebSocket):
             _rbac_ok = False
             if token.startswith("ys_"):
                 try:
-                    from yunshu_control.role_manager import RBACManager
                     rbac = getattr(ws.app.state, "rbac_manager", None)
-                    if rbac is None:
-                        rbac = RBACManager()
-                    api_key = rbac.authenticate(token)
-                    if api_key is not None:
-                        _rbac_ok = True
+                    if rbac is not None:
+                        api_key = rbac.authenticate(token)
+                        if api_key is not None:
+                            _rbac_ok = True
                 except Exception:
                     pass
             if not _rbac_ok:

@@ -20,10 +20,11 @@ router = APIRouter(tags=["models"])
 def _check_permission(request: Request, permission: str) -> None:
     """Check RBAC permission on gateway endpoints.
 
-    1. If rbac_key is set (from TenantAuthMiddleware), check has_permission()
-    2. If rbac_key is None but YUNSHU_AUTH_TOKEN is set, allow (static token = admin)
-    3. If no auth configured, allow access
-    4. Otherwise raise 403
+    Security (deny-by-default):
+    1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in, logged at startup)
+    2. If rbac_key is set (from TenantAuthMiddleware), check has_permission()
+    3. If rbac_key is None but YUNSHU_AUTH_TOKEN is set, allow (static token = admin)
+    4. If no auth configured and not disabled — DENY access (secure default)
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
@@ -33,9 +34,18 @@ def _check_permission(request: Request, permission: str) -> None:
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return
     # No RBAC key — check if static token auth is active
-    if os.environ.get("YUNSHU_AUTH_TOKEN") is not None:
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if auth_token is not None and auth_token:
         return  # Static token = admin access
-    # No auth configured — allow for dev convenience
+    # No auth configured and not explicitly disabled — deny by default
+    logger.warning(
+        "Admin endpoint access denied: no auth configured. "
+        "Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true to control access."
+    )
+    raise HTTPException(
+        status_code=401,
+        detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+    )
 
 # Guard against concurrent load/unload of the same model
 _model_ops_lock = asyncio.Lock()

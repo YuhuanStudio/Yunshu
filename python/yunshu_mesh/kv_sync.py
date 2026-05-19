@@ -867,8 +867,8 @@ class MeshHealthMonitor:
             # Update node state if it was offline (recovery)
             node = self._nodes.get(node_id)
             if node and node.state == MeshNodeState.OFFLINE:
-                node.state = MeshNodeState.READY
-                status.state = MeshNodeState.READY
+                node.mark_healthy()
+                status.state = node.state
 
             return True
 
@@ -963,7 +963,7 @@ class MeshHealthMonitor:
 
                 node = self._nodes.get(node_id)
                 if node:
-                    node.state = MeshNodeState.OFFLINE
+                    node.mark_unhealthy(reason="kv_sync_failure")
 
             # Capture failure count and node snapshot under lock for logging.
             fail_count = status.consecutive_failures
@@ -1164,7 +1164,7 @@ class MeshHealthMonitor:
                     status.state = MeshNodeState.OFFLINE
                     node = self._nodes.get(node_id)
                     if node:
-                        node.state = MeshNodeState.OFFLINE
+                        node.mark_unhealthy(reason="health_check_failure")
                     should_failover = True
             if should_failover:
                 self.on_node_failure(node_id)

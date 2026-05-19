@@ -235,6 +235,25 @@ class TestRBACPersistence:
         assert result.requests_per_minute == 10
         assert result.tokens_per_minute == 1000
 
+    def test_atomic_write_no_tmp_left(self, tmp_path):
+        """After saving, no .tmp file should remain."""
+        import os
+        path = tmp_path / "keys.json"
+        mgr = RBACManager(persist_path=path)
+        mgr.create_key("test")
+        assert path.exists()
+        assert not os.path.exists(str(path) + ".tmp")
+
+    def test_file_permissions_restricted(self, tmp_path):
+        """RBAC data files must be 0o600 (owner-only read/write)."""
+        import os
+        import stat
+        path = tmp_path / "keys.json"
+        mgr = RBACManager(persist_path=path)
+        mgr.create_key("test")
+        mode = os.stat(path).st_mode & 0o777
+        assert mode == 0o600, f"Expected 0o600, got {oct(mode)}"
+
 
 class TestRBACPermissionConsistency:
     """Verify all permissions used in admin.py are defined in RolePermissions."""

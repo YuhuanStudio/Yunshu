@@ -3,20 +3,45 @@ from __future__ import annotations
 
 Based on oMLX's benchmark.py pattern but adapted for Yunshu's architecture.
 Uses mx.core for GPU operations with proper warmup and synchronization.
+
+Security: All benchmark endpoints require authentication (deny-by-default).
+Benchmarks are resource-intensive and can cause DoS if left unprotected.
+Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 
 
 import asyncio
 import logging
+import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/bench", tags=["benchmark"])
+
+
+def _check_permission(request: Request) -> None:
+    """Check auth on benchmark endpoints (deny-by-default).
+
+    Benchmarks are resource-intensive GPU operations that can degrade
+    inference performance for all users.
+    """
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+    rbac_key = getattr(request.state, "rbac_key", None)
+    if rbac_key is not None:
+        return
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if auth_token is not None and auth_token:
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="Benchmark requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+    )
 
 # ── State ──
 
@@ -270,15 +295,16 @@ async def _run_throughput(request: ThroughputRequest) -> dict:
 
 
 @router.post("/roofline")
-async def bench_roofline(request: RooflineRequest):
+async def bench_roofline(req: Request, bench_req: RooflineRequest):
     """Run GEMM roofline benchmark on Apple GPU."""
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
         _active_benchmark = "roofline"
 
     try:
-        result = await asyncio.to_thread(_run_roofline, request)
+        result = await asyncio.to_thread(_run_roofline, bench_req)
         _benchmark_results["roofline"] = result
         return result
     except Exception as e:
@@ -290,15 +316,16 @@ async def bench_roofline(request: RooflineRequest):
 
 
 @router.post("/latency")
-async def bench_latency(request: LatencyRequest):
+async def bench_latency(req: Request, bench_req: LatencyRequest):
     """Run E2E latency benchmark."""
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
         _active_benchmark = "latency"
 
     try:
-        result = await _run_latency(request)
+        result = await _run_latency(bench_req)
         _benchmark_results["latency"] = result
         return result
     except Exception as e:
@@ -310,14 +337,15 @@ async def bench_latency(request: LatencyRequest):
 
 
 @router.post("/throughput")
-async def bench_throughput(request: ThroughputRequest):
+async def bench_throughput(req: Request, bench_req: ThroughputRequest):
     """Run concurrent throughput benchmark."""
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
         _active_benchmark = "throughput"
     try:
-        result = await _run_throughput(request)
+        result = await _run_throughput(bench_req)
         _benchmark_results["throughput"] = result
         return result
     except Exception as e:
@@ -329,8 +357,9 @@ async def bench_throughput(request: ThroughputRequest):
 
 
 @router.get("/status")
-async def bench_status():
+async def bench_status(req: Request):
     """Get current benchmark status."""
+    _check_permission(req)
     with _lock:
         active = _active_benchmark
     return {
@@ -350,12 +379,13 @@ class ModelBenchRequest(BaseModel):
 
 
 @router.post("/model")
-async def bench_model(request: ModelBenchRequest):
+async def bench_model(req: Request, bench_req: ModelBenchRequest):
     """Run model-level benchmark using BatchedEngine directly (no HTTP overhead).
 
     This uses the engine's BenchmarkRunner for in-process benchmarking,
     measuring pure GPU inference speed without network latency.
     """
+    _check_permission(req)
     with _lock:
         if _active_benchmark:
             raise HTTPException(status_code=409, detail=f"Benchmark '{_active_benchmark}' is already running")
@@ -372,10 +402,10 @@ async def bench_model(request: ModelBenchRequest):
 
         runner = BenchmarkRunner(engine)
         suite = await runner.run_suite(
-            prompt_lengths=request.prompt_lengths,
-            max_tokens_list=request.max_tokens_list,
-            num_requests=request.num_requests,
-            stream=request.stream,
+            prompt_lengths=bench_req.prompt_lengths,
+            max_tokens_list=bench_req.max_tokens_list,
+            num_requests=bench_req.num_requests,
+            stream=bench_req.stream,
         )
         _benchmark_results["model"] = suite.to_dict()
         return suite.to_dict()

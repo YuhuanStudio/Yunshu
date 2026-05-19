@@ -127,11 +127,20 @@ class HeartbeatMonitor:
                         node = self._nodes[node_id]
                         node.heartbeat()
                         try:
-                            node.state = MeshNodeState[msg.get("state", "READY")]
+                            reported_state = MeshNodeState[msg.get("state", "READY")]
                         except (KeyError, ValueError):
                             logger.debug("Invalid node state from heartbeat: %s",
                                          msg.get("state"))
-                        node._active_requests = msg.get("active_requests", 0)
+                            reported_state = None
+                        if reported_state is not None:
+                            # Use mark_healthy for recovery path
+                            # (OFFLINE → RECOVERING → READY).
+                            # For other state transitions, use set_state.
+                            if reported_state == MeshNodeState.READY:
+                                node.mark_healthy()
+                            else:
+                                node.set_state(reported_state, force=True)
+                        node.update_load(msg.get("active_requests", 0))
                         # Recovery check — capture callback data, fire outside lock
                         if node_id in self._timed_out:
                             self._timed_out.discard(node_id)
@@ -165,7 +174,7 @@ class HeartbeatMonitor:
                             self._timed_out.add(node_id)
                             node = self._nodes.get(node_id)
                             if node:
-                                node.state = MeshNodeState.OFFLINE
+                                node.mark_unhealthy(reason="heartbeat_timeout")
                                 logger.warning(f"Node timeout: {node.hostname} ({node_id})")
                                 timed_out_nodes.append(node)
                     else:

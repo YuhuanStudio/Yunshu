@@ -33,6 +33,12 @@ class TestImageEditsRequest:
         req = ImageEditsRequest(image="dGVzdA==", prompt="edit")
         assert req.model == "Z-Image-Turbo-MLX-4bit"
         assert req.n == 1
+        assert req.denoise_strength == 0.8
+
+    def test_denoise_strength_custom(self):
+        from yunshu_gateway.routers.images import ImageEditsRequest
+        req = ImageEditsRequest(image="dGVzdA==", prompt="edit", denoise_strength=0.3)
+        assert req.denoise_strength == 0.3
 
 
 class TestImageSizeValidation:

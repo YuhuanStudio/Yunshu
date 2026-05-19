@@ -1583,6 +1583,7 @@ class ImageGenEngine:
         guidance_scale: float = 0.0,
         seed: int | None = None,
         image: bytes | None = None,
+        denoise_strength: float = 0.8,
         **kwargs,
     ) -> list[bytes]:
         """Unified generate interface for text-to-image and image conditioning.
@@ -1590,8 +1591,10 @@ class ImageGenEngine:
         Returns a list of PNG byte strings.
 
         For img2img: the `image` parameter provides a source image.
-        Without a VAE encoder, variation is done by using a seeded perturbation
-        of the noise schedule — producing similar but distinct outputs.
+        The source image is encoded to latents, partially noised, and
+        partially denoised to produce an output that preserves the source
+        structure. `denoise_strength` controls how much the output deviates
+        from the source (0.0=identical, 1.0=ignore source).
         """
         if self._transformer is None:
             raise RuntimeError("Engine not started")
@@ -1604,6 +1607,7 @@ class ImageGenEngine:
                 height=height,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
+                denoise_strength=denoise_strength,
             )
 
         png = await self.generate_image(
@@ -1625,32 +1629,52 @@ class ImageGenEngine:
         height: int = 1024,
         num_inference_steps: int = 4,
         seed: int | None = None,
+        denoise_strength: float = 0.8,
     ) -> list[bytes]:
-        """Generate a variation of a source image.
+        """Generate a variation of a source image using img2img pipeline.
 
-        Without a VAE encoder, we generate a new image using the source
-        image dimensions and a seed derived from the source image content.
-        This produces visually related but distinct outputs.
+        Encodes the source image to latent space via the VAE encoder,
+        adds partial noise (controlled by denoise_strength), then runs
+        partial denoising to produce a variation that preserves the
+        source image structure.
+
+        Args:
+            source_image: Source image bytes (PNG/JPEG).
+            prompt: Optional text prompt for conditioning.
+            width: Output width.
+            height: Output height.
+            num_inference_steps: Number of denoising steps.
+            seed: Random seed.
+            denoise_strength: How much to re-denoise (0.0=keep source, 1.0=full noise).
+
+        Returns:
+            List of PNG byte strings.
         """
-        import hashlib
+        if self._transformer is None:
+            raise RuntimeError("Engine not started")
 
         if prompt:
             gen_prompt = prompt
         else:
             gen_prompt = "A variation of the provided image, high quality, detailed"
 
-        # Derive a seed from the source image content for reproducibility
-        content_hash = hashlib.md5(source_image).hexdigest()
-        derived_seed = int(content_hash[:8], 16) ^ (seed or 42)
+        def _variation_sync() -> bytes:
+            return self._run_img2img_pipeline(
+                prompt=gen_prompt,
+                image_data=source_image,
+                width=width,
+                height=height,
+                num_steps=num_inference_steps,
+                seed=seed if seed is not None else 42,
+                denoise_strength=denoise_strength,
+            )
 
-        png = await self.generate_image(
-            prompt=gen_prompt,
-            width=width,
-            height=height,
-            num_inference_steps=num_inference_steps,
-            seed=derived_seed,
-        )
-        return [png]
+        t0 = time.monotonic()
+        loop = asyncio.get_running_loop()
+        png_bytes = await loop.run_in_executor(self._executor, _variation_sync)
+        elapsed = time.monotonic() - t0
+        logger.info(f"Image variation: {elapsed:.2f}s, prompt='{gen_prompt[:50]}...'")
+        return [png_bytes]
 
     async def generate_image_stream(
         self,
@@ -2158,6 +2182,141 @@ class ImageGenEngine:
         arr = arr.transpose(2, 0, 1)  # (3, H, W)
         tensor = mx.array(arr[np.newaxis, :, :, :])  # (1, 3, H, W)
         return tensor, h, w
+
+    def _run_img2img_pipeline(
+        self,
+        prompt: str,
+        image_data: bytes,
+        width: int,
+        height: int,
+        num_steps: int,
+        seed: int,
+        denoise_strength: float = 0.8,
+    ) -> bytes:
+        """Run image-to-image pipeline: encode source, add noise, partial denoise.
+
+        Pipeline:
+        1. Load source image → pixel tensor → encode to latents (VAE encoder)
+        2. Add noise to latents at the appropriate timestep determined by denoise_strength
+        3. Run partial denoising from the noised latents
+        4. VAE decode → image
+
+        Args:
+            prompt: Text prompt for conditioning.
+            image_data: Source image bytes (PNG/JPEG).
+            width: Output width.
+            height: Output height.
+            num_steps: Denoising steps.
+            seed: Random seed.
+            denoise_strength: How much to re-denoise (0.0=keep source, 1.0=full noise).
+        """
+        # 1. Load and encode source image
+        image_tensor, img_h, img_w = self._load_image_to_tensor(image_data)
+        # Resize to target dimensions if needed
+        if img_h != height or img_w != width:
+            from PIL import Image as PILImage
+            pil = PILImage.open(io.BytesIO(image_data)).convert("RGB").resize(
+                (width, height), PILImage.LANCZOS
+            )
+            arr = np.array(pil, dtype=np.float32) / 255.0
+            arr = (arr - 0.5) / 0.5
+            arr = arr.transpose(2, 0, 1)[np.newaxis, :, :, :]
+            image_tensor = mx.array(arr)
+
+        source_latents = self._vae.encode_deterministic(image_tensor)
+        mx.eval(source_latents)
+
+        # Add frame dimension for transformer: (16, 1, H/8, W/8)
+        source_latents_4d = source_latents[:, np.newaxis, :, :]
+
+        # 2. Tokenize prompt
+        tokenizer = self._tokenizer
+        formatted = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
+        tokens = tokenizer(
+            [formatted],
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="np",
+        )
+        input_ids = mx.array(tokens["input_ids"])
+        attention_mask = mx.array(tokens["attention_mask"])
+
+        # 3. Text encoding
+        cap_feats = self._text_encoder(input_ids, attention_mask)
+        num_valid = int(mx.sum(attention_mask[0]).item())
+        cap_feats = cap_feats[0, :num_valid, :]
+        mx.eval(cap_feats)
+
+        # 4. Compute sigma schedule
+        sigmas = _compute_sigmas(num_steps, width, height)
+
+        # 5. Add noise to source latents based on denoise_strength
+        # Higher denoise_strength → start from later timestep (more noise)
+        # denoise_strength=1.0: start from pure noise (timestep 0)
+        # denoise_strength=0.0: keep source latents exactly (timestep = num_steps)
+        latent_h = height // 8
+        latent_w = width // 8
+        noise = mx.random.normal(
+            shape=[16, 1, latent_h, latent_w],
+            key=mx.random.key(seed),
+        ).astype(mx.float16)
+
+        # Determine the starting step based on denoise_strength
+        # Start from step at index: num_steps * (1 - denoise_strength)
+        start_step = int(num_steps * (1.0 - denoise_strength))
+        start_step = max(0, min(start_step, num_steps - 1))
+
+        if start_step == 0 and denoise_strength >= 1.0:
+            # Full denoising from pure noise (same as text2img)
+            latents = noise
+        else:
+            # Blend source latents with noise at the starting timestep's sigma
+            sigma_start = sigmas[start_step]
+            # Flow-matching interpolation: latents = (1 - sigma) * source + sigma * noise
+            latents = (1.0 - sigma_start) * source_latents_4d.astype(mx.float16) + sigma_start * noise
+
+        mx.eval(latents)
+
+        # 6. Partial denoising loop (from start_step to num_steps)
+        if self._teacache is not None:
+            self._teacache.reset()
+
+        for t in range(start_step, num_steps):
+            sigma_t = sigmas[t].reshape((1,))
+            timestep = mx.ones_like(sigma_t) - sigma_t
+
+            if self._teacache is not None:
+                noise_pred = self._teacache.forward(
+                    self._transformer, latents, timestep, sigmas, cap_feats,
+                )
+            else:
+                noise_pred = self._transformer(
+                    x=latents,
+                    timestep=timestep,
+                    sigmas=sigmas,
+                    cap_feats=cap_feats,
+                )
+
+            # Euler step
+            dt = sigmas[t + 1] - sigmas[t]
+            latents = latents + noise_pred * dt
+            mx.eval(latents)
+            logger.debug(f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+
+        # 7. VAE decode (auto-tile for large images)
+        if width * height > 1024 * 1024:
+            image = self._vae.decode_tiled(latents, tile_size_px=512, overlap_px=64)
+        else:
+            image = self._vae.decode(latents)
+        mx.eval(image)
+
+        return self._to_png(image)
 
     def _run_inpaint_pipeline(
         self,

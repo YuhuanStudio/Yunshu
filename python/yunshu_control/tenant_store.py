@@ -197,13 +197,14 @@ class TenantManager:
     def authenticate(self, api_key: str) -> Optional[Tenant]:
         """Authenticate an API key. Returns tenant or None."""
         key_hash = self.hash_key(api_key)
-        tenant_id = self._key_to_tenant.get(key_hash)
-        if tenant_id is None:
-            return None
-        tenant = self._tenants.get(tenant_id)
-        if tenant is None or not tenant.is_active:
-            return None
-        return tenant
+        with self._lock:
+            tenant_id = self._key_to_tenant.get(key_hash)
+            if tenant_id is None:
+                return None
+            tenant = self._tenants.get(tenant_id)
+            if tenant is None or not tenant.is_active:
+                return None
+            return tenant
 
     def list_tenants(self) -> list[dict]:
         with self._lock:

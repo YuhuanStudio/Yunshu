@@ -228,6 +228,8 @@ class GrammarBitmaskEngine:
         """
         self._constraint = constraint
         self._table_cache: dict[int, TokenStringTable] = {}
+        self._checkpoint_stack: list = []
+        self._constraint_rollback_needs_arg: bool | None = None
 
     @property
     def state(self) -> str:
@@ -279,15 +281,6 @@ class GrammarBitmaskEngine:
 
     def reset(self) -> None:
         self._constraint.reset()
-
-    # The wrapped constraint's checkpoint() may return saved state
-    # (RegexConstraint, ChoiceConstraint return a dict) or None
-    # (JsonSchemaConstraint uses internal stack).  rollback() may
-    # require the saved dict as an argument or take no args at all.
-    # We store the return value and only pass it if the constraint's
-    # rollback() signature accepts an argument.
-    _checkpoint_stack: list = []
-    _constraint_rollback_needs_arg: bool | None = None
 
     def checkpoint(self) -> None:
         if hasattr(self._constraint, "checkpoint"):

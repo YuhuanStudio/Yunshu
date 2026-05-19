@@ -24,6 +24,7 @@ from yunshu_engine.audio_engine import (
     TTSEngine,
     _audio_to_wav_bytes,
     _pcm_to_wav,
+    _wav_chunk_size,
     list_voices,
     make_wav_header,
 )
@@ -99,6 +100,42 @@ class TestWavHelpers:
         recovered = np.frombuffer(pcm_bytes, dtype=np.int16)
         np.testing.assert_array_equal(recovered, original)
 
+    def test_pcm_to_wav_overflows_on_huge_data(self):
+        """Producing a WAV from data exceeding 4 GB should raise ValueError."""
+        # data_size > 0xFFFFFFFF - 36 => overflow
+        huge_data_size = 0xFFFFFFFF  # 4,294,967,295 bytes of PCM
+        # Instead of allocating that much memory, test _wav_chunk_size directly
+        with pytest.raises(ValueError, match="exceeds 4 GB limit"):
+            _wav_chunk_size(huge_data_size)
+
+    def test_wav_chunk_size_normal(self):
+        """Normal sizes should compute without error."""
+        assert _wav_chunk_size(0) == 36
+        assert _wav_chunk_size(200) == 236
+        assert _wav_chunk_size(0xFFFFFFFF - 36) == 0xFFFFFFFF  # max allowed
+
+    def test_wav_chunk_size_overflow(self):
+        """One byte over the max should raise."""
+        with pytest.raises(ValueError):
+            _wav_chunk_size(0xFFFFFFFF - 35)  # 36 + this = 0x100000000
+
+    def test_make_wav_header_streaming_mode(self):
+        """Streaming mode should write data_size=0 in both RIFF and data fields."""
+        hdr = make_wav_header(data_size=99999, sample_rate=24000, streaming=True)
+        assert len(hdr) == 44
+        riff_size = struct.unpack_from('<I', hdr, 4)[0]
+        assert riff_size == 36  # 36 + 0
+        data_size_field = struct.unpack_from('<I', hdr, 40)[0]
+        assert data_size_field == 0
+
+    def test_make_wav_header_non_streaming_unchanged(self):
+        """Non-streaming mode should still write actual data_size."""
+        hdr = make_wav_header(data_size=5000, sample_rate=24000, streaming=False)
+        riff_size = struct.unpack_from('<I', hdr, 4)[0]
+        assert riff_size == 36 + 5000
+        data_size_field = struct.unpack_from('<I', hdr, 40)[0]
+        assert data_size_field == 5000
+
 
 # ── list_voices ──
 
@@ -173,6 +210,49 @@ class TestASREngine:
         assert stats["model"] == "whisper-small"
         assert stats["loaded"] is False
         assert stats["running"] is False
+
+    def test_transcribe_extracts_sample_rate_from_wav(self):
+        """VAD pre-check should read sample rate from the WAV fmt chunk,
+        not use a hardcoded value."""
+        engine = ASREngine("whisper-small")
+        engine._model = MagicMock()  # mark as loaded to skip start check
+
+        # Create a WAV at 48kHz — different from the default 16kHz
+        pcm = np.zeros(4800, dtype=np.int16)
+        wav_bytes = _pcm_to_wav(pcm, sample_rate=48000)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(wav_bytes)
+            tmp_path = tmp.name
+
+        # Verify the WAV we wrote has 48000 in its header
+        sr_in_file = struct.unpack_from('<I', wav_bytes, 24)[0]
+        assert sr_in_file == 48000
+
+        try:
+            # Patch model.generate to avoid actually calling mlx-audio.
+            # The VAD pre-check runs before model.generate(), and since it's
+            # silence VAD will detect no speech and return early — which is
+            # fine for this test.  The point is it doesn't crash.
+            mock_result = MagicMock()
+            mock_result.text = "hello"
+            mock_result.language = "en"
+            mock_result.segments = []
+            mock_result.total_time = 0.5
+            engine._model.generate = MagicMock(return_value=mock_result)
+
+            # The call should succeed — the old code used `self._sample_rate`
+            # which was never set (AttributeError or wrong fallback).
+            # The fix reads the sample rate from the WAV fmt chunk.
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(
+                    engine.transcribe(tmp_path, language="en")
+                )
+                assert "text" in result
+            finally:
+                loop.close()
+        finally:
+            os.unlink(tmp_path)
 
 
 # ── Module-level convenience functions ──

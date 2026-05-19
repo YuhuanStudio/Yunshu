@@ -2008,13 +2008,30 @@ class EngineCore:
                                     token_position=total_pos,
                                     request_id=rid,
                                 )
-                                # Trim real KV cache for sliding window models
+                                # Trim real KV cache for sliding window models.
+                                # When blocks slide out of the window, the KV cache
+                                # arrays must be trimmed to free memory and keep
+                                # attention computation correct.
                                 if evicted:
                                     req = self.scheduler.running.get(rid)
-                                    if req is not None and req.prompt_cache is not None:
-                                        self._sliding_window_mgr.trim_kv_cache(
-                                            req.prompt_cache, request_id=rid,
+                                    if req is not None:
+                                        # Trim the per-request prompt cache (MLX KV arrays)
+                                        if req.prompt_cache is not None:
+                                            self._sliding_window_mgr.trim_kv_cache(
+                                                req.prompt_cache, request_id=rid,
+                                            )
+                                        # Invalidate prefix cache entries whose blocks
+                                        # have slid out of the window. Without this,
+                                        # new requests may get prefix cache hits with
+                                        # stale KV blocks that the model will never
+                                        # attend to.
+                                        prefix_cache = getattr(
+                                            self.scheduler, '_prefix_cache', None,
                                         )
+                                        if prefix_cache is not None:
+                                            self._sliding_window_mgr.invalidate_prefix_cache(
+                                                prefix_cache, request_id=rid,
+                                            )
                             except Exception:
                                 logger.debug("sliding window tracking failed", exc_info=True)
 

@@ -11,6 +11,7 @@ Implements a simple RBAC system:
 import hashlib
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -181,7 +182,10 @@ class RBACManager:
             logger.warning(f"RBAC: failed to load keys from {self._persist_path}: {e}")
 
     def _save(self) -> None:
-        """Save API keys to JSON file."""
+        """Save API keys to JSON file atomically (write temp + rename).
+
+        Must be called while ``self._lock`` is held.
+        """
         if self._persist_path is None:
             return
         try:
@@ -204,8 +208,11 @@ class RBACManager:
                     for k in self._keys.values()
                 ]
             }
-            self._persist_path.write_text(json.dumps(data, indent=2))
-            self._persist_path.chmod(0o600)
+            tmp_path = str(self._persist_path) + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, str(self._persist_path))
         except OSError as e:
             logger.warning(f"RBAC: failed to save keys to {self._persist_path}: {e}")
 

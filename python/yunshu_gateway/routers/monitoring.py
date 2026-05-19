@@ -4,6 +4,10 @@ L1 gateway monitoring endpoints: system stats, model status, active requests.
 These are distinct from the L2 control-plane monitoring endpoints in
 yunshu_api/routers/monitoring.py — these are for real-time gateway
 observability by operators and Prometheus scraping.
+
+Security: All monitoring endpoints require authentication (deny-by-default).
+The /prometheus endpoint is exempt for scraper compatibility.
+Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 
 
@@ -13,7 +17,7 @@ import platform
 import subprocess
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 logger = logging.getLogger(__name__)
@@ -22,6 +26,26 @@ from ..middleware.metrics_aggregator import get_metrics_aggregator
 from ..middleware.prometheus_exporter import get_prometheus_metrics
 
 router = APIRouter(prefix="/gw/monitoring", tags=["monitoring"])
+
+
+def _check_permission(request: Request) -> None:
+    """Check auth on monitoring endpoints (deny-by-default).
+
+    Monitoring endpoints expose system internals (GPU memory, model stats,
+    request details) that should not be publicly accessible.
+    """
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+    rbac_key = getattr(request.state, "rbac_key", None)
+    if rbac_key is not None:
+        return  # Authenticated via RBAC
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if auth_token is not None and auth_token:
+        return  # Static token auth
+    raise HTTPException(
+        status_code=401,
+        detail="Monitoring requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+    )
 
 
 def _collect_engines(default_engine, model_manager) -> list[tuple[str, Any]]:
@@ -197,7 +221,9 @@ def _get_active_requests() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.get("/system")
-async def system_stats() -> dict[str, Any]:
+async def system_stats(request: Request) -> dict[str, Any]:
+    """System-level statistics: CPU, memory, GPU, runtime info."""
+    _check_permission(request)
     """System-level statistics: CPU, memory, GPU, runtime info."""
     result = {
         "cpu": _get_cpu_info(),
@@ -228,8 +254,9 @@ async def system_stats() -> dict[str, Any]:
 
 
 @router.get("/models")
-async def models_status() -> dict[str, Any]:
+async def models_status(request: Request) -> dict[str, Any]:
     """Model status list (loaded, stats, etc.)."""
+    _check_permission(request)
     models = _get_model_status()
     return {
         "models": models,
@@ -239,9 +266,11 @@ async def models_status() -> dict[str, Any]:
 
 @router.get("/requests")
 async def requests_stats(
+    request: Request,
     window: int = Query(60, ge=1, le=3600, description="Aggregation window in seconds"),
 ) -> dict[str, Any]:
     """Active and recent request statistics."""
+    _check_permission(request)
     data = _get_active_requests()
     # Add aggregator percentiles.
     agg = get_metrics_aggregator()
@@ -398,8 +427,9 @@ async def prometheus_export() -> str:
 
 
 @router.get("/kv-cache")
-async def kv_cache_stats() -> dict[str, Any]:
+async def kv_cache_stats(request: Request) -> dict[str, Any]:
     """KV prefix cache statistics."""
+    _check_permission(request)
     from ..engine import get_engine, get_model_manager
     from yunshu_engine.batched_engine import BatchedEngine
 
@@ -425,7 +455,8 @@ async def kv_cache_stats() -> dict[str, Any]:
 
 
 @router.get("/spec-decode")
-async def spec_decode_stats() -> dict[str, Any]:
+async def spec_decode_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Speculative decoding statistics."""
     from ..engine import get_engine, get_model_manager
     from yunshu_engine.batched_engine import BatchedEngine
@@ -469,7 +500,8 @@ async def spec_decode_stats() -> dict[str, Any]:
 
 
 @router.get("/radix-tree")
-async def radix_tree_stats() -> dict[str, Any]:
+async def radix_tree_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Radix tree statistics for KV cache prefix matching."""
     from ..engine import get_engine, get_model_manager
     from yunshu_engine.batched_engine import BatchedEngine
@@ -488,7 +520,8 @@ async def radix_tree_stats() -> dict[str, Any]:
 
 
 @router.get("/prefill-progress")
-async def prefill_progress() -> dict[str, Any]:
+async def prefill_progress(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Prefill progress tracking."""
     from yunshu_engine.prefill_progress import get_prefill_tracker
     tracker = get_prefill_tracker()
@@ -498,7 +531,8 @@ async def prefill_progress() -> dict[str, Any]:
 
 
 @router.get("/memory-guard")
-async def memory_guard_stats() -> dict[str, Any]:
+async def memory_guard_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Memory guard pressure statistics across all loaded engines."""
     from ..engine import get_engine, get_model_manager
 
@@ -522,7 +556,8 @@ async def memory_guard_stats() -> dict[str, Any]:
 
 
 @router.get("/ssd-cache")
-async def ssd_cache_stats() -> dict[str, Any]:
+async def ssd_cache_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """SSD KV cache statistics across all loaded engines."""
     from ..engine import get_engine, get_model_manager
 
@@ -541,7 +576,8 @@ async def ssd_cache_stats() -> dict[str, Any]:
 
 
 @router.get("/data-parallel")
-async def data_parallel_stats() -> dict[str, Any]:
+async def data_parallel_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """DataParallelRouter statistics — load distribution across replicas.
 
     When the DP middleware is active, includes health checking and per-node
@@ -564,7 +600,8 @@ async def data_parallel_stats() -> dict[str, Any]:
 
 
 @router.get("/per-model")
-async def per_model_stats() -> dict[str, Any]:
+async def per_model_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Per-model request statistics."""
     try:
         from yunshu_engine.server_metrics import get_server_metrics
@@ -581,7 +618,8 @@ async def per_model_stats() -> dict[str, Any]:
 
 
 @router.get("/thinking-segments")
-async def thinking_segment_stats() -> dict[str, Any]:
+async def thinking_segment_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Thinking segment KV substore statistics across all loaded engines."""
     from ..engine import get_engine, get_model_manager
 
@@ -597,7 +635,8 @@ async def thinking_segment_stats() -> dict[str, Any]:
 
 
 @router.get("/metal-kernels")
-async def metal_kernel_stats() -> dict[str, Any]:
+async def metal_kernel_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Metal kernel manager status across all loaded engines.
 
     Reports kernel compilation status, available kernels, and per-engine
@@ -627,7 +666,8 @@ async def metal_kernel_stats() -> dict[str, Any]:
 
 
 @router.get("/ane-embeddings")
-async def ane_embedding_stats() -> dict[str, Any]:
+async def ane_embedding_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """ANE embedding co-processor status.
 
     Reports ANE availability, CoreML model compilation status, inference
@@ -642,7 +682,8 @@ async def ane_embedding_stats() -> dict[str, Any]:
 
 
 @router.get("/external-prefill")
-async def external_prefill_stats() -> dict[str, Any]:
+async def external_prefill_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """External prefill server/client statistics.
 
     Reports disaggregated prefill status when YUNSHU_EXTERNAL_PREFILL=1 is set.
@@ -658,7 +699,8 @@ async def external_prefill_stats() -> dict[str, Any]:
 
 
 @router.get("/health-dashboard")
-async def health_dashboard() -> dict[str, Any]:
+async def health_dashboard(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Aggregated health dashboard with 0-100 scoring.
 
     Collects system resources, model status, request health,
@@ -677,7 +719,8 @@ async def health_dashboard() -> dict[str, Any]:
 
 
 @router.get("/reasoning-tokens")
-async def reasoning_tokens_stats() -> dict[str, Any]:
+async def reasoning_tokens_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Reasoning token usage across all engines.
 
     Reports thinking/reasoning token counts from BatchedEngine
@@ -716,7 +759,8 @@ async def reasoning_tokens_stats() -> dict[str, Any]:
 
 
 @router.get("/response-cache")
-async def response_cache_stats() -> dict[str, Any]:
+async def response_cache_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Response cache hit/miss statistics.
 
     Shows per-engine response cache metrics (hits, misses) and
@@ -750,7 +794,8 @@ async def response_cache_stats() -> dict[str, Any]:
 
 
 @router.get("/inflight-prefix-sharing")
-async def inflight_prefix_sharing_stats() -> dict[str, Any]:
+async def inflight_prefix_sharing_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Inflight prefix sharing statistics (SGLang cache_unfinished_req pattern).
 
     Tracks how many concurrent requests share KV prefix blocks during
@@ -765,7 +810,8 @@ async def inflight_prefix_sharing_stats() -> dict[str, Any]:
 
 
 @router.get("/request-coalescer")
-async def request_coalescer_stats() -> dict[str, Any]:
+async def request_coalescer_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Request coalescing statistics (batch simultaneous requests for same model).
 
     Shows how many requests were batched together within the coalescing
@@ -781,7 +827,8 @@ async def request_coalescer_stats() -> dict[str, Any]:
 
 
 @router.get("/token-scheduler")
-async def token_scheduler_stats() -> dict[str, Any]:
+async def token_scheduler_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Token-level scheduler statistics (WFQ token budget + priority inversion).
 
     Shows token budget allocation stats, fairness metrics, and priority
@@ -815,7 +862,8 @@ async def token_scheduler_stats() -> dict[str, Any]:
 
 
 @router.get("/kv-migration")
-async def kv_migration_stats() -> dict[str, Any]:
+async def kv_migration_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """KV migration statistics (multi-tier GPU/CPU/SSD block management).
 
     Shows how many KV blocks have been migrated between tiers,
@@ -839,7 +887,8 @@ async def kv_migration_stats() -> dict[str, Any]:
 
 
 @router.get("/attention-eviction")
-async def attention_eviction_stats() -> dict[str, Any]:
+async def attention_eviction_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """H2O-style attention-score-based KV eviction statistics.
 
     Shows how many requests are being tracked, total blocks scored,
@@ -865,7 +914,8 @@ async def attention_eviction_stats() -> dict[str, Any]:
 
 
 @router.get("/batch-size")
-async def batch_size_stats() -> dict[str, Any]:
+async def batch_size_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Batch size distribution statistics from server metrics.
 
     Shows batch size percentiles (p50, p99) for scheduler steps.
@@ -880,7 +930,8 @@ async def batch_size_stats() -> dict[str, Any]:
 
 
 @router.get("/auto-tuner")
-async def auto_tuner_stats() -> dict[str, Any]:
+async def auto_tuner_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Auto-tuner state and tuning decisions.
 
     Returns the current tunable parameters, profiling state, SLO compliance,
@@ -909,7 +960,8 @@ async def auto_tuner_stats() -> dict[str, Any]:
 
 
 @router.get("/memory-pressure")
-async def memory_pressure_stats() -> dict[str, Any]:
+async def memory_pressure_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Memory pressure and guard statistics across all loaded engines.
 
     Combines MemoryGuard admission-control stats with memory monitor
@@ -958,7 +1010,8 @@ _ENDPOINT_MAP: dict[str, Any] = {}
 
 
 @router.get("/all")
-async def all_monitoring_stats() -> dict[str, Any]:
+async def all_monitoring_stats(request: Request) -> dict[str, Any]:
+    _check_permission(request)
     """Aggregate all monitoring stats into a single response.
 
     Returns all monitoring data in one HTTP call, reducing the WebUI

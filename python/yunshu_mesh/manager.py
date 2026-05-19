@@ -333,7 +333,7 @@ class MeshManager:
                 failed_node = n
                 break
         if failed_node:
-            failed_node.state = MeshNodeState.OFFLINE
+            failed_node.mark_unhealthy(reason="node_failure")
             self._publish_event("node_state_change", node_id, {
                 "new_state": "offline",
                 "reason": "failure",
@@ -381,10 +381,10 @@ class MeshManager:
         with self._node_lock:
             if node.state == MeshNodeState.OFFLINE:
                 return
-            node.state = MeshNodeState.OFFLINE
+            node.mark_unhealthy(reason="peer_lost")
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
-                topo_node.state = MeshNodeState.OFFLINE
+                topo_node.mark_unhealthy(reason="peer_lost")
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:
@@ -401,7 +401,7 @@ class MeshManager:
             # Guard: skip if already handled by _on_peer_lost or a prior timeout
             if node.state == MeshNodeState.OFFLINE:
                 return
-            node.state = MeshNodeState.OFFLINE
+            node.mark_unhealthy(reason="node_timeout")
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:
@@ -417,10 +417,11 @@ class MeshManager:
             # Guard: skip if node is already READY (duplicate recovery callback)
             if node.state == MeshNodeState.READY:
                 return
-            node.state = MeshNodeState.READY
+            # Use mark_healthy to go through RECOVERING → READY path
+            node.mark_healthy()
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
-                topo_node.state = MeshNodeState.READY
+                topo_node.mark_healthy()
             if self._dp_router:
                 self._dp_router.mark_available(node.node_id)
             if self._disagg_router:

@@ -602,6 +602,171 @@ class SlidingWindowKVManager:
         self._stats.memory_saved_bytes = blocks_evicted * per_block_bytes
         return self._stats
 
+    def trim_kv_cache(self, kv_cache: Any, request_id: str = "") -> int:
+        """Trim a real MLX KV cache to remove entries outside the sliding window.
+
+        Called by EngineCore after ``on_new_token`` returns evicted block IDs.
+        For MLX's ``make_prompt_cache`` format, each layer's cache is a list of
+        ``(key, value)`` tuples shaped ``(seq_len, num_heads, head_dim)``.
+        This method slices off positions that fell outside the window.
+
+        Args:
+            kv_cache: The MLX prompt cache (list of (key, value) tuples per layer).
+            request_id: The request ID (for logging).
+
+        Returns:
+            Number of token positions trimmed from the cache arrays.
+        """
+        if kv_cache is None:
+            return 0
+
+        blocks = self._request_blocks.get(request_id, [])
+        current_pos = self._request_positions.get(request_id, 0)
+
+        if not blocks or current_pos <= 0:
+            return 0
+
+        # Compute the number of active positions within the window.
+        # System prompt blocks are always kept, so the effective window
+        # start for non-system blocks is:
+        window_start = max(0, current_pos - self._window_size + self._block_size)
+
+        # The total number of tokens to keep = system prompt tokens + window tokens.
+        # System prompt blocks always remain; non-system blocks within window remain.
+        active_positions = set()
+        for block in blocks:
+            active_positions.add(block.token_position)
+
+        # For MLX KV cache (list of layers, each layer is (key, value) arrays):
+        # Trim arrays to keep only the last window_size positions.
+        # System prompt blocks are at the start and are always kept.
+        n_system = sum(1 for b in blocks if b.is_system_prompt)
+        system_tokens = n_system * self._block_size
+
+        # The cache should keep: system_tokens + window_tokens
+        # where window_tokens = min(current_pos - system_tokens, window_size)
+        window_tokens = min(current_pos - system_tokens, self._window_size)
+        keep_tokens = system_tokens + max(0, window_tokens)
+
+        trimmed = 0
+        try:
+            for layer_cache in kv_cache:
+                if layer_cache is None:
+                    continue
+                # MLX prompt cache: each entry is (key, value) or a cache object
+                if isinstance(layer_cache, (list, tuple)) and len(layer_cache) == 2:
+                    key, value = layer_cache
+                    seq_len = key.shape[0] if hasattr(key, 'shape') else 0
+                    if seq_len > keep_tokens:
+                        trim_from_start = seq_len - keep_tokens
+                        # Keep system prompt tokens + last window tokens
+                        if trim_from_start > 0 and n_system > 0:
+                            # Keep system prefix + window suffix
+                            import mlx.core as mx
+                            new_key = mx.concatenate(
+                                [key[:system_tokens], key[seq_len - window_tokens:]],
+                                axis=0,
+                            )
+                            new_value = mx.concatenate(
+                                [value[:system_tokens], value[seq_len - window_tokens:]],
+                                axis=0,
+                            )
+                            layer_cache = (new_key, new_value)
+                            trimmed += trim_from_start
+                        elif trim_from_start > 0:
+                            import mlx.core as mx
+                            new_key = key[trim_from_start:]
+                            new_value = value[trim_from_start:]
+                            layer_cache = (new_key, new_value)
+                            trimmed += trim_from_start
+        except Exception:
+            logger.debug(
+                "trim_kv_cache failed for request %s",
+                request_id, exc_info=True,
+            )
+
+        if trimmed > 0:
+            self._stats.kv_trimmed += trimmed
+            logger.debug(
+                "SlidingWindowKV trimmed %d positions for request %s "
+                "(keep=%d, window=%d)",
+                trimmed, request_id, keep_tokens, self._window_size,
+            )
+
+        return trimmed
+
+    def invalidate_prefix_cache(
+        self,
+        prefix_cache: Any,
+        request_id: str = "",
+    ) -> int:
+        """Invalidate prefix cache entries whose blocks have slid out of the window.
+
+        When sliding window attention evicts blocks, any prefix cache entries
+        that reference those blocks must be invalidated. Otherwise, new requests
+        may receive stale KV data from the prefix cache -- blocks that the model
+        will never attend to, wasting memory and potentially causing incorrect
+        attention computation.
+
+        Args:
+            prefix_cache: The KV prefix cache (has ``evict_by_prefix_len`` or
+                ``invalidate`` method). If None, no-op.
+            request_id: The request ID (for logging).
+
+        Returns:
+            Number of prefix cache entries invalidated, or 0 if no-op.
+        """
+        if prefix_cache is None:
+            return 0
+
+        blocks = self._request_blocks.get(request_id, [])
+        current_pos = self._request_positions.get(request_id, 0)
+        if not blocks or current_pos <= 0:
+            return 0
+
+        # Find the minimum token position among non-system blocks.
+        # Prefix cache entries shorter than this position are stale because
+        # the sliding window has moved past them.
+        window_start = max(0, current_pos - self._window_size + self._block_size)
+
+        # Non-system blocks below window_start have been evicted.
+        evicted_blocks = [
+            b for b in blocks
+            if not b.is_system_prompt and b.token_position < window_start
+        ]
+        if not evicted_blocks:
+            return 0
+
+        # Compute the maximum stale prefix length (in tokens).
+        # Any prefix cache entry with <= this many tokens is stale.
+        max_stale_tokens = max(b.token_position for b in evicted_blocks)
+        max_stale_tokens = min(max_stale_tokens, current_pos)
+
+        if max_stale_tokens <= 0:
+            return 0
+
+        # Try to invalidate stale entries in the prefix cache.
+        invalidated = 0
+        try:
+            # Method 1: prefix cache has a dedicated invalidation method.
+            if hasattr(prefix_cache, 'invalidate_up_to'):
+                invalidated = prefix_cache.invalidate_up_to(max_stale_tokens)
+            # Method 2: evict entries with a token count filter.
+            elif hasattr(prefix_cache, 'evict_by_max_tokens'):
+                invalidated = prefix_cache.evict_by_max_tokens(max_stale_tokens)
+            else:
+                logger.debug(
+                    "Prefix cache has no invalidation method; "
+                    "sliding window eviction may serve stale KV data"
+                )
+        except Exception:
+            logger.debug(
+                "Prefix cache invalidation failed for request %s",
+                request_id, exc_info=True,
+            )
+
+        return invalidated
+
     def remove_request(self, request_id: str) -> None:
         """Remove all blocks for a completed request."""
         self._request_blocks.pop(request_id, None)

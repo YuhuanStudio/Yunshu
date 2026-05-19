@@ -44,6 +44,7 @@ _rbac_init_lock = __import__("threading").Lock()
 
 
 def _get_rbac_manager(request: Request):
+    import os
     from yunshu_control.role_manager import RBACManager
 
     manager = getattr(request.app.state, "rbac_manager", None)
@@ -52,7 +53,14 @@ def _get_rbac_manager(request: Request):
             # Double-checked locking after acquiring the lock
             manager = getattr(request.app.state, "rbac_manager", None)
             if manager is None:
-                manager = RBACManager()
+                persist_path = os.environ.get(
+                    "YUNSHU_RBAC_PATH",
+                    os.path.join(
+                        os.environ.get("YUNSHU_BASE_PATH", os.path.expanduser("~/.yunshu")),
+                        "rbac_keys.json",
+                    ),
+                )
+                manager = RBACManager(persist_path=persist_path)
                 request.app.state.rbac_manager = manager
     return manager
 

@@ -416,6 +416,174 @@ class TestWaterFillingRebalancer:
         assert total == 32
 
 
+class TestWaterFillingEdgeCases:
+    """Edge-case coverage for the WaterFillingRebalancer zero-layer and
+    capacity bugs."""
+
+    def test_single_node_gets_all_layers(self):
+        """Single node should receive all layers directly — fast path."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [_node("solo")]
+        result = rebalancer.rebalance([], nodes, 32)
+        assert len(result) == 1
+        assert result[0].num_layers == 32
+        assert result[0].start_layer == 0
+        assert result[0].end_layer == 32
+
+    def test_single_node_with_existing_alloc(self):
+        """Single node with stale multi-node allocation — fast path."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [_node("only")]
+        current = [
+            StageAllocation("only", 0, 10, 10),
+            StageAllocation("gone", 10, 20, 10),
+        ]
+        result = rebalancer.rebalance(current, nodes, 20)
+        assert len(result) == 1
+        assert result[0].num_layers == 20
+
+    def test_zero_capacity_node_gets_no_layers(self):
+        """A zero-capacity node should never receive layers."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [_node("capable", memory_gb=64), _bare_node("dead")]
+        current = [StageAllocation("capable", 0, 32, 32)]
+        result = rebalancer.rebalance(current, nodes, 32)
+        total = sum(s.num_layers for s in result)
+        assert total == 32
+        # The dead node should have 0 layers
+        dead_stage = [s for s in result if s.node_id == "dead"][0]
+        assert dead_stage.num_layers == 0
+        # The capable node gets all 32
+        capable_stage = [s for s in result if s.node_id == "capable"][0]
+        assert capable_stage.num_layers == 32
+
+    def test_zero_capacity_nodes_no_acceptors(self):
+        """With mixed capable/zero-capacity nodes, zero-cap nodes stay at 0."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [
+            _node("a", memory_gb=64),
+            _bare_node("z1"),
+            _bare_node("z2"),
+        ]
+        current = [StageAllocation("a", 0, 32, 32)]
+        result = rebalancer.rebalance(current, nodes, 32)
+        total = sum(s.num_layers for s in result)
+        assert total == 32
+        # Zero-cap nodes must have 0
+        for s in result:
+            if s.node_id.startswith("z"):
+                assert s.num_layers == 0
+
+    def test_all_zero_capacity_equal_fallback(self):
+        """All nodes zero-capacity triggers equal fallback."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [_bare_node("n0"), _bare_node("n1"), _bare_node("n2")]
+        result = rebalancer.rebalance([], nodes, 6)
+        assert len(result) == 3
+        total = sum(s.num_layers for s in result)
+        assert total == 6
+        for s in result:
+            assert s.num_layers == 2
+
+    def test_more_nodes_than_layers_equal_fallback(self):
+        """Equal fallback with more nodes than layers — some get 0."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [_bare_node(f"n{i}") for i in range(5)]
+        result = rebalancer.rebalance([], nodes, 3)
+        total = sum(s.num_layers for s in result)
+        assert total == 3
+        # First 3 nodes get 1 each, last 2 get 0
+        nonzero = sum(1 for s in result if s.num_layers > 0)
+        assert nonzero == 3
+
+    def test_adjust_total_skips_zero_ideal(self):
+        """_adjust_total should not add layers to nodes with ideal==0."""
+        rebalancer = WaterFillingRebalancer()
+        # 2 capable + 1 zero-cap node, starting from all-zero current
+        nodes = [
+            _node("a", memory_gb=64),
+            _node("b", memory_gb=64),
+            _bare_node("z"),
+        ]
+        result = rebalancer.rebalance([], nodes, 10)
+        total = sum(s.num_layers for s in result)
+        assert total == 10
+        # Zero-cap node must have 0
+        dead = [s for s in result if s.node_id == "z"][0]
+        assert dead.num_layers == 0
+        # Capable nodes split the layers
+        alive = [s for s in result if s.node_id != "z"]
+        assert sum(s.num_layers for s in alive) == 10
+
+    def test_compute_stats_no_division_by_zero(self):
+        """_compute_stats with all-zero stages should not raise ZeroDivisionError."""
+        allocator = LayerAllocator()
+        # Force stats computation with empty stages
+        stages = [
+            StageAllocation("n0", 0, 0, 0),
+            StageAllocation("n1", 0, 0, 0),
+        ]
+        allocator._last_alloc = stages
+        allocator._last_strategy = LayerAllocationStrategy.EQUAL
+        allocator._last_stats = allocator._compute_stats(0, stages, LayerAllocationStrategy.EQUAL)
+        stats = allocator.get_stats()
+        assert stats is not None
+        assert stats.balance_ratio == 0.0
+        assert stats.max_stage_layers == 0
+        assert stats.min_stage_layers == 0
+
+    def test_rebalance_total_layers_preserved_with_dead_node(self):
+        """When a node leaves, its layers are fully redistributed to survivors."""
+        rebalancer = WaterFillingRebalancer()
+        # n1 left, n0 and n2 remain (equal capacity)
+        nodes = [_node("n0", memory_gb=64), _node("n2", memory_gb=64)]
+        current = [
+            StageAllocation("n0", 0, 16, 16),
+            StageAllocation("n1", 16, 32, 16),  # n1 left — 16 layers to redistribute
+            StageAllocation("n2", 32, 48, 16),
+        ]
+        result = rebalancer.rebalance(current, nodes, 48)
+        total = sum(s.num_layers for s in result)
+        assert total == 48
+        # n2 had 16, n0 had 16, n1's 16 should be split between n0 and n2
+        assert result[0].num_layers > 16  # n0 should gain some
+        assert result[1].num_layers > 16  # n2 should gain some
+
+    def test_rebalance_zero_total_layers_returns_empty(self):
+        """Rebalance with total_layers=0 returns empty list."""
+        rebalancer = WaterFillingRebalancer()
+        result = rebalancer.rebalance([], [_node("n0")], 0)
+        assert result == []
+
+    def test_rebalance_empty_nodes_returns_empty(self):
+        """Rebalance with empty nodes list returns empty list."""
+        rebalancer = WaterFillingRebalancer()
+        result = rebalancer.rebalance([], [], 32)
+        assert result == []
+
+    def test_negative_layers_returns_empty(self):
+        """Rebalance with negative total_layers returns empty list."""
+        rebalancer = WaterFillingRebalancer()
+        result = rebalancer.rebalance([], [_node("n0")], -5)
+        assert result == []
+
+    def test_all_nodes_full_no_transfer(self):
+        """When all nodes are exactly at ideal, no transfers happen."""
+        rebalancer = WaterFillingRebalancer()
+        nodes = [_node("n0", memory_gb=64), _node("n1", memory_gb=64)]
+        # Already perfectly balanced
+        current = [
+            StageAllocation("n0", 0, 16, 16),
+            StageAllocation("n1", 16, 32, 16),
+        ]
+        result = rebalancer.rebalance(current, nodes, 32)
+        total = sum(s.num_layers for s in result)
+        assert total == 32
+        # Should remain balanced
+        assert result[0].num_layers == 16
+        assert result[1].num_layers == 16
+
+
 # ===================================================================
 # Test AllocationStats
 # ===================================================================

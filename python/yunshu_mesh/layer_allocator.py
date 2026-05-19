@@ -137,36 +137,62 @@ class WaterFillingRebalancer:
             return []
 
         num_nodes = len(nodes)
+
+        # Single-node fast path: no rebalancing needed
+        if num_nodes == 1:
+            return [StageAllocation(
+                node_id=nodes[0].node_id,
+                start_layer=0,
+                end_layer=total_layers,
+                num_layers=total_layers,
+            )]
+
         total_capacity = sum(n.capacity_score() for n in nodes)
 
         if total_capacity <= 0:
             # All nodes have zero capacity — fall back to equal split
             return self._equal_fallback(nodes, total_layers)
 
-        # Compute ideal layer counts
-        ideal = []
-        for node in nodes:
-            share = total_layers * (node.capacity_score() / total_capacity)
-            ideal.append(share)
+        # Identify nodes with positive capacity — only they receive layers.
+        # Zero-capacity nodes get 0 layers and are excluded from water-filling.
+        capable_mask = [n.capacity_score() > 0 for n in nodes]
+        capable_indices = [i for i, c in enumerate(capable_mask) if c]
+
+        if not capable_indices:
+            # Shouldn't reach here (total_capacity > 0 implies some capable),
+            # but guard against floating-point edge cases.
+            return self._equal_fallback(nodes, total_layers)
+
+        # Compute ideal layer counts (only for capable nodes)
+        ideal = [0.0] * num_nodes
+        for i in capable_indices:
+            share = total_layers * (nodes[i].capacity_score() / total_capacity)
+            ideal[i] = share
 
         # Start from current allocation mapped to surviving nodes
         alloc_map: dict[str, int] = {}
         for sa in current_alloc:
             alloc_map[sa.node_id] = sa.num_layers
 
-        # Initialize allocation: keep current if node still exists, else 0
+        # Initialize allocation: keep current if node still exists, else 0.
+        # Zero-capacity nodes start at 0 and stay at 0.
         current = []
-        for node in nodes:
-            current.append(alloc_map.get(node.node_id, 0))
+        for i, node in enumerate(nodes):
+            if not capable_mask[i]:
+                current.append(0)
+            else:
+                current.append(alloc_map.get(node.node_id, 0))
 
-        # Ensure total is correct — scale proportionally if nodes changed
+        # Ensure total is correct — scale proportionally if nodes changed.
+        # _adjust_total respects ideal[] which is 0 for zero-capacity nodes.
         current_total = sum(current)
         if current_total != total_layers:
-            # Redistribute excess/deficit proportionally
             diff = total_layers - current_total
             self._adjust_total(current, ideal, diff)
 
-        # Water-filling: move layers from donors to acceptors
+        # Water-filling: move layers from donors to acceptors.
+        # Zero-capacity nodes (ideal[i]==0) are never acceptors; they may be
+        # donors if they somehow have layers from a prior allocation.
         improved = True
         max_iterations = total_layers * 2  # safety bound
         iteration = 0
@@ -179,7 +205,7 @@ class WaterFillingRebalancer:
             donors = []  # (index, excess)
             acceptors = []  # (index, deficit)
 
-            for i, node in enumerate(nodes):
+            for i in range(num_nodes):
                 diff = ideal[i] - current[i]
                 if diff >= self._threshold:
                     acceptors.append((i, diff))
@@ -224,42 +250,62 @@ class WaterFillingRebalancer:
         ideal: list[float],
         diff: int,
     ) -> None:
-        """Adjust current allocations to match total_layers."""
+        """Adjust current allocations to match total_layers.
+
+        Nodes with ideal[i] == 0 are skipped — they should never receive
+        layers.  The minimum allocation per node is 0 (not negative).
+        """
         if diff == 0:
             return
 
+        n = len(current)
+
         if diff > 0:
-            # Add layers to most under-provisioned
+            # Add layers to most under-provisioned nodes.
+            # Skip nodes with ideal == 0 (zero-capacity).
             for _ in range(diff):
                 worst_idx = -1
                 worst_gap = float("-inf")
-                for i in range(len(current)):
+                for i in range(n):
+                    if ideal[i] <= 0:
+                        continue  # zero-capacity node — skip
                     gap = ideal[i] - current[i]
                     if gap > worst_gap:
                         worst_gap = gap
                         worst_idx = i
-                if worst_idx >= 0:
-                    current[worst_idx] += 1
+                if worst_idx < 0:
+                    break  # no eligible node found
+                current[worst_idx] += 1
         else:
-            # Remove layers from most over-provisioned
+            # Remove layers from most over-provisioned.
+            # Never go below 0.
             for _ in range(-diff):
                 worst_idx = -1
                 worst_gap = float("-inf")
-                for i in range(len(current)):
+                for i in range(n):
+                    if current[i] <= 0:
+                        continue  # nothing to remove
                     gap = current[i] - ideal[i]
                     if gap > worst_gap:
                         worst_gap = gap
                         worst_idx = i
-                if worst_idx >= 0:
-                    current[worst_idx] = max(0, current[worst_idx] - 1)
+                if worst_idx < 0:
+                    break  # nothing left to remove
+                current[worst_idx] -= 1
 
     def _equal_fallback(
         self,
         nodes: list[NodeProfile],
         total_layers: int,
     ) -> list[StageAllocation]:
-        """Fall back to equal split when no capacity info available."""
+        """Fall back to equal split when no capacity info available.
+
+        When total_layers < len(nodes), only the first total_layers nodes
+        receive 1 layer each; the rest get 0.
+        """
         n = len(nodes)
+        if total_layers <= 0:
+            return self._build_stages(nodes, [0] * n, 0)
         base = total_layers // n
         remainder = total_layers % n
         current = []
@@ -274,11 +320,15 @@ class WaterFillingRebalancer:
         layer_counts: list[int],
         total_layers: int,
     ) -> list[StageAllocation]:
-        """Convert a list of layer counts into StageAllocation objects."""
+        """Convert a list of layer counts into StageAllocation objects.
+
+        Nodes with 0 layers are included as degenerate stages so the caller
+        can still map node_id → stage, but their start_layer == end_layer.
+        """
         stages = []
         offset = 0
         for i, node in enumerate(nodes):
-            count = layer_counts[i]
+            count = layer_counts[i] if i < len(layer_counts) else 0
             stages.append(StageAllocation(
                 node_id=node.node_id,
                 start_layer=offset,
@@ -702,12 +752,20 @@ class LayerAllocator:
 
         layer_counts = [s.num_layers for s in stages if s.num_layers > 0]
         if not layer_counts:
-            layer_counts = [0]
+            return AllocationStats(
+                total_layers=num_layers,
+                num_stages=len(stages),
+                balance_ratio=0.0,
+                max_stage_layers=0,
+                min_stage_layers=0,
+                strategy=strategy_str,
+                stages=stages,
+            )
 
         return AllocationStats(
             total_layers=num_layers,
             num_stages=len(stages),
-            balance_ratio=min(layer_counts) / max(layer_counts) if max(layer_counts) > 0 else 0.0,
+            balance_ratio=min(layer_counts) / max(layer_counts),
             max_stage_layers=max(layer_counts),
             min_stage_layers=min(layer_counts),
             strategy=strategy_str,

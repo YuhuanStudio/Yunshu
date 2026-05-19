@@ -693,6 +693,41 @@ def create_app() -> FastAPI:
     )
     app.state.request_coalescer = get_request_coalescer()
     app.state.streaming_buffer = get_streaming_buffer()
+
+    # ── RBAC persistence: load keys from disk on startup ──
+    rbac_path = os.environ.get(
+        "YUNSHU_RBAC_PATH",
+        os.path.join(
+            os.environ.get("YUNSHU_BASE_PATH", os.path.expanduser("~/.yunshu")),
+            "rbac_keys.json",
+        ),
+    )
+    try:
+        from yunshu_control.role_manager import RBACManager
+        rbac_manager = RBACManager(persist_path=rbac_path)
+        app.state.rbac_manager = rbac_manager
+        if rbac_manager.is_enabled():
+            logger.info(f"RBAC: loaded keys from {rbac_path}")
+    except Exception as e:
+        logger.warning(f"RBAC: failed to initialize with persist_path={rbac_path}: {e}")
+
+    # ── Tenant persistence: load tenants from disk on startup ──
+    tenant_path = os.environ.get(
+        "YUNSHU_TENANT_PATH",
+        os.path.join(
+            os.environ.get("YUNSHU_BASE_PATH", os.path.expanduser("~/.yunshu")),
+            "tenants.json",
+        ),
+    )
+    try:
+        from yunshu_control.tenant_store import TenantManager
+        tenant_manager = TenantManager(persist_path=tenant_path)
+        app.state.tenant_manager = tenant_manager
+        tenants = tenant_manager.list_tenants()
+        if tenants:
+            logger.info(f"TenantManager: loaded {len(tenants)} tenants from {tenant_path}")
+    except Exception as e:
+        logger.warning(f"TenantManager: failed to initialize with persist_path={tenant_path}: {e}")
     # Response cache: opt-in via YUNSHU_RESPONSE_CACHE=1
     if os.environ.get("YUNSHU_RESPONSE_CACHE", "").lower() in ("1", "true", "yes"):
         app.state.response_cache = get_response_cache()

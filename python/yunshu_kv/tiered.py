@@ -511,8 +511,11 @@ class TieredKVCacheManager:
                 + all_promoted
                 + existing[hot_matched_count + len(all_promoted):]
             )
-            table.total_tokens = (len(table._blocks) - 1) * block_size
-            table._last_block_occupancy = 0
+            table.total_tokens = match.num_matched_tokens
+            if match.unmatched_token_ids:
+                table._last_block_occupancy = 0
+            else:
+                table._last_block_occupancy = block_size
             match.matched_blocks = match.matched_blocks + all_promoted
 
         return table, match
@@ -560,9 +563,6 @@ class TieredKVCacheManager:
 
 
 # ── Background SSD Flush Thread ──
-
-
-import threading
 
 
 class BackgroundSSDFlush:

@@ -44,6 +44,27 @@ def _audio_to_wav_bytes(audio: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RAT
     return _pcm_to_wav(pcm, sample_rate)
 
 
+def _wav_chunk_size(data_size: int) -> int:
+    """Calculate RIFF chunk size with overflow protection.
+
+    Standard WAV uses 32-bit unsigned ints, so max RIFF chunk size is
+    0xFFFFFFFF (4,294,967,295 bytes).  The RIFF size field equals
+    ``36 + data_size``.  If the audio exceeds ~4 GB this overflows and
+    produces a corrupt header.
+
+    For data that would overflow, raise ``ValueError`` — callers should
+    split into multiple files or switch to a streaming format.
+    """
+    riff_size = 36 + data_size
+    if riff_size > 0xFFFFFFFF:
+        raise ValueError(
+            f"WAV data_size={data_size} exceeds 4 GB limit "
+            f"(RIFF chunk would overflow 32-bit field).  "
+            f"Split the audio or use a streaming-capable container format."
+        )
+    return riff_size
+
+
 def _pcm_to_wav(pcm: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE, num_channels: int = 1) -> bytes:
     """Encode 16-bit PCM samples into a WAV byte string."""
     buf = io.BytesIO()
@@ -53,7 +74,7 @@ def _pcm_to_wav(pcm: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE, num_cha
 
     # RIFF header
     buf.write(b'RIFF')
-    buf.write(struct.pack('<I', 36 + data_size))
+    buf.write(struct.pack('<I', _wav_chunk_size(data_size)))
     buf.write(b'WAVE')
     # fmt chunk
     buf.write(b'fmt ')
@@ -76,6 +97,7 @@ def make_wav_header(
     data_size: int,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     num_channels: int = 1,
+    streaming: bool = False,
 ) -> bytes:
     """Generate a WAV header for raw PCM data.
 
@@ -84,16 +106,26 @@ def make_wav_header(
 
     Args:
         data_size: Number of bytes of raw PCM data that will follow.
+            Ignored when *streaming* is True.
         sample_rate: Sample rate in Hz.
         num_channels: Number of audio channels.
+        streaming: If True, write ``data_size=0`` to signal an unknown-length
+            stream.  Some WAV players (and the Yunshu gateway) interpret a
+            zero-size data chunk as "read until EOF".  This avoids lying to
+            the client about the total length.
 
     Returns:
         44-byte WAV header.
     """
     sample_width = 2  # 16-bit
+    if streaming:
+        effective_data_size = 0  # signals unknown length
+    else:
+        effective_data_size = data_size
+
     buf = io.BytesIO()
     buf.write(b'RIFF')
-    buf.write(struct.pack('<I', 36 + data_size))
+    buf.write(struct.pack('<I', _wav_chunk_size(effective_data_size)))
     buf.write(b'WAVE')
     buf.write(b'fmt ')
     buf.write(struct.pack('<I', 16))
@@ -104,7 +136,7 @@ def make_wav_header(
     buf.write(struct.pack('<H', num_channels * sample_width))
     buf.write(struct.pack('<H', sample_width * 8))
     buf.write(b'data')
-    buf.write(struct.pack('<I', data_size))
+    buf.write(struct.pack('<I', effective_data_size))
     return buf.getvalue()
 
 
@@ -352,13 +384,15 @@ class TTSEngine:
                     pcm = (audio * 32767).astype(np.int16)
                     raw_bytes = pcm.tobytes()
                     if _first_chunk:
-                        # Send a WAV header with a large-but-valid data_size.
-                        # Using 0xFFFFFFFF overflows the RIFF chunk size field.
-                        # Clients handle unknown-length via the stream ending.
+                        # Send a WAV header with data_size=0 to signal
+                        # unknown length.  Clients read until the stream
+                        # ends.  This avoids a fabricated size that could
+                        # be wrong or overflow the 32-bit RIFF field.
                         wav_header = make_wav_header(
-                            data_size=0x7FFFFF00,  # Large valid size, avoids 32-bit overflow
+                            data_size=0,
                             sample_rate=int(sample_rate),
                             num_channels=1,
+                            streaming=True,
                         )
                         _thread_queue.put_nowait({
                             "audio": wav_header + raw_bytes,
@@ -554,8 +588,12 @@ class ASREngine:
                 import numpy as np
                 with open(audio_path, "rb") as f:
                     raw = f.read()
-                # Try to detect WAV header and extract raw PCM
+                # Try to detect WAV header and extract raw PCM + sample rate
+                file_sr: int | None = None
                 if raw[:4] == b"RIFF":
+                    # Extract sample rate from the fmt chunk (bytes 24-27)
+                    if len(raw) >= 28 and raw[12:16] == b"fmt ":
+                        file_sr = struct.unpack_from('<I', raw, 24)[0]
                     # Find the 'data' chunk — skip any extra chunks
                     data_offset = raw.find(b"data")
                     if data_offset != -1 and len(raw) > data_offset + 8:
@@ -569,11 +607,11 @@ class ASREngine:
                 # Resample to VAD's expected sample rate if different
                 # (VAD models typically expect 16kHz)
                 vad_sr = self._vad.sample_rate
-                file_sr = self._sample_rate if hasattr(self, '_sample_rate') and self._sample_rate else 16000
-                if file_sr != vad_sr and file_sr > 0 and len(samples) > 0:
+                effective_file_sr = file_sr if file_sr is not None else 16000
+                if effective_file_sr != vad_sr and effective_file_sr > 0 and len(samples) > 0:
                     try:
                         import scipy.signal
-                        num_samples = int(len(samples) * vad_sr / file_sr)
+                        num_samples = int(len(samples) * vad_sr / effective_file_sr)
                         samples = scipy.signal.resample(samples, num_samples)
                     except ImportError:
                         pass  # No scipy — proceed with native rate, VAD may be less accurate
