@@ -155,6 +155,8 @@ class AdaptiveBatchScheduler:
                 )
 
         # --- Clamp to pending count ---
+        if pending_count == 0:
+            return 0
         batch = max(cfg.min_batch, min(batch, pending_count))
 
         # --- Clamp to config bounds ---

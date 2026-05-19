@@ -281,6 +281,7 @@ class BoundarySnapshotSSDStore:
                 self._write_queue.clear()
 
             if items:
+                flushed_keys = []
                 for filepath_str, data in items:
                     try:
                         # Write to temp file first, then atomically rename to
@@ -288,8 +289,15 @@ class BoundarySnapshotSSDStore:
                         tmp_path = filepath_str + ".tmp"
                         Path(tmp_path).write_bytes(data)
                         os.replace(tmp_path, filepath_str)
+                        # Extract key from filename (e.g., "req_L0.bin" → "req_L0")
+                        fname = Path(filepath_str).stem
+                        flushed_keys.append(fname)
                     except Exception as e:
                         logger.warning(f"Boundary snapshot write failed for {filepath_str}: {e}")
+                # Remove flushed entries from pending writes to free memory
+                with self._pending_lock:
+                    for k in flushed_keys:
+                        self._pending_writes.pop(k, None)
             else:
                 time.sleep(0.05)
 

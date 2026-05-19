@@ -448,7 +448,7 @@ class DisaggRouter:
         """Mark a KV transfer as completed or failed."""
         with self._lock:
             for t in self._pending_transfers:
-                if t.request_id == request_id and t.status == "pending":
+                if t.request_id == request_id and t.status in ("pending", "transferring"):
                     t.status = "completed" if success else "failed"
                     if t.source_node in self._nodes:
                         self._nodes[t.source_node].kv_transfer_queue = max(

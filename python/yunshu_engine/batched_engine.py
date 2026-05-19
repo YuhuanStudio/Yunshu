@@ -1499,7 +1499,9 @@ class BatchedEngine:
                         )
                     if max_ctx and token_count + max_tokens > max_ctx:
                         from .context_window import ContextWindowManager
-                        ctx_mgr = ContextWindowManager()
+                        ctx_mgr = ContextWindowManager(
+                            token_counter=lambda text: len(self._tokenizer.encode(text)),
+                        )
                         result = ctx_mgr.compute_truncation(
                             messages=prompt,
                             max_tokens=max_ctx - max_tokens,

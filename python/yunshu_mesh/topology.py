@@ -45,7 +45,8 @@ class MeshTopology:
 
     @property
     def size(self) -> int:
-        return len(self._nodes)
+        with self._lock:
+            return len(self._nodes)
 
     @property
     def nodes(self) -> list[MeshNode]:

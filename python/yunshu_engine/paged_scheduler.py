@@ -127,6 +127,14 @@ class PagedScheduler(Scheduler):
         self._block_tables[request.request_id] = table
         request.cached_tokens = getattr(prefix_match, 'num_matched_tokens', 0)
 
+        # Check queue capacity BEFORE calling super(), which may reject.
+        # If rejected, free the already-allocated blocks to avoid leaks.
+        if len(self.waiting) >= self.config.max_waiting_requests:
+            self._kv_manager.free_request(table, request.request_id)
+            self._block_tables.pop(request.request_id, None)
+            request.set_finished(RequestStatus.FINISHED_ERROR, reason="queue_full")
+            return
+
         super().add_request(request)
 
     def step(self) -> SchedulerOutput:

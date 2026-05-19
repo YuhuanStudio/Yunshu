@@ -111,35 +111,38 @@ class OCREngine:
 
         # Reset RoPE state for new request
         lm = self._model.language_model
-        if hasattr(lm, "_rope_deltas"):
-            lm._rope_deltas = None
-        if hasattr(lm, "_position_ids"):
-            lm._position_ids = None
 
         cache = make_prompt_cache(lm)
         current_ids = inputs["input_ids"]
 
         tokens = []
         eos_token_id = getattr(self._tokenizer, "eos_token_id", None)
-        for step in range(4096):
-            kwargs = {"cache": cache}
-            if step == 0:
-                kwargs["pixel_values"] = inputs["pixel_values"]
-                for k in ("image_grid_thw", "attention_mask"):
-                    if k in inputs:
-                        kwargs[k] = inputs[k]
+        try:
+            for step in range(4096):
+                kwargs = {"cache": cache}
+                if step == 0:
+                    kwargs["pixel_values"] = inputs["pixel_values"]
+                    for k in ("image_grid_thw", "attention_mask"):
+                        if k in inputs:
+                            kwargs[k] = inputs[k]
 
-            out = lm(inputs=current_ids, **kwargs)
-            logits = out.logits if hasattr(out, "logits") else out
+                out = lm(inputs=current_ids, **kwargs)
+                logits = out.logits if hasattr(out, "logits") else out
 
-            next_token = mx.argmax(logits[:, -1, :], axis=-1)
-            tok_id = next_token.item()
+                next_token = mx.argmax(logits[:, -1, :], axis=-1)
+                tok_id = next_token.item()
 
-            if eos_token_id is not None and tok_id == eos_token_id:
-                break
+                if eos_token_id is not None and tok_id == eos_token_id:
+                    break
 
-            tokens.append(tok_id)
-            current_ids = mx.array([[tok_id]])
+                tokens.append(tok_id)
+                current_ids = mx.array([[tok_id]])
+        finally:
+            # Always reset shared RoPE state even on error
+            if hasattr(lm, "_rope_deltas"):
+                lm._rope_deltas = None
+            if hasattr(lm, "_position_ids"):
+                lm._position_ids = None
 
         text = self._tokenizer.decode(tokens)
         return {"text": text, "confidence": 1.0, "language": None}

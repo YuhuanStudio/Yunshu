@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-19 — Wave 264: scheduler double-remove, prefill double-decrement, spec decode cache over-trim, context window message truncation, request lifecycle, prometheus metrics)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 267: PagedScheduler KV block leak, boundary snapshot memory growth, OCR RoPE leak, context window tokenizer, adaptive batch zero-pending, mesh thread safety, disagg status match)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,19 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 267 — PagedScheduler KV Block Leak, Boundary Snapshot Memory, OCR RoPE, Context Window Tokenizer)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 267: PagedScheduler add_request KV block 泄漏 | queue_full 時 super().add_request() 拒絕但 KV block 已分配，永不釋放。加入提前容量檢查 + 失敗時 free | KV block 無限泄漏 (HIGH) |
+| Wave 267: BoundarySnapshot _pending_writes 內存增長 | writer thread flush 到磁盤但不清除 dict 條目，長期運行無限增長。flushed_keys 批次 pop | 內存泄漏 (HIGH) |
+| Wave 267: OCR _extract_sync RoPE 狀態泄漏 | 異常時 model.language_model._rope_deltas/_position_ids 殘留，下次請求位置錯亂。try/finally 清理 | 推理正確性 (HIGH) |
+| Wave 267: Context window 截斷使用字符估計 | len(text)//4 估算 token 數不準確，過度/不足截斷。改為 tokenizer.encode 計算 | 截斷精確 (MEDIUM) |
+| Wave 267: Adaptive batch pending=0 返回 min_batch | pending_count=0 時 clamp 到 min_batch 導致調度器嘗試空批。提前返回 0 | 調度效率 (LOW) |
+| Wave 267: Topology.size 無鎖 | 與 add/remove 並行讀取可能觀察不一致狀態。加入 self._lock | 線程安全 (LOW) |
+| Wave 267: EventLog.close() 無鎖 | 並行 append/close 造成 use-after-free。加入 self._lock | 線程安全 (LOW) |
+| Wave 267: DisaggPD complete_kv_transfer 只匹配 pending | transferring 狀態的 KV 轉移無法完成。改為匹配 pending+transferring | KV 轉移卡住 (MEDIUM) |
 
 ### 已完成修復 (2026-05-19 Wave 266 — 8-Agent Deep Audit: Engine Core, BatchedEngine, Gateway, KV, Scheduler, Spec Decode, Mesh, Multimodal)
 

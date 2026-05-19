@@ -190,10 +190,11 @@ class EventLog:
 
     def close(self) -> None:
         """Close the database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
-        self._initialized = False
+        with self._lock:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
+            self._initialized = False
 
     def append(self, event_type: str, node_id: str = "", payload: dict | None = None) -> ClusterEvent:
         """Append a new event to the log.

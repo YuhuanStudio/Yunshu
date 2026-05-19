@@ -149,15 +149,15 @@ class TestComputeBatchSize:
         # Should not exceed max_batch
         assert batch <= 8
 
-    def test_zero_pending_returns_min_batch(self):
+    def test_zero_pending_returns_zero(self):
         scheduler = AdaptiveBatchScheduler()
         batch = scheduler.compute_batch_size(
             current_memory_usage=0.3,
             avg_latency_ms=50.0,
             pending_count=0,
         )
-        # Clamped to min_batch since min(max, pending=0) = 0, then max(min, 0) = min
-        assert batch >= 1
+        # No pending requests → batch size 0 (don't schedule empty batches)
+        assert batch == 0
 
     def test_batch_size_is_integer(self):
         scheduler = AdaptiveBatchScheduler()
