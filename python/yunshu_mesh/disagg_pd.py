@@ -129,7 +129,7 @@ class KVTransferRequest:
 
     def __post_init__(self):
         if not self.created_at:
-            self.created_at = time.time()
+            self.created_at = time.monotonic()
 
 
 @dataclass

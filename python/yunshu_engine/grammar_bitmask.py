@@ -280,19 +280,37 @@ class GrammarBitmaskEngine:
     def reset(self) -> None:
         self._constraint.reset()
 
-    # The wrapped constraint's checkpoint() returns saved state and
-    # rollback(saved) requires it.  We must store the intermediate
-    # value so rollback can pass it back.
+    # The wrapped constraint's checkpoint() may return saved state
+    # (RegexConstraint, ChoiceConstraint return a dict) or None
+    # (JsonSchemaConstraint uses internal stack).  rollback() may
+    # require the saved dict as an argument or take no args at all.
+    # We store the return value and only pass it if the constraint's
+    # rollback() signature accepts an argument.
     _checkpoint_state: Any = None
+    _constraint_rollback_needs_arg: bool | None = None
 
     def checkpoint(self) -> None:
         if hasattr(self._constraint, "checkpoint"):
-            self._constraint.checkpoint()
-            self._checkpoint_state = True
+            result = self._constraint.checkpoint()
+            self._checkpoint_state = result
+            # Probe whether rollback() expects an argument (takes >1 param
+            # i.e. self + saved) by inspecting its signature once.
+            if self._constraint_rollback_needs_arg is None and hasattr(self._constraint, "rollback"):
+                import inspect
+                sig = inspect.signature(self._constraint.rollback)
+                self._constraint_rollback_needs_arg = len(sig.parameters) > 0
 
     def rollback(self) -> None:
-        if hasattr(self._constraint, "rollback") and self._checkpoint_state:
-            self._constraint.rollback()
+        if hasattr(self._constraint, "rollback"):
+            if self._constraint_rollback_needs_arg:
+                saved = self._checkpoint_state
+                if saved is not None:
+                    self._constraint.rollback(saved)
+                else:
+                    # No checkpoint data saved — call bare rollback as fallback
+                    self._constraint.rollback()
+            else:
+                self._constraint.rollback()
             self._checkpoint_state = None
 
     def get_stats(self) -> dict[str, Any]:
