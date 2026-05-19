@@ -393,6 +393,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    # Anthropic API paths — exact matching to avoid overmatching routes that
+    # merely end in '/messages' (e.g. /api/v1/admin/messages).
+    _ANTHROPIC_PATHS = frozenset({
+        "/v1/messages", "/messages",
+        "/v1/messages/count_tokens", "/messages/count_tokens",
+    })
+
     app = FastAPI(
         title="Yunshu",
         version="0.1.0-dev",
@@ -418,7 +425,7 @@ def create_app() -> FastAPI:
 
         # Anthropic endpoints: return Anthropic error format
         path = request.url.path
-        if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+        if path in _ANTHROPIC_PATHS:
             return JSONResponse(
                 status_code=400,
                 content={
@@ -448,7 +455,7 @@ def create_app() -> FastAPI:
         path = request.url.path
 
         # Anthropic endpoints: return Anthropic error format
-        if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+        if path in _ANTHROPIC_PATHS:
             error_type = "invalid_request_error"
             if exc.status_code == 404:
                 error_type = "not_found_error"
@@ -489,7 +496,7 @@ def create_app() -> FastAPI:
         )
         path = request.url.path
         # Anthropic endpoints: return Anthropic error format
-        if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+        if path in _ANTHROPIC_PATHS:
             return JSONResponse(
                 status_code=500,
                 content={
@@ -570,7 +577,7 @@ def create_app() -> FastAPI:
             # Allow health/monitoring/admin even during shutdown
             if not path.startswith(("/health", "/metrics", "/api/v1/admin", "/api/v1/monitoring")):
                 # Anthropic endpoints: return Anthropic error format
-                if path.endswith(("/messages", "/messages/count_tokens")):
+                if path in _ANTHROPIC_PATHS:
                     return JSONResponse(
                         status_code=503,
                         content={
@@ -599,7 +606,7 @@ def create_app() -> FastAPI:
         path = request.url.path
         if is_sleeping() and not path.startswith(("/sleep", "/wake-up", "/health", "/api/v1/admin", "/api/v1/monitoring")):
             # Anthropic endpoints: return Anthropic error format
-            if path.endswith(("/messages", "/messages/count_tokens")):
+            if path in _ANTHROPIC_PATHS:
                 return JSONResponse(
                     status_code=503,
                     content={
@@ -629,7 +636,7 @@ def create_app() -> FastAPI:
             try:
                 if int(content_length) > max_request_size:
                     path = request.url.path
-                    if path.endswith("/messages") or path.endswith("/messages/count_tokens"):
+                    if path in _ANTHROPIC_PATHS:
                         return JSONResponse(
                             status_code=413,
                             content={

@@ -1840,28 +1840,28 @@ class BatchedEngine:
                     import mlx.core as _mx
                     sel = logits[..., recent]
                     sel = _mx.where(sel < 0, sel * rp, sel / rp)
-                    logits[..., recent] = sel
+                    logits = logits.at[..., _mx.array(recent)].set(sel)
                 return logits
             logits_processors.append(_rep_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty, n_prompt=prompt_tokens):
-                # Per OpenAI API spec, frequency/presence penalties only apply
-                # to generated tokens, NOT prompt tokens.
+                import mlx.core as _mx
                 gen_tokens = tokens[n_prompt:] if len(tokens) > n_prompt else []
                 counts = {}
                 for t in gen_tokens:
                     counts[int(t)] = counts.get(int(t), 0) + 1
                 for tid, cnt in counts.items():
                     if fp > 0:
-                        logits[..., tid] -= fp * cnt
+                        logits = logits.at[..., tid].set(logits[..., tid] - fp * cnt)
                     if pp > 0 and cnt > 0:
-                        logits[..., tid] -= pp
+                        logits = logits.at[..., tid].set(logits[..., tid] - pp)
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
             def _logit_bias_proc(_tokens, logits, biases=logit_bias):
+                import mlx.core as _mx
                 for tid, bias in biases.items():
-                    logits[..., tid] += bias
+                    logits = logits.at[..., tid].set(logits[..., tid] + bias)
                 return logits
             logits_processors.append(_logit_bias_proc)
 
@@ -2857,28 +2857,28 @@ class BatchedEngine:
                     import mlx.core as _mx
                     sel = logits[..., recent]
                     sel = _mx.where(sel < 0, sel * rp, sel / rp)
-                    logits[..., recent] = sel
+                    logits = logits.at[..., _mx.array(recent)].set(sel)
                 return logits
             logits_processors.append(_repetition_penalty)
         if frequency_penalty != 0.0 or presence_penalty != 0.0:
             def _freq_pres_penalty(tokens, logits, fp=frequency_penalty, pp=presence_penalty, n_prompt=prompt_tokens):
-                # Per OpenAI API spec, frequency/presence penalties only apply
-                # to generated tokens, NOT prompt tokens.
+                import mlx.core as _mx
                 gen_tokens = tokens[n_prompt:] if len(tokens) > n_prompt else []
                 counts = {}
                 for t in gen_tokens:
                     counts[int(t)] = counts.get(int(t), 0) + 1
                 for tid, cnt in counts.items():
                     if fp > 0:
-                        logits[..., tid] -= fp * cnt
+                        logits = logits.at[..., tid].set(logits[..., tid] - fp * cnt)
                     if pp > 0 and cnt > 0:
-                        logits[..., tid] -= pp
+                        logits = logits.at[..., tid].set(logits[..., tid] - pp)
                 return logits
             logits_processors.append(_freq_pres_penalty)
         if logit_bias:
             def _logit_bias_proc(_tokens, logits, biases=logit_bias):
+                import mlx.core as _mx
                 for tid, bias in biases.items():
-                    logits[..., tid] += bias
+                    logits = logits.at[..., tid].set(logits[..., tid] + bias)
                 return logits
             logits_processors.append(_logit_bias_proc)
 
