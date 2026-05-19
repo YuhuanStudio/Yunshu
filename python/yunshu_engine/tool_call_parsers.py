@@ -278,7 +278,13 @@ def parse_generic_tool_calls(text: str) -> list[ToolCallResult]:
             args_str = json.dumps(args, ensure_ascii=False) if not isinstance(args, str) else args
             results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
         except json.JSONDecodeError:
-            results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=block))
+            # JSON parse failed — try to extract arguments field with regex
+            # as a last resort before giving up entirely.
+            _args_match = re.search(r'"arguments"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', block)
+            if _args_match:
+                results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=_args_match.group(1)))
+            else:
+                logger.debug("generic tool call JSON parse failed for name=%s", name)
     return results
 
 
