@@ -122,6 +122,11 @@ class CompletionRequest(BaseModel):
 @router.post("/completions", response_model=None)
 async def create_completion(req: CompletionRequest, request: Request):
     """OpenAI-compatible text completion endpoint."""
+    # Validate stop strings: reject empty strings (would match immediately)
+    if req.stop:
+        req.stop = [s for s in req.stop if s]
+        if not req.stop:
+            req.stop = None
     engine = get_engine()
 
     if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):

@@ -799,6 +799,12 @@ async def _build_multi_choice(
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    # Validate stop strings: reject empty strings (would match immediately)
+    if req.stop:
+        req.stop = [s for s in req.stop if s]
+        if not req.stop:
+            req.stop = None
+
     # Audit: log user field if provided (OpenAI spec: end-user tracking)
     if req.user:
         logger.info(f"[{getattr(request.state, 'request_id', '-')}] user={req.user}")

@@ -1807,7 +1807,10 @@ class VLMEngine:
         tokens_list = [token_id]  # Include the first prefill token for JSON constraint
         try:
           for _ in range(max_tokens - 1):
-            if cancel_event is not None and cancel_event.is_set():
+            if cancel_event is not None and (
+                cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                else cancel_event.is_set()
+            ):
                 # Flush remaining detokenizer bytes before cancelling
                 if has_detokenizer:
                     remaining = detokenizer.finalize()
