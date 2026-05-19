@@ -400,7 +400,7 @@ async def _stream_completion(
     n = max(req.n, 1)
 
     async def _stream_choice(choice_idx: int):
-        nonlocal prompt_tok, completion_tok, cached_tok, _done_emitted, metrics_recorded
+        nonlocal prompt_tok, completion_tok, cached_tok
         choice_finish_reason = None
         # Per-choice text offset tracker for logprobs text_offset field.
         # When echo=True, the prompt text is emitted first, so the completion
@@ -527,6 +527,7 @@ async def _stream_completion(
         )
 
     async def _token_source():
+        nonlocal _done_emitted, metrics_recorded
         # Stream each choice sequentially (matches OpenAI spec behavior)
         for choice_idx in range(n):
             async for chunk in _stream_choice(choice_idx):

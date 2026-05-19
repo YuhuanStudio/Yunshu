@@ -147,35 +147,41 @@ class ToolCallStreamer:
             after = self._buffer[idx + len(TOOL_CALL_OPEN):]
             close_idx = after.find(">")
             if close_idx != -1:
-                # We have a complete opening tag
-                # Emit any text before the tag
-                before = self._buffer[:idx]
-                if before:
-                    results.append(StreamOutput(text=before, state=self._state))
+                # Validate: char after <tool_call must be a valid delimiter
+                # (space, >, /, \) to reject e.g. <tool_calls>
+                first_after = after[0] if after else ">"
+                if first_after not in (">", " ", "/", "\\"):
+                    # Not a valid tool_call tag — fall through to flush check
+                    pass
+                else:
+                    # Emit any text before the tag
+                    before = self._buffer[:idx]
+                    if before:
+                        results.append(StreamOutput(text=before, state=self._state))
 
-                # Check if this is actually a closing tag </tool_call...>
-                if self._buffer[idx:].startswith(TOOL_CALL_CLOSE):
-                    # It's a closing tag appearing without opening — treat as text
-                    closing_text = self._buffer[idx:]
-                    self._state = StreamState.TEXT
+                    # Check if this is actually a closing tag </tool_call...>
+                    if self._buffer[idx:].startswith(TOOL_CALL_CLOSE):
+                        # It's a closing tag appearing without opening — treat as text
+                        closing_text = self._buffer[idx:]
+                        self._state = StreamState.TEXT
+                        self._buffer = ""
+                        results.append(StreamOutput(
+                            text=closing_text,
+                            state=self._state,
+                        ))
+                        return results
+
+                    # Move to JSON mode
+                    self._state = StreamState.TOOL_JSON
+                    self._json_buffer = ""
                     self._buffer = ""
-                    results.append(StreamOutput(
-                        text=closing_text,
-                        state=self._state,
-                    ))
+
+                    # If there's content after the closing >, process it in TOOL_JSON
+                    remaining = after[close_idx + 1:]
+                    if remaining:
+                        results.extend(self._handle_tool_json_state(remaining))
+
                     return results
-
-                # Move to JSON mode
-                self._state = StreamState.TOOL_JSON
-                self._json_buffer = ""
-                self._buffer = ""
-
-                # If there's content after the closing >, process it in TOOL_JSON
-                remaining = after[close_idx + 1:]
-                if remaining:
-                    results.extend(self._handle_tool_json_state(remaining))
-
-                return results
             else:
                 # Partial tag — might be building up <tool_call...>
                 # Check if what we have so far could still become a tag
