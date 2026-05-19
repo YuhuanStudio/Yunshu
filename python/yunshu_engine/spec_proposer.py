@@ -125,6 +125,11 @@ class CompositeSpecProposer(SpecProposer):
     def accept(self, n_accepted: int) -> None:
         if self._last_winning_proposer is not None:
             self._last_winning_proposer.accept(n_accepted)
+            # Non-winning proposers still called with 0 so they can
+            # maintain their internal statistics (e.g. proposal accuracy).
+            for p in self._proposers:
+                if p is not self._last_winning_proposer:
+                    p.accept(0)
         else:
             for p in self._proposers:
                 p.accept(n_accepted)

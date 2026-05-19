@@ -220,7 +220,6 @@ class Request:
 
     def append_token(self, token_id: int) -> None:
         self.output_token_ids.append(token_id)
-        self.num_computed_tokens += 1
 
     def set_finished(self, status: RequestStatus, reason: str | None = None) -> None:
         """Transition to a finished state with optional reason.

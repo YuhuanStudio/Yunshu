@@ -229,6 +229,11 @@ class BlockPool:
         if not self.enable_caching:
             return
         import time
+        # If a different block already owns this hash slot, clear its
+        # cache metadata so it doesn't linger in cache_only state.
+        old_block = self._hash_to_block.get(block_hash)
+        if old_block is not None and old_block is not block:
+            old_block.reset_hash()
         block.block_hash = block_hash
         block.last_access_time = time.monotonic()
         self._hash_to_block[block_hash] = block
@@ -374,6 +379,11 @@ class BlockPool:
                         value_cache[new_block.block_id] = value_cache[old_block.block_id]
                 except Exception:
                     logger.warning("KV data copy in cow_block_in_table failed — returning old block to avoid corruption", exc_info=True)
+                    # Put the new block back — it was allocated from the free
+                    # queue but we can't use it.  Without this, the block leaks
+                    # permanently (ref_count=1 but nobody holds a reference).
+                    new_block.ref_count = 0
+                    self.free_queue.append(new_block)
                     return old_block, key_cache, value_cache
             # Update the table entry
             table._blocks[logical_idx] = new_block

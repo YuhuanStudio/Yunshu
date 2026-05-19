@@ -33,12 +33,15 @@ class HeartbeatMonitor:
         interval: float = 5.0,
         timeout: float = 30.0,
         port: int = _HEARTBEAT_PORT,
+        failure_threshold: int = 3,
     ):
         self.interval = interval
         self.timeout = timeout
         self.port = port
+        self.failure_threshold = failure_threshold
         self._nodes: dict[str, MeshNode] = {}
         self._last_heartbeat: dict[str, float] = {}
+        self._missed_counts: dict[str, int] = {}
         self._timed_out: set[str] = set()
         self._nodes_lock = threading.Lock()
         self._on_timeout_callbacks: list[Callable] = []
@@ -56,6 +59,7 @@ class HeartbeatMonitor:
             for peer in peers:
                 self._nodes[peer.node_id] = peer
                 self._last_heartbeat[peer.node_id] = time.monotonic()
+                self._missed_counts[peer.node_id] = 0
 
         self._running = True
         self._setup_socket()
@@ -119,6 +123,7 @@ class HeartbeatMonitor:
                 with self._nodes_lock:
                     if node_id and node_id in self._nodes:
                         self._last_heartbeat[node_id] = time.monotonic()
+                        self._missed_counts[node_id] = 0
                         node = self._nodes[node_id]
                         node.heartbeat()
                         try:
@@ -151,13 +156,18 @@ class HeartbeatMonitor:
             timed_out_nodes = []
             with self._nodes_lock:
                 for node_id, last_hb in list(self._last_heartbeat.items()):
-                    if now - last_hb > self.timeout and node_id not in self._timed_out:
-                        self._timed_out.add(node_id)
-                        node = self._nodes.get(node_id)
-                        if node:
-                            node.state = MeshNodeState.OFFLINE
-                            logger.warning(f"Node timeout: {node.hostname} ({node_id})")
-                            timed_out_nodes.append(node)
+                    if now - last_hb > self.timeout:
+                        self._missed_counts[node_id] = self._missed_counts.get(node_id, 0) + 1
+                        if (self._missed_counts[node_id] >= self.failure_threshold
+                                and node_id not in self._timed_out):
+                            self._timed_out.add(node_id)
+                            node = self._nodes.get(node_id)
+                            if node:
+                                node.state = MeshNodeState.OFFLINE
+                                logger.warning(f"Node timeout: {node.hostname} ({node_id})")
+                                timed_out_nodes.append(node)
+                    else:
+                        self._missed_counts[node_id] = 0
             # Fire timeout callbacks outside lock to prevent deadlock
             for node in timed_out_nodes:
                 for cb in list(self._on_timeout_callbacks):

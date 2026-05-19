@@ -222,13 +222,15 @@ class TestRequest:
         assert req.rope_deltas == 1.5
         assert req.cached_tokens == 50
 
-    def test_append_token_increments_computed(self):
+    def test_append_token_tracks_output(self):
         from yunshu_engine.request import Request
         req = Request(request_id="test", prompt="hello")
         assert req.num_computed_tokens == 0
         req.append_token(42)
-        assert req.num_computed_tokens == 1
+        # num_computed_tokens tracks prefill progress only — NOT incremented by output tokens
+        assert req.num_computed_tokens == 0
         assert req.output_token_ids == [42]
+        assert req.num_output_tokens == 1
 
 
 class TestPrefillProgress:

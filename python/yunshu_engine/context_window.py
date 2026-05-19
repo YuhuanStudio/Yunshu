@@ -303,7 +303,7 @@ class ContextWindowManager:
         while window and window[0].get("role") == "tool":
             window.pop(0)
 
-        return system_msgs + window
+        return deepcopy(system_msgs) + deepcopy(window)
 
     def _importance_aware(
         self, messages: list[dict], max_tokens: int

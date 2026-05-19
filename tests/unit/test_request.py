@@ -87,7 +87,7 @@ class TestRequest:
         req.append_token(42)
         assert req.output_token_ids == [42]
         assert req.num_output_tokens == 1
-        assert req.num_computed_tokens == 1
+        assert req.num_computed_tokens == 0  # tracks prefill only, not output
         req.append_token(43)
         assert req.num_output_tokens == 2
 
