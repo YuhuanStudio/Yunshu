@@ -632,6 +632,10 @@ class SpeculativeDecoder:
             ):
                 break
 
+            # Budget check: cap draft length to remaining token budget
+            remaining = max_tokens - len(generated_tokens)
+            effective_K = min(K, remaining)
+
             # Snapshot draft cache before drafting (reference-based, no copy)
             draft_snap = self._snapshot_cache(draft_cache)
 
@@ -640,7 +644,7 @@ class SpeculativeDecoder:
             draft_tokens = []
             draft_probs = []
             d_input = mx.array([[last_tok]])
-            for _ in range(K):
+            for _ in range(effective_K):
                 # Check cancellation inside draft loop too
                 if cancel_event is not None and (
                     cancel_event._value if isinstance(cancel_event, asyncio.Event)
@@ -673,15 +677,17 @@ class SpeculativeDecoder:
             accepted = verify_result.accepted_count
             all_accepted = (accepted == len(draft_tokens))
 
-            # Append accepted tokens
+            # Append accepted tokens — but respect max_tokens budget
             for tid in verify_result.accepted_ids:
+                if len(generated_tokens) >= max_tokens:
+                    break
                 generated_tokens.append(tid)
                 if tid in eos_ids:
                     return generated_tokens
 
             # Append correction/bonus token
             bonus_id = verify_result.bonus_token_id
-            if bonus_id >= 0:
+            if bonus_id >= 0 and len(generated_tokens) < max_tokens:
                 generated_tokens.append(bonus_id)
                 if all_accepted:
                     self._stats["total_bonus_tokens"] += 1

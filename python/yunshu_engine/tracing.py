@@ -560,8 +560,8 @@ class MetricsAggregatorV2:
                     lines.append(f"{name}_count{label_str} {count}")
                 lines.append("")
 
-        self._scrape_count += 1
-        self._last_scrape_duration_ms = (time.monotonic() - t0) * 1000.0
+            self._scrape_count += 1
+            self._last_scrape_duration_ms = (time.monotonic() - t0) * 1000.0
 
         return "\n".join(lines)
 

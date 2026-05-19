@@ -26,6 +26,7 @@ import gc
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -452,8 +453,17 @@ class ThinkingSegmentSubstore:
                 "kv_data": kv_serialized,
             }
 
-            with open(filepath, "w") as f:
-                json.dump(data, f)
+            import tempfile
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(conv_dir), suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f)
+                os.replace(tmp_path, str(filepath))
+            except Exception:
+                os.unlink(tmp_path) if os.path.exists(tmp_path) else None
+                raise
 
             self._stats["ssd_saves"] += 1
             logger.debug(f"Saved thinking segment to SSD: {filepath}")

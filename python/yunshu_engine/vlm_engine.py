@@ -1560,6 +1560,7 @@ class VLMEngine:
         accumulated = ""  # Accumulate text for multi-token stop suffix matching
         _emitted_pos = 0  # Track how much of accumulated has been emitted
         _in_thinking = False  # Track thinking state for current_state routing
+        _thinking_token_count = 0  # Count tokens generated while in thinking state
         _think_scan_pos = 0  # Cursor for scanning thinking tags (avoids re-scanning already-seen text)
         _num_prompt_tokens = 0
         # Estimate prompt tokens for output metadata.
@@ -1610,6 +1611,7 @@ class VLMEngine:
                         completion_tokens=token_count,
                         prompt_tokens=_num_prompt_tokens,
                         current_state="reasoning" if _in_thinking else "normal",
+                        reasoning_tokens=_thinking_token_count,
                     ))
                     return
                 token_count += 1
@@ -1638,6 +1640,9 @@ class VLMEngine:
                             break
                 _think_scan_pos = len(accumulated) - len(_scan)
                 _cur_state = "reasoning" if _in_thinking else "normal"
+                # Count tokens generated while in thinking state
+                if _in_thinking:
+                    _thinking_token_count += 1
                 finish_reason = None
                 if hasattr(result, 'finish_reason') and result.finish_reason:
                     finish_reason = result.finish_reason
@@ -1651,13 +1656,18 @@ class VLMEngine:
                             idx = accumulated.find(s, _emitted_pos)
                             accumulated = accumulated[:idx]
                             finish_reason = "stop"
-                            _emitted_pos = len(accumulated)
+                            # Clamp thinking scan cursor to new length so it
+                            # doesn't point past the trimmed text.
+                            _think_scan_pos = min(_think_scan_pos, len(accumulated))
                             break
 
                 # Compute the safe-to-emit text: everything up to _emitted_pos
                 if finish_reason == "stop":
-                    # Emit any remaining held-back text (stop already trimmed from accumulated)
-                    _emit_text = accumulated[_emitted_pos:] if accumulated else ""
+                    # Emit all held-back text up to the stop position.
+                    # accumulated has already been trimmed (stop suffix removed),
+                    # so everything from _emitted_pos to end is safe to emit.
+                    _emit_text = accumulated[_emitted_pos:]
+                    _emitted_pos = len(accumulated)
                 else:
                     # Compute safe emit boundary — don't emit text that could be
                     # a partial prefix of a stop sequence.
@@ -1672,6 +1682,7 @@ class VLMEngine:
                     _emit_text = accumulated[_emitted_pos:_safe_end] if accumulated else ""
                     _emitted_pos = _safe_end
 
+                _reasoning_tok = _thinking_token_count if finish_reason else 0
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
                     new_text=_emit_text,
@@ -1680,6 +1691,7 @@ class VLMEngine:
                     completion_tokens=token_count,
                     prompt_tokens=_num_prompt_tokens,
                     current_state=_cur_state,
+                    reasoning_tokens=_reasoning_tok,
                 ))
                 if finish_reason:
                     return
@@ -1689,6 +1701,20 @@ class VLMEngine:
             # without setting result.finish_reason and token_count < max_tokens.
             # Always emit finished=True so the consumer never hangs waiting for
             # a final output, even when zero tokens were generated.
+            #
+            # Flush any held-back text (from stop suffix prefix detection)
+            # before emitting the terminal output so text isn't lost.
+            _exhausted_state = "reasoning" if _in_thinking else "normal"
+            _held_text = accumulated[_emitted_pos:]
+            if _held_text:
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text=_held_text,
+                    finish_reason=None,
+                    finished=False,
+                    prompt_tokens=_num_prompt_tokens,
+                    current_state=_exhausted_state,
+                ))
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
                 new_text="",
@@ -1696,9 +1722,9 @@ class VLMEngine:
                 finished=True,
                 completion_tokens=token_count,
                 prompt_tokens=_num_prompt_tokens,
-            ))
-
-            # Post-streaming bookkeeping (cache stats, encoder cache, KV prefix).
+                current_state=_exhausted_state,
+                reasoning_tokens=_thinking_token_count,
+            ))            # Post-streaming bookkeeping (cache stats, encoder cache, KV prefix).
             # Wrapped in try/except to prevent double finished=True if any of
             # these operations raise after the finished output was already emitted.
             try:
@@ -1727,6 +1753,7 @@ class VLMEngine:
                 logger.debug("post-stream bookkeeping failed", exc_info=True)
 
         except Exception as e:
+            _error_state = "reasoning" if _in_thinking else "normal"
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
                 new_text="",
@@ -1735,6 +1762,8 @@ class VLMEngine:
                 completion_tokens=token_count,
                 prompt_tokens=_num_prompt_tokens,
                 error=str(e),
+                current_state=_error_state,
+                reasoning_tokens=_thinking_token_count,
             ))
 
     def _stream_vlm_text(

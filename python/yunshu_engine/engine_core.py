@@ -1968,6 +1968,25 @@ class EngineCore:
                     # Ensure the request is finalized even if distribution failed
                     _rid = getattr(req_output, 'request_id', None)
                     if _rid:
+                        # Put error output + sentinel into collector so
+                        # generate()/stream_outputs() consumers don't hang
+                        # forever waiting for output that will never arrive.
+                        _err_collector = self._output_collectors.get(_rid)
+                        if _err_collector is not None:
+                            try:
+                                from .request import RequestOutput
+                                _err_collector.put(RequestOutput(
+                                    request_id=_rid,
+                                    finished=True,
+                                    finish_reason="error",
+                                    error=f"Output distribution failed: {_output_err}",
+                                ))
+                                _err_collector.put(None)  # sentinel
+                            except Exception:
+                                logger.debug(
+                                    "error collector put failed for %s",
+                                    _rid, exc_info=True,
+                                )
                         self._signal_finished(_rid)
                         self._finalize_request(_rid)
 
@@ -1995,9 +2014,29 @@ class EngineCore:
                                     finished=True,
                                     finish_reason=budget_result,
                                     error=f"Budget exhausted: {budget_result}",
+                                    prompt_tokens=req_output.prompt_tokens,
                                     completion_tokens=req_output.completion_tokens,
                                 ))
                                 _bc.put(None)
+                            # Fail dedup shadows so their consumers don't hang
+                            if self._request_dedup is not None:
+                                _shadow_ids = [
+                                    sid for sid, pid in self._dedup_shadows.items()
+                                    if pid == rid
+                                ]
+                                for _sid in _shadow_ids:
+                                    _sc = self._output_collectors.get(_sid)
+                                    if _sc is not None:
+                                        _sc.put(_RO(
+                                            request_id=_sid,
+                                            finished=True,
+                                            finish_reason=budget_result,
+                                            error=f"Primary request {rid} budget exhausted",
+                                            prompt_tokens=req_output.prompt_tokens,
+                                            completion_tokens=req_output.completion_tokens,
+                                        ))
+                                        _sc.put(None)
+                                    self._signal_finished(_sid)
                             self._signal_finished(rid)
                             self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
                         # Sliding window tracking
@@ -2428,6 +2467,10 @@ class EngineCore:
         self._finished_events.pop(request_id, None)
         self._request_timestamps.pop(request_id, None)
         self._kv_prefix_hashes.pop(request_id, None)
+        # Remove from idempotency/TTFT guards so they don't grow unboundedly.
+        # Safe to discard even if never added (no KeyError from set.discard).
+        self._finalized_ids.discard(request_id)
+        self._ttft_done.discard(request_id)
 
     def _get_max_seq_len(self) -> int:
         """Get the model's maximum sequence length from config."""

@@ -122,6 +122,11 @@ class _Histogram:
         0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
         1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
     )
+    # Inference-specific buckets for sub-second latency (TTFT, ITL).
+    INFERENCE_BUCKETS = (
+        0.001, 0.002, 0.005, 0.01, 0.02, 0.05,
+        0.1, 0.2, 0.5, 1.0, 2.5, 5.0, 10.0,
+    )
 
     def __init__(
         self,
@@ -155,7 +160,6 @@ class _Histogram:
                     bc[i] += 1
             # Cap per-label-series to prevent unbounded growth.
             if len(lst) > 100_000:
-                dropped = lst[:-50_000]
                 self._observations[key] = lst[-50_000:]
                 # Recompute bucket_counts from remaining observations.
                 remaining = self._observations[key]
@@ -163,6 +167,9 @@ class _Histogram:
                     sum(1 for v in remaining if v <= upper)
                     for upper in self._buckets
                 ]
+                # Recompute sum/count to stay consistent with remaining data.
+                self._sums[key] = sum(remaining)
+                self._counts[key] = len(remaining)
 
     def format(self) -> str:
         lines: list[str] = []
@@ -278,10 +285,12 @@ class PrometheusMetrics:
         self._histograms["ttft_seconds"] = _Histogram(
             "yunshu_ttft_seconds",
             "Time to first token in seconds",
+            buckets=_Histogram.INFERENCE_BUCKETS,
         )
         self._histograms["itl_seconds"] = _Histogram(
             "yunshu_itl_seconds",
             "Inter-token latency in seconds",
+            buckets=_Histogram.INFERENCE_BUCKETS,
         )
 
         # Spec decode gauges
@@ -335,6 +344,14 @@ class PrometheusMetrics:
             "yunshu_spec_mtp_acceptance_rate",
             "MTP speculative decoding acceptance rate",
         )
+        self._gauges["mtp_acceptance_rate"] = _Gauge(
+            "yunshu_mtp_acceptance_rate",
+            "MTP acceptance rate (alternate gauge set from batched_engine)",
+        )
+        self._gauges["mtp_total_cycles"] = _Gauge(
+            "yunshu_mtp_total_cycles",
+            "MTP total speculative decoding cycles",
+        )
 
         # KV prefix cache gauges
         self._gauges["kv_prefix_cache_entries"] = _Gauge(
@@ -384,6 +401,14 @@ class PrometheusMetrics:
         self._gauges["chunked_prefill_total_chunks_processed"] = _Gauge(
             "yunshu_chunked_prefill_total_chunks_processed",
             "Total chunked prefill chunks processed",
+        )
+        self._gauges["chunked_prefill_budget_used"] = _Gauge(
+            "yunshu_chunked_prefill_budget_used",
+            "Chunked prefill token budget used so far",
+        )
+        self._gauges["chunked_prefill_budget_limit"] = _Gauge(
+            "yunshu_chunked_prefill_budget_limit",
+            "Chunked prefill token budget limit",
         )
 
         # ITL gauges (set from monitoring.py prometheus_export endpoint)

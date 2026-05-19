@@ -37,6 +37,17 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6681 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 262 — 6-Agent Deep Audit: LoRA, Spec Decode, VLM, Engine Core, Thinking Segment)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 262: LoRA save_base_weights 時序 | merge_adapter 在 load_adapter 之後才調用 save_base_weights，保存的是 LoRA 後的權重。移到 load_adapter 之前 | 防止 base 權重被 LoRA 污染 (HIGH) |
+| Wave 262: Spec decode max_tokens 預算 | draft token 不受 max_tokens 限制，可能超出生成。加入 effective_K = min(K, remaining) | 防止超出生成上限 |
+| Wave 262: VLM streaming 文字丟失 | stop 後綴截斷時 accumulated 被裁剪但 _think_scan_pos 未更新，可能越界。加入 min() clamp | 防止 streaming 文字截斷 |
+| Wave 262: VLM streaming 尾部文字丟失 | generator 完成時未 flush held-back 文字直接發終止信號。加入 flush 邏輯 | 防止最後一段文字丟失 |
+| Wave 262: EngineCore error output consumer hang | 分發失敗時只調用 _signal_finished 未放入 error output，consumer 永遠等待。加入 error output + sentinel | 防止 consumer 死鎖 |
+| Wave 262: Thinking segment SSD 非原子寫入 | JSON 直接寫入最終路徑，崩潰時可能截斷。改為 tempfile + os.replace | SSD 快照寫入安全 |
+
 ### 已完成修復 (2026-05-19 Wave 261 — 8-Agent Deep Audit: Mesh, Audio, RBAC, KV, Grammar)
 
 | 修復 | 描述 | 影響 |

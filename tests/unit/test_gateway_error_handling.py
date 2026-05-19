@@ -484,6 +484,8 @@ class TestFinalizeRequestIdempotency:
         core._dedup_hashes = {}
         core._dedup_shadows = {}
         core._request_dedup = None
+        core._finalized_ids = set()
+        core._ttft_done = set()
         core._checkpoint_mgr = None
         core._sliding_window_mgr = None
 
@@ -573,6 +575,8 @@ class TestAbortRequestRemovesState:
         core._dedup_hashes = {}
         core._dedup_shadows = {}
         core._request_dedup = None
+        core._finalized_ids = set()
+        core._ttft_done = set()
         core._checkpoint_mgr = None
         core._sliding_window_mgr = None
 
@@ -651,6 +655,8 @@ class TestEngineLoopErrorDelivery:
         core._dedup_hashes = {}
         core._dedup_shadows = {}
         core._request_dedup = None
+        core._finalized_ids = set()
+        core._ttft_done = set()
         core._checkpoint_mgr = None
         core._sliding_window_mgr = None
         core._running = True

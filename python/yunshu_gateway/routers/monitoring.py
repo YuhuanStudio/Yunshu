@@ -224,7 +224,6 @@ def _get_active_requests() -> dict[str, Any]:
 async def system_stats(request: Request) -> dict[str, Any]:
     """System-level statistics: CPU, memory, GPU, runtime info."""
     _check_permission(request)
-    """System-level statistics: CPU, memory, GPU, runtime info."""
     result = {
         "cpu": _get_cpu_info(),
         "memory": _get_memory_info(),

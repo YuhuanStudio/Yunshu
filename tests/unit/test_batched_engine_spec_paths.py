@@ -146,6 +146,8 @@ def _make_engine_core():
     core._request_dedup = None
     core._dedup_hashes = {}
     core._dedup_shadows = {}
+    core._finalized_ids = set()
+    core._ttft_done = set()
     core._checkpoint_mgr = None
     core._sliding_window_mgr = None
     core._request_lifecycle = MagicMock()

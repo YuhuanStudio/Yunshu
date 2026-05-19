@@ -118,6 +118,7 @@ class SpecDraftVerifier:
         logits_processors: list | None = None,
         generation_stream=None,
         token_history: list[int] | None = None,
+        draft_logprobs: list[float] | None = None,
     ) -> VerifyResult:
         """Verify K draft tokens against the target model.
 
@@ -135,6 +136,11 @@ class SpecDraftVerifier:
 
         For proper K-way verification, use verify_with_last_token() instead.
 
+        Probabilistic acceptance: When draft_logprobs is provided along with
+        a non-None sampler, uses the standard speculative sampling criterion:
+            accept with probability min(1, p_target(x) / p_draft(x))
+        When draft_logprobs is None, falls back to greedy argmax comparison.
+
         Args:
             model: The target MLX model (nn.Module).
             draft_ids: K draft token IDs to verify.
@@ -143,6 +149,9 @@ class SpecDraftVerifier:
             logits_processors: Optional list of logits processor functions.
             generation_stream: Optional MLX stream for GPU work.
             token_history: Optional token IDs for logits processor context.
+            draft_logprobs: Optional log-probabilities from the draft model for
+                           each draft token. Required for probabilistic acceptance
+                           with non-greedy sampling.
 
         Returns:
             VerifyResult with accepted tokens, bonus token, and cache state.
@@ -188,43 +197,55 @@ class SpecDraftVerifier:
                         ).squeeze(0)
                     )
 
-        # Step 3: Get model predictions (greedy or sampled)
-        if sampler is not None:
-            logprobs = batch_logits - mx.logsumexp(
-                batch_logits, axis=-1, keepdims=True
-            )
-            model_picks = sampler(logprobs).tolist()
-        else:
-            model_picks = mx.argmax(batch_logits, axis=-1).tolist()
+        # Step 3: Compute target log-probabilities
+        target_logprobs = batch_logits - mx.logsumexp(
+            batch_logits, axis=-1, keepdims=True
+        )
 
-        # Step 4: Find acceptance boundary (shifted comparison).
-        # logits[i] predicts what comes AFTER d[i], so we compare:
-        #   model_picks[0]  ->  draft_ids[1]   (verifies d1)
-        #   model_picks[i]  ->  draft_ids[i+1] (verifies d_{i+1})
-        # d0 is trusted (comes from pattern match) and always included.
-        accepted_tokens = [draft_ids[0]]  # d0 is always accepted (trusted)
-        rejection_position = None
-        for i in range(K - 1):
-            if model_picks[i] == draft_ids[i + 1]:
-                accepted_tokens.append(draft_ids[i + 1])
+        # Step 4: Probabilistic or greedy acceptance
+        # Determine acceptance mode:
+        # - draft_logprobs provided + sampler -> probabilistic acceptance
+        # - otherwise -> greedy argmax comparison
+        use_probabilistic = (
+            draft_logprobs is not None
+            and len(draft_logprobs) == K
+            and sampler is not None
+        )
+
+        if use_probabilistic:
+            accepted_tokens, rejection_position, bonus_token = (
+                _probabilistic_accept_shifted(
+                    target_logprobs, draft_ids, draft_logprobs
+                )
+            )
+        else:
+            # Greedy: get model predictions and compare
+            if sampler is not None:
+                model_picks = sampler(target_logprobs).tolist()
             else:
-                rejection_position = i + 1
-                break
+                model_picks = mx.argmax(batch_logits, axis=-1).tolist()
+
+            # Shifted comparison (d0 trusted):
+            accepted_tokens = [draft_ids[0]]
+            rejection_position = None
+            for i in range(K - 1):
+                if model_picks[i] == draft_ids[i + 1]:
+                    accepted_tokens.append(draft_ids[i + 1])
+                else:
+                    rejection_position = i + 1
+                    break
+
+            # Bonus token
+            if rejection_position is not None:
+                bonus_token = model_picks[rejection_position - 1]
+            else:
+                bonus_token = model_picks[K - 1]
 
         accepted_count = len(accepted_tokens)
         all_accepted = accepted_count == K
         rejected_count = K - accepted_count
 
-        # Step 5: Bonus token from rejection point or last position.
-        # logits[K-1] predicts what comes after all K drafts -> always the bonus.
-        # If rejection at position i+1: bonus = model_picks[i] (prediction at i).
-        # If all accepted: bonus = model_picks[K-1] (prediction at last position).
-        if rejection_position is not None:
-            bonus_token = model_picks[rejection_position - 1]
-        else:
-            bonus_token = model_picks[K - 1]
-
-        # Step 6: Trim KV cache to remove rejected entries
+        # Step 5: Trim KV cache to remove rejected entries
         cache_trimmed = 0
         if rejected_count > 0 and prompt_cache is not None:
             cache_trimmed = _trim_cache(prompt_cache, rejected_count)
@@ -253,6 +274,7 @@ class SpecDraftVerifier:
         logits_processors: list | None = None,
         generation_stream=None,
         token_history: list[int] | None = None,
+        draft_logprobs: list[float] | None = None,
     ) -> VerifyResult:
         """Verify K draft tokens using the correct mlx-lm verification algorithm.
 
@@ -266,6 +288,11 @@ class SpecDraftVerifier:
 
         This gives exactly K correct comparisons + 1 bonus = K+1 positions.
 
+        Probabilistic acceptance: When draft_logprobs is provided along with
+        a non-None sampler, uses the standard speculative sampling criterion:
+            accept with probability min(1, p_target(x) / p_draft(x))
+        When draft_logprobs is None, falls back to greedy argmax comparison.
+
         Args:
             model: The target MLX model.
             last_token_id: The last accepted/produced token (in cache).
@@ -275,6 +302,9 @@ class SpecDraftVerifier:
             logits_processors: Optional logits processors.
             generation_stream: Optional MLX stream.
             token_history: Optional token history for logits processors.
+            draft_logprobs: Optional log-probabilities from the draft model for
+                           each draft token. Required for probabilistic acceptance
+                           with non-greedy sampling.
 
         Returns:
             VerifyResult with correctly aligned verification.
@@ -325,33 +355,45 @@ class SpecDraftVerifier:
                         ).squeeze(0)
                     )
 
-        # Step 4: Get model predictions
-        if sampler is not None:
-            logprobs = batch_logits - mx.logsumexp(
-                batch_logits, axis=-1, keepdims=True
-            )
-            model_picks = sampler(logprobs).tolist()
-        else:
-            model_picks = mx.argmax(batch_logits, axis=-1).tolist()
-
-        # Step 5: Verify K draft tokens against model picks[0..K-1]
-        # logits[0] predicts after last_token -> compare with d0
-        # logits[i] predicts after last_token,d0..d[i-1] -> compare with d[i]
-        accepted_tokens, rejection_position = _find_acceptance_boundary(
-            model_picks[:K], draft_ids, K
+        # Step 4: Compute target log-probabilities
+        target_logprobs = batch_logits - mx.logsumexp(
+            batch_logits, axis=-1, keepdims=True
         )
+
+        # Step 5: Probabilistic or greedy acceptance
+        use_probabilistic = (
+            draft_logprobs is not None
+            and len(draft_logprobs) == K
+            and sampler is not None
+        )
+
+        if use_probabilistic:
+            accepted_tokens, rejection_position, bonus_token = (
+                _probabilistic_accept(
+                    target_logprobs, draft_ids, draft_logprobs, K
+                )
+            )
+        else:
+            # Greedy: get model predictions and compare
+            if sampler is not None:
+                model_picks = sampler(target_logprobs).tolist()
+            else:
+                model_picks = mx.argmax(batch_logits, axis=-1).tolist()
+
+            # Standard verification: compare model_picks[0..K-1] with draft_ids[0..K-1]
+            accepted_tokens, rejection_position = _find_acceptance_boundary(
+                model_picks[:K], draft_ids, K
+            )
+
+            # Bonus token
+            if rejection_position is not None:
+                bonus_token = model_picks[rejection_position]
+            else:
+                bonus_token = model_picks[K]
 
         accepted_count = len(accepted_tokens)
         all_accepted = accepted_count == K
         rejected_count = K - accepted_count
-
-        # Bonus token:
-        # - If rejected at position i: bonus = model_picks[i] (model's pick at rejection)
-        # - If all accepted: bonus = model_picks[K] (prediction after all tokens)
-        if rejection_position is not None:
-            bonus_token = model_picks[rejection_position]
-        else:
-            bonus_token = model_picks[K]
 
         # Step 6: Trim KV cache.
         # After step 1 (rollback -1) and step 2 (forward K+1), net entries = K.
@@ -409,6 +451,159 @@ class SpecDraftVerifier:
 
 
 # ── Module-level helpers ──
+
+import random as _random
+
+# Module-level RNG for probabilistic acceptance (separate from any user-facing seed)
+_prob_rng = _random.Random()
+
+
+def _probabilistic_accept(
+    target_logprobs,
+    draft_ids: list[int],
+    draft_logprobs: list[float],
+    K: int,
+) -> tuple[list[int], int | None, int | None]:
+    """Probabilistic acceptance for verify_with_last_token (aligned comparison).
+
+    Standard speculative sampling criterion (Chen et al. 2023, Leviathan et al. 2023):
+      Accept draft token x_i with probability min(1, p_target(x_i) / p_draft(x_i))
+
+    On rejection, sample a correction token from the adjusted distribution:
+      p_adjusted(x) = normalize(max(0, p_target(x) - p_draft(x)))
+
+    target_logprobs shape: [K+1, vocab_size] (positions 0..K-1 for verification,
+    position K for bonus).
+
+    Returns (accepted_tokens, rejection_position, bonus_token).
+    """
+    # Gather target logprob for each draft token at positions 0..K-1
+    draft_ids_arr = mx.array(draft_ids).reshape(K, 1)
+    target_lp = mx.take_along_axis(
+        target_logprobs[:K], draft_ids_arr, axis=-1
+    ).squeeze(-1)
+    draft_lp = mx.array(draft_logprobs)
+
+    # Acceptance ratio: min(1, exp(target_lp - draft_lp))
+    ratios = mx.minimum(mx.ones(K), mx.exp(target_lp - draft_lp))
+
+    # Sequential scan: accept until first rejection
+    accepted_tokens = []
+    rejection_position = None
+
+    for i in range(K):
+        r = float(ratios[i].item())
+        u = _prob_rng.random()
+        if u < r:
+            accepted_tokens.append(draft_ids[i])
+        else:
+            rejection_position = i
+            break
+
+    # Bonus / correction token
+    if rejection_position is not None:
+        # Sample correction token from adjusted distribution at rejection position
+        bonus_token = _sample_correction(
+            target_logprobs[rejection_position],
+            draft_ids[rejection_position],
+            float(draft_lp[rejection_position].item()),
+        )
+    else:
+        # All accepted: bonus from position K
+        bonus_token = _sample_bonus(target_logprobs[K])
+
+    return accepted_tokens, rejection_position, bonus_token
+
+
+def _probabilistic_accept_shifted(
+    target_logprobs,
+    draft_ids: list[int],
+    draft_logprobs: list[float],
+) -> tuple[list[int], int | None, int | None]:
+    """Probabilistic acceptance for verify() (shifted comparison).
+
+    In the shifted mode, logits[i] predicts position AFTER d[i], so we compare:
+      target_logprobs[i] vs draft_logprobs[i+1] for position d[i+1].
+    d0 is always trusted (from pattern match).
+
+    Returns (accepted_tokens, rejection_position, bonus_token).
+    """
+    K = len(draft_ids)
+    accepted_tokens = [draft_ids[0]]  # d0 trusted
+    rejection_position = None
+
+    # Shifted comparison: verify d[1..K-1] against target_logprobs[0..K-2]
+    for i in range(K - 1):
+        # Target logprob for draft token d[i+1] at position i
+        tid = draft_ids[i + 1]
+        t_lp = float(target_logprobs[i, tid].item())
+        d_lp = draft_logprobs[i + 1]
+
+        ratio = min(1.0, _math_exp(t_lp - d_lp))
+        u = _prob_rng.random()
+        if u < ratio:
+            accepted_tokens.append(draft_ids[i + 1])
+        else:
+            rejection_position = i + 1
+            break
+
+    # Bonus token
+    if rejection_position is not None:
+        bonus_pos = rejection_position - 1
+        bonus_token = _sample_correction(
+            target_logprobs[bonus_pos],
+            draft_ids[rejection_position],
+            draft_logprobs[rejection_position],
+        )
+    else:
+        bonus_token = _sample_bonus(target_logprobs[K - 1])
+
+    return accepted_tokens, rejection_position, bonus_token
+
+
+def _sample_correction(
+    target_logprobs_row,
+    draft_token_id: int,
+    draft_lp: float,
+) -> int:
+    """Sample a correction token from max(0, p_target - p_draft) distribution.
+
+    This is the standard speculative sampling resampling step:
+    when a draft token is rejected, sample from the difference distribution
+    to produce a token from the target that was under-represented in the draft.
+    """
+    # Convert logprobs to probs
+    probs = mx.softmax(target_logprobs_row, axis=-1)
+
+    # Subtract draft probability for the rejected token
+    # p_adjusted(x) = max(0, p_target(x) - p_draft(x))
+    draft_prob = _math_exp(draft_lp)
+    adjusted = mx.maximum(mx.zeros_like(probs), probs - draft_prob)
+
+    # Normalize
+    total = adjusted.sum()
+    if total > 0:
+        adjusted = adjusted / total
+        # Sample from the adjusted distribution
+        return int(mx.random.categorical(adjusted.reshape(1, -1)).item())
+    else:
+        # Fallback: sample from target distribution
+        return int(mx.random.categorical(target_logprobs_row.reshape(1, -1)).item())
+
+
+def _sample_bonus(target_logprobs_row) -> int:
+    """Sample a bonus token from the target distribution (after all drafts accepted)."""
+    return int(mx.random.categorical(target_logprobs_row.reshape(1, -1)).item())
+
+
+def _math_exp(x: float) -> float:
+    """Safe exp that clamps to avoid overflow."""
+    import math
+    if x > 50.0:
+        return float("inf")
+    if x < -50.0:
+        return 0.0
+    return math.exp(x)
 
 
 def _find_acceptance_boundary(

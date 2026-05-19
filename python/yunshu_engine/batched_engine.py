@@ -4796,6 +4796,48 @@ class BatchedEngine:
             xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
         )
 
+        # Grammar constraint: pre-validate draft tokens against allowed set
+        _stream_grammar_constraint = None
+        if json_schema is not None:
+            try:
+                sampler = _build_constrained_sampler(sampler, json_schema, tokenizer)
+                _stream_grammar_constraint = sampler.constraint if hasattr(sampler, 'constraint') else None
+            except Exception:
+                logger.warning("Grammar constraint setup failed for streaming n-gram spec", exc_info=True)
+
+        def _stream_grammar_filter_drafts(
+            draft_ids: list[int],
+            generated_ids: list[int],
+        ) -> list[int]:
+            """Filter draft tokens that violate grammar constraints (streaming path)."""
+            if _stream_grammar_constraint is None:
+                return draft_ids
+            _stream_grammar_constraint.checkpoint()
+            allowed = _stream_grammar_constraint.get_allowed_tokens(tokenizer, generated_ids)
+            if not allowed:
+                _stream_grammar_constraint.rollback()
+                return draft_ids
+            allowed_set = set(allowed)
+            filtered = []
+            for tid in draft_ids:
+                if tid in allowed_set:
+                    filtered.append(tid)
+                    try:
+                        tok_text = tokenizer.decode([tid])
+                        _stream_grammar_constraint.advance(tok_text)
+                    except Exception:
+                        logger.debug("grammar constraint advance failed in streaming filter", exc_info=True)
+                        break
+                    allowed = _stream_grammar_constraint.get_allowed_tokens(tokenizer, generated_ids + filtered)
+                    if allowed:
+                        allowed_set = set(allowed)
+                    else:
+                        break
+                else:
+                    break
+            _stream_grammar_constraint.rollback()
+            return filtered
+
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue(maxsize=512)
         loop = asyncio.get_running_loop()
@@ -4912,6 +4954,8 @@ class BatchedEngine:
                     draft_ids = proposer.propose(all_token_ids)
                     if _adaptive_k is not None:
                         draft_ids = draft_ids[:_adaptive_k]
+                    # Grammar-aware draft filtering: reject drafts that violate constraints
+                    draft_ids = _stream_grammar_filter_drafts(draft_ids, all_token_ids)
                     n_draft = min(len(draft_ids), remaining)
 
                     if n_draft == 0:
@@ -5003,6 +5047,13 @@ class BatchedEngine:
                                 _put((_text, n_tok, "stop" if suffix_hit else None, accepted_id))
                                 if suffix_hit:
                                     stopped = True
+                            # Advance grammar constraint for accepted/bonus token
+                            if _stream_grammar_constraint is not None and not stop_hit:
+                                try:
+                                    tok_text = tokenizer.decode([accepted_id])
+                                    _stream_grammar_constraint.advance(tok_text)
+                                except Exception:
+                                    pass
                             if i >= accepted:
                                 stopped = True
                             if stopped:
@@ -5048,6 +5099,13 @@ class BatchedEngine:
                                 _put((_text, n_tok, "stop" if suffix_hit else None, accepted_id))
                                 if suffix_hit:
                                     stopped = True
+                            # Advance grammar constraint for accepted/bonus token
+                            if _stream_grammar_constraint is not None and not stop_hit:
+                                try:
+                                    tok_text = tokenizer.decode([accepted_id])
+                                    _stream_grammar_constraint.advance(tok_text)
+                                except Exception:
+                                    pass
                             if not is_accept:
                                 stopped = True
                             if stopped:
