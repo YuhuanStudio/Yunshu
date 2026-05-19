@@ -2803,6 +2803,7 @@ class Scheduler:
 
     def _cleanup_finished(self) -> None:
         """Remove finished requests from running dict."""
+        uids_to_remove = []
         for req_id in list(self.running.keys()):
             req = self.running[req_id]
             if RequestStatus.is_finished(req.status):
@@ -2812,6 +2813,7 @@ class Scheduler:
                 uid = getattr(req, 'batch_uid', None)
                 if uid is not None:
                     self._uid_to_req.pop(uid, None)
+                    uids_to_remove.append(uid)
                 self._kv_prefix_hashes.pop(req_id, None)
                 # Clean up chunked prefill state for finished/aborted requests.
                 # Without this, _pending_prefill leaks when a request finishes
@@ -2827,6 +2829,13 @@ class Scheduler:
                 # Chunked prefill production tracking cleanup
                 self._chunked_prefill_fairness.pop(req_id, None)
                 self._chunked_prefill_enqueued_at.pop(req_id, None)
+        # Free BatchGenerator's internal resources (KV cache, attention state)
+        # for finished requests. Without this, GPU memory leaks indefinitely.
+        if uids_to_remove and hasattr(self, '_batch_gen') and self._batch_gen is not None:
+            try:
+                self._batch_gen.remove(uids_to_remove)
+            except Exception:
+                logger.debug("batch_gen.remove failed in cleanup_finished", exc_info=True)
 
     def _create_detokenizer(self):
         if self.tokenizer is None:

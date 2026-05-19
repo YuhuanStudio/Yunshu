@@ -887,6 +887,8 @@ class VideoEngine:
                     import subprocess
                     import numpy as np
 
+                    proc = None  # Initialize before try to prevent NameError in except
+
                     # Probe video info
                     probe = subprocess.run(
                         ["ffprobe", "-v", "quiet", "-print_format", "json",
@@ -1003,7 +1005,7 @@ class VideoEngine:
                     proc.wait()
 
                 except Exception:
-                    if proc.poll() is None:
+                    if proc is not None and proc.poll() is None:
                         proc.terminate()
                         try:
                             proc.wait(timeout=5)

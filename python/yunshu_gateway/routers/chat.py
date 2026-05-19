@@ -1656,7 +1656,7 @@ async def _stream_response_multi(
                     fr = output.finish_reason
                     if fr is not None:
                         choice_finish_reason = fr
-                    _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
+                    _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                     if _is_reasoning:
@@ -1752,7 +1752,7 @@ async def _stream_response_multi(
                     fr = getattr(output, 'finish_reason', None)
                     if fr is not None:
                         choice_finish_reason = fr
-                    _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
+                    _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                     if _is_reasoning:
@@ -1921,7 +1921,7 @@ def _format_choice_chunk(
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
-def _format_chat_logprobs(logprobs_list: list[dict] | None) -> dict | None:
+def _format_chat_logprobs(logprobs_list: list[dict] | None, tokenizer=None) -> dict | None:
     """Format per-token logprobs from GenerationOutput into OpenAI Chat format."""
     if not logprobs_list:
         return None
@@ -1930,15 +1930,25 @@ def _format_chat_logprobs(logprobs_list: list[dict] | None) -> dict | None:
         if not isinstance(lp_entry, dict):
             continue
         token_str = lp_entry.get("token", "")
+        if not token_str and tokenizer and "token_id" in lp_entry:
+            try:
+                token_str = tokenizer.decode([lp_entry["token_id"]])
+            except Exception:
+                pass
         top_lps = lp_entry.get("top_logprobs", [])
-        decoded_top = [
-            {
-                "token": tlp.get("token", ""),
+        decoded_top = []
+        for tlp in top_lps:
+            tlp_token = tlp.get("token", "")
+            if not tlp_token and tokenizer and "token_id" in tlp:
+                try:
+                    tlp_token = tokenizer.decode([tlp["token_id"]])
+                except Exception:
+                    pass
+            decoded_top.append({
+                "token": tlp_token,
                 "logprob": tlp.get("logprob", 0.0),
-                "bytes": list(tlp.get("token", "").encode("utf-8")) if tlp.get("token") else [],
-            }
-            for tlp in top_lps
-        ]
+                "bytes": list(tlp_token.encode("utf-8")) if tlp_token else [],
+            })
         content.append({
             "token": token_str,
             "logprob": lp_entry.get("logprob", 0.0),
@@ -2074,7 +2084,7 @@ async def _stream_response(
                 elif token_text:
                     completion_tok += 1
 
-                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
+                _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
 
                 # Route thinking content based on SequenceStateMachine state
                 _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
@@ -2167,7 +2177,7 @@ async def _stream_response(
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
-                _chunk_lp = _format_chat_logprobs(output.logprobs) if req.logprobs and hasattr(output, 'logprobs') else None
+                _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
                 _is_final_from_engine = output.finish_reason is not None
                 if getattr(output, 'current_state', None) == "reasoning":

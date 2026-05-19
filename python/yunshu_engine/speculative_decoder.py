@@ -649,11 +649,11 @@ class SpeculativeDecoder:
                     break
                 d_out = self.draft(d_input, cache=draft_cache)
                 d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
-                d_probs = mx.softmax(d_logits, axis=-1)
+                d_logprobs = d_logits - mx.logsumexp(d_logits, axis=-1, keepdims=True)
                 next_tok = draft_sampler(d_logits)
                 tok_id = int(next_tok.item())
                 draft_tokens.append(tok_id)
-                draft_probs.append(float(d_probs[0, tok_id].item()))
+                draft_probs.append(float(d_logprobs[0, tok_id].item()))
                 d_input = next_tok.reshape(1, 1)
 
             if not draft_tokens:

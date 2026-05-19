@@ -554,13 +554,15 @@ class KVCacheManager:
                 # outdated KV data.
                 self._warm_tier._store.pop(block.block_hash, None)
 
-            # Remove from hot prefix cache
-            self.block_pool._evict_cached_block(block)
-
-            # Re-check ref_count after eviction — BlockPool.touch() may have
-            # reactivated this block between snapshot and now.
+            # Re-check ref_count BEFORE evicting — BlockPool.touch() may have
+            # reactivated this block between snapshot and now. Evicting a
+            # block with ref_count > 1 would strip the prefix cache entry
+            # from an actively-shared block.
             if block.ref_count > 1:
                 continue  # actively shared by multiple requests
+
+            # Remove from hot prefix cache (safe now: ref_count <= 1)
+            self.block_pool._evict_cached_block(block)
 
             # ref_count == 1 means cache-only block (no active request holds it).
             # _evict_cached_block cleared its hash, so it's no longer in the
@@ -647,11 +649,13 @@ class KVCacheManager:
                 # outdated KV data.
                 self._warm_tier._store.pop(block.block_hash, None)
 
-            self.block_pool._evict_cached_block(block)
-
-            # Re-check ref_count — concurrent touch() may have reactivated
+            # Re-check ref_count BEFORE evicting — concurrent touch() may
+            # have reactivated this block. Evicting a ref_count > 1 block
+            # strips the prefix cache entry from actively-shared blocks.
             if block.ref_count > 1:
                 continue
+
+            self.block_pool._evict_cached_block(block)
 
             # ref_count == 1: cache-only block orphaned after hash clear.
             # Recycle it into the free queue.

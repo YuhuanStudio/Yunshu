@@ -317,7 +317,8 @@ class EventLog:
         if not self._initialized:
             self.initialize()
 
-        self._node_states.clear()
+        with self._lock:
+            self._node_states.clear()
 
         # Find last snapshot
         snapshot_seq = self.get_last_snapshot()
@@ -471,7 +472,9 @@ class EventLog:
     def prune_before(self, sequence: int) -> int:
         """Remove events before a given sequence number.
 
-        Useful after a snapshot to free space.
+        Useful after a snapshot to free space. Protects snapshots from
+        deletion and refuses to prune if no snapshot exists (which would
+        make recovery impossible).
 
         Returns:
             Number of pruned events.
@@ -481,6 +484,14 @@ class EventLog:
 
         if self._conn is None:
             raise RuntimeError("EventLog not initialized: connection is None")
+
+        # Guard: refuse to prune if no snapshot exists, as this would
+        # destroy all events and make crash recovery impossible.
+        last_snapshot = self.get_last_snapshot()
+        if last_snapshot == 0:
+            logger.warning("Cannot prune events: no snapshot exists yet")
+            return 0
+
         with self._lock:
             cursor = self._conn.execute(
                 "DELETE FROM events WHERE sequence < ? AND event_type != ?",

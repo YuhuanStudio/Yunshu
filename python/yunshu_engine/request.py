@@ -234,6 +234,12 @@ class Request:
         self.finish_reason = reason or RequestStatus.finish_reason(status)
         if not self.generation_end:
             self.generation_end = time.monotonic()
+        # Ensure done_event is set so no coroutine hangs waiting on it
+        if self.done_event is not None:
+            try:
+                self.done_event.set()
+            except Exception:
+                pass
 
     def __lt__(self, other: "Request") -> bool:
         if self.priority != other.priority:

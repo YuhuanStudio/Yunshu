@@ -481,28 +481,21 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
         except json.JSONDecodeError:
             pass
 
-    # Try bare JSON — find the opening brace after name and parse from there
+    # Try bare JSON — find the opening brace after name and parse from there.
+    # Use json.JSONDecoder.raw_decode for robust parsing that correctly
+    # handles nested braces inside string values (avoids false termination
+    # on literal '}' characters within JSON string values).
     calls: list[dict] = []
     for m in _TOOL_CALL_JSON_RE.finditer(text):
         name = m.group(1)
         rest = text[m.end():]
-        brace_depth = 0
-        end = -1
-        for i, ch in enumerate(rest):
-            if ch == '{':
-                brace_depth += 1
-            elif ch == '}':
-                brace_depth -= 1
-                if brace_depth == 0:
-                    end = i
-                    break
-        if end >= 0:
-            args_str = rest[:end + 1]
-            try:
-                json.loads(args_str)
-                calls.append({"name": name, "arguments": args_str})
-            except json.JSONDecodeError:
-                pass
+        try:
+            decoder = json.JSONDecoder()
+            obj, end_idx = decoder.raw_decode(rest)
+            args_str = rest[:end_idx]
+            calls.append({"name": name, "arguments": args_str})
+        except json.JSONDecodeError:
+            pass
     return calls or None
 
 
