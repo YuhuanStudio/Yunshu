@@ -35,7 +35,75 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6557 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-19 Wave 253-255 — Deep Audit: 38 Critical/High Bugs Fixed Across 8 Subsystems)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 253: BlockTable 增量 total_tokens | append_block/append_blocks/update_last_block_occupancy/fork/clear 重構為增量累加，修復 append_blocks 雙重計數 + fork 遺漏 _last_block_occupancy + clear 未重置 | KV token 計數正確 |
+| Wave 253: COW block leak | cow_block_in_table 錯誤路徑新分配的 block 未歸還 free queue，永久洩漏 | KV block pool 不再洩漏 |
+| Wave 253: prefix cache hash collision | cache_block 碰撞時未清除舊 block 的 hash，導致 stale cache_only 狀態 | 前綴緩存一致性 |
+| Wave 253: CompositeSpecProposer accept | 非獲勝 proposer 未收到 accept(0) 通知，統計不準確 | 推測解碼統計正確 |
+| Wave 253: heartbeat failure_threshold | UDP 單包丟失即標記離線。新增 failure_threshold=3 連續丟失計數 | 避免心跳假陽性 |
+| Wave 253: num_computed_tokens scope | append_token() 不再遞增 num_computed_tokens (僅追蹤 prefill 進度) | token 計數語義正確 |
+| Wave 253: sliding_window deep copy | _sliding_window 返回 deepcopy 而非原始 message 引用 | 防止截斷策略修改用戶數據 |
+| Wave 254: json_schema crash | `_buf_offset` AttributeError 在 NUMBER 終止符狀態觸發運行時崩潰 | JSON 約束生成不再崩潰 |
+| Wave 254: dedup hash collision | compute_hash 僅含 4 參數，缺少 seed/json_schema/penalties 等。陰影請求獲得錯誤輸出 | 請求去重哈希包含所有採樣參數 |
+| Wave 254: cancel auth bypass | isinstance(rbac_key, str) 對 APIKey/Tenant 對象永遠 False。RBAC 用戶被拒 | RBAC 認證正確透傳 |
+| Wave 254: dedup shadow fields | 中間 fan-out 缺少 current_state/logprobs/reasoning_tokens/cached_tokens | 陰影串流輸出完整 |
+| Wave 254: warm tier thread safety | manager.py 直接存取 _warm_tier._store 繞過鎖。新增 remove() 方法 | 溫層線程安全 |
+| Wave 254: boundary snapshot data loss | load() 用 pop() 消耗 pending writes，二次 load 丟失數據 | SSD 邊界快照可重複讀取 |
+| Wave 254: _active_requests counter | gateway 從未遞增活躍請求計數，shutdown drain 永遠跳過 | 優雅關機正確等待 |
+| Wave 254: partial_prefill leak | effective_chunk_size=0 時計數器遞增但無對應遞減 | 分塊預填充計數器正確 |
+| Wave 254: logprob NaN/-inf | softmax 輸出 log(0) 產生 -inf，JSON 解析失敗。箝位至 -100.0 | logprobs JSON 兼容 |
+| Wave 254: dedup shadow cleanup race | 陰影完成後立即 cleanup，消費者可能未讀完 | 陰影清理延遲至消費者 finally |
+| Wave 254: profiling path traversal | output_path 未驗證，任意文件寫入風險。限制至 /tmp | 安全性: 任意文件寫入修復 |
+| Wave 254: response cache non-deterministic | 非確定性採樣 (temperature>0, no seed) 被緩存，返回過時結果 | 緩存僅存確定性請求 |
+| Wave 254: realtime RBAC | WebSocket 端點僅檢查靜態 token，忽略 ys_ 金鑰 | WebSocket RBAC 支持 |
+| Wave 254: RBAC file permissions | 持久化 JSON 文件未設置 0o600，多用戶系統可讀 | 密鑰文件權限安全 |
+| Wave 255: VLM thinking false positives | encode("<think")[-1] 取最後 token 導致假陽性。多 token 時改用文字後綴匹配 | 思考狀態檢測正確 (6 處) |
+| Wave 255: multi-token stop suffix | 僅 pop() 最後 token，多 token 後綴殘留。finalize() 後修剪後綴文字 | 輸出文字正確截斷 (3 處) |
+| Wave 255: StreamingBuffer pool leak | chat.py 取得 buffer 後從未歸還，每次串流洩漏 64KB | 串流緩衝區正確回收 |
+| Wave 255: RBAC gateway enforcement | models load/unload 和 sleep/wake 無權限檢查。新增 _check_permission | RBAC 權限在敏感端點執行 |
+
+### 其他 Wave 254 修復
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| _failed_insert_ids finish_reason | 硬編碼 "error" 而非使用請求的實際 finish_reason | 完成/錯誤原因正確 |
+| has_requests() pending aborts | 含 pending_abort_ids 導致空 batch step 浪費 GPU | 調度器空轉消除 |
+| DataParallelRouter add_node | 非冪等，重複發現覆蓋負載統計 | DP 路由器負載統計保留 |
+| Discovery node replacement | 新發現替換 MeshNode 對象，中斷共享引用 | 發現層對象身份保持 |
+| Heartbeat missed_counts init | 動態發現節點缺少初始化，3 次即標記離線 | 新節點心跳閾值正確 |
+| Priority queue thread safety | __len__/__bool__ 無鎖，異步事件循環競爭 | 優先級隊列線程安全 |
+| SSD wall-clock time | tiered.py last_access 用 monotonic() 但持久化至 JSON | SSD 緩存 LRU 跨重啟正確 |
+| Disagg route failure | route_request 失敗返回 "" 而非 None | 路由 API 一致性 |
+| cow_block_in_table return type | 返回類型註解 KVBlock vs 實際 tuple | 類型註解正確 |
+| completion_tok reset | 中間 chunk completion_tokens=0 重置累計計數 | 串流 token 計數正確 |
+
+### 已完成修復 (2026-05-18 ~ 2026-05-19 Wave 142-252 — 110 Waves of Deep Correctness Audit)
+
+> **Waves 142-252** (110 waves, 600+ bugs fixed): Comprehensive deep correctness audit spanning all subsystems.
+> Key themes: thread safety (mesh, KV, scheduler, streaming), token counting accuracy,
+> parameter forwarding completeness, resource leak elimination, API compliance (OpenAI/Anthropic),
+> structured output correctness, spec decode validation, and multi-tenant security hardening.
+
+**Major subsystem fixes by area:**
+
+| 區域 | 波段 | 關鍵修復 |
+|------|------|----------|
+| Scheduler | 142-250 | FCFS aging, preemption stale tokens, partial prefill continuity, _active_partial_prefills counter, has_requests() pending aborts, effective_priority inheritance |
+| KV Cache | 142-252 | BlockTable incremental total_tokens, COW block leak, prefix cache hash collision, warm tier thread safety, boundary snapshot data loss, SSD monotonic→wall-clock, tiered surplus blocks, kv_offload _blocks/blocks mismatch, RadixTree split alignment, FreeBlockQueue assert→exception |
+| Gateway | 142-255 | _active_requests counter middleware, completion_tok reset guard, StreamingBuffer pool leak, RBAC permission enforcement (models/sleep), profiling path traversal, response cache non-deterministic, cancel auth bypass (isinstance fix), realtime RBAC, Anthropic streaming stop_reason, completions error format, streaming duplicate [DONE] guard |
+| Engine | 142-252 | dedup hash collision (all sampling params), shadow field propagation (current_state/logprobs/reasoning_tokens), shadow cleanup race, logprob NaN/-inf clamp, num_computed_tokens scope, context window truncation, thinking token text-based detection, multi-token stop suffix truncation, MLX logits mutation NO-OP fix |
+| Mesh | 142-252 | DataParallelRouter idempotent add_node, discovery node object replacement fix, heartbeat missed_counts init for dynamic nodes, mesh lock inversion, peer_lost dedup, monotonic time sweep, disagg route None return |
+| Security | 142-255 | RBAC file permissions (0o600), RBAC gateway enforcement, profiling path validation, WebSocket RBAC, tenant_auth ys_ fallthrough, rate limit X-Forwarded-For spoofing |
+| Spec Decode | 142-252 | CompositeSpecProposer accept notification, spec decode refeed position ID corruption, probabilistic acceptance, LoRA deep copy, SSD atomic+checksum |
+| Structured Output | 142-254 | json_schema _buf_offset crash, NUMBER_ZERO handling, grammar bitmask checkpoint/rollback, regex DFA rewrite, tool parser brace tracking |
+| VLM | 142-255 | thinking token false positives (6 locations), img2img (partial), VLM penalty consistency, streaming cancel_event, prefix cache, KV prefix reuse |
+| Audio | 142-200 | VAD WAV parsing, VAD full-scan, ASR sample rate, audio token estimation, WAV streaming header |
+| Video | 142-250 | LoRA deep copy, subprocess leak, frame count, native pipeline, TeaCache |
 
 ### 已完成修復 (2026-05-18 Wave 141 — Architecture Gap Completion: Compute Utilization + WebUI Exposure)
 
@@ -1865,7 +1933,7 @@ vllm-omni 有**17 個模型特定的輸入處理器** (bagel, cosyvoice3, fish_s
 
 ---
 
-> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 的核心差距不在於「缺少什麼技術」，而在於「已實現的技術沒有接入管線」。11 個死模塊 + 13 個未觸發的管線功能 + 0 處裸 except:pass + 0 個未修復安全漏洞 (全部已修)。參考項目的最大啟示是: **一個功能的價值不在於它被實現了多少，而在於它被用戶實際使用了多少**。測試套件 3301 passed, 13 skipped。
+> **最終結論**: 通過對比 14 個參考項目 (vLLM, oMLX, SGLang, mlx-lm, llama.cpp, exo, Parallax, vllm-mlx, vllm-omni 等)，Yunshu 已從「已實現的技術沒有接入管線」進化為「全管線整合 + 600+ 深層修復 + 6694 測試全通」。所有死模塊已 WIRED，所有管線功能已接入，所有已知安全漏洞已修復。Waves 142-255 新增 600+ 深層修復涵蓋線程安全、token 計數、資源洩漏、API 合規、結構化輸出、推測解碼驗證、多租戶安全。測試套件 **6694 passed, 16 skipped**。
 
 ### 18.1 ~~致命 Bug: Streaming VLM 丟失圖片~~ ✅ 已修復 (M1)
 
@@ -2133,4 +2201,4 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 
 ---
 
-> **多模態結論**: Yunshu 的多模態已全面完成。LLM 完整可用，VLM streaming + 連續批處理 (VLMAsyncEngineCore)，Audio 格式轉換，OCR (GLM-OCR-bf16)，視頻音頻提取，視頻理解 (VLM frame extraction)，Realtime token-level 音頻串流，MCP client，TTS 原生串流，LoRA gateway + 圖像 LoRA，圖像預覽串流 (preview_interval)，Grammar 約束 (regex/choice/CFG)，分離式 P/D 端點，VLM request 字段完善。Wave 26 新增: STS Engine (enhance/separate/transform)，VAE encoder + inpainting，VAE tiling (cosine blend)，ControlNet + depth-guided，TeaCache (diffusion acceleration)，Video Engine (Wan2.2/LTX2)，Pipeline Registry (多模型)，VLM SpecPrefill。測試套件 3566 passed, 13 skipped。
+> **多模態結論**: Yunshu 的多模態已全面完成。LLM 完整可用，VLM streaming + 連續批處理 (VLMAsyncEngineCore)，Audio 格式轉換，OCR (GLM-OCR-bf16)，視頻音頻提取，視頻理解 (VLM frame extraction)，Realtime token-level 音頻串流，MCP client，TTS 原生串流，LoRA gateway + 圖像 LoRA，圖像預覽串流 (preview_interval)，Grammar 約束 (regex/choice/CFG)，分離式 P/D 端點，VLM request 字段完善。Wave 26 新增: STS Engine (enhance/separate/transform)，VAE encoder + inpainting，VAE tiling (cosine blend)，ControlNet + depth-guided，TeaCache (diffusion acceleration)，Video Engine (Wan2.2/LTX2)，Pipeline Registry (多模型)，VLM SpecPrefill。Wave 255 新增: VLM 思考狀態文字匹配修復、多 token stop 後綴截斷修復。測試套件 **6694 passed, 16 skipped**。
