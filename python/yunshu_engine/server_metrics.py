@@ -61,8 +61,8 @@ class ServerMetrics:
         self._total_compute_time_ms: float = 0.0
         self._total_wall_time_ms: float = 0.0
 
-        self._start_time = time.time()
-        self._last_save_time = time.time()
+        self._start_time = time.monotonic()
+        self._last_save_time = time.monotonic()
 
         if stats_path:
             self._load_alltime()
@@ -112,7 +112,7 @@ class ServerMetrics:
                 "total_generation_duration": self._alltime_generation_duration,
                 "per_model": dict(self._alltime_per_model),
             }
-            self._last_save_time = time.time()
+            self._last_save_time = time.monotonic()
         try:
             self._stats_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._stats_path.with_suffix(".json.tmp")
@@ -164,7 +164,7 @@ class ServerMetrics:
             # Periodic save (flag-based to avoid lock reentrance)
             needs_save = (
                 self._stats_path
-                and time.time() - self._last_save_time >= _SAVE_INTERVAL
+                and time.monotonic() - self._last_save_time >= _SAVE_INTERVAL
             )
 
         if needs_save:
@@ -326,7 +326,7 @@ class ServerMetrics:
         self, model_id: str = "", scope: str = "session"
     ) -> dict[str, Any]:
         with self._lock:
-            uptime = time.time() - self._start_time
+            uptime = time.monotonic() - self._start_time
 
             if scope == "alltime":
                 if model_id:

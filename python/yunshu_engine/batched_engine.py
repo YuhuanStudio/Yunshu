@@ -3122,18 +3122,17 @@ class BatchedEngine:
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
                             _thinking_tokens.append(token)
                             _in_thinking = False
-                            # Emit the closing think tag so consumers see a properly closed block
+                            # Emit current token's text first (still reasoning content)
+                            if new_text:
+                                _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "reasoning"))
+                            # Then emit closing think tag
                             detokenizer.add_token(think_end_token)
                             _end_text = detokenizer.last_segment
                             if _end_text:
-                                _put((_end_text, n_tok, None, len(_thinking_tokens), None, "normal"))
+                                _put((_end_text, n_tok, None, len(_thinking_tokens), None, "reasoning"))
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
-                            # Emit text before finalizing so consumer reads it
-                            # before the stop chunk (consumer breaks on done=True).
-                            if new_text:
-                                _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "normal"))
                             detokenizer.finalize()
                             _remaining = detokenizer.last_segment
                             if _remaining:

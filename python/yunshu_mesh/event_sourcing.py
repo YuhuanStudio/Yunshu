@@ -217,7 +217,8 @@ class EventLog:
                 sequence=self._sequence,
             )
 
-            assert self._conn is not None
+            if self._conn is None:
+                raise RuntimeError("Database connection not initialized")
             self._conn.execute(
                 "INSERT INTO events (sequence, event_id, event_type, timestamp, node_id, payload) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -320,7 +321,8 @@ class EventLog:
 
         if snapshot_seq > 0:
             # Restore from snapshot
-            assert self._conn is not None
+            if self._conn is None:
+                raise RuntimeError("Database connection not initialized")
             row = self._conn.execute(
                 "SELECT payload FROM events WHERE sequence = ?",
                 (snapshot_seq,),

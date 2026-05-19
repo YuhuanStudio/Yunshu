@@ -620,7 +620,7 @@ class HealthDashboard:
         report["health_score"] = self.compute_health_score(report)
 
         with self._lock:
-            self._last_collect_time = time.time()
+            self._last_collect_time = time.monotonic()
             self._last_report = report
 
         return report
@@ -700,7 +700,7 @@ class HealthDashboard:
     def get_report(self) -> dict[str, Any]:
         """Return the latest health report, collecting if stale."""
         with self._lock:
-            age = time.time() - self._last_collect_time
+            age = time.monotonic() - self._last_collect_time
             if age > 30 or not self._last_report:
                 # Will collect outside lock
                 pass

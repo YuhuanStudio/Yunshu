@@ -182,9 +182,11 @@ class SpecDraftVerifier:
             for i in range(K):
                 context_ids = token_history + draft_ids[:i]
                 for processor in logits_processors:
-                    batch_logits[i] = processor(
-                        mx.array(context_ids), batch_logits[i : i + 1]
-                    ).squeeze(0)
+                    batch_logits = batch_logits.at[i].set(
+                        processor(
+                            mx.array(context_ids), batch_logits[i : i + 1]
+                        ).squeeze(0)
+                    )
 
         # Step 3: Get model predictions (greedy or sampled)
         if sampler is not None:
@@ -317,9 +319,11 @@ class SpecDraftVerifier:
             for i in range(K + 1):
                 context_ids = token_history + all_input[:i]
                 for processor in logits_processors:
-                    batch_logits[i] = processor(
-                        mx.array(context_ids), batch_logits[i : i + 1]
-                    ).squeeze(0)
+                    batch_logits = batch_logits.at[i].set(
+                        processor(
+                            mx.array(context_ids), batch_logits[i : i + 1]
+                        ).squeeze(0)
+                    )
 
         # Step 4: Get model predictions
         if sampler is not None:

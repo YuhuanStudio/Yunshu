@@ -163,7 +163,7 @@ class MemoryMonitor:
     def get_memory_info(self) -> MemoryInfo:
         """Get current memory state from MLX Metal."""
         with self._lock:
-            now = time.time()
+            now = time.monotonic()
             if (
                 self._last_info is not None
                 and now - self._last_check_time < self._check_interval

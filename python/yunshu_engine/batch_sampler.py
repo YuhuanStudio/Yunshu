@@ -124,9 +124,10 @@ class BatchSampler:
         t0 = time.perf_counter()
 
         batch_size, vocab_size = logits_batch.shape
-        assert len(params_list) == batch_size, (
-            f"params_list length ({len(params_list)}) must match batch_size ({batch_size})"
-        )
+        if len(params_list) != batch_size:
+            raise ValueError(
+                f"params_list length ({len(params_list)}) must match batch_size ({batch_size})"
+            )
 
         temperatures = []
         top_k_values = []
@@ -444,9 +445,10 @@ class LogitsProcessorBatch:
             Modified logits_batch shape [batch, vocab].
         """
         batch_size = logits_batch.shape[0]
-        assert len(configs) == batch_size, (
-            f"configs length ({len(configs)}) must match batch_size ({batch_size})"
-        )
+        if len(configs) != batch_size:
+            raise ValueError(
+                f"configs length ({len(configs)}) must match batch_size ({batch_size})"
+            )
 
         result = logits_batch
 
@@ -757,8 +759,10 @@ class BatchStopChecker:
             List of StopResult, one per request.
         """
         batch_size = token_ids.shape[0]
-        assert len(generated_counts) == batch_size
-        assert len(stop_configs) == batch_size
+        if len(generated_counts) != batch_size:
+            raise ValueError(f"generated_counts length ({len(generated_counts)}) must match batch_size ({batch_size})")
+        if len(stop_configs) != batch_size:
+            raise ValueError(f"stop_configs length ({len(stop_configs)}) must match batch_size ({batch_size})")
 
         self._stats["total_checks"] += 1
         results: list[StopResult] = []

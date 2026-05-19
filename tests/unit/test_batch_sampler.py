@@ -80,7 +80,7 @@ class TestBatchSamplerPrepare:
         logits = _make_logits(batch_size=4, vocab_size=50)
         params = _default_params(batch_size=2)
 
-        with pytest.raises(AssertionError, match="params_list length"):
+        with pytest.raises(ValueError, match="params_list length"):
             sampler.prepare_batch(logits, params)
 
     def test_prepare_preserves_top_k_values(self):
