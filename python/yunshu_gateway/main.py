@@ -32,6 +32,15 @@ _memory_enforcer = None
 # Background tasks tracked for clean shutdown
 _background_tasks: list[asyncio.Task] = []
 
+# Cache UMA size once at module load to avoid sysctl per-request
+try:
+    import subprocess as _sp
+    _total_uma_bytes: int = int(_sp.run(
+        ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5,
+    ).stdout.strip())
+except Exception:
+    _total_uma_bytes: int = 0
+
 # Startup timestamp for uptime tracking
 _startup_time: float = 0.0
 
@@ -898,22 +907,11 @@ def create_app() -> FastAPI:
         if not has_loaded_model:
             ready = False
 
-        # Check GPU memory available
+        # Check GPU memory available (uses cached UMA size)
         try:
             import mlx.core as mx
             active = mx.get_active_memory()
-            total_uma = 0
-            try:
-                import asyncio as _asyncio
-                import subprocess
-                r = await _asyncio.to_thread(
-                    subprocess.run,
-                    ["sysctl", "-n", "hw.memsize"],
-                    capture_output=True, text=True,
-                )
-                total_uma = int(r.stdout.strip())
-            except Exception:
-                logger.debug("failed", exc_info=True)
+            total_uma = _total_uma_bytes
             if total_uma > 0:
                 mem_pct = active / total_uma
                 checks["gpu_memory_ok"] = mem_pct < 0.95
