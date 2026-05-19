@@ -28,12 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 def mx_barrier(group: Optional[mx.distributed.Group] = None) -> None:
-    """Synchronize all processes using all_sum on CPU stream."""
+    """Synchronize all processes using all_sum on GPU stream."""
     if group is None:
         return
+    mx.synchronize()
     mx.eval(
         mx.distributed.all_sum(
-            mx.array(1.0), group=group, stream=mx.default_stream(mx.Device(mx.cpu))
+            mx.array(1.0), group=group, stream=mx.default_stream(mx.Device(mx.gpu))
         )
     )
 
@@ -136,8 +137,8 @@ class ShardedMoE(nn.Module):
         self.group = group
 
     def __call__(self, x: mx.array, *args, **kwargs) -> mx.array:
-        from mlx.nn.layers.distributed import sum_gradients
-        x = sum_gradients(self.group)(x)
+        # For inference: gather full input, apply local expert shard, all-reduce outputs
+        x = mx.distributed.all_gather(x, group=self.group)
         y = self._original_layer(x, *args, **kwargs)
         y = mx.distributed.all_sum(y, group=self.group)
         return y

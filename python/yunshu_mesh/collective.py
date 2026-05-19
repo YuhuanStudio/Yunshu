@@ -170,7 +170,8 @@ class CollectiveOps:
     ) -> mx.array:
         """Receive array from a specific rank."""
         if not self._initialized:
-            return mx.zeros(shape, dtype=dtype)
+            raise RuntimeError("Collective ops not initialized — cannot receive data. "
+                             "Ensure mx.distributed.init() was called before using recv().")
         kwargs = {"src": src, "group": self._group}
         if stream is not None:
             kwargs["stream"] = stream

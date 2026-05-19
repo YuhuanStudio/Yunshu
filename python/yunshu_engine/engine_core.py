@@ -346,6 +346,7 @@ class EngineCore:
         self._dedup_hashes: dict[str, str] = {}  # req_id → content_hash
         self._dedup_shadows: dict[str, str] = {}  # shadow_req_id → primary_req_id
         self._finalized_ids: set[str] = set()  # idempotency guard for _finalize_request
+        self._ttft_done: set[str] = set()  # TTFT deduplication guard
         if os.environ.get("YUNSHU_REQUEST_DEDUP", "").strip() in ("1", "true", "yes"):
             self._request_dedup = RequestDeduplicator.from_env()
             logger.info("RequestDeduplicator wired (SHA-256 content-hash dedup)")
@@ -943,8 +944,7 @@ class EngineCore:
             self._dedup_hashes.clear()
             self._dedup_shadows.clear()
         self._finalized_ids.clear()
-
-        self.scheduler.shutdown()
+        self._ttft_done.clear()
 
         # Release model/tokenizer refs + GC + cache clear on executor
         self._model = None
@@ -1962,22 +1962,24 @@ class EngineCore:
                     if _tokens_gen > 0 and batch_size > 0:
                         _est_itl_ms = _step_wall_ms / _tokens_gen
 
-                    # Estimate TTFT from requests that transitioned from
-                    # PREFILLING to DECODING (tracked via lifecycle orchestrator).
+                    # Estimate TTFT from requests that just transitioned from
+                    # PREFILLING to DECODING (completion_tokens > 0 and not yet
+                    # recorded in _ttft_done). This measures actual first-token
+                    # latency, not end-to-end request latency.
                     _est_ttft_ms = 0.0
                     _ttft_count = 0
                     for o in scheduler_output.outputs:
                         rid = getattr(o, 'request_id', None)
-                        if rid and hasattr(self, '_ttft_done'):
-                            if rid in self._ttft_done:
-                                continue
-                        if (o.finished
-                            and getattr(o, 'finish_reason', 'stop') not in ("error", "timeout", "abort")
-                            and not getattr(o, 'error', None)):
+                        if not rid or rid in self._ttft_done:
+                            continue
+                        if getattr(o, 'finished', False):
+                            continue
+                        if getattr(o, 'completion_tokens', 0) > 0:
                             _start_ts = self._request_timestamps.get(rid)
                             if _start_ts is not None:
                                 _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
                                 _ttft_count += 1
+                                self._ttft_done.add(rid)
                     if _ttft_count > 0:
                         _est_ttft_ms /= _ttft_count
 

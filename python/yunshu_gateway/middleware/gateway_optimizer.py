@@ -160,4 +160,8 @@ class RequestCoalescingMiddleware:
         except Exception:
             logger.debug("coalescer tracking failed", exc_info=True)
 
-        await self.app(scope, receive, send)
+        # Replay the consumed body so downstream handlers can read it
+        async def _replay_receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.app(scope, _replay_receive, send)

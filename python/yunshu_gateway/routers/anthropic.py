@@ -1286,12 +1286,10 @@ async def _stream_anthropic(
     except MemoryError:
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
-        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Anthropic streaming error", exc_info=True)
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
-        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         try:

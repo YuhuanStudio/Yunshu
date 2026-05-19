@@ -111,10 +111,19 @@ def parse_qwen_tool_calls(text: str) -> list[ToolCallResult]:
 
 
 def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
-    """Parse DeepSeek-style tool calls with special token markers."""
+    """Parse DeepSeek-style tool calls with special token markers.
+
+    DeepSeek uses fullwidth chars in markers:
+    - ｜ (U+FF5C) for pipes
+    - tool▁callBegin uses ▁ (U+2581 LOWER ONE EIGHTH BLOCK) for underscores
+    """
     results = []
-    pattern = r'･tool_callBegin･function･tool_sep･([\w.\-]+)\s*```json\s*'
-    # Also try the visible form
+    # Primary pattern: fullwidth pipe markers with special token boundaries
+    pattern = r'｜tool▁callBegin｜function｜tool_sep｜([\w.\-]+)\s*```json\s*'
+    # Fallback: halfwidth variants
+    if not re.search(pattern, text):
+        pattern = r'[･|]tool_callBegin[･|]function[･|]tool_sep[･|]([\w.\-]+)\s*```json\s*'
+    # Last fallback: plain function form
     if not re.search(pattern, text):
         pattern = r'function\s*:\s*([\w.\-]+)\s*```json\s*'
     for i, match in enumerate(re.finditer(pattern, text, re.DOTALL)):

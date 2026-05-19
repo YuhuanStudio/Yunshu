@@ -8,10 +8,11 @@ System monitoring: hardware status, server metrics, prefill progress, model disc
 """
 
 
+import asyncio
 import logging
 import threading
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -34,8 +35,8 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 logger = logging.getLogger(__name__)
 
-# Lock for thread-safe config mutations and RBAC manager initialization
-_config_lock = __import__("threading").Lock()
+# Locks for config mutations and RBAC initialization (asyncio.Lock to avoid blocking event loop)
+_config_lock = asyncio.Lock()
 _rbac_init_lock = __import__("threading").Lock()
 
 
@@ -340,7 +341,7 @@ async def update_engine_config(
             logger.warning("Ignored unknown config field: %s", field)
 
     updated = []
-    with _config_lock:
+    async with _config_lock:
         for field, value in updates.items():
             if hasattr(cfg, field):
                 old_val = getattr(cfg, field)
@@ -406,7 +407,7 @@ async def update_model_settings(
         entry.settings = ModelSettings()
 
     overrides = await request.json()
-    with _config_lock:
+    async with _config_lock:
         changed = entry.settings.apply_overrides(overrides)
 
     return {"status": "updated", "model_id": model_id, "changed_fields": changed}
@@ -418,7 +419,7 @@ async def update_model_settings(
 @router.post("/tokens", response_model=AuthTokenResponse)
 async def create_token(req: AuthTokenCreate, request: Request, _=Depends(require_permission("can_manage_tokens"))):
     """Create a new API auth token (simple)."""
-    now = datetime.now(tz=None)
+    now = datetime.now(tz=timezone.utc)
     expires = now + timedelta(days=req.expires_days) if req.expires_days else None
 
     manager = _get_rbac_manager(request)

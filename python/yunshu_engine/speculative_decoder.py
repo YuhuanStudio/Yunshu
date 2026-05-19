@@ -419,7 +419,7 @@ class SpeculativeDecoder:
             # Feed back for next step
             current_ids = next_token.reshape(1, 1)
 
-        mx.eval(token_ids)
+        mx.eval(current_ids)
         return DraftResult(token_ids=token_ids, logprobs=logprobs)
 
     def verify_draft(
@@ -661,71 +661,52 @@ class SpeculativeDecoder:
 
             self._stats["total_draft_tokens"] += len(draft_tokens)
 
-            # Step 2: Target verifies one-by-one
+            # Step 2: Batch verify all K draft tokens in ONE forward pass
             last_tok = generated_tokens[-1]
-            t_input = mx.array([[last_tok]])
-            t_out = self.target(t_input, cache=target_cache)
-            t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
+            last_tok_arr = mx.array([[last_tok]])
+            draft_result = DraftResult(
+                token_ids=draft_tokens,
+                logprobs=draft_probs,
+            )
+            verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache)
 
-            accepted = 0
-            all_accepted = True
-            t_probs = mx.softmax(t_logits, axis=-1)
-            for j in range(len(draft_tokens)):
-                draft_tok = draft_tokens[j]
-                draft_p = float(draft_probs[j]) if j < len(draft_probs) else 1.0
-                target_p = float(t_probs[0, draft_tok].item())
+            accepted = verify_result.accepted_count
+            all_accepted = (accepted == len(draft_tokens))
 
-                # EAGLE-3 probabilistic acceptance: accept if U < min(1, target_p/draft_p)
-                if draft_p > 0:
-                    ratio = min(1.0, target_p / draft_p)
-                else:
-                    # Draft assigned zero probability — reject and resample from target
-                    ratio = 0.0
-                u = self.rng.random()
+            # Append accepted tokens
+            for tid in verify_result.accepted_ids:
+                generated_tokens.append(tid)
+                if tid in eos_ids:
+                    return generated_tokens
 
-                if u < ratio:
-                    accepted += 1
-                    generated_tokens.append(draft_tok)
-                    if draft_tok in eos_ids:
-                        return generated_tokens
-                    t_input = mx.array([[draft_tok]])
-                    t_out = self.target(t_input, cache=target_cache)
-                    t_logits = t_out.logits[:, -1, :] if hasattr(t_out, 'logits') else t_out[:, -1, :]
-                    t_probs = mx.softmax(t_logits, axis=-1)
-                else:
-                    # Rejected: resample from target distribution at this position
-                    if target_sampler:
-                        corrected = int(target_sampler(t_logits).item())
-                    else:
-                        corrected = int(t_logits.argmax(axis=-1).item())
-                    generated_tokens.append(corrected)
-                    all_accepted = False
-                    break
-
-            if all_accepted:
-                # Bonus token from target
-                bonus = int(target_sampler(t_logits).item()) if target_sampler else int(t_logits.argmax(axis=-1).item())
-                generated_tokens.append(bonus)
-                self._stats["total_bonus_tokens"] += 1
-
-                if bonus in eos_ids:
+            # Append correction/bonus token
+            bonus_id = verify_result.bonus_token_id
+            if bonus_id >= 0:
+                generated_tokens.append(bonus_id)
+                if all_accepted:
+                    self._stats["total_bonus_tokens"] += 1
+                if bonus_id in eos_ids:
                     return generated_tokens
 
             self._stats["total_accepted_tokens"] += accepted
             self._stats["total_steps"] += 1
 
-            # On rejection: restore draft cache from snapshot, then re-feed
-            # only the accepted + correction tokens (NOT the full sequence).
-            # This is O(accepted+1) instead of O(total_length) for full rebuild.
+            # On partial acceptance: trim target cache of rejected entries,
+            # restore draft cache, re-feed accepted + correction tokens.
             if accepted < len(draft_tokens):
+                # verify_draft fed [last_tok, d0..dK-1] (K+1 entries).
+                # Only accepted+1 are valid. Trim the rejected ones.
+                trim_count = len(draft_tokens) - accepted
+                try:
+                    from mlx_lm.models.cache import trim_prompt_cache
+                    trim_prompt_cache(target_cache, trim_count)
+                except Exception:
+                    for c in target_cache:
+                        if hasattr(c, "trim"):
+                            c.trim(trim_count)
+
                 self._restore_cache(draft_cache, draft_snap)
-                # Re-feed only the tokens that target accepted / corrected.
-                # After restore, the draft cache is at the pre-draft state
-                # (snapshot taken BEFORE draft loop fed anything), so we need
-                # to feed just the accepted draft tokens + the correction token.
-                # Do NOT include last_tok — it was already in the cache at
-                # snapshot time (fed during the previous iteration's refeed
-                # or the initial prefill).
+                # Re-feed accepted + correction tokens to draft cache.
                 refeed = generated_tokens[-(accepted + 1):]
                 for tok in refeed:
                     self.draft(mx.array([[tok]]), cache=draft_cache)

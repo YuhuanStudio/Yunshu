@@ -16,7 +16,7 @@ from ..engine import get_engine, get_model_manager
 router = APIRouter(tags=["models"])
 
 # Guard against concurrent load/unload of the same model
-_model_ops_lock = threading.Lock()
+_model_ops_lock = asyncio.Lock()
 _model_ops_inflight: set[str] = set()
 
 
@@ -104,7 +104,7 @@ async def load_model(req: LoadModelRequest) -> dict:
         raise HTTPException(status_code=400, detail="model field cannot be empty")
 
     # Guard against concurrent load/unload of the same model
-    with _model_ops_lock:
+    async with _model_ops_lock:
         if req.model in _model_ops_inflight:
             raise HTTPException(status_code=409, detail=f"Model '{req.model}' is already being loaded or unloaded")
         _model_ops_inflight.add(req.model)
@@ -141,7 +141,7 @@ async def load_model(req: LoadModelRequest) -> dict:
 
         return {"status": "loaded", "model": req.model}
     finally:
-        with _model_ops_lock:
+        async with _model_ops_lock:
             _model_ops_inflight.discard(req.model)
 
 
@@ -149,7 +149,7 @@ async def load_model(req: LoadModelRequest) -> dict:
 async def unload_model(model_id: str) -> dict:
     """Unload a model and release memory."""
     # Guard against concurrent load/unload of the same model
-    with _model_ops_lock:
+    async with _model_ops_lock:
         if model_id in _model_ops_inflight:
             raise HTTPException(status_code=409, detail=f"Model '{model_id}' is already being loaded or unloaded")
         _model_ops_inflight.add(model_id)
@@ -166,5 +166,5 @@ async def unload_model(model_id: str) -> dict:
         await manager.unload_model(model_id)
         return {"status": "unloaded", "model": model_id}
     finally:
-        with _model_ops_lock:
+        async with _model_ops_lock:
             _model_ops_inflight.discard(model_id)

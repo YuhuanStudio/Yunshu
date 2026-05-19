@@ -371,7 +371,8 @@ class BlockPool:
                         key_cache[new_block.block_id] = key_cache[old_block.block_id]
                         value_cache[new_block.block_id] = value_cache[old_block.block_id]
                 except Exception:
-                    logger.debug("KV data copy in cow_block_in_table failed", exc_info=True)
+                    logger.warning("KV data copy in cow_block_in_table failed — returning old block to avoid corruption", exc_info=True)
+                    return old_block, key_cache, value_cache
             # Update the table entry
             table._blocks[logical_idx] = new_block
 

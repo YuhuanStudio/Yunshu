@@ -3080,7 +3080,6 @@ class BatchedEngine:
                     # Check cancellation
                     if _is_cancelled(cancel_event):
                         mx.synchronize()
-                        mx.clear_cache()
                         # Flush remaining detokenizer bytes before cancelling
                         try:
                             remaining = detokenizer.finalize()
@@ -3099,7 +3098,6 @@ class BatchedEngine:
                     # Check timeout-driven cancel from consumer
                     if _timeout_cancel.is_set():
                         mx.synchronize()
-                        mx.clear_cache()
                         try:
                             remaining = detokenizer.finalize()
                             if remaining:
@@ -4132,10 +4130,10 @@ class BatchedEngine:
             hit_eos = False
             _hit_suffix = False
             for token_id in new_tokens:
-                generated_tokens.append(token_id)
                 if token_id in eos_ids:
                     hit_eos = True
                     break
+                generated_tokens.append(token_id)
                 detokenizer.add_token(token_id)
                 if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                     _hit_suffix = True
@@ -4995,6 +4993,16 @@ class BatchedEngine:
                                 stopped = True
                             if stopped:
                                 break
+
+                        # CPU fallback: trim KV cache for rejected tokens
+                        if accepted < n_draft:
+                            try:
+                                from mlx_lm.models.cache import trim_prompt_cache
+                                trim_prompt_cache(cache, n_draft - accepted)
+                            except Exception:
+                                for c in cache:
+                                    if hasattr(c, "trim"):
+                                        c.trim(n_draft - accepted)
 
                     self._ngram_stats["accepted"] += accepted
                     if self._adaptive_spec is not None:
