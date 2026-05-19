@@ -4514,7 +4514,7 @@ class BatchedEngine:
                                     tok_text = tokenizer.decode([tid])
                                     _grammar_constraint.advance(tok_text)
                                 except Exception:
-                                    pass
+                                    logger.debug("Grammar constraint advance failed for token %d", tid, exc_info=True)
 
                         # Emit bonus token (model's own prediction at rejection/last point)
                         if not _stopped and result.bonus_token is not None and remaining > 0:

@@ -299,10 +299,10 @@ class ServerMetrics:
         gen_dur: float,
         uptime: float,
     ) -> dict[str, Any]:
-        actual = prompt - cached
+        actual = max(0, prompt - cached)
         avg_prefill_tps = actual / prefill_dur if prefill_dur > 0 else 0.0
         avg_gen_tps = completion / gen_dur if gen_dur > 0 else 0.0
-        cache_eff = (cached / prompt * 100) if prompt > 0 else 0.0
+        cache_eff = min(100.0, cached / prompt * 100) if prompt > 0 else 0.0
 
         compute_util = (
             min(self._total_compute_time_ms / self._total_wall_time_ms * 100.0, 100.0)

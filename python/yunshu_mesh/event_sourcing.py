@@ -249,7 +249,8 @@ class EventLog:
         if not self._initialized:
             self.initialize()
 
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("EventLog not initialized: connection is None")
         rows = self._conn.execute(
             "SELECT sequence, event_id, event_type, timestamp, node_id, payload "
             "FROM events WHERE sequence >= ? ORDER BY sequence",
@@ -276,7 +277,8 @@ class EventLog:
         if not self._initialized:
             self.initialize()
 
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("EventLog not initialized: connection is None")
         row = self._conn.execute(
             "SELECT MAX(sequence) FROM events WHERE event_type = ?",
             (EventType.SNAPSHOT.value,),

@@ -160,6 +160,8 @@ class StageCache:
             self._misses += 1
             return None
         self._hits += 1
+        # Move to end for LRU ordering
+        self._cache[key] = self._cache.pop(key)
         return value
 
     def put(self, stage: PipelineStage, inputs: Any, result: Any) -> None:

@@ -980,20 +980,16 @@ class ModelWarmupManager:
 
         for prompt in prompts:
             try:
-                # Tokenize and run a single generate_step to trigger
-                # Metal kernel compilation with real data shapes
-                ids = mx.array([ord(c) for c in prompt[:32]][:1], dtype=mx.int32)
+                ids = mx.array([1], dtype=mx.int32)
                 cache = []
                 for _ in generate_step(ids, model, max_tokens=1, sampler=sampler, prompt_cache=cache):
                     break
                 mx.eval(cache)
                 compiled_ok += 1
-            except Exception as exc:
-                logger.debug(f"Warmup generate_step failed for prompt: {exc}")
-            finally:
-                # Always record for stats even if generation fails
                 self._prompts_warmed.append(prompt)
                 warmed += 1
+            except Exception as exc:
+                logger.debug(f"Warmup generate_step failed for prompt: {exc}")
 
         return warmed
 

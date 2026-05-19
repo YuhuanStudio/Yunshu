@@ -213,7 +213,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Startup timeout ──
     startup_timeout = float(os.environ.get("YUNSHU_STARTUP_TIMEOUT", "300"))
 
-    _startup_time = time.time()
+    _startup_time = time.monotonic()
 
     if DEFAULT_MODEL:
         # Single-model mode: use BatchedEngine directly
@@ -226,7 +226,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await asyncio.wait_for(engine.start(), timeout=startup_timeout)
             logger.info(
                 "Startup complete: model '%s' loaded (%.1fs)",
-                DEFAULT_MODEL, time.time() - _startup_time,
+                DEFAULT_MODEL, time.monotonic() - _startup_time,
             )
         except asyncio.TimeoutError:
             logger.error(
@@ -294,7 +294,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         logger.info(
             "Startup complete: multi-model mode, %d models registered (%.1fs)",
-            len(manager.list_entries()), time.time() - _startup_time,
+            len(manager.list_entries()), time.monotonic() - _startup_time,
         )
 
     # Initialize MCP client manager (LLM → external MCP tool servers)
@@ -387,7 +387,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info(
         "Shutdown complete (%.1fs uptime)",
-        time.time() - _startup_time,
+        time.monotonic() - _startup_time,
     )
     _startup_time = 0.0
 
@@ -778,7 +778,7 @@ def create_app() -> FastAPI:
             "model_manager": _safe_memory_usage(manager),
             "server_state": _server_state,
             "active_requests": _active_requests,
-            "uptime_seconds": round(time.time() - _startup_time, 1) if _startup_time > 0 else 0,
+            "uptime_seconds": round(time.monotonic() - _startup_time, 1) if _startup_time > 0 else 0,
         }
         if _memory_enforcer is not None:
             try:

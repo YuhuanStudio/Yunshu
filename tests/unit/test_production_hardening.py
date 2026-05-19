@@ -104,7 +104,7 @@ class TestStreamingCancellation:
         gen = ActiveGeneration(
             request_id="r1",
             model="test",
-            created_at=time.time(),
+            created_at=time.monotonic(),
             cancel_event=asyncio.Event(),
         )
         time.sleep(0.01)

@@ -387,6 +387,11 @@ class SLOMonitor:
                 return True
 
             self._check_counts[metric] += 1
+            # Sliding window: reset counts periodically to prevent stale
+            # historical violations from triggering auto-tuning after recovery
+            if self._check_counts[metric] > 100:
+                self._check_counts[metric] = 0
+                self._violation_counts[metric] = 0
 
             if metric == "ttft":
                 met = value <= self._config.ttft_ms

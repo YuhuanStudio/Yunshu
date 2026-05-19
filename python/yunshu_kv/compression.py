@@ -61,6 +61,9 @@ def quantize_kv_4bit(
 
     *batch_dims, num_tokens, head_dim = arr.shape
 
+    if arr.ndim < 2 or head_dim == 0:
+        raise ValueError(f"kv_array must be at least 2D with head_dim > 0, got shape {arr.shape}")
+
     # Pad head_dim to be divisible by group_size * 2 (for packing)
     effective_dim = head_dim
     pad_needed = (group_size - head_dim % group_size) % group_size
@@ -74,6 +77,7 @@ def quantize_kv_4bit(
 
     # Per-group absolute max
     group_max = np.max(np.abs(grouped), axis=-1, keepdims=True)  # [..., tokens, groups, 1]
+    group_max = np.where(np.isfinite(group_max), group_max, 0.0)
     scales = (group_max / 7.0).squeeze(-1)  # [..., tokens, groups]
     scales = np.where(scales == 0, 1.0, scales)
 

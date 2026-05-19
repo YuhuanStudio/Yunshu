@@ -206,9 +206,12 @@ class MemoryMonitor:
 
     def estimate_block_memory(self, block_size: int) -> int:
         """Estimate memory usage for one KV cache block."""
-        layers = self._num_layers or 32
-        kv_heads = self._num_kv_heads or 8
-        dim = self._head_dim or 128
+        layers = self._num_layers
+        kv_heads = self._num_kv_heads
+        dim = self._head_dim
+        if not (layers and kv_heads and dim):
+            logger.warning("estimate_block_memory called before set_model_info — returning 0")
+            return 0
         dtype = self._dtype_size
 
         # Per layer: keys + values, shape (1, kv_heads, block_size, head_dim)

@@ -311,7 +311,8 @@ class ModelManager:
         # Already loaded — update access time
         if entry.is_loaded and entry.engine is not None:
             entry.last_access = time.monotonic()
-            return entry.engine
+            if entry.engine is not None:
+                return entry.engine
 
         # Check if another coroutine is already loading this model.
         # Wait on the per-model event instead of raising RuntimeError.

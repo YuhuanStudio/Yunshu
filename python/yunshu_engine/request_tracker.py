@@ -24,7 +24,7 @@ class ActiveGeneration:
 
     @property
     def elapsed_s(self) -> float:
-        return time.time() - self.created_at
+        return time.monotonic() - self.created_at
 
 
 class RequestTracker:
@@ -39,7 +39,7 @@ class RequestTracker:
         gen = ActiveGeneration(
             request_id=request_id,
             model=model,
-            created_at=time.time(),
+            created_at=time.monotonic(),
             cancel_event=threading.Event(),
         )
         with self._lock:
