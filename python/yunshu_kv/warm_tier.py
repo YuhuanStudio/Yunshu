@@ -108,6 +108,11 @@ class KVWarmTier:
     def promote(self, block_hash: int) -> Optional[bytes]:
         """Retrieve and decompress a KV block for promotion back to hot tier.
 
+        Uses a peek-then-pop pattern: first dequantize the entry in-place,
+        then pop on success.  If dequantization fails, the entry is left
+        in the store so a concurrent demode for the same hash cannot cause
+        silent data loss.
+
         Args:
             block_hash: Hash identifying the block.
 
@@ -115,13 +120,30 @@ class KVWarmTier:
             Dequantized data (MLX array or numpy array), or None if not found.
         """
         with self._lock:
-            entry = self._store.pop(block_hash, None)
-            if entry is None:
+            # Peek: read without removing.
+            if block_hash not in self._store:
                 self._misses += 1
                 return None
 
+            entry = self._store[block_hash]
             self._hits += 1
             packed, scales, head_dim = entry if len(entry) == 3 else (*entry, 0)
+
+            # Try dequantization first — only pop on success.
+            try:
+                from .compression import dequantize_kv_4bit
+
+                result = dequantize_kv_4bit(packed, scales, head_dim=head_dim)
+            except Exception:
+                logger.warning(
+                    "Failed to promote block 0x%x from warm tier — "
+                    "leaving entry in store for retry",
+                    block_hash, exc_info=True,
+                )
+                return None
+
+            # Dequantization succeeded — safe to pop.
+            self._store.pop(block_hash, None)
 
             # Adjust memory accounting
             try:
@@ -136,37 +158,7 @@ class KVWarmTier:
             except Exception:
                 logger.debug("memory accounting adjustment in promote failed", exc_info=True)
 
-            try:
-                from .compression import dequantize_kv_4bit
-
-                return dequantize_kv_4bit(packed, scales, head_dim=head_dim)
-            except Exception:
-                logger.warning(
-                    "Failed to promote block 0x%x from warm tier — re-inserting for retry",
-                    block_hash, exc_info=True,
-                )
-                if block_hash not in self._store:
-                    self._store[block_hash] = (packed, scales, head_dim)
-                    self._store.move_to_end(block_hash)
-                    while len(self._store) > self.config.max_blocks:
-                        self._evict_unlocked(1)
-                    try:
-                        packed_nbytes = (
-                            np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
-                        )
-                        scales_nbytes = (
-                            np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
-                        )
-                        self._memory_used += packed_nbytes + scales_nbytes
-                    except Exception:
-                        logger.debug("memory accounting re-insert in promote failed", exc_info=True)
-                else:
-                    logger.warning(
-                        "promote block 0x%x: concurrent demote replaced entry, "
-                        "skipping re-insert (memory subtraction preserved)",
-                        block_hash,
-                    )
-                return None
+            return result
 
     def contains(self, block_hash: int) -> bool:
         """Check whether a block is present in the warm tier."""

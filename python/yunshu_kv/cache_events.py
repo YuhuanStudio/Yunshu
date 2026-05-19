@@ -49,6 +49,8 @@ class CacheEventBus:
     def __init__(self) -> None:
         self._subscribers: dict[str, list[Callable[[CacheEvent], None]]] = {}
         self._lock = threading.Lock()
+        self._failure_counts: dict[int, int] = {}  # id(callback) → consecutive failures
+        self._max_failures: int = 10
 
     # -- Subscribe / Unsubscribe ------------------------------------------
 
@@ -73,19 +75,38 @@ class CacheEventBus:
         The subscriber list is snapshot under the lock; callbacks run
         outside the lock to prevent deadlocks if a callback itself
         subscribes/unsubscribes.
+
+        Callbacks that fail more than ``_max_failures`` times consecutively
+        are automatically unsubscribed to prevent a faulty subscriber from
+        generating unbounded warning noise.
         """
         with self._lock:
             callbacks = list(self._subscribers.get(event.event_type, []))
         for cb in callbacks:
             try:
                 cb(event)
+                # Success — reset consecutive failure count
+                with self._lock:
+                    self._failure_counts.pop(id(cb), None)
             except Exception:
-                logger.warning(
-                    "CacheEventBus subscriber %r raised on %s",
-                    cb,
-                    event.event_type,
-                    exc_info=True,
-                )
+                cb_id = id(cb)
+                with self._lock:
+                    self._failure_counts[cb_id] = self._failure_counts.get(cb_id, 0) + 1
+                    count = self._failure_counts[cb_id]
+                if count >= self._max_failures:
+                    logger.error(
+                        "CacheEventBus subscriber %r failed %d times on %s — auto-unsubscribing",
+                        cb, count, event.event_type,
+                    )
+                    self.unsubscribe(event.event_type, cb)
+                    with self._lock:
+                        self._failure_counts.pop(cb_id, None)
+                else:
+                    logger.warning(
+                        "CacheEventBus subscriber %r raised on %s (failure %d/%d)",
+                        cb, event.event_type, count, self._max_failures,
+                        exc_info=True,
+                    )
 
     # -- Introspection -----------------------------------------------------
 

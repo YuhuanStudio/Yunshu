@@ -1112,6 +1112,11 @@ class Scheduler:
             for _ in range(self.config.stream_interval):
                 if not self._has_active_requests():
                     break
+                # Remove finished UIDs from BatchGenerator immediately so
+                # the next decode step doesn't waste GPU on dead requests.
+                if self._uids_to_remove and self._batch_gen is not None:
+                    self._batch_gen.remove(self._uids_to_remove)
+                    self._uids_to_remove.clear()
                 try:
                     gen_responses = self._batch_gen.next_generated()
                 except StopIteration:
@@ -2564,6 +2569,11 @@ class Scheduler:
                     reason=finish_reason,
                 )
                 self._uid_to_req.pop(uid, None)
+                # Schedule removal from BatchGenerator so subsequent decode
+                # steps within the same step() call don't waste GPU forward
+                # passes on a finished request.
+                if uid not in self._uids_to_remove:
+                    self._uids_to_remove.append(uid)
 
                 # Deferred cache clearing (oMLX #435)
                 self._deferred_clear_at = (

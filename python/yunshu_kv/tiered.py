@@ -511,7 +511,8 @@ class TieredKVCacheManager:
                 + all_promoted
                 + existing[hot_matched_count + len(all_promoted):]
             )
-            table.total_tokens = len(table._blocks) * block_size
+            table.total_tokens = (len(table._blocks) - 1) * block_size
+            table._last_block_occupancy = 0
             match.matched_blocks = match.matched_blocks + all_promoted
 
         return table, match
