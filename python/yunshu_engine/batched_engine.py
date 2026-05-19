@@ -1932,11 +1932,20 @@ class BatchedEngine:
                 _prefill_tracker = None
 
             if thinking_budget is not None or enable_thinking:
+                # Only use token ID matching when "<think"/"</think" encode to
+                # a SINGLE token.  Multi-token encodings mean encode(...)[-1]
+                # picks a random last token, causing false-positive state transitions.
                 try:
-                    think_end_token = tokenizer.encode("</think")[-1]
-                    think_start_token = tokenizer.encode("<think")[-1]
+                    _ts_ids = tokenizer.encode("<think")
+                    _te_ids = tokenizer.encode("</think")
+                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                        think_start_token = _ts_ids[0]
+                        think_end_token = _te_ids[0]
+                    else:
+                        think_start_token = think_end_token = None
                 except Exception:
                     logger.debug("thinking token encode failed", exc_info=True)
+                    think_start_token = think_end_token = None
 
             # Prompt cache: try exact-match KV lookup by messages hash
             _pc_hit = False
@@ -3008,11 +3017,20 @@ class BatchedEngine:
                 _prefill_tracker = None
 
             if thinking_budget is not None or enable_thinking:
+                # Only use token ID matching when "<think"/"</think" encode to
+                # a SINGLE token.  Multi-token encodings mean encode(...)[-1]
+                # picks a random last token, causing false-positive state transitions.
                 try:
-                    think_end_token = tokenizer.encode("</think")[-1]
-                    think_start_token = tokenizer.encode("<think")[-1]
+                    _ts_ids = tokenizer.encode("<think")
+                    _te_ids = tokenizer.encode("</think")
+                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                        think_start_token = _ts_ids[0]
+                        think_end_token = _te_ids[0]
+                    else:
+                        think_start_token = think_end_token = None
                 except Exception:
                     logger.debug("thinking token encode failed", exc_info=True)
+                    think_start_token = think_end_token = None
 
             # KV prefix cache for streaming
             prefix_cache = self._kv_prefix_cache
@@ -3221,6 +3239,15 @@ class BatchedEngine:
                             _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
+                        # Trim stop suffix from remaining text — the suffix may
+                        # span multiple tokens, so detokenizer.text still contains
+                        # it even after finalize().  Without this, the partial
+                        # suffix text leaks into the output.
+                        if suffix_hit and stop_suffixes and _remaining:
+                            for s in stop_suffixes:
+                                if _remaining.endswith(s):
+                                    _remaining = _remaining[:-len(s)]
+                                    break
                         if _remaining:
                             _put((_remaining, n_tok, None, len(_thinking_tokens), None, _cur_state))
                         # Final stop chunk — consumer breaks on this

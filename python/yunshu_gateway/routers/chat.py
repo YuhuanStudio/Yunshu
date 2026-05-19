@@ -38,7 +38,7 @@ from ..streaming import (
     run_with_disconnect_guard,
 )
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
-from yunshu_engine.gateway_optimizer import get_streaming_buffer
+from yunshu_engine.gateway_optimizer import get_streaming_buffer, return_streaming_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -2313,7 +2313,7 @@ async def _stream_response(
               _record_metrics(prompt_tok, completion_tok)
           except Exception:
               pass
-      # Log buffer stats at debug level
+      # Log buffer stats and return to pool to prevent 64KB leak per request
       if _stream_buf is not None:
           try:
               stats = _stream_buf.get_stats()
@@ -2327,4 +2327,7 @@ async def _stream_response(
               )
           except Exception:
               logger.debug("operation failed", exc_info=True)
-              logger.debug("StreamingResponseBuffer stats logging failed", exc_info=True)
+          try:
+              return_streaming_buffer(_stream_buf)
+          except Exception:
+              logger.debug("StreamingResponseBuffer return to pool failed", exc_info=True)

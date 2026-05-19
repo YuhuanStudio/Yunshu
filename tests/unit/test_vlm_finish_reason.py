@@ -160,11 +160,14 @@ class TestVLMNonStreamingFinishReason:
         think_start_id = 500
         think_end_id = 501
 
+        # Single-token encoding for think tags — required for token-based
+        # thinking detection.  Multi-token encodings use text-based detection
+        # which requires realistic decode() output.
         def mock_encode(text):
             if text == "<think":
-                return [0, think_start_id]
+                return [think_start_id]
             if text == "</think":
-                return [0, think_end_id]
+                return [think_end_id]
             return [1, 2, 3]
         engine._tokenizer.encode.side_effect = mock_encode
 
@@ -376,11 +379,14 @@ class TestVLMStreamingFinishReason:
         think_start_id = 500
         think_end_id = 501
 
+        # Single-token encoding for think tags — required for token-based
+        # thinking detection.  Multi-token encodings use text-based detection
+        # which requires realistic decode() output.
         def mock_encode(text):
             if text == "<think":
-                return [0, think_start_id]
+                return [think_start_id]
             if text == "</think":
-                return [0, think_end_id]
+                return [think_end_id]
             return [1, 2, 3]
         engine._tokenizer.encode.side_effect = mock_encode
 

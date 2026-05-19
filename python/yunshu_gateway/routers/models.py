@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel
@@ -14,6 +15,27 @@ from pydantic import BaseModel
 from ..engine import get_engine, get_model_manager
 
 router = APIRouter(tags=["models"])
+
+
+def _check_permission(request: Request, permission: str) -> None:
+    """Check RBAC permission on gateway endpoints.
+
+    1. If rbac_key is set (from TenantAuthMiddleware), check has_permission()
+    2. If rbac_key is None but YUNSHU_AUTH_TOKEN is set, allow (static token = admin)
+    3. If no auth configured, allow access
+    4. Otherwise raise 403
+    """
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+    rbac_key = getattr(request.state, "rbac_key", None)
+    if rbac_key is not None:
+        if not rbac_key.has_permission(permission):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return
+    # No RBAC key — check if static token auth is active
+    if os.environ.get("YUNSHU_AUTH_TOKEN") is not None:
+        return  # Static token = admin access
+    # No auth configured — allow for dev convenience
 
 # Guard against concurrent load/unload of the same model
 _model_ops_lock = asyncio.Lock()
@@ -98,8 +120,9 @@ async def get_model(model_id: str) -> dict:
 
 
 @router.post("/models/load")
-async def load_model(req: LoadModelRequest) -> dict:
+async def load_model(req: LoadModelRequest, request: Request) -> dict:
     """Load a model (supports both single-engine and multi-model modes)."""
+    _check_permission(request, "can_load_models")
     if not req.model or not req.model.strip():
         raise HTTPException(status_code=400, detail="model field cannot be empty")
 
@@ -146,8 +169,9 @@ async def load_model(req: LoadModelRequest) -> dict:
 
 
 @router.post("/models/unload/{model_id}")
-async def unload_model(model_id: str) -> dict:
+async def unload_model(model_id: str, request: Request) -> dict:
     """Unload a model and release memory."""
+    _check_permission(request, "can_unload_models")
     # Guard against concurrent load/unload of the same model
     async with _model_ops_lock:
         if model_id in _model_ops_inflight:

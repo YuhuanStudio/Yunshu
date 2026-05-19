@@ -650,15 +650,30 @@ class VLMEngine:
                 tokens = []
                 _in_thinking = False
                 _thinking_tokens = 0
+                # Thinking token detection: only use token ID matching when
+                # "<think"/"</think" encode to a SINGLE token.  Multi-token
+                # encodings mean `encode(...)[-1]` picks a random last token,
+                # causing false positives (any token sharing that ID triggers
+                # a state transition).  Fall back to text-based suffix matching
+                # for multi-token vocabularies.
+                _think_single_token = False
                 try:
-                    think_start_id = self._tokenizer.encode("<think")[-1]
-                    think_end_id = self._tokenizer.encode("</think")[-1]
+                    _ts_ids = self._tokenizer.encode("<think")
+                    _te_ids = self._tokenizer.encode("</think")
+                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                        think_start_id = _ts_ids[0]
+                        think_end_id = _te_ids[0]
+                        _think_single_token = True
+                    else:
+                        think_start_id = think_end_id = None
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
                     think_start_id = think_end_id = None
+                    _think_single_token = False
 
                 _stop_hit = False
                 _budget_hit = False
+                _accumulated_text = ""  # for text-based thinking detection
                 for token_id, _ in generate_step(
                     input_ids, self._model,
                     max_tokens=max_tokens,
@@ -666,11 +681,22 @@ class VLMEngine:
                 ):
                     tokens.append(token_id)
                     # Track thinking segment boundaries
-                    if think_start_id is not None:
+                    if _think_single_token and think_start_id is not None:
                         if not _in_thinking and token_id == think_start_id:
                             _in_thinking = True
                         elif _in_thinking:
                             if token_id == think_end_id:
+                                _in_thinking = False
+                            else:
+                                _thinking_tokens += 1
+                    elif not _think_single_token:
+                        # Text-based thinking detection for multi-token encodings
+                        _tok_text = self._tokenizer.decode([token_id])
+                        _accumulated_text += _tok_text
+                        if not _in_thinking and _accumulated_text.endswith("<think"):
+                            _in_thinking = True
+                        elif _in_thinking:
+                            if _accumulated_text.endswith("</think"):
                                 _in_thinking = False
                             else:
                                 _thinking_tokens += 1
@@ -680,7 +706,7 @@ class VLMEngine:
                     # Thinking budget enforcement — cap thinking tokens, not total tokens
                     if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
                         # Append closing tag to keep output well-formed
-                        if think_end_id is not None:
+                        if _think_single_token and think_end_id is not None:
                             tokens.append(think_end_id)
                         _budget_hit = True
                         break
@@ -877,14 +903,27 @@ class VLMEngine:
                     reasoning_effort = kwargs.get('reasoning_effort')
                     if reasoning_effort is not None:
                         thinking_budget = {"low": 2048, "medium": 8192, "high": 32768}.get(reasoning_effort, 8192)
+                # Thinking token detection: only use token ID matching when
+                # "<think"/"</think" encode to a SINGLE token.  Multi-token
+                # encodings mean `encode(...)[-1]` picks a random last token,
+                # causing false positives.  Fall back to text-based detection.
+                _think_single_token = False
                 try:
-                    think_start_id = self._tokenizer.encode("<think")[-1]
-                    think_end_id = self._tokenizer.encode("</think")[-1]
+                    _ts_ids = self._tokenizer.encode("<think")
+                    _te_ids = self._tokenizer.encode("</think")
+                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                        think_start_id = _ts_ids[0]
+                        think_end_id = _te_ids[0]
+                        _think_single_token = True
+                    else:
+                        think_start_id = think_end_id = None
                 except Exception:
                     logger.debug("thinking token encode failed", exc_info=True)
                     think_start_id = think_end_id = None
+                    _think_single_token = False
 
                 accumulated = ""
+                _thinking_text = ""  # for text-based thinking detection
                 token_count = 0
                 _num_prompt_tokens = len(input_ids)
                 _cur_state = "normal"  # Initialize before loop; referenced after loop if 0 iterations
@@ -922,7 +961,7 @@ class VLMEngine:
                     is_eos = token_id in stop_ids
 
                     # Track thinking segment boundaries
-                    if think_start_id is not None:
+                    if _think_single_token and think_start_id is not None:
                         if not _in_thinking and token_id == think_start_id:
                             _in_thinking = True
                         elif _in_thinking:
@@ -930,9 +969,20 @@ class VLMEngine:
                                 _in_thinking = False
                             else:
                                 _thinking_tokens += 1
+                    elif not _think_single_token:
+                        # Text-based thinking detection for multi-token encodings
+                        _tok_text = self._tokenizer.decode([token_id])
+                        _thinking_text += _tok_text
+                        if not _in_thinking and _thinking_text.endswith("<think"):
+                            _in_thinking = True
+                        elif _in_thinking:
+                            if _thinking_text.endswith("</think"):
+                                _in_thinking = False
+                            else:
+                                _thinking_tokens += 1
 
                     # Thinking budget enforcement
-                    if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget and think_end_id is not None:
+                    if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget and (think_end_id is not None or not _think_single_token):
                         # Budget exceeded — stop generation
                         if has_detokenizer:
                             remaining = detokenizer.finalize()
@@ -1354,13 +1404,22 @@ class VLMEngine:
             _thinking_tokens = 0
             _stop_hit = False
             _budget_hit = False
+            _think_single_token = False
             try:
-                think_start_id = self._tokenizer.encode("<think")[-1]
-                think_end_id = self._tokenizer.encode("</think")[-1]
+                _ts_ids = self._tokenizer.encode("<think")
+                _te_ids = self._tokenizer.encode("</think")
+                if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                    think_start_id = _ts_ids[0]
+                    think_end_id = _te_ids[0]
+                    _think_single_token = True
+                else:
+                    think_start_id = think_end_id = None
             except Exception:
                 logger.debug("operation failed", exc_info=True)
                 think_start_id = think_end_id = None
+                _think_single_token = False
 
+            _thinking_text = ""  # for text-based thinking detection
             for _ in range(max_tokens - 1):
                 output = lm(current[None], cache=cache)
                 logits = output.logits[:, -1, :]
@@ -1403,7 +1462,8 @@ class VLMEngine:
                         json_constraint.advance(token_text)
                     except Exception:
                         logger.debug("json constraint advance failed", exc_info=True)
-                if think_start_id is not None:
+                # Track thinking segment boundaries
+                if _think_single_token and think_start_id is not None:
                     if not _in_thinking and tok_id == think_start_id:
                         _in_thinking = True
                     elif _in_thinking:
@@ -1411,10 +1471,21 @@ class VLMEngine:
                             _in_thinking = False
                         else:
                             _thinking_tokens += 1
+                elif not _think_single_token:
+                    # Text-based thinking detection for multi-token encodings
+                    _tok_text = self._tokenizer.decode([tok_id])
+                    _thinking_text += _tok_text
+                    if not _in_thinking and _thinking_text.endswith("<think"):
+                        _in_thinking = True
+                    elif _in_thinking:
+                        if _thinking_text.endswith("</think"):
+                            _in_thinking = False
+                        else:
+                            _thinking_tokens += 1
                 # Thinking budget enforcement — cap thinking tokens
                 if thinking_budget is not None and _in_thinking and _thinking_tokens >= thinking_budget:
                     # Append closing tag to keep output well-formed
-                    if think_end_id is not None:
+                    if _think_single_token and think_end_id is not None:
                         tokens.append(think_end_id)
                     _budget_hit = True
                     break
@@ -1762,13 +1833,22 @@ class VLMEngine:
 
         _in_thinking = False
         _thinking_tokens = 0
+        _think_single_token = False
         try:
-            think_start_id = self._tokenizer.encode("<think")[-1]
-            think_end_id = self._tokenizer.encode("</think")[-1]
+            _ts_ids = self._tokenizer.encode("<think")
+            _te_ids = self._tokenizer.encode("</think")
+            if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                think_start_id = _ts_ids[0]
+                think_end_id = _te_ids[0]
+                _think_single_token = True
+            else:
+                think_start_id = think_end_id = None
         except Exception:
             logger.debug("operation failed", exc_info=True)
             think_start_id = think_end_id = None
+            _think_single_token = False
 
+        _thinking_text = ""  # for text-based thinking detection
         token_id = current.item()
         is_eos = token_id in stop_ids
         finish_reason = "stop" if is_eos else None
@@ -1785,8 +1865,13 @@ class VLMEngine:
         # Track thinking state for gateway routing
         # If the first token is the think-start token, mark _in_thinking so the
         # loop's thinking budget and state tracking work correctly.
-        if think_start_id is not None and token_id == think_start_id:
+        if _think_single_token and think_start_id is not None and token_id == think_start_id:
             _in_thinking = True
+        elif not _think_single_token:
+            # Text-based thinking detection for multi-token encodings
+            _thinking_text += self._tokenizer.decode([token_id])
+            if _thinking_text.endswith("<think"):
+                _in_thinking = True
         _state = "reasoning" if _in_thinking else "normal"
         queue.put_nowait(RequestOutput(
             request_id=req_id,
@@ -1872,11 +1957,22 @@ class VLMEngine:
                 except Exception:
                     logger.debug("json constraint advance failed (stream)", exc_info=True)
             # Track thinking segment boundaries in VLM streaming
-            if think_start_id is not None:
+            if _think_single_token and think_start_id is not None:
                 if not _in_thinking and token_id == think_start_id:
                     _in_thinking = True
                 elif _in_thinking:
                     if token_id == think_end_id:
+                        _in_thinking = False
+                    else:
+                        _thinking_tokens += 1
+            elif not _think_single_token:
+                # Text-based thinking detection for multi-token encodings
+                _tok_text_vlm = self._tokenizer.decode([token_id])
+                _thinking_text += _tok_text_vlm
+                if not _in_thinking and _thinking_text.endswith("<think"):
+                    _in_thinking = True
+                elif _in_thinking:
+                    if _thinking_text.endswith("</think"):
                         _in_thinking = False
                     else:
                         _thinking_tokens += 1
@@ -1944,12 +2040,14 @@ class VLMEngine:
                 if has_detokenizer:
                     remaining = detokenizer.finalize()
                     if remaining:
-                        # When a stop suffix was hit, trim everything from
-                        # the suffix position onward. _text_len_before marks
-                        # the safe boundary before the suffix-triggering token.
-                        if suffix_hit and '_text_len_before' in dir():
-                            safe = remaining[:_text_len_before]
-                            remaining = safe.rstrip()
+                        # When a stop suffix was hit, trim the suffix from
+                        # remaining text.  The suffix may span multiple tokens
+                        # so detokenizer.text still contains it after finalize().
+                        if suffix_hit and stop_suffixes:
+                            for s in stop_suffixes:
+                                if remaining.endswith(s):
+                                    remaining = remaining[:-len(s)]
+                                    break
                     if remaining:
                         queue.put_nowait(RequestOutput(
                             request_id=req_id,

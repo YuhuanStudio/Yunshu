@@ -19,6 +19,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["sleep"])
 
 
+def _check_permission(request: Request, permission: str) -> None:
+    """Check RBAC permission on sleep/wake endpoints.
+
+    1. If rbac_key is set (from TenantAuthMiddleware), check has_permission()
+    2. If rbac_key is None but YUNSHU_AUTH_TOKEN is set, allow (static token = admin)
+    3. If no auth configured, allow access
+    4. Otherwise raise 403
+    """
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+    rbac_key = getattr(request.state, "rbac_key", None)
+    if rbac_key is not None:
+        if not rbac_key.has_permission(permission):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return
+    # No RBAC key — check if static token auth is active
+    if os.environ.get("YUNSHU_AUTH_TOKEN") is not None:
+        return  # Static token = admin access
+    # No auth configured — allow for dev convenience
+
+
 class SleepRequest(BaseModel):
     level: int = 0  # 0=pause, 1=unload weights, 2=deep sleep
 
@@ -34,6 +55,7 @@ _saved_model_name: str | None = None  # Model name saved before L1/L2 unload
 @router.post("/sleep")
 async def sleep_server(req: SleepRequest, request: Request):
     """Put server to sleep at the specified level."""
+    _check_permission(request, "can_unload_models")
     global _sleeping, _sleep_level, _sleep_transitioning, _saved_model_name
 
     with _sleep_lock:
@@ -116,6 +138,7 @@ async def sleep_server(req: SleepRequest, request: Request):
 @router.post("/wake-up")
 async def wake_up_server(request: Request):
     """Wake up server from sleep, reload model if needed."""
+    _check_permission(request, "can_unload_models")
     global _sleeping, _sleep_level, _sleep_transitioning, _saved_model_name
 
     with _sleep_lock:
