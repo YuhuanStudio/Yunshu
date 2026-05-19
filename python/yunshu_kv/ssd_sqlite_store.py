@@ -352,6 +352,47 @@ class SSDSQLiteStore:
             for r in rows
         ]
 
+    def get_and_delete(self, block_hash: str) -> Optional[dict]:
+        """Atomically look up and delete a block entry.
+
+        Prevents TOCTOU race where another thread could delete the block
+        between a separate get() and delete() call pair.
+
+        Returns:
+            Dict with block metadata if found and deleted, None otherwise.
+        """
+        if self._conn is None:
+            return None
+        with self._lock:
+            try:
+                row = self._conn.execute(
+                    """
+                    SELECT block_hash, block_path, num_tokens, created_at,
+                           last_accessed, access_count, size_bytes
+                    FROM kv_entries WHERE block_hash = ?
+                    """,
+                    (block_hash,),
+                ).fetchone()
+                if row is None:
+                    return None
+                self._conn.execute(
+                    "DELETE FROM kv_entries WHERE block_hash = ?",
+                    (block_hash,),
+                )
+                self._conn.commit()
+                return {
+                    "block_hash": row[0],
+                    "block_path": row[1],
+                    "num_tokens": row[2],
+                    "created_at": row[3],
+                    "last_accessed": row[4],
+                    "access_count": row[5],
+                    "size_bytes": row[6],
+                }
+            except Exception:
+                logger.debug("SSDSQLiteStore.get_and_delete failed for %s", block_hash[:16], exc_info=True)
+                return None
+
     def get_stats(self) -> dict:
         """Return aggregate statistics."""
         if self._conn is None:

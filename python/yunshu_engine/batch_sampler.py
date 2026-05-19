@@ -626,6 +626,7 @@ class StopResult:
     reason: str | None = None  # "stop", "length", "eos", "stop_token_id"
     matched_token_id: int | None = None
     matched_string: str | None = None
+    matched_token_count: int = 0  # number of tokens in matched stop string
 
 
 class _AhoCorasickNode:
@@ -643,6 +644,42 @@ class _AhoCorasickNode:
         self.fail: "_AhoCorasickNode | None" = None
 
 
+def build_stop_trie(
+    stop_strings: list[str],
+    tokenizer: Any,
+) -> _AhoCorasickTrie | None:
+    """Build an Aho-Corasick trie from stop strings for batch matching.
+
+    Encodes each stop string into token IDs using the tokenizer, then
+    constructs an AC automaton for efficient multi-pattern matching.
+
+    Args:
+        stop_strings: List of stop strings (e.g., ["\\n\\n", "<|im_end|>"]).
+        tokenizer: Tokenizer with encode() method.
+
+    Returns:
+        _AhoCorasickTrie or None if no valid patterns could be built.
+    """
+    if not stop_strings or tokenizer is None:
+        return None
+
+    patterns: list[tuple[tuple[int, ...], int, str]] = []
+    for idx, s in enumerate(stop_strings):
+        if not s:
+            continue
+        try:
+            token_ids = tuple(tokenizer.encode(s, add_special_tokens=False))
+            if token_ids:
+                patterns.append((token_ids, idx, s))
+        except Exception:
+            continue
+
+    if not patterns:
+        return None
+
+    return _AhoCorasickTrie(patterns)
+
+
 class _AhoCorasickTrie:
     """Minimal Aho-Corasick automaton for multi-pattern token matching.
 
@@ -650,19 +687,26 @@ class _AhoCorasickTrie:
     for efficient multi-pattern matching in a single pass.
     """
 
-    def __init__(self, patterns: list[tuple[tuple[int, ...], int]]) -> None:
+    def __init__(self, patterns: list[tuple[tuple[int, ...], int] | tuple[tuple[int, ...], int, str]]) -> None:
         """Build AC automaton from patterns.
 
         Args:
-            patterns: List of (token_sequence, pattern_index) pairs.
+            patterns: List of (token_sequence, pattern_index) pairs or
+                      (token_sequence, pattern_index, original_string) triples.
         """
         self._root = _AhoCorasickNode()
         self._patterns = patterns
         self._num_patterns = len(patterns)
-        self._max_pattern_len = max((len(seq) for seq, _ in patterns), default=0)
+        self._max_pattern_len = max((len(p[0]) for p in patterns), default=0)
+        self._pattern_strings = {}
+        for p in patterns:
+            if len(p) == 3:
+                self._pattern_strings[p[1]] = p[2]
 
         # Build trie
-        for token_seq, pidx in patterns:
+        for p in patterns:
+            token_seq = p[0]
+            pidx = p[1]
             node = self._root
             for token_id in token_seq:
                 if token_id not in node.children:
@@ -715,6 +759,21 @@ class _AhoCorasickTrie:
                 matches.extend(node.output)
 
         return matches
+
+    def get_pattern(self, index: int) -> tuple[tuple[int, ...], int, str]:
+        """Return (token_sequence, pattern_index, original_string) for a matched pattern."""
+        return self._patterns[index]
+
+    def get_pattern_string(self, index: int) -> str:
+        """Return the original stop string for a matched pattern index."""
+        return self._pattern_strings.get(index, "")
+
+    def get_pattern_token_count(self, index: int) -> int:
+        """Return the number of tokens in a matched pattern."""
+        for seq, pidx, _ in self._patterns:
+            if pidx == index:
+                return len(seq)
+        return 0
 
     @property
     def num_patterns(self) -> int:
@@ -821,11 +880,14 @@ class BatchStopChecker:
                 if matches:
                     # Find which pattern matched
                     matched_idx = matches[0]
+                    matched_str = config.stop_string_trie.get_pattern_string(matched_idx)
+                    matched_toks = config.stop_string_trie.get_pattern_token_count(matched_idx)
                     results.append(StopResult(
                         request_id=config.request_id,
                         should_stop=True,
                         reason="stop",
-                        matched_string=f"pattern_{matched_idx}",
+                        matched_string=matched_str,
+                        matched_token_count=matched_toks,
                     ))
                     self._stats["total_stops"] += 1
                     continue

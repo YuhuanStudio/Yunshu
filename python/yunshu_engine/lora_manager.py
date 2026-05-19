@@ -183,6 +183,19 @@ class LoRAAdapterManager:
                     )
                     return False
 
+            # CRITICAL: restore base model BEFORE applying new adapter to
+            # prevent double-wrap (LoRALinear wrapping LoRALinear).
+            # The active adapter was already verified to have zero refs above.
+            if self._active_adapter_id is not None and not entry.is_merged:
+                with self._gpu_lock:
+                    self._restore_base()
+                old_active = self._adapters.get(self._active_adapter_id)
+                if old_active and old_active is not entry:
+                    old_active.is_loaded = False
+                    if old_active.adapter_id in self._lru_order:
+                        self._lru_order.remove(old_active.adapter_id)
+                self._active_adapter_id = None
+
             # Mark as loading to prevent concurrent load of same adapter
             entry.is_loaded = True  # tentative — will be reverted on failure
 
@@ -524,34 +537,46 @@ class LoRAAdapterManager:
             self._base_model.update_modules(tree_unflatten(lora_layers))
 
     def _restore_base(self) -> None:
-        """Restore base model weights and structure from saved copy."""
+        """Restore base model weights and structure from saved copy.
+
+        IMPORTANT: modifies the model IN-PLACE via update_modules() so
+        that external references (engine._model, etc.) remain valid.
+        Never reassigns self._base_model to a new object.
+        """
         if self._base_model is None:
             return
 
-        # First, structurally unwrap LoRALinear back to nn.Linear
+        from mlx.utils import tree_unflatten
+
+        # Structurally unwrap LoRALinear → nn.Linear in-place.
+        # Both paths use update_modules() which mutates the existing
+        # model object rather than creating a new one.
+        unwrapped = []
         try:
-            from mlx_lm.tuner.utils import remove_lora_layers
-            self._base_model = remove_lora_layers(self._base_model)
-        except ImportError:
-            # Fallback: manually unwrap LoRALinear layers
-            import mlx.nn as nn
-            from mlx.utils import tree_unflatten
-            try:
-                from mlx_lm.tuner.lora import LoRALinear
-            except ImportError:
-                logger.error(
-                    "Cannot restore base model: mlx_lm.tuner.lora.LoRALinear "
-                    "is not available and remove_lora_layers failed"
-                )
-                return
-            unwrapped = []
+            from mlx_lm.tuner.lora import LoRALinear
             for name, module in self._base_model.named_modules():
                 if isinstance(module, LoRALinear):
                     unwrapped.append((name, module.linear))
-            if unwrapped:
-                self._base_model.update_modules(tree_unflatten(unwrapped))
+        except ImportError:
+            # LoRALinear unavailable — try remove_lora_layers as fallback
+            try:
+                from mlx_lm.tuner.utils import remove_lora_layers
+                restored = remove_lora_layers(self._base_model)
+                # remove_lora_layers returns a NEW model; graft its
+                # modules back into the original to keep ext refs valid.
+                for name, module in restored.named_modules():
+                    unwrapped.append((name, module))
+            except ImportError:
+                logger.error(
+                    "Cannot restore base model: neither LoRALinear nor "
+                    "remove_lora_layers are available"
+                )
+                return
 
-        # Then restore original weights if we have a copy
+        if unwrapped:
+            self._base_model.update_modules(tree_unflatten(unwrapped))
+
+        # Restore original weights if we have a saved copy
         if self._base_model_copy is not None:
             import mlx.core as mx
             self._base_model.update(self._base_model_copy)

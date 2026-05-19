@@ -1220,7 +1220,7 @@ class BatchedEngine:
         import gc
         gc.collect()
 
-        from .mlx_executor import get_mlx_executor
+        from .mlx_executor import get_mlx_executor, shutdown_mlx_executor
         loop = asyncio.get_running_loop()
         import mlx.core as mx
 
@@ -1228,7 +1228,11 @@ class BatchedEngine:
             mx.synchronize()
             mx.clear_cache()
 
-        await loop.run_in_executor(get_mlx_executor(), _cleanup)
+        try:
+            await loop.run_in_executor(get_mlx_executor(), _cleanup)
+        except RuntimeError:
+            logger.debug("MLX executor cleanup skipped (executor already shut down)")
+        shutdown_mlx_executor(wait=False)
         logger.info(f"BatchedEngine stopped: {self.model_name}")
 
     def _should_use_engine_loop(self, use_engine_loop: bool | None) -> bool:

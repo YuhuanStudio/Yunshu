@@ -65,6 +65,28 @@ def get_mlx_executor() -> ThreadPoolExecutor:
     return _executor
 
 
+def shutdown_mlx_executor(wait: bool = True) -> None:
+    """Shut down the global MLX executor thread.
+
+    Called during engine shutdown to release the thread and its resources.
+    After shutdown, get_mlx_executor() will create a fresh executor if needed.
+
+    Args:
+        wait: If True, block until all submitted GPU work completes.
+    """
+    global _executor
+    with _executor_lock:
+        if _executor is not None:
+            if wait:
+                try:
+                    sync_and_clear_cache()
+                except Exception:
+                    logger.debug("sync_and_clear_cache during shutdown failed", exc_info=True)
+            _executor.shutdown(wait=wait)
+            _executor = None
+            logger.info("MLX executor shut down")
+
+
 def sync_and_clear_cache() -> None:
     """Synchronize in-flight GPU work before clearing the Metal buffer cache.
 

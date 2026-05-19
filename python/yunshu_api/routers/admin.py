@@ -34,8 +34,9 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 logger = logging.getLogger(__name__)
 
-# Lock for thread-safe config mutations
+# Lock for thread-safe config mutations and RBAC manager initialization
 _config_lock = __import__("threading").Lock()
+_rbac_init_lock = __import__("threading").Lock()
 
 
 # ── RBAC Helpers ──
@@ -46,8 +47,12 @@ def _get_rbac_manager(request: Request):
 
     manager = getattr(request.app.state, "rbac_manager", None)
     if manager is None:
-        manager = RBACManager()
-        request.app.state.rbac_manager = manager
+        with _rbac_init_lock:
+            # Double-checked locking after acquiring the lock
+            manager = getattr(request.app.state, "rbac_manager", None)
+            if manager is None:
+                manager = RBACManager()
+                request.app.state.rbac_manager = manager
     return manager
 
 
