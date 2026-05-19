@@ -66,9 +66,10 @@ class DataParallelRouter:
         self._lock = threading.Lock()
 
     def add_node(self, node_id: str, rank: int) -> None:
-        """Register a data-parallel node."""
+        """Register a data-parallel node. Idempotent — preserves existing load stats."""
         with self._lock:
-            self._nodes[node_id] = NodeLoad(node_id=node_id, rank=rank)
+            if node_id not in self._nodes:
+                self._nodes[node_id] = NodeLoad(node_id=node_id, rank=rank)
 
     def remove_node(self, node_id: str) -> None:
         """Remove a node from the routing pool."""

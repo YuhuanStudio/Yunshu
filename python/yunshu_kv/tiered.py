@@ -157,7 +157,7 @@ class SSDCacheStore:
 
             if block_hash in self._index:
                 # Already stored — just update access time
-                self._index[block_hash].last_access = time.monotonic()
+                self._index[block_hash].last_access = time.time()
                 return True
 
             # Serialize KV data to bytes with shape metadata
@@ -194,7 +194,7 @@ class SSDCacheStore:
                 block_index=block_index,
                 num_tokens=num_tokens,
                 size_bytes=header_size + len(raw_bytes),
-                last_access=time.monotonic(),
+                last_access=time.time(),
             )
             self._index[block_hash] = entry
             self._current_size_bytes += entry.size_bytes

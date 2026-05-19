@@ -29,13 +29,13 @@ def _check_auth(request: Request) -> None:
     # Check RBAC key first (set by TenantAuthMiddleware for ys_-prefixed keys)
     if hasattr(request, "state"):
         rbac_key = getattr(request.state, "rbac_key", None)
-        if isinstance(rbac_key, str) and rbac_key:
-            return  # Valid RBAC key — already authenticated by middleware
+        if rbac_key is not None:
+            return  # Valid RBAC key (APIKey object) — already authenticated by middleware
 
         # Check tenant attribute (set by TenantAuthMiddleware for static tokens)
         tenant = getattr(request.state, "tenant", None)
-        if isinstance(tenant, str) and tenant:
-            return  # Authenticated via static token through middleware
+        if tenant is not None:
+            return  # Authenticated via static token through middleware (Tenant object)
 
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:

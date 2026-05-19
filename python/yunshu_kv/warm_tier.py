@@ -173,6 +173,23 @@ class KVWarmTier:
         with self._lock:
             return block_hash in self._store
 
+    def remove(self, block_hash: int) -> bool:
+        """Remove a specific entry by hash. Thread-safe."""
+        with self._lock:
+            entry = self._store.pop(block_hash, None)
+            if entry is not None:
+                packed, scales = entry[0], entry[1]
+                packed_nbytes = (
+                    np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
+                )
+                scales_nbytes = (
+                    np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
+                )
+                self._memory_used -= packed_nbytes + scales_nbytes
+                self._memory_used = max(0, self._memory_used)
+                return True
+            return False
+
     def evict(self, count: int) -> int:
         """Evict the oldest (least recently used) blocks.
 

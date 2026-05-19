@@ -194,7 +194,16 @@ class NodeDiscovery:
     def _add_discovered(self, node: MeshNode) -> None:
         with self._lock:
             is_new = node.node_id not in self._discovered_nodes
-            self._discovered_nodes[node.node_id] = node
+            if is_new:
+                self._discovered_nodes[node.node_id] = node
+            else:
+                # Update existing node in-place to preserve shared references
+                existing = self._discovered_nodes[node.node_id]
+                existing.ip = node.ip
+                existing.port = node.port
+                existing.capabilities = node.capabilities
+                if node.hostname:
+                    existing.hostname = node.hostname
             self._discovered_times[node.node_id] = time.monotonic()
             callbacks = list(self._on_discovered_callbacks)
             # Prune stale nodes that haven't been seen in a while

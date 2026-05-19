@@ -330,7 +330,7 @@ class DisaggRouter:
                 if role == NodeRole.DECODE or role == NodeRole.HYBRID:
                     node.active_decodes += 1
 
-        return node_id or "", role
+        return node_id or None, role
 
     def request_completed(self, node_id: str, role: NodeRole) -> None:
         """Decrement load counters after a request finishes."""

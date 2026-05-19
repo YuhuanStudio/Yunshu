@@ -125,7 +125,7 @@ class BoundarySnapshotSSDStore:
 
         # Check pending writes first (may not be flushed yet)
         with self._pending_lock:
-            data = self._pending_writes.pop(key, None)
+            data = self._pending_writes.get(key)
             if data is not None:
                 return self._deserialize(data)
 

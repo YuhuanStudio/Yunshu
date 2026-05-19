@@ -152,14 +152,14 @@ class TestDisaggRouter:
     def test_route_no_nodes(self):
         router = DisaggRouter()
         node_id, role = router.route_request(prompt_tokens=100)
-        assert node_id == ""
+        assert node_id is None
 
     def test_mark_unavailable(self):
         router = DisaggRouter(DisaggConfig(auto_role_detection=False))
         router.add_node("n1", NodeRole.HYBRID)
         router.mark_unavailable("n1")
         node_id, _ = router.route_request(prompt_tokens=100)
-        assert node_id == ""
+        assert node_id is None
 
     def test_mark_available(self):
         router = DisaggRouter(DisaggConfig(auto_role_detection=False))

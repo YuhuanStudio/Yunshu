@@ -118,10 +118,12 @@ class RequestPriorityQueue(Generic[T]):
             self._front_seq = -(1 << 30)
 
     def __len__(self) -> int:
-        return len(self._heap)
+        with self._lock:
+            return len(self._heap)
 
     def __bool__(self) -> bool:
-        return bool(self._heap)
+        with self._lock:
+            return bool(self._heap)
 
     def __contains__(self, item: object) -> bool:
         """Linear scan — only used for test assertions, not hot path."""

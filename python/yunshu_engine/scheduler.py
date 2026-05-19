@@ -1014,7 +1014,7 @@ class Scheduler:
         return request_id in self.requests
 
     def has_requests(self) -> bool:
-        return bool(self.waiting) or bool(self.running) or bool(self._pending_abort_ids)
+        return bool(self.waiting) or bool(self.running)
 
     def _has_active_requests(self) -> bool:
         return bool(self.running)
@@ -1052,10 +1052,11 @@ class Scheduler:
         if self._failed_insert_ids:
             for fail_id in self._failed_insert_ids:
                 fail_req = self.requests.get(fail_id)
+                actual_reason = getattr(fail_req, 'finish_reason', None) or "error"
                 outputs.append(RequestOutput(
                     request_id=fail_id,
                     finished=True,
-                    finish_reason="error",
+                    finish_reason=actual_reason,
                     error=f"Request {fail_id} failed to insert into batch generator",
                     prompt_tokens=getattr(fail_req, 'num_prompt_tokens', 0) if fail_req else 0,
                     completion_tokens=0,
@@ -1495,9 +1496,8 @@ class Scheduler:
                         self.waiting.push_front(req, priority=req.sampling_params.priority)
                         continue
 
-                    self._active_partial_prefills += 1
-
                 if should_chunk and effective_chunk_size > 0:
+                    self._active_partial_prefills += 1
                     chunk = tokens_to_insert[:effective_chunk_size]
                     remaining = tokens_to_insert[effective_chunk_size:]
                     # Store remaining tokens for subsequent steps

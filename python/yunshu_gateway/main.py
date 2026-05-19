@@ -626,6 +626,27 @@ def create_app() -> FastAPI:
             )
         return await call_next(request)
 
+    # Active request tracking for graceful shutdown drain
+    _INFERENCE_PATHS = (
+        "/v1/chat/completions", "/v1/completions", "/v1/embeddings",
+        "/v1/messages", "/v1/responses", "/v1/audio/speech",
+        "/v1/audio/transcriptions", "/v1/images/generations",
+        "/v1/images/edits", "/v1/images/variations",
+    )
+
+    @app.middleware("http")
+    async def track_active_requests(request: Request, call_next):
+        global _active_requests
+        if request.url.path in _INFERENCE_PATHS:
+            _active_requests += 1
+            try:
+                return await call_next(request)
+            finally:
+                _active_requests -= 1
+                if _active_requests == 0 and _drain_event is not None:
+                    _drain_event.set()
+        return await call_next(request)
+
     # Request body size limit middleware (reject oversized payloads early)
     max_request_size = int(os.environ.get("YUNSHU_MAX_REQUEST_SIZE", str(10 * 1024 * 1024)))
 

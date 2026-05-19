@@ -552,7 +552,7 @@ class KVCacheManager:
                 # Demotion failed or was skipped — remove any stale warm-tier
                 # entry for this hash so future promotions don't return
                 # outdated KV data.
-                self._warm_tier._store.pop(block.block_hash, None)
+                self._warm_tier.remove(block.block_hash)
 
             # Re-check ref_count BEFORE evicting — BlockPool.touch() may have
             # reactivated this block between snapshot and now. Evicting a
@@ -647,7 +647,7 @@ class KVCacheManager:
                 # Demotion failed or was skipped — remove any stale warm-tier
                 # entry for this hash so future promotions don't return
                 # outdated KV data.
-                self._warm_tier._store.pop(block.block_hash, None)
+                self._warm_tier.remove(block.block_hash)
 
             # Re-check ref_count BEFORE evicting — concurrent touch() may
             # have reactivated this block. Evicting a ref_count > 1 block

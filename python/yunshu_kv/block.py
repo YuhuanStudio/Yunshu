@@ -346,7 +346,7 @@ class BlockPool:
         logical_idx: int,
         key_cache: Any = None,
         value_cache: Any = None,
-    ) -> KVBlock:
+    ) -> tuple[KVBlock, Any, Any]:
         """COW a block within a BlockTable, copying KV data if available.
 
         After COW, the table entry at `logical_idx` points to the new

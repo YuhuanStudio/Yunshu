@@ -1213,6 +1213,14 @@ class EngineCore:
                 model=str(getattr(self.scheduler, 'model_id', '') or ''),
                 prompt=prompt, max_tokens=max_tokens,
                 temperature=temperature, top_p=top_p,
+                top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                seed=seed,
+                json_schema=str(json_schema) if json_schema else None,
+                thinking_budget=thinking_budget,
+                reasoning_effort=reasoning_effort,
             )
             dedup_result = self._request_dedup.check(req_id, content_hash)
             if dedup_result is not None:
@@ -1839,6 +1847,10 @@ class EngineCore:
                                     completion_tokens=req_output.completion_tokens,
                                     finished=False,
                                     prompt_tokens=req_output.prompt_tokens,
+                                    logprobs=req_output.logprobs,
+                                    current_state=req_output.current_state,
+                                    reasoning_tokens=req_output.reasoning_tokens,
+                                    cached_tokens=req_output.cached_tokens,
                                 ))
 
                     if req_output.finished:
@@ -1891,9 +1903,10 @@ class EngineCore:
                                         )
                                         shadow_collector.put(shadow_output)
                                         shadow_collector.put(None)  # sentinel
-                                        # Signal shadow finished before finalize
+                                        # Signal shadow finished — don't cleanup here,
+                                        # let the consumer's finally block handle it to
+                                        # avoid racing with the consumer reading the collector.
                                         self._signal_finished(shadow_id)
-                                        self._cleanup_request(shadow_id)
                         # Signal request completion before finalize so generate()
                         # consumers waiting on the event can wake up.
                         self._signal_finished(rid)

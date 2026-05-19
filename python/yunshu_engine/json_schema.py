@@ -734,10 +734,6 @@ class JsonSchemaConstraint:
                     i += 1
                     continue
                 # Number ended — validate required digits were produced.
-                if self._state in (JsonState.NUMBER_FRACTION,
-                                   JsonState.NUMBER_EXPONENT,
-                                   JsonState.NUMBER_EXPONENT_SIGN):
-                    self._buf_offset += 1
                 self._value_completed()
                 continue
 
