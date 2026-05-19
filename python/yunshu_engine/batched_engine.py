@@ -2117,7 +2117,6 @@ class BatchedEngine:
                                 _thinking_tokens.append(token)
                                 _in_thinking = False
                                 detokenizer.add_token(think_end_token)
-                                tokens.append(think_end_token)
                                 break
                         # Progressive KV quantization (C6: keep memory flat during generation)
                         if self._kv_quant_bits is not None:
@@ -3126,6 +3125,7 @@ class BatchedEngine:
                             if new_text:
                                 _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "reasoning"))
                             # Then emit closing think tag
+                            n_tok += 1  # Count the forced closing tag token
                             detokenizer.add_token(think_end_token)
                             _end_text = detokenizer.last_segment
                             if _end_text:

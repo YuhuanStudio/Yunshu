@@ -122,7 +122,8 @@ class HeartbeatMonitor:
                         try:
                             node.state = MeshNodeState[msg.get("state", "READY")]
                         except (KeyError, ValueError):
-                            pass
+                            logger.debug("Invalid node state from heartbeat: %s",
+                                         msg.get("state"))
                         node._active_requests = msg.get("active_requests", 0)
                         # Recovery check — capture callback data, fire outside lock
                         if node_id in self._timed_out:

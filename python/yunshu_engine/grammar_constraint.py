@@ -258,26 +258,25 @@ class _RegexDFA:
         if category == _sre_parse.CATEGORY_DIGIT:
             chars.update(range(ord('0'), ord('9') + 1))
         elif category == _sre_parse.CATEGORY_NOT_DIGIT:
-            for i in range(0, 0x10000):
-                if not chr(i).isdigit():
-                    chars.add(i)
+            digits = set(range(ord('0'), ord('9') + 1))
+            chars = set(range(1, 0x10000)) - digits
         elif category == _sre_parse.CATEGORY_SPACE:
             for c in ' \t\n\r\f\v':
                 chars.add(ord(c))
         elif category == _sre_parse.CATEGORY_NOT_SPACE:
-            for i in range(0, 0x10000):
-                if chr(i) not in ' \t\n\r\f\v':
-                    chars.add(i)
+            space = {ord(c) for c in ' \t\n\r\f\v'}
+            chars = set(range(1, 0x10000)) - space
         elif category == _sre_parse.CATEGORY_WORD:
             chars.update(range(ord('a'), ord('z') + 1))
             chars.update(range(ord('A'), ord('Z') + 1))
             chars.update(range(ord('0'), ord('9') + 1))
             chars.add(ord('_'))
         elif category == _sre_parse.CATEGORY_NOT_WORD:
-            for i in range(0, 0x10000):
-                c = chr(i)
-                if not (c.isalnum() or c == '_'):
-                    chars.add(i)
+            word = (set(range(ord('a'), ord('z') + 1))
+                    | set(range(ord('A'), ord('Z') + 1))
+                    | set(range(ord('0'), ord('9') + 1))
+                    | {ord('_')})
+            chars = set(range(1, 0x10000)) - word
         return chars
 
     def _epsilon_closure(self, states: frozenset[int]) -> frozenset[int]:
@@ -892,7 +891,7 @@ class LarkGrammarConstraint:
                 # If parse_interactive is unavailable, we cannot confirm
                 # the char is a valid prefix — do NOT add it.
 
-        if len(valid) > 90:
+        if len(valid) > len(test_chars) - 2:
             return None
         return valid
 

@@ -283,7 +283,9 @@ class KVSynchronizationService:
 
     @property
     def stats(self) -> KVSyncStats:
-        return self._stats
+        with self._lock:
+            import copy
+            return copy.copy(self._stats)
 
     def set_block_provider(
         self, provider: Callable[[int], list[KVBlockData]]
@@ -643,8 +645,9 @@ class KVSynchronizationService:
         if consumer is not None and blocks:
             try:
                 loaded = consumer(blocks, model_name)
-                with self._lock:
-                    self._stats.bytes_received += total_bytes
+                if loaded > 0:
+                    with self._lock:
+                        self._stats.bytes_received += total_bytes
             except Exception as e:
                 logger.debug("Block consumer failed: %s", e, exc_info=True)
 
@@ -1062,21 +1065,22 @@ class MeshHealthMonitor:
             logger.warning("Cannot rebalance: no LayerAllocator configured")
             return None
 
-        # Collect healthy node profiles
+        # Collect healthy node profiles under lock
         from .layer_allocator import NodeProfile
 
-        healthy_nodes = self.get_healthy_nodes()
-        profiles = []
-        for nid in healthy_nodes:
-            node = self._nodes.get(nid)
-            if node:
-                profiles.append(NodeProfile(
-                    node_id=nid,
-                    memory_bytes=int(
-                        node.capabilities.total_memory_gb * (1024 ** 3)
-                    ),
-                    gpu_cores=node.capabilities.gpu_cores,
-                ))
+        with self._lock:
+            healthy_nodes = [nid for nid, status in self._node_status.items() if status.healthy]
+            profiles = []
+            for nid in healthy_nodes:
+                node = self._nodes.get(nid)
+                if node:
+                    profiles.append(NodeProfile(
+                        node_id=nid,
+                        memory_bytes=int(
+                            node.capabilities.total_memory_gb * (1024 ** 3)
+                        ),
+                        gpu_cores=node.capabilities.gpu_cores,
+                    ))
 
         if not profiles:
             logger.warning("Cannot rebalance: no healthy nodes")

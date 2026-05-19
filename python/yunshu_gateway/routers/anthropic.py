@@ -833,10 +833,14 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
             content={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
         )
     # Handle both Engine (prompt_token_count) and BatchedEngine (prompt_tokens)
-    prompt_toks = getattr(result, 'prompt_tokens', 0) or getattr(result, 'prompt_token_count', 0)
-    completion_toks = getattr(result, 'completion_tokens', 0) or getattr(result, 'completion_token_count', 0)
-    text = getattr(result, 'text', '') or getattr(result, 'generated_text', '')
-    finish_reason = getattr(result, 'finish_reason', None) or getattr(result, 'finish_state', None)
+    _pt = getattr(result, 'prompt_tokens', None)
+    prompt_toks = _pt if _pt is not None else getattr(result, 'prompt_token_count', 0)
+    _ct = getattr(result, 'completion_tokens', None)
+    completion_toks = _ct if _ct is not None else getattr(result, 'completion_token_count', 0)
+    _txt = getattr(result, 'text', None)
+    text = _txt if _txt is not None else getattr(result, 'generated_text', '')
+    _fr = getattr(result, 'finish_reason', None)
+    finish_reason = _fr if _fr is not None else getattr(result, 'finish_state', None)
     cached_toks = getattr(result, 'cached_tokens', 0) or 0
     _record_metrics(prompt_toks, completion_toks)
 

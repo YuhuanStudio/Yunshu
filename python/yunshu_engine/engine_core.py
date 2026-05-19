@@ -1962,15 +1962,19 @@ class EngineCore:
                     if _tokens_gen > 0 and batch_size > 0:
                         _est_itl_ms = _step_wall_ms / _tokens_gen
 
-                    # Estimate TTFT from requests that just completed prefill
+                    # Estimate TTFT from requests that transitioned from
+                    # PREFILLING to DECODING (tracked via lifecycle orchestrator).
                     _est_ttft_ms = 0.0
                     _ttft_count = 0
                     for o in scheduler_output.outputs:
+                        rid = getattr(o, 'request_id', None)
+                        if rid and hasattr(self, '_ttft_done'):
+                            if rid in self._ttft_done:
+                                continue
                         if (o.finished
-                            and o.completion_tokens <= 1
                             and getattr(o, 'finish_reason', 'stop') not in ("error", "timeout", "abort")
                             and not getattr(o, 'error', None)):
-                            _start_ts = self._request_timestamps.get(o.request_id)
+                            _start_ts = self._request_timestamps.get(rid)
                             if _start_ts is not None:
                                 _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
                                 _ttft_count += 1
