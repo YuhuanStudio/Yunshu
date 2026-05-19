@@ -536,3 +536,275 @@ class TestVLMVisionFinishReason:
                 )
 
         assert result["finish_reason"] == "length"
+
+
+# ── 4. Streaming vision path — held-back text loss ──
+
+
+class TestVLMVisionStreamingContentLoss:
+    """Tests for text loss bugs in _stream_vlm_vision."""
+
+    @pytest.fixture
+    def vlm_engine(self):
+        """Create a VLMEngine configured for vision streaming."""
+        engine = _make_vlm_engine()
+        engine._has_vision = True
+        engine._is_vlm = True
+        return engine
+
+    def _make_stream_result(self, text, finish_reason=None):
+        """Create a mock stream result object."""
+        r = MagicMock()
+        r.text = text
+        r.finish_reason = finish_reason
+        return r
+
+    @pytest.mark.asyncio
+    async def test_vision_stream_held_text_emitted_on_stop_suffix(self, vlm_engine):
+        """BUG: When stop suffix found, text held back for prefix detection
+        must be emitted. Previously _emitted_pos was set to len(accumulated)
+        before emitting, so held text was lost."""
+        vlm_engine._extract_images = AsyncMock(return_value=["/tmp/test.jpg"])
+        vlm_engine._extract_audio = AsyncMock(return_value=[])
+        vlm_engine._extract_video_frames = AsyncMock(return_value=[])
+        vlm_engine._apply_vlm_template_with_cache = MagicMock(return_value="prompt")
+        vlm_engine._compute_image_hash = MagicMock(return_value="abc123")
+        vlm_engine._get_kv_prefix_state = MagicMock(return_value=None)
+        vlm_engine._vlm_vision_cache_adapter = None
+        vlm_engine._encoder_cache = MagicMock()
+        vlm_engine._encoder_cache.get.return_value = None
+
+        # Stream yields: "hello " then "world" then "STOP" (stop suffix)
+        results = [
+            self._make_stream_result("hello "),
+            self._make_stream_result("world"),
+            self._make_stream_result("STOP"),
+        ]
+
+        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
+            with patch('mlx_lm.sample_utils.make_sampler'):
+                outputs = []
+                async for output in vlm_engine.generate_stream(
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                        ]},
+                    ],
+                    max_tokens=10,
+                    stop=["STOP"],
+                ):
+                    outputs.append(output)
+
+        # Collect all emitted text
+        all_text = "".join(o.new_text for o in outputs)
+        # The text "hello world" should have been emitted (STOP trimmed)
+        assert "hello world" in all_text, f"Expected 'hello world' in emitted text, got: '{all_text}'"
+
+        # Verify finish_reason
+        finished = [o for o in outputs if o.finished]
+        assert len(finished) >= 1
+        assert finished[-1].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_vision_stream_generator_exhaust_flushes_held_text(self, vlm_engine):
+        """BUG: When generator exhausts without finish_reason, held-back text
+        (from stop suffix prefix detection) must be flushed."""
+        vlm_engine._extract_images = AsyncMock(return_value=["/tmp/test.jpg"])
+        vlm_engine._extract_audio = AsyncMock(return_value=[])
+        vlm_engine._extract_video_frames = AsyncMock(return_value=[])
+        vlm_engine._apply_vlm_template_with_cache = MagicMock(return_value="prompt")
+        vlm_engine._compute_image_hash = MagicMock(return_value="abc123")
+        vlm_engine._get_kv_prefix_state = MagicMock(return_value=None)
+        vlm_engine._vlm_vision_cache_adapter = None
+        vlm_engine._encoder_cache = MagicMock()
+        vlm_engine._encoder_cache.get.return_value = None
+
+        # Generator yields text that could be a prefix of "STOP" but isn't,
+        # then exhausts. E.g., "ST" is a prefix of "STOP" so it's held back.
+        # When generator exhausts, it should be flushed.
+        results = [
+            self._make_stream_result("hello "),
+            self._make_stream_result("ST"),
+        ]
+
+        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
+            with patch('mlx_lm.sample_utils.make_sampler'):
+                outputs = []
+                async for output in vlm_engine.generate_stream(
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                        ]},
+                    ],
+                    max_tokens=10,
+                    stop=["STOP"],
+                ):
+                    outputs.append(output)
+
+        all_text = "".join(o.new_text for o in outputs)
+        # "hello " should definitely be emitted; "ST" should be flushed on exhaustion
+        assert "hello " in all_text, f"Expected 'hello ' in emitted text, got: '{all_text}'"
+
+        finished = [o for o in outputs if o.finished]
+        assert len(finished) >= 1
+
+    @pytest.mark.asyncio
+    async def test_vision_stream_current_state_on_exhaustion(self, vlm_engine):
+        """BUG: Generator exhaustion output should include current_state."""
+        vlm_engine._extract_images = AsyncMock(return_value=["/tmp/test.jpg"])
+        vlm_engine._extract_audio = AsyncMock(return_value=[])
+        vlm_engine._extract_video_frames = AsyncMock(return_value=[])
+        vlm_engine._apply_vlm_template_with_cache = MagicMock(return_value="prompt")
+        vlm_engine._compute_image_hash = MagicMock(return_value="abc123")
+        vlm_engine._get_kv_prefix_state = MagicMock(return_value=None)
+        vlm_engine._vlm_vision_cache_adapter = None
+        vlm_engine._encoder_cache = MagicMock()
+        vlm_engine._encoder_cache.get.return_value = None
+
+        results = [
+            self._make_stream_result("hello"),
+        ]
+
+        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
+            with patch('mlx_lm.sample_utils.make_sampler'):
+                outputs = []
+                async for output in vlm_engine.generate_stream(
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                        ]},
+                    ],
+                    max_tokens=10,
+                ):
+                    outputs.append(output)
+
+        finished = [o for o in outputs if o.finished]
+        assert len(finished) >= 1
+        # current_state should be present on the terminal output
+        assert hasattr(finished[-1], 'current_state')
+        assert finished[-1].current_state in ("normal", "reasoning")
+
+    @pytest.mark.asyncio
+    async def test_vision_stream_reasoning_tokens_counted(self, vlm_engine):
+        """BUG: thinking tokens should be counted in _stream_vlm_vision and
+        reported via reasoning_tokens on the terminal RequestOutput."""
+        vlm_engine._extract_images = AsyncMock(return_value=["/tmp/test.jpg"])
+        vlm_engine._extract_audio = AsyncMock(return_value=[])
+        vlm_engine._extract_video_frames = AsyncMock(return_value=[])
+        vlm_engine._apply_vlm_template_with_cache = MagicMock(return_value="prompt")
+        vlm_engine._compute_image_hash = MagicMock(return_value="abc123")
+        vlm_engine._get_kv_prefix_state = MagicMock(return_value=None)
+        vlm_engine._vlm_vision_cache_adapter = None
+        vlm_engine._encoder_cache = MagicMock()
+        vlm_engine._encoder_cache.get.return_value = None
+
+        # Simulate thinking tokens: <think_reasoning_</think_answer
+        results = [
+            self._make_stream_result("<think"),
+            self._make_stream_result("reasoning here"),
+            self._make_stream_result("</think"),
+            self._make_stream_result("answer"),
+        ]
+
+        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
+            with patch('mlx_lm.sample_utils.make_sampler'):
+                outputs = []
+                async for output in vlm_engine.generate_stream(
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                        ]},
+                    ],
+                    max_tokens=10,
+                ):
+                    outputs.append(output)
+
+        finished = [o for o in outputs if o.finished]
+        assert len(finished) >= 1
+        # reasoning_tokens should be > 0 (we had thinking tokens)
+        assert finished[-1].reasoning_tokens > 0, \
+            f"Expected reasoning_tokens > 0, got {finished[-1].reasoning_tokens}"
+
+        # The current_state should have transitioned through reasoning
+        states_seen = [o.current_state for o in outputs if o.current_state]
+        assert "reasoning" in states_seen, \
+            f"Expected 'reasoning' in states, got: {states_seen}"
+
+    @pytest.mark.asyncio
+    async def test_vision_stream_error_includes_current_state(self, vlm_engine):
+        """BUG: Error output should include current_state."""
+        vlm_engine._extract_images = AsyncMock(return_value=["/tmp/test.jpg"])
+        vlm_engine._extract_audio = AsyncMock(return_value=[])
+        vlm_engine._extract_video_frames = AsyncMock(return_value=[])
+        vlm_engine._apply_vlm_template_with_cache = MagicMock(return_value="prompt")
+        vlm_engine._compute_image_hash = MagicMock(return_value="abc123")
+        vlm_engine._get_kv_prefix_state = MagicMock(return_value=None)
+        vlm_engine._vlm_vision_cache_adapter = None
+        vlm_engine._encoder_cache = MagicMock()
+        vlm_engine._encoder_cache.get.return_value = None
+
+        with patch('mlx_vlm.generate.stream_generate', side_effect=RuntimeError("VLM crash")):
+            with patch('mlx_lm.sample_utils.make_sampler'):
+                outputs = []
+                async for output in vlm_engine.generate_stream(
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                        ]},
+                    ],
+                    max_tokens=10,
+                ):
+                    outputs.append(output)
+
+        error_outputs = [o for o in outputs if o.finish_reason == "error"]
+        assert len(error_outputs) >= 1
+        assert hasattr(error_outputs[0], 'current_state')
+        assert error_outputs[0].current_state in ("normal", "reasoning")
+
+    @pytest.mark.asyncio
+    async def test_vision_stream_think_scan_pos_clamped_on_stop_trim(self, vlm_engine):
+        """BUG: _think_scan_pos must be clamped after stop suffix trims accumulated."""
+        vlm_engine._extract_images = AsyncMock(return_value=["/tmp/test.jpg"])
+        vlm_engine._extract_audio = AsyncMock(return_value=[])
+        vlm_engine._extract_video_frames = AsyncMock(return_value=[])
+        vlm_engine._apply_vlm_template_with_cache = MagicMock(return_value="prompt")
+        vlm_engine._compute_image_hash = MagicMock(return_value="abc123")
+        vlm_engine._get_kv_prefix_state = MagicMock(return_value=None)
+        vlm_engine._vlm_vision_cache_adapter = None
+        vlm_engine._encoder_cache = MagicMock()
+        vlm_engine._encoder_cache.get.return_value = None
+
+        # Text with thinking markers then a stop suffix that trims past them.
+        # If _think_scan_pos isn't clamped, the next scan iteration could
+        # use an out-of-bounds cursor.
+        results = [
+            self._make_stream_result("<think"),
+            self._make_stream_result("some reasoning here"),
+            self._make_stream_result("</think"),
+            self._make_stream_result("END"),
+        ]
+
+        with patch('mlx_vlm.generate.stream_generate', return_value=iter(results)):
+            with patch('mlx_lm.sample_utils.make_sampler'):
+                outputs = []
+                async for output in vlm_engine.generate_stream(
+                    messages=[
+                        {"role": "user", "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                        ]},
+                    ],
+                    max_tokens=10,
+                    stop=["END"],
+                ):
+                    outputs.append(output)
+
+        # Should not crash with IndexError from _think_scan_pos
+        finished = [o for o in outputs if o.finished]
+        assert len(finished) >= 1
+        assert finished[-1].finish_reason == "stop"

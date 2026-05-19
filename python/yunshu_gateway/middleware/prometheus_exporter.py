@@ -282,6 +282,11 @@ class PrometheusMetrics:
             "yunshu_inference_duration_seconds",
             "Inference step duration in seconds",
         )
+        self._histograms["prefill_duration_seconds"] = _Histogram(
+            "yunshu_prefill_duration_seconds",
+            "Prefill phase duration in seconds",
+            buckets=_Histogram.INFERENCE_BUCKETS,
+        )
         self._histograms["ttft_seconds"] = _Histogram(
             "yunshu_ttft_seconds",
             "Time to first token in seconds",

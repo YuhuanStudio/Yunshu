@@ -37,6 +37,27 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6681 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 263 — 6-Agent Deep Audit: Scheduler, Streaming, Metrics, Request, Spec Decode, Mesh)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 263: EngineCore _finalized_ids 內存泄漏 | set 只 add 不 discard，長期運行無限增長。加入 _cleanup_request 中 discard | 防止內存泄漏 (HIGH) |
+| Wave 263: EngineCore _ttft_done 內存泄漏 | 同上，_ttft_done 無清理。加入 discard | 防止內存泄漏 |
+| Wave 263: Budget exhaustion dedup shadow consumer hang | 預算耗盡時只通知 primary 不通知 shadow。加入 shadow fan-out | 防止 shadow consumer 死鎖 (HIGH) |
+| Wave 263: Context window 截斷丟失系統消息 | token_ids[excess:] 盲目截斷，可能丟失系統消息。加入 message-level 截斷 | 保護系統消息 (HIGH) |
+| Wave 263: set_finished() 跳過 done_event 信號 | scheduler 直接設 status=FINISHED 跳過 set_finished()。改為調用 set_finished | 防止 done_event 永不觸發 (MEDIUM) |
+| Wave 263: Request 重引用未釋放 | 完成後 MLX array/embedding/token list 仍被引用。加入 release_resources() | GPU 記憶體回收 |
+| Wave 263: Spec decode probabilistic acceptance | verifier 只做 argmax 比較，非貪婪採樣拒絕率過高。加入 p_target/p_draft 概率接受 | 提升非貪婪 spec decode 接受率 (HIGH) |
+| Wave 263: Streaming ngram spec 無 grammar 約束 | streaming 路徑忽略 json_schema，產生無效 JSON。加入 grammar filter | Grammar + spec decode 正確性 |
+| Wave 263: VLM streaming 5 bugs | stop 後綴截斷丟文字、尾部 flush、current_state 缺失、reasoning_tokens 未計數、think_scan_pos 越界 | VLM streaming 完整性 (HIGH) |
+| Wave 263: VLM streaming metrics 雙重記錄 | _token_source 和 finally 都調用 _record_metrics。加入 metrics_recorded flag | Metrics 準確 |
+| Wave 263: Multi-choice streaming 缺 [DONE] sentinel | cancel 時直接 return 不發送 SSE [DONE]。客戶端掛起。補發 sentinel | SSE 協議完整 (HIGH) |
+| Wave 263: Anthropic streaming output_tokens 下溢 | stop 在第一個 token 時 output_tokens -= 1 變 -1。加入 > 0 guard | Token 計數正確 |
+| Wave 263: DisaggPD stale "transferring" 不清理 | _cleanup_stale_transfers 只清 pending。改為 pending+transferring | 防止路由飢餓 (HIGH) |
+| Wave 263: DisaggPD remove_node 不取消轉移 | 節點移除時不取消 in-flight transfer。加入清理邏輯 | 防止計數器泄漏 |
+| Wave 263: DisaggPD/RTT add_node 覆蓋計數器 | 重複註冊會歸零 active_requests。改為保留現有計數 | 負載均衡正確 |
+| Wave 263: set_finished 無狀態驗證 | 任意狀態可轉 FINISHED。加入 _FINISH_VALID_PREDECESSORS 驗證 | 狀態機完整性 |
+
 ### 已完成修復 (2026-05-19 Wave 262 — 6-Agent Deep Audit: LoRA, Spec Decode, VLM, Engine Core, Thinking Segment)
 
 | 修復 | 描述 | 影響 |

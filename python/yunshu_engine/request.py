@@ -221,14 +221,29 @@ class Request:
     def append_token(self, token_id: int) -> None:
         self.output_token_ids.append(token_id)
 
+    # Valid predecessor states for each finished state.
+    # PREEMPTED/WAITING can also go to FINISHED_* (queue_full, timeout, abort).
+    _FINISH_VALID_PREDECESSORS = frozenset({
+        RequestStatus.WAITING,
+        RequestStatus.PREFILLING,
+        RequestStatus.RUNNING,
+        RequestStatus.PREEMPTED,
+    })
+
     def set_finished(self, status: RequestStatus, reason: str | None = None) -> None:
         """Transition to a finished state with optional reason.
 
         Validates the transition: already-finished requests cannot transition
-        to a different finished state (prevents masking bugs).
+        to a different finished state (prevents masking bugs).  Non-finished
+        states that are not valid predecessors (e.g. another FINISHED_* state)
+        are silently rejected.
         """
         if RequestStatus.is_finished(self.status) and self.status != status:
             return  # Already finished — ignore spurious re-finish
+        if not RequestStatus.is_finished(self.status):
+            # Validate the current state is a legal predecessor for a finish.
+            if self.status not in self._FINISH_VALID_PREDECESSORS:
+                return
         self.status = status
         self.finish_reason = reason or RequestStatus.finish_reason(status)
         if not self.generation_end:
@@ -239,6 +254,26 @@ class Request:
                 self.done_event.set()
             except Exception:
                 pass
+
+    def release_resources(self) -> None:
+        """Release heavy references (MLX arrays, embeddings, media, caches).
+
+        Call this when the request is finalized to avoid holding GPU memory
+        via stale references in long-lived data structures. Safe to call
+        multiple times — sets fields to None after releasing.
+        """
+        self.prompt_cache = None
+        self.vlm_inputs_embeds = None
+        self.vlm_extra_kwargs = None
+        self.images = None
+        self.videos = None
+        self.detokenizer = None
+        if hasattr(self, '_spec_draft_cache'):
+            self._spec_draft_cache = None
+        # Clear large lists that may hold many tokens
+        self.prompt_token_ids = []
+        self.output_token_ids = []
+        self.remaining_tokens = None
 
     def __lt__(self, other: "Request") -> bool:
         if self.priority != other.priority:

@@ -267,23 +267,58 @@ class DisaggRouter:
         memory_gb: float = 0.0,
         gpu_cores: int = 0,
     ) -> None:
-        """Register a node in the disaggregated pool."""
+        """Register a node in the disaggregated pool.
+
+        If a node with the same ID already exists, its runtime counters
+        (active_prefills, active_decodes, kv_transfer_queue) are preserved
+        to avoid load-counter leaks from in-flight requests.
+        """
         with self._lock:
             if self._config.auto_role_detection and role == NodeRole.HYBRID:
                 role = self._auto_detect_role(memory_gb, gpu_cores)
 
+            existing = self._nodes.get(node_id)
             self._nodes[node_id] = DisaggNodeInfo(
                 node_id=node_id,
                 role=role,
                 memory_gb=memory_gb,
                 gpu_cores=gpu_cores,
+                # Preserve runtime counters from the previous registration
+                # so that in-flight requests don't leak their load tracking.
+                active_prefills=(
+                    existing.active_prefills if existing else 0
+                ),
+                active_decodes=(
+                    existing.active_decodes if existing else 0
+                ),
+                kv_transfer_queue=(
+                    existing.kv_transfer_queue if existing else 0
+                ),
             )
         logger.info(f"Added node {node_id} as {role.name} ({memory_gb}GB, {gpu_cores} GPU cores)")
 
     def remove_node(self, node_id: str) -> None:
-        """Remove a node from the pool."""
+        """Remove a node from the pool and cancel its in-flight transfers."""
         with self._lock:
             self._nodes.pop(node_id, None)
+            # Cancel in-flight transfers involving the removed node
+            for t in self._pending_transfers:
+                if t.status in ("pending", "transferring") and (
+                    t.source_node == node_id or t.target_node == node_id
+                ):
+                    t.status = "failed"
+                    self._stats.kv_transfer_failures += 1
+                    # Decrement source node's queue only if the source is
+                    # NOT the removed node (the source node was already
+                    # popped from self._nodes above).
+                    if t.source_node != node_id and t.source_node in self._nodes:
+                        self._nodes[t.source_node].kv_transfer_queue = max(
+                            0, self._nodes[t.source_node].kv_transfer_queue - 1
+                        )
+                    logger.warning(
+                        "KV transfer cancelled (node %s removed): %s (%s → %s)",
+                        node_id, t.request_id, t.source_node, t.target_node,
+                    )
 
     def mark_unavailable(self, node_id: str) -> None:
         """Mark a node as unavailable."""
@@ -298,7 +333,7 @@ class DisaggRouter:
                 self._nodes[node_id].available = True
 
     def _cleanup_stale_transfers(self) -> None:
-        """Remove transfers pending for more than 60 seconds (stale/leaked).
+        """Remove transfers pending or transferring for more than 60 seconds.
 
         If a transfer never completes because a node crashed or the
         network dropped the message, the kv_transfer_queue counter on
@@ -309,7 +344,7 @@ class DisaggRouter:
         stale_timeout = 60.0  # seconds
         stale = [
             t for t in self._pending_transfers
-            if t.status == "pending"
+            if t.status in ("pending", "transferring")
             and (now - t.created_at) > stale_timeout
         ]
         for t in stale:
@@ -335,7 +370,7 @@ class DisaggRouter:
         self,
         prompt_tokens: int,
         request_id: str = "",
-    ) -> tuple[str, NodeRole]:
+    ) -> tuple[str | None, NodeRole]:
         """Route a request to the appropriate pool.
 
         Increments active load counters so subsequent routing decisions
@@ -501,17 +536,18 @@ class DisaggRouter:
 
     def compute_utilization(self) -> None:
         """Compute pool utilization for stats."""
-        prefill_nodes = [n for n in self._nodes.values() if n.role == NodeRole.PREFILL]
-        decode_nodes = [n for n in self._nodes.values() if n.role == NodeRole.DECODE]
+        with self._lock:
+            prefill_nodes = [n for n in self._nodes.values() if n.role == NodeRole.PREFILL]
+            decode_nodes = [n for n in self._nodes.values() if n.role == NodeRole.DECODE]
 
-        if prefill_nodes:
-            self._stats.prefill_node_utilization = sum(
-                n.active_prefills for n in prefill_nodes
-            ) / len(prefill_nodes)
-        if decode_nodes:
-            self._stats.decode_node_utilization = sum(
-                n.active_decodes for n in decode_nodes
-            ) / len(decode_nodes)
+            if prefill_nodes:
+                self._stats.prefill_node_utilization = sum(
+                    n.active_prefills for n in prefill_nodes
+                ) / len(prefill_nodes)
+            if decode_nodes:
+                self._stats.decode_node_utilization = sum(
+                    n.active_decodes for n in decode_nodes
+                ) / len(decode_nodes)
 
     def get_stats(self) -> dict[str, Any]:
         """Return disaggregated serving statistics."""

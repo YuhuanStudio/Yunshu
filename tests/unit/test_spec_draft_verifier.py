@@ -461,8 +461,8 @@ class TestVerifyWithLastToken:
         assert result.bonus_token == 99  # Model's pick at rejection position 1
         assert result.rejection_position == 1
         assert result.rejected_count == 2
-        # Cache: trimmed 1 (rollback) + 2 (rejected drafts)
-        assert result.cache_trimmed == 2
+        # Cache: trimmed rejected_count - 1 (rollback already removed 1)
+        assert result.cache_trimmed == 1
 
     def test_total_mismatch(self):
         """First draft doesn't match — 0 accepted + bonus."""
@@ -479,7 +479,7 @@ class TestVerifyWithLastToken:
         assert result.bonus_token == 99
         assert result.rejection_position == 0
         assert result.rejected_count == 3
-        assert result.cache_trimmed == 3
+        assert result.cache_trimmed == 2  # rejected_count - 1 (rollback already removed 1)
 
     def test_single_draft_accepted(self):
         """K=1 draft that matches — 1 accepted + bonus from position 1."""
@@ -510,7 +510,7 @@ class TestVerifyWithLastToken:
         assert result.accepted_count == 0
         assert result.bonus_token == 99
         assert result.rejection_position == 0
-        assert result.cache_trimmed == 1
+        assert result.cache_trimmed == 0  # rejected_count-1 = 0, rollback already trimmed 1
 
     def test_empty_drafts(self):
         """Empty draft list — nothing to verify."""
@@ -557,7 +557,7 @@ class TestVerifyWithLastToken:
         )
 
         assert result.accepted_count == 1
-        assert result.cache_trimmed == 2
+        assert result.cache_trimmed == 1  # rejected_count-1 = 2-1 = 1
 
 
 # ── Sampler-based verification tests ──

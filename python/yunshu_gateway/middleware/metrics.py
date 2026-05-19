@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
 
+from fastapi import HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -222,12 +223,45 @@ def get_metrics() -> _Metrics:
     return _metrics
 
 
+def _check_metrics_auth(request: Request) -> None:
+    """Validate auth on the /metrics endpoint.
+
+    Follows the same deny-by-default pattern as monitoring._check_permission:
+    if YUNSHU_AUTH_TOKEN is set, the request must present it as a Bearer token.
+    If auth is disabled or no token is configured, access is allowed (backward
+    compatibility for Prometheus scrapers that don't send auth headers).
+    """
+    import hmac
+    import os
+
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+    auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
+    if not auth_token:
+        return  # No auth configured — allow for scraper compatibility
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = auth_header[7:]
+    if not hmac.compare_digest(token, auth_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """Collect request metrics for Prometheus."""
 
     async def dispatch(self, request: Request, call_next):
         # Serve metrics endpoint
         if request.url.path == "/metrics":
+            _check_metrics_auth(request)
             parts = [_metrics.to_prometheus()]
             # Append Prometheus exporter gauges (engine-level metrics)
             try:
@@ -240,31 +274,32 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                     engines = []
                     engine = get_engine()
                     if engine and hasattr(engine, 'is_loaded') and engine.is_loaded:
-                        engines.append(engine)
+                        engines.append(("default", engine))
                     manager = get_model_manager()
                     if manager:
                         for entry in manager.list_entries():
                             if entry.is_loaded and entry.engine:
-                                engines.append(entry.engine)
-                    for eng in engines:
+                                engines.append((entry.model_id, entry.engine))
+                    for mid, eng in engines:
+                        ml = {"model_id": mid}
                         if isinstance(eng, BatchedEngine):
                             radix_stats = eng.get_radix_tree_stats()
                             ev = radix_stats.get("eviction_stats", {})
-                            pm.set_gauge("radix_evictions_lru", ev.get("lru", 0))
-                            pm.set_gauge("radix_evictions_lfu", ev.get("lfu", 0))
-                            pm.set_gauge("radix_evictions_fifo", ev.get("fifo", 0))
-                            pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0))
-                            pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0))
-                            pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0))
+                            pm.set_gauge("radix_evictions_lru", ev.get("lru", 0), labels=ml)
+                            pm.set_gauge("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
+                            pm.set_gauge("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
+                            pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
+                            pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
+                            pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
                             # Scheduler monitoring gauges from engine_core
                             try:
                                 core = getattr(eng, '_engine_core', None)
                                 if core is not None:
-                                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
-                                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
+                                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
+                                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
                                     pm.set_gauge("compute_utilization_pct",
-                                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0)
-                                    pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0))
+                                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
+                                    pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
                             except Exception:
                                 logger.debug("scheduler monitoring gauge population failed", exc_info=True)
                 except Exception:

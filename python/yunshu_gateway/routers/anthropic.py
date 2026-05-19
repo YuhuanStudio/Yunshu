@@ -1081,7 +1081,8 @@ async def _stream_anthropic(
                                 break
 
                     if _stop_matched_this_token:
-                        output_tokens -= 1  # Don't count stop-triggering token
+                        if output_tokens > 0:
+                            output_tokens -= 1  # Don't count stop-triggering token
                         # Emit only the safe portion of the current token
                         _safe_len = len(accumulated_text) - _prev_len
                         if _safe_len > 0:
@@ -1205,7 +1206,8 @@ async def _stream_anthropic(
                                 break
 
                     if _stop_matched_this_token:
-                        output_tokens -= 1  # Don't count stop-triggering token
+                        if output_tokens > 0:
+                            output_tokens -= 1  # Don't count stop-triggering token
                         # Emit only the safe portion of the current token
                         _safe_len = len(accumulated_text) - _prev_len
                         if _safe_len > 0:

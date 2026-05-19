@@ -6,11 +6,11 @@ yunshu_api/routers/monitoring.py — these are for real-time gateway
 observability by operators and Prometheus scraping.
 
 Security: All monitoring endpoints require authentication (deny-by-default).
-The /prometheus endpoint is exempt for scraper compatibility.
 Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true for access.
 """
 
 
+import hmac
 import logging
 import os
 import platform
@@ -31,21 +31,42 @@ router = APIRouter(prefix="/gw/monitoring", tags=["monitoring"])
 def _check_permission(request: Request) -> None:
     """Check auth on monitoring endpoints (deny-by-default).
 
-    Monitoring endpoints expose system internals (GPU memory, model stats,
-    request details) that should not be publicly accessible.
+    Validates Bearer token against YUNSHU_AUTH_TOKEN using constant-time
+    comparison to prevent timing attacks.  Follows the same pattern as
+    cancel.py._check_auth.
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
+    # RBAC key set by TenantAuthMiddleware (ys_-prefixed API keys).
     rbac_key = getattr(request.state, "rbac_key", None)
     if rbac_key is not None:
-        return  # Authenticated via RBAC
+        return
+    # Tenant set by TenantAuthMiddleware for static tokens.
+    tenant = getattr(request.state, "tenant", None)
+    if tenant is not None:
+        return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
-    if auth_token is not None and auth_token:
-        return  # Static token auth
-    raise HTTPException(
-        status_code=401,
-        detail="Monitoring requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
-    )
+    if not auth_token:
+        # No auth configured — deny access.
+        raise HTTPException(
+            status_code=401,
+            detail="Monitoring requires authentication. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
+        )
+    # Validate the request actually presents the correct token.
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = auth_header[7:]
+    if not hmac.compare_digest(token, auth_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def _collect_engines(default_engine, model_manager) -> list[tuple[str, Any]]:
@@ -289,63 +310,67 @@ async def requests_stats(
 
 
 @router.get("/prometheus", response_class=PlainTextResponse)
-async def prometheus_export() -> str:
+async def prometheus_export(request: Request) -> str:
     """Full Prometheus exposition-format output with live engine stats."""
+    _check_permission(request)
     pm = get_prometheus_metrics()
 
-    # Refresh spec decode stats into Prometheus gauges
+    # Refresh spec decode stats into Prometheus gauges (with model_id labels
+    # to prevent multi-model gauge overwrite — last-model-wins was a bug).
     from ..engine import get_model_manager, get_engine
     from yunshu_engine.batched_engine import BatchedEngine
     manager = get_model_manager()
     if manager is not None:
         for entry in manager.list_entries():
             if entry.is_loaded and isinstance(getattr(entry, 'engine', None), BatchedEngine):
+                mid = entry.model_id
+                ml = {"model_id": mid}  # model_id label for multi-model safety
                 ngram_stats = getattr(entry.engine, '_ngram_stats', {})
-                pm.set_gauge("spec_ngram_proposals", ngram_stats.get("proposals", 0))
-                pm.set_gauge("spec_ngram_accepted", ngram_stats.get("accepted", 0))
-                pm.set_gauge("spec_ngram_draft", ngram_stats.get("total_draft", 0))
+                pm.set_gauge("spec_ngram_proposals", ngram_stats.get("proposals", 0), labels=ml)
+                pm.set_gauge("spec_ngram_accepted", ngram_stats.get("accepted", 0), labels=ml)
+                pm.set_gauge("spec_ngram_draft", ngram_stats.get("total_draft", 0), labels=ml)
                 spec_enabled = getattr(entry.engine, '_spec_enabled', False)
                 ngram_proposer = getattr(entry.engine, '_ngram_proposer', None)
                 pm.set_gauge("spec_enabled",
-                    1 if (spec_enabled or ngram_proposer is not None) else 0)
+                    1 if (spec_enabled or ngram_proposer is not None) else 0, labels=ml)
 
                 # Cross-model speculative decoder stats (SpeculativeDecoder._stats)
                 spec_decoder = getattr(entry.engine, '_spec_decoder', None)
                 if spec_decoder is not None:
                     sd_stats = spec_decoder.get_stats()
-                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0))
-                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0))
-                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0))
-                    pm.set_gauge("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0))
-                    pm.set_gauge("spec_effective_speedup", sd_stats.get("effective_speedup", 0.0))
+                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
+                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
+                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0), labels=ml)
+                    pm.set_gauge("spec_bonus_tokens", sd_stats.get("total_bonus_tokens", 0), labels=ml)
+                    pm.set_gauge("spec_effective_speedup", sd_stats.get("effective_speedup", 0.0), labels=ml)
                 else:
-                    pm.set_gauge("spec_draft_tokens", 0)
-                    pm.set_gauge("spec_accepted_tokens", 0)
-                    pm.set_gauge("spec_acceptance_rate", 0.0)
-                    pm.set_gauge("spec_bonus_tokens", 0)
-                    pm.set_gauge("spec_effective_speedup", 0.0)
+                    pm.set_gauge("spec_draft_tokens", 0, labels=ml)
+                    pm.set_gauge("spec_accepted_tokens", 0, labels=ml)
+                    pm.set_gauge("spec_acceptance_rate", 0.0, labels=ml)
+                    pm.set_gauge("spec_bonus_tokens", 0, labels=ml)
+                    pm.set_gauge("spec_effective_speedup", 0.0, labels=ml)
 
                 # MTP speculative decoding stats
                 mtp_decoder = getattr(entry.engine, '_mtp_decoder', None)
                 if mtp_decoder is not None and hasattr(mtp_decoder, 'stats'):
                     ms = mtp_decoder.stats
                     mtp_total = ms.accepts + ms.rejects
-                    pm.set_gauge("spec_mtp_accepts", ms.accepts)
-                    pm.set_gauge("spec_mtp_rejects", ms.rejects)
+                    pm.set_gauge("spec_mtp_accepts", ms.accepts, labels=ml)
+                    pm.set_gauge("spec_mtp_rejects", ms.rejects, labels=ml)
                     pm.set_gauge("spec_mtp_acceptance_rate",
-                        ms.accepts / mtp_total if mtp_total > 0 else 0.0)
+                        ms.accepts / mtp_total if mtp_total > 0 else 0.0, labels=ml)
                 else:
-                    pm.set_gauge("spec_mtp_accepts", 0)
-                    pm.set_gauge("spec_mtp_rejects", 0)
-                    pm.set_gauge("spec_mtp_acceptance_rate", 0.0)
+                    pm.set_gauge("spec_mtp_accepts", 0, labels=ml)
+                    pm.set_gauge("spec_mtp_rejects", 0, labels=ml)
+                    pm.set_gauge("spec_mtp_acceptance_rate", 0.0, labels=ml)
 
                 # ITL stats from ServerMetrics
                 try:
                     from yunshu_engine.server_metrics import get_server_metrics
                     sm = get_server_metrics()
                     itl = sm.get_itl_stats()
-                    pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0))
-                    pm.set_gauge("itl_p99_ms", itl.get("itl_p99_ms", 0))
+                    pm.set_gauge("itl_p50_ms", itl.get("itl_p50_ms", 0), labels=ml)
+                    pm.set_gauge("itl_p99_ms", itl.get("itl_p99_ms", 0), labels=ml)
                 except Exception:
                     logger.debug("ITL gauge population failed", exc_info=True)
 
@@ -354,14 +379,14 @@ async def prometheus_export() -> str:
                     kv_stats = entry.engine.get_kv_cache_stats()
                     paged = kv_stats.get("paged_kv", {})
                     if paged.get("enabled"):
-                        pm.set_gauge("kv_cache_blocks_used", paged.get("used_blocks", 0))
-                        pm.set_gauge("kv_cache_blocks_total", paged.get("total_blocks", 0))
+                        pm.set_gauge("kv_cache_blocks_used", paged.get("used_blocks", 0), labels=ml)
+                        pm.set_gauge("kv_cache_blocks_total", paged.get("total_blocks", 0), labels=ml)
                     # KV prefix cache gauges
                     prefix = kv_stats.get("prefix_cache", {})
                     if prefix:
-                        pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0))
-                        pm.set_gauge("kv_prefix_cache_hits", prefix.get("hits", 0))
-                        pm.set_gauge("kv_prefix_cache_misses", prefix.get("misses", 0))
+                        pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0), labels=ml)
+                        pm.set_gauge("kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml)
+                        pm.set_gauge("kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml)
                 except Exception:
                     logger.debug("KV cache gauge population failed", exc_info=True)
 
@@ -369,13 +394,14 @@ async def prometheus_export() -> str:
                 try:
                     radix_stats = entry.engine.get_radix_tree_stats()
                     if radix_stats.get("enabled"):
-                        pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0))
-                        pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0))
-                        evictions = radix_stats.get("evictions", {})
-                        pm.set_gauge("radix_evictions_lru", evictions.get("lru", 0))
-                        pm.set_gauge("radix_evictions_lfu", evictions.get("lfu", 0))
-                        pm.set_gauge("radix_evictions_fifo", evictions.get("fifo", 0))
-                        pm.set_gauge("radix_evictions_freed_blocks", radix_stats.get("freed_blocks", 0))
+                        pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
+                        pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
+                        # RadixTree.get_stats() returns "eviction_stats" (not "evictions")
+                        ev = radix_stats.get("eviction_stats", {})
+                        pm.set_gauge("radix_evictions_lru", ev.get("lru", 0), labels=ml)
+                        pm.set_gauge("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
+                        pm.set_gauge("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
+                        pm.set_gauge("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
                 except Exception:
                     logger.debug("RadixTree gauge population failed", exc_info=True)
 
@@ -383,11 +409,11 @@ async def prometheus_export() -> str:
                 try:
                     core = getattr(entry.engine, '_engine_core', None)
                     if core is not None:
-                        pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
-                        pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
+                        pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
+                        pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
                         pm.set_gauge("compute_utilization_pct",
-                            core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0)
-                        pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0))
+                            core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
+                        pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
                 except Exception:
                     logger.debug("scheduler monitoring gauge population failed", exc_info=True)
 
@@ -398,27 +424,29 @@ async def prometheus_export() -> str:
                         tracker = getattr(getattr(core, 'scheduler', None), '_attention_score_tracker', None)
                         if tracker is not None:
                             at_stats = tracker.get_stats()
-                            pm.set_gauge("attention_eviction_tracked_requests", at_stats.get("tracked_requests", 0))
-                            pm.set_gauge("attention_eviction_total_blocks", at_stats.get("total_blocks", 0))
+                            pm.set_gauge("attention_eviction_tracked_requests", at_stats.get("tracked_requests", 0), labels=ml)
+                            pm.set_gauge("attention_eviction_total_blocks", at_stats.get("total_blocks", 0), labels=ml)
                 except Exception:
                     logger.debug("attention eviction gauge population failed", exc_info=True)
     else:
         # Single-model mode: refresh gauges from the default engine
         engine = get_engine()
         if isinstance(engine, BatchedEngine):
+            mid = getattr(engine, 'model_name', 'default')
+            ml = {"model_id": mid}
             try:
                 spec_decoder = getattr(engine, '_spec_decoder', None)
                 if spec_decoder is not None:
                     sd_stats = spec_decoder.get_stats()
-                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0))
-                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0))
-                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0))
+                    pm.set_gauge("spec_draft_tokens", sd_stats.get("total_draft_tokens", 0), labels=ml)
+                    pm.set_gauge("spec_accepted_tokens", sd_stats.get("total_accepted_tokens", 0), labels=ml)
+                    pm.set_gauge("spec_acceptance_rate", sd_stats.get("acceptance_rate", 0.0), labels=ml)
                 core = getattr(engine, '_engine_core', None)
                 if core is not None:
-                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0))
-                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0))
+                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
+                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
                     pm.set_gauge("compute_utilization_pct",
-                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0)
+                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
             except Exception:
                 logger.debug("single-engine gauge population failed", exc_info=True)
 

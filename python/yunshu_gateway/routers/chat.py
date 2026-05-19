@@ -1484,10 +1484,12 @@ async def _stream_vlm_response(
         # Record metrics for VLM streaming path
         if vlm_prompt_tok > 0 or vlm_completion_tok > 0:
             _record_metrics(vlm_prompt_tok, vlm_completion_tok)
+        metrics_recorded = True
 
         yield format_openai_done()
         done_emitted = True
     done_emitted = False
+    metrics_recorded = False
     try:
       async for event in with_sse_keepalive(
           _token_source(),
@@ -1516,7 +1518,7 @@ async def _stream_vlm_response(
           except Exception:
               pass
       # Fallback metrics recording if generator raised before completing
-      if vlm_prompt_tok > 0 or vlm_completion_tok > 0:
+      if not metrics_recorded and (vlm_prompt_tok > 0 or vlm_completion_tok > 0):
           try:
               _record_metrics(vlm_prompt_tok, vlm_completion_tok)
           except Exception:
@@ -1646,6 +1648,8 @@ async def _stream_response_multi(
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
+                        yield format_openai_done()
+                        done_emitted = True
                         return
                     if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                         total_prompt_tok = output.prompt_tokens
@@ -1742,6 +1746,8 @@ async def _stream_response_multi(
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
+                        yield format_openai_done()
+                        done_emitted = True
                         return
                     if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                         total_prompt_tok = output.prompt_tokens

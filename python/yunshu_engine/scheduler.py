@@ -1039,8 +1039,7 @@ class Scheduler:
     def add_request(self, request: Request) -> None:
         """Add request to waiting queue (called from event loop thread)."""
         if len(self.waiting) >= self.config.max_waiting_requests:
-            request.status = RequestStatus.FINISHED_ERROR
-            request.finish_reason = "queue_full"
+            request.set_finished(RequestStatus.FINISHED_ERROR, reason="queue_full")
             logger.warning(
                 f"Rejecting request {request.request_id}: waiting queue full "
                 f"({len(self.waiting)}/{self.config.max_waiting_requests})"
@@ -2069,8 +2068,11 @@ class Scheduler:
                             self._batch_gen.remove([uid])
                         except Exception:
                             logger.debug("batch gen remove for timeout abort failed", exc_info=True)
-                    # Clean up per-request state
-                    self._pop_pending_prefill(req_id)
+                    # Clean up per-request state — pop _pending_prefill directly
+                    # (NOT _pop_pending_prefill) to avoid double-decrementing
+                    # _active_partial_prefills.  The cleanup loop at the bottom of
+                    # this method handles the single decrement for errored_ids.
+                    self._pending_prefill.pop(req_id, None)
                     for cleanup_dict in (
                         self._detokenizers, self._thinking_processors,
                         self._thinking_state, self._chunked_prefill_fairness,
@@ -2917,6 +2919,18 @@ class Scheduler:
             except Exception:
                 logger.debug("batch_gen.remove failed in cleanup_finished", exc_info=True)
 
+        # Clear _uids_to_remove to prevent double-removal at the start of the
+        # next step().  _process_responses appends finished UIDs to
+        # _uids_to_remove so that the inner decode loop (step 6) skips them,
+        # but _cleanup_finished removes those same UIDs from the BatchGenerator
+        # right here.  Without this clear, the next step's preamble would try
+        # to remove them a second time.
+        if uids_to_remove and self._uids_to_remove:
+            removed_set = set(uids_to_remove)
+            self._uids_to_remove = [
+                u for u in self._uids_to_remove if u not in removed_set
+            ]
+
     def _create_detokenizer(self):
         if self.tokenizer is None:
             return None
@@ -3055,9 +3069,11 @@ class Scheduler:
         return failed
 
     def remove_finished_request(self, request_id: str) -> None:
-        self.requests.pop(request_id, None)
+        req = self.requests.pop(request_id, None)
         self.finished_ids.discard(request_id)
         self._kv_prefix_hashes.pop(request_id, None)
+        if req is not None:
+            req.release_resources()
 
     def _try_init_spec_decoder(self) -> None:
         """Try to initialize speculative decoding by detecting spec heads in the model.

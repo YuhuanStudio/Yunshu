@@ -1044,6 +1044,9 @@ class EngineCore:
             self._finished_events[req_id].set()
             return req_id
 
+        # Save original prompt before any transformation for message-level truncation
+        _original_prompt = prompt
+
         # Apply per-request LoRA adapter (acquire ref before generation, release after)
         loaded_lora = None
         if lora_adapter:
@@ -1144,22 +1147,62 @@ class EngineCore:
         if max_seq_len > 0 and num_prompt_tokens + max_tokens > max_seq_len:
             excess = num_prompt_tokens + max_tokens - max_seq_len
             if excess > 0 and num_prompt_tokens > excess:
-                token_ids = token_ids[excess:]
-                num_prompt_tokens = len(token_ids)
-                # Keep prompt in sync with truncated token_ids so downstream
-                # consumers see the correct truncated content.
-                try:
-                    prompt = self._tokenizer.decode(token_ids)
-                except Exception:
-                    prompt = token_ids
-                # Record truncation via ContextWindowManager
-                if self._context_window_mgr is not None:
-                    self._context_window_mgr._stats.truncations_applied += 1
-                    self._context_window_mgr._stats.total_tokens_saved += excess
-                logger.info(
-                    f"Context window truncation: {excess} tokens removed from prompt "
-                    f"(max_seq_len={max_seq_len})"
-                )
+                # Prefer message-level truncation when we still have the
+                # original messages — it preserves system/developer messages
+                # and keeps tool-call/response pairs intact.
+                truncated_messages = None
+                if isinstance(_original_prompt, list) and _original_prompt and isinstance(_original_prompt[0], dict):
+                    try:
+                        trunc_result = self._context_window_mgr.compute_truncation(
+                            messages=_original_prompt,
+                            max_tokens=max_seq_len - max_tokens,
+                            strategy="importance_aware",
+                        )
+                        truncated_messages = trunc_result.messages
+                    except Exception:
+                        logger.debug("message-level truncation failed, falling back to token-level", exc_info=True)
+
+                if truncated_messages is not None:
+                    # Re-encode the truncated messages
+                    try:
+                        text = self._messages_to_text(truncated_messages, enable_thinking)
+                        token_ids = self._tokenizer.encode(text)
+                        num_prompt_tokens = len(token_ids)
+                        prompt = truncated_messages
+                        logger.info(
+                            f"Context window truncation (message-level): "
+                            f"{num_prompt_tokens} tokens remaining "
+                            f"(max_seq_len={max_seq_len})"
+                        )
+                    except Exception:
+                        # Fallback to token-level truncation
+                        logger.debug("re-encoding truncated messages failed, falling back to token-level", exc_info=True)
+                        token_ids = token_ids[excess:]
+                        num_prompt_tokens = len(token_ids)
+                        try:
+                            prompt = self._tokenizer.decode(token_ids)
+                        except Exception:
+                            prompt = token_ids
+                        logger.info(
+                            f"Context window truncation (token-level): {excess} tokens removed "
+                            f"(max_seq_len={max_seq_len})"
+                        )
+                else:
+                    # Token-level fallback for string prompts or when message-level fails
+                    token_ids = token_ids[excess:]
+                    num_prompt_tokens = len(token_ids)
+                    try:
+                        prompt = self._tokenizer.decode(token_ids)
+                    except Exception:
+                        prompt = token_ids
+                    # Record truncation via ContextWindowManager
+                    if self._context_window_mgr is not None:
+                        self._context_window_mgr._stats.truncations_applied += 1
+                        self._context_window_mgr._stats.total_tokens_saved += excess
+                    logger.info(
+                        f"Context window truncation (token-level): {excess} tokens removed "
+                        f"(max_seq_len={max_seq_len})"
+                    )
             elif excess > 0 and num_prompt_tokens <= excess:
                 # Prompt alone exceeds the context window — truncation would
                 # consume the entire prompt.  Return an error immediately so

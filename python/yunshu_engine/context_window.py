@@ -447,23 +447,35 @@ class ContextWindowManager:
 
     # ── Helpers ──
 
+    # Estimated token cost for non-text content blocks (images, video frames).
+    # Real models use 256–1024 tokens per image; we use a conservative 128.
+    _IMAGE_TOKEN_ESTIMATE = 128
+
     def _count_messages_tokens(self, messages: list[dict]) -> int:
         """Count total tokens in a list of messages.
 
         Includes tool_calls in assistant messages and tool_call_id/name
         in tool role messages for accurate multi-turn token estimation.
+        Handles multimodal content (image/video blocks) and None content.
         """
         import json as _json
 
         total = 0
         for msg in messages:
             content = msg.get("content", "")
-            if isinstance(content, str):
+            if content is None:
+                # Message with null content — still has role overhead
+                total += 0
+            elif isinstance(content, str):
                 total += self._token_counter(content)
             elif isinstance(content, list):
                 # Multimodal content blocks
                 for block in content:
                     if isinstance(block, dict):
+                        block_type = block.get("type", "")
+                        if block_type in ("image_url", "image", "video", "video_url"):
+                            # Image/video blocks cost hundreds of tokens in practice
+                            total += self._IMAGE_TOKEN_ESTIMATE
                         text = block.get("text", "")
                         total += self._token_counter(text)
                     elif isinstance(block, str):

@@ -100,14 +100,26 @@ class RTTAwareRouter:
 
     def add_node(self, node_id: str, max_requests: int = 32) -> None:
         with self._lock:
-            self._nodes[node_id] = NodeRTT(
-                node_id=node_id,
-                max_requests=max_requests,
-            )
+            existing = self._nodes.get(node_id)
+            if existing:
+                # Preserve active_requests from previous registration to
+                # avoid load-counter leaks from in-flight requests.
+                existing.max_requests = max_requests
+            else:
+                self._nodes[node_id] = NodeRTT(
+                    node_id=node_id,
+                    max_requests=max_requests,
+                )
 
     def remove_node(self, node_id: str) -> None:
         with self._lock:
-            self._nodes.pop(node_id, None)
+            node = self._nodes.pop(node_id, None)
+            if node and node.active_requests > 0:
+                logger.warning(
+                    "Removing node %s with %d active requests — "
+                    "counters will be lost",
+                    node_id, node.active_requests,
+                )
 
     def record_rtt(self, node_id: str, rtt_ms: float) -> None:
         """Record an RTT measurement for a node."""

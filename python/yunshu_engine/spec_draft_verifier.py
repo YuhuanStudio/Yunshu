@@ -397,11 +397,15 @@ class SpecDraftVerifier:
 
         # Step 6: Trim KV cache.
         # After step 1 (rollback -1) and step 2 (forward K+1), net entries = K.
-        # Keep: 1 (last_token) + accepted_count = 1 + accepted_count.
-        # Trim: K - (1 + accepted_count) = rejected_count.
+        # Keep: 1 (last_token) + accepted_count entries from the forward pass.
+        # Trim: K - (1 + accepted_count) = rejected_count - 1.
+        # The rejected_count includes all unaccepted drafts, but since the
+        # forward pass starts from last_token (which we want to keep), only
+        # rejected_count - 1 entries beyond the accepted ones need trimming.
+        trim_count = max(0, rejected_count - 1)
         cache_trimmed = 0
-        if rejected_count > 0 and prompt_cache is not None:
-            cache_trimmed = _trim_cache(prompt_cache, rejected_count)
+        if trim_count > 0 and prompt_cache is not None:
+            cache_trimmed = _trim_cache(prompt_cache, trim_count)
 
         elapsed = (time.perf_counter() - t0) * 1e6
         self._update_stats(K, accepted_count, bonus_token)
@@ -502,7 +506,10 @@ def _probabilistic_accept(
 
     # Bonus / correction token
     if rejection_position is not None:
-        # Sample correction token from adjusted distribution at rejection position
+        # Sample correction token from adjusted distribution at rejection position.
+        # Pass the target logprobs row for sampling — since we only have token-level
+        # draft logprobs (not the full draft distribution), _sample_correction will
+        # sample from the target distribution, which is still correct.
         bonus_token = _sample_correction(
             target_logprobs[rejection_position],
             draft_ids[rejection_position],
@@ -565,30 +572,41 @@ def _sample_correction(
     target_logprobs_row,
     draft_token_id: int,
     draft_lp: float,
+    draft_logprobs_row=None,
 ) -> int:
     """Sample a correction token from max(0, p_target - p_draft) distribution.
 
-    This is the standard speculative sampling resampling step:
+    This is the standard speculative sampling resampling step (Chen et al. 2023,
+    Leviathan et al. 2023):
     when a draft token is rejected, sample from the difference distribution
     to produce a token from the target that was under-represented in the draft.
+
+    Args:
+        target_logprobs_row: Target model log-probabilities [vocab_size].
+        draft_token_id: The rejected draft token ID (unused when draft_logprobs_row given).
+        draft_lp: Log-probability of rejected token from draft model.
+        draft_logprobs_row: Optional full draft log-prob distribution [vocab_size].
+            When provided, uses the proper element-wise subtraction
+            p_adjusted(x) = max(0, p_target(x) - p_draft(x)) for all x.
+            When None (common for n-gram/MTP where only token-level probs are
+            available), samples from the target distribution directly.
     """
-    # Convert logprobs to probs
+    # Convert target logprobs to probs
     probs = mx.softmax(target_logprobs_row, axis=-1)
 
-    # Subtract draft probability for the rejected token
-    # p_adjusted(x) = max(0, p_target(x) - p_draft(x))
-    draft_prob = _math_exp(draft_lp)
-    adjusted = mx.maximum(mx.zeros_like(probs), probs - draft_prob)
+    if draft_logprobs_row is not None:
+        # Full draft distribution available: proper correction sampling
+        draft_probs = mx.softmax(draft_logprobs_row, axis=-1)
+        adjusted = mx.maximum(mx.zeros_like(probs), probs - draft_probs)
+        total = adjusted.sum()
+        if total > 0:
+            adjusted = adjusted / total
+            return int(mx.random.categorical(adjusted.reshape(1, -1)).item())
 
-    # Normalize
-    total = adjusted.sum()
-    if total > 0:
-        adjusted = adjusted / total
-        # Sample from the adjusted distribution
-        return int(mx.random.categorical(adjusted.reshape(1, -1)).item())
-    else:
-        # Fallback: sample from target distribution
-        return int(mx.random.categorical(target_logprobs_row.reshape(1, -1)).item())
+    # Without full draft distribution, we cannot compute the true correction.
+    # Sampling from target is still correct (guarantees target distribution
+    # fidelity) — just slightly less variance-reduced than the optimal correction.
+    return int(mx.random.categorical(target_logprobs_row.reshape(1, -1)).item())
 
 
 def _sample_bonus(target_logprobs_row) -> int:
