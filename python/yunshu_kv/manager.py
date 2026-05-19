@@ -268,6 +268,9 @@ class KVCacheManager:
                     matched_blocks.append(new_block)
                     matched_hashes.append(h)
                     continue
+                # Promotion failed (warm tier entry evicted between contains()
+                # and promote()) — free the allocated block to prevent a leak.
+                self.block_pool.free([new_block])
                 break
             else:
                 break  # chain hash: once we miss, all subsequent miss

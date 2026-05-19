@@ -257,7 +257,7 @@ class MemoryAwareScheduler:
             if projected_util >= self._pressure_threshold:
                 # Admit this one but pause further admissions
                 self._is_paused = True
-                self._paused_since = time.time()
+                self._paused_since = time.monotonic()
                 self._stats.pressure_pauses += 1
                 self._stats.is_paused = True
                 logger.warning(
@@ -313,7 +313,7 @@ class MemoryAwareScheduler:
                 request_id=request_id,
                 reserved_bytes=num_bytes,
                 num_tokens=num_tokens,
-                timestamp=time.time(),
+                timestamp=time.monotonic(),
                 model_name=model_name,
             )
             self._reservations[request_id] = entry
