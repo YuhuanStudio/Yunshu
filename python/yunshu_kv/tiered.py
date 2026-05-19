@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,6 +75,10 @@ class SSDCacheStore:
         self._index: dict[int, SSDCacheEntry] = {}
         self._current_size_bytes: int = 0
         self._next_block_index: int = 0
+        # Lock protects index lookups + file reads/writes from concurrent
+        # eviction.  Without it, _evict_lru() can unlink a block file
+        # between load()'s index lookup and file read (TOCTOU race).
+        self._lock = threading.Lock()
 
         # Load existing index
         self._load_index()
@@ -144,96 +149,114 @@ class SSDCacheStore:
 
     def store(self, block_hash: int, kv_data: mx.array, num_tokens: int) -> bool:
         """Store a KV block to SSD. Returns True if stored successfully."""
-        if self._current_size_bytes >= self.max_size_bytes:
-            self._evict_lru()
+        with self._lock:
             if self._current_size_bytes >= self.max_size_bytes:
-                return False  # Cannot free enough space
+                self._evict_lru_locked()
+                if self._current_size_bytes >= self.max_size_bytes:
+                    return False  # Cannot free enough space
 
-        if block_hash in self._index:
-            # Already stored — just update access time
-            self._index[block_hash].last_access = time.monotonic()
+            if block_hash in self._index:
+                # Already stored — just update access time
+                self._index[block_hash].last_access = time.monotonic()
+                return True
+
+            # Serialize KV data to bytes with shape metadata
+            try:
+                import numpy as np
+                data_mx = mx.array(kv_data).astype(mx.float16)
+                numpy_data = np.array(data_mx)
+                shape = numpy_data.shape
+                raw_bytes = numpy_data.tobytes()
+            except Exception as e:
+                logger.warning(f"Failed to serialize KV block: {e}")
+                return False
+
+            block_index = self._next_block_index
+            self._next_block_index += 1
+
+            try:
+                import zlib
+                crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
+                with open(self._block_path(block_index), "wb") as f:
+                    # Header: ndim (4 bytes) + shape values (4 bytes each) + CRC32
+                    f.write(struct.pack("<I", len(shape)))
+                    for dim in shape:
+                        f.write(struct.pack("<I", dim))
+                    f.write(struct.pack("<I", crc))
+                    f.write(raw_bytes)
+            except OSError as e:
+                logger.warning(f"Failed to write SSD cache block: {e}")
+                return False
+
+            header_size = 4 + 4 * len(shape) + 4  # ndim + shape dims + CRC32
+            entry = SSDCacheEntry(
+                block_hash=block_hash,
+                block_index=block_index,
+                num_tokens=num_tokens,
+                size_bytes=header_size + len(raw_bytes),
+                last_access=time.monotonic(),
+            )
+            self._index[block_hash] = entry
+            self._current_size_bytes += entry.size_bytes
             return True
 
-        # Serialize KV data to bytes with shape metadata
-        try:
-            import numpy as np
-            data_mx = mx.array(kv_data).astype(mx.float16)
-            numpy_data = np.array(data_mx)
-            shape = numpy_data.shape
-            raw_bytes = numpy_data.tobytes()
-        except Exception as e:
-            logger.warning(f"Failed to serialize KV block: {e}")
-            return False
-
-        block_index = self._next_block_index
-        self._next_block_index += 1
-
-        try:
-            import zlib
-            crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
-            with open(self._block_path(block_index), "wb") as f:
-                # Header: ndim (4 bytes) + shape values (4 bytes each) + CRC32
-                f.write(struct.pack("<I", len(shape)))
-                for dim in shape:
-                    f.write(struct.pack("<I", dim))
-                f.write(struct.pack("<I", crc))
-                f.write(raw_bytes)
-        except OSError as e:
-            logger.warning(f"Failed to write SSD cache block: {e}")
-            return False
-
-        header_size = 4 + 4 * len(shape) + 4  # ndim + shape dims + CRC32
-        entry = SSDCacheEntry(
-            block_hash=block_hash,
-            block_index=block_index,
-            num_tokens=num_tokens,
-            size_bytes=header_size + len(raw_bytes),
-            last_access=time.monotonic(),
-        )
-        self._index[block_hash] = entry
-        self._current_size_bytes += entry.size_bytes
-        return True
-
     def load(self, block_hash: int) -> Optional[mx.array]:
-        """Load a KV block from SSD. Returns None if not found."""
-        entry = self._index.get(block_hash)
-        if entry is None:
-            return None
+        """Load a KV block from SSD. Returns None if not found.
 
-        path = self._block_path(entry.block_index)
-        if not path.exists():
-            self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
-            del self._index[block_hash]
-            return None
+        Holds _lock throughout index lookup + file read to prevent
+        _evict_lru() from deleting the file between the two operations.
+        """
+        with self._lock:
+            entry = self._index.get(block_hash)
+            if entry is None:
+                return None
 
-        try:
-            with open(path, "rb") as f:
-                ndim = struct.unpack("<I", f.read(4))[0]
-                shape = tuple(struct.unpack("<I", f.read(4))[0] for _ in range(ndim))
-                stored_crc = struct.unpack("<I", f.read(4))[0]
-                raw_bytes = f.read()
-            import zlib
-            actual_crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
-            if stored_crc != actual_crc:
-                logger.warning(
-                    "CRC mismatch for SSD block 0x%x (stored=%08x actual=%08x), discarding",
-                    block_hash, stored_crc, actual_crc,
-                )
+            path = self._block_path(entry.block_index)
+            if not path.exists():
                 self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
                 del self._index[block_hash]
                 return None
-            import numpy as np
-            numpy_data = np.frombuffer(raw_bytes, dtype=np.float16).copy().reshape(shape)
-            return mx.array(numpy_data)
-        except Exception as e:
-            logger.warning(f"Failed to load SSD cache block: {e}")
-            return None
+
+            try:
+                with open(path, "rb") as f:
+                    ndim = struct.unpack("<I", f.read(4))[0]
+                    shape = tuple(struct.unpack("<I", f.read(4))[0] for _ in range(ndim))
+                    stored_crc = struct.unpack("<I", f.read(4))[0]
+                    raw_bytes = f.read()
+                import zlib
+                actual_crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
+                if stored_crc != actual_crc:
+                    logger.warning(
+                        "CRC mismatch for SSD block 0x%x (stored=%08x actual=%08x), discarding",
+                        block_hash, stored_crc, actual_crc,
+                    )
+                    self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                    del self._index[block_hash]
+                    return None
+                import numpy as np
+                numpy_data = np.frombuffer(raw_bytes, dtype=np.float16).copy().reshape(shape)
+                return mx.array(numpy_data)
+            except FileNotFoundError:
+                # Race: file was deleted after existence check (e.g. external cleanup)
+                logger.debug("SSD block file vanished for hash 0x%x", block_hash)
+                self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                self._index.pop(block_hash, None)
+                return None
+            except Exception as e:
+                logger.warning(f"Failed to load SSD cache block: {e}")
+                return None
 
     def contains(self, block_hash: int) -> bool:
-        return block_hash in self._index
+        with self._lock:
+            return block_hash in self._index
 
     def _evict_lru(self) -> None:
-        """Evict least recently used blocks to free space."""
+        """Evict least recently used blocks to free space. Acquires _lock."""
+        with self._lock:
+            self._evict_lru_locked()
+
+    def _evict_lru_locked(self) -> None:
+        """Evict least recently used blocks to free space. Caller must hold _lock."""
         if not self._index:
             return
 

@@ -4526,7 +4526,9 @@ class BatchedEngine:
                             else:
                                 detokenizer.add_token(bonus)
                             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                tokens.pop()  # Exclude suffix-triggering token from count
                                 _stopped_by_suffix = True
+                                _stopped = True
                             # Advance sampler's grammar constraint for bonus token
                             if _grammar_constraint is not None:
                                 try:

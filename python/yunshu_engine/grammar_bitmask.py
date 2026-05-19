@@ -280,13 +280,20 @@ class GrammarBitmaskEngine:
     def reset(self) -> None:
         self._constraint.reset()
 
+    # The wrapped constraint's checkpoint() returns saved state and
+    # rollback(saved) requires it.  We must store the intermediate
+    # value so rollback can pass it back.
+    _checkpoint_state: Any = None
+
     def checkpoint(self) -> None:
         if hasattr(self._constraint, "checkpoint"):
             self._constraint.checkpoint()
+            self._checkpoint_state = True
 
     def rollback(self) -> None:
-        if hasattr(self._constraint, "rollback"):
+        if hasattr(self._constraint, "rollback") and self._checkpoint_state:
             self._constraint.rollback()
+            self._checkpoint_state = None
 
     def get_stats(self) -> dict[str, Any]:
         stats = getattr(self._constraint, "get_stats", lambda: {})()
@@ -322,6 +329,8 @@ class BitmaskConstrainedSampler:
 
     def __call__(self, logits: Any) -> Any:
         """Sample a token with bitmask constraint."""
+        import mlx.core as mx
+
         # Lazy-init applicator
         if self._applicator is None:
             self._table = TokenStringTable.get(self._tokenizer)
@@ -332,7 +341,6 @@ class BitmaskConstrainedSampler:
             masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
         else:
             bitmask = self._engine.compute_bitmask(self._tokenizer)
-            import mlx.core as mx
             if mx.any(bitmask).item():
                 masked_logits = self._applicator.apply(logits, bitmask)
             else:
@@ -343,7 +351,6 @@ class BitmaskConstrainedSampler:
         token = self._base_sampler(masked_logits)
 
         # Update state
-        import mlx.core as mx
         token_id = int(token)
         self._generated_ids.append(token_id)
 

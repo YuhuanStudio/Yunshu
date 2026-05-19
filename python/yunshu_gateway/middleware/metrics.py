@@ -117,8 +117,13 @@ class _Metrics:
             if latencies:
                 sorted_lat = sorted(latencies)
                 avg = sum(latencies) / len(latencies)
-                p50 = sorted_lat[len(sorted_lat) // 2]
-                p99 = sorted_lat[min(int(len(sorted_lat) * 0.99), len(sorted_lat) - 1)]
+                n = len(sorted_lat)
+                # Nearest-rank percentile: p-th percentile is at index
+                # ceil(p/100 * n) - 1, clamped to [0, n-1].
+                p50_idx = min(max(int(0.5 * n + 0.5) - 1, 0), n - 1)
+                p99_idx = min(max(int(0.99 * n + 0.5) - 1, 0), n - 1)
+                p50 = sorted_lat[p50_idx]
+                p99 = sorted_lat[p99_idx]
                 esc_ep = _esc_prom(endpoint)
                 lines.append(
                     f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.5"}} {p50:.4f}'

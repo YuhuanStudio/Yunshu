@@ -536,6 +536,14 @@ class LoRAAdapterManager:
             # Fallback: manually unwrap LoRALinear layers
             import mlx.nn as nn
             from mlx.utils import tree_unflatten
+            try:
+                from mlx_lm.tuner.lora import LoRALinear
+            except ImportError:
+                logger.error(
+                    "Cannot restore base model: mlx_lm.tuner.lora.LoRALinear "
+                    "is not available and remove_lora_layers failed"
+                )
+                return
             unwrapped = []
             for name, module in self._base_model.named_modules():
                 if isinstance(module, LoRALinear):

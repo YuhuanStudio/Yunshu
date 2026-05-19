@@ -66,6 +66,7 @@ class VLMStreamChunk:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     ttft_ms: float = 0.0
+    error: str | None = None
 
 
 @dataclass
@@ -251,7 +252,7 @@ class VLMAsyncEngineCore:
             self._stats["failed_requests"] += 1
             try:
                 await state.output_queue.put(
-                    VLMStreamChunk(finish_reason="error")
+                    VLMStreamChunk(finish_reason="error", error=str(e))
                 )
             except Exception:
                 logger.debug("failed", exc_info=True)

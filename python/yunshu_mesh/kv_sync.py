@@ -957,8 +957,9 @@ class MeshHealthMonitor:
                 if node:
                     node.state = MeshNodeState.OFFLINE
 
-            # Capture failure count under lock for logging.
+            # Capture failure count and node snapshot under lock for logging.
             fail_count = status.consecutive_failures
+            node_snapshot = self._nodes.get(node_id)
 
             if not already_unhealthy:
                 self._rebalance_events.append(RebalanceEvent(
@@ -972,7 +973,7 @@ class MeshHealthMonitor:
         if not already_unhealthy:
             for cb in self._on_node_failure_callbacks:
                 try:
-                    cb(node_id, self._nodes.get(node_id))
+                    cb(node_id, node_snapshot)
                 except Exception:
                     logger.debug("on_node_failure callback error", exc_info=True)
 

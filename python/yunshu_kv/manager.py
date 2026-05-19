@@ -520,6 +520,7 @@ class KVCacheManager:
                 continue
 
             # Demote to warm tier (if we have KV data to compress)
+            demoted_ok = False
             if self._warm_tier is not None and self._key_cache is not None:
                 try:
                     block_idx = block.block_id
@@ -532,9 +533,15 @@ class KVCacheManager:
                         kv_packed = mx.stack([key_slice, val_slice], axis=0)
                     else:
                         kv_packed = key_slice
-                    self._warm_tier.demote(block.block_hash, kv_packed)
+                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed)
                 except Exception:
                     logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
+
+            if not demoted_ok and self._warm_tier is not None:
+                # Demotion failed or was skipped — remove any stale warm-tier
+                # entry for this hash so future promotions don't return
+                # outdated KV data.
+                self._warm_tier._store.pop(block.block_hash, None)
 
             # Remove from hot prefix cache
             self.block_pool._evict_cached_block(block)
@@ -608,6 +615,7 @@ class KVCacheManager:
                 continue
 
             # Demote to warm tier if available
+            demoted_ok = False
             if self._warm_tier is not None and self._key_cache is not None:
                 try:
                     block_idx = block.block_id
@@ -618,9 +626,15 @@ class KVCacheManager:
                         kv_packed = mx.stack([key_slice, val_slice], axis=0)
                     else:
                         kv_packed = key_slice
-                    self._warm_tier.demote(block.block_hash, kv_packed)
+                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed)
                 except Exception:
                     logger.debug("warm tier demote failed in memory_pressure_evict", exc_info=True)
+
+            if not demoted_ok and self._warm_tier is not None:
+                # Demotion failed or was skipped — remove any stale warm-tier
+                # entry for this hash so future promotions don't return
+                # outdated KV data.
+                self._warm_tier._store.pop(block.block_hash, None)
 
             self.block_pool._evict_cached_block(block)
 

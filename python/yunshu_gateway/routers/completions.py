@@ -501,8 +501,8 @@ async def _stream_completion(
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
-                if hasattr(output, 'completion_token_count') and output.completion_token_count:
-                    completion_tok_per_choice[choice_idx] = output.completion_token_count
+                if hasattr(output, 'completion_tokens') and output.completion_tokens:
+                    completion_tok_per_choice[choice_idx] = output.completion_tokens
                 elif output.token_text:
                     completion_tok_per_choice[choice_idx] = completion_tok_per_choice.get(choice_idx, 0) + 1
                 if output.finish_reason is not None:

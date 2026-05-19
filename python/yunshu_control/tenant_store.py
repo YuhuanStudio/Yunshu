@@ -66,7 +66,7 @@ class Tenant:
     # Runtime counters (not persisted)
     _request_count: int = 0
     _token_count: int = 0
-    _window_start: float = field(default_factory=time.time)
+    _window_start: float = field(default_factory=time.monotonic)
     _active_requests: int = 0
     # Lock for thread-safe rate-limit checks (not persisted)
     _rate_limit_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -74,7 +74,7 @@ class Tenant:
     def check_rate_limit(self) -> bool:
         """Check if tenant is within rate limits. Returns True if allowed."""
         with self._rate_limit_lock:
-            now = time.time()
+            now = time.monotonic()
             if now - self._window_start > 60:
                 self._request_count = 0
                 self._token_count = 0
@@ -91,7 +91,7 @@ class Tenant:
     def check_and_record(self, tokens: int = 0) -> bool:
         """Atomically check rate limit and record if allowed. Returns True if allowed."""
         with self._rate_limit_lock:
-            now = time.time()
+            now = time.monotonic()
             if now - self._window_start > 60:
                 self._request_count = 0
                 self._token_count = 0

@@ -707,6 +707,10 @@ class VLMEngine:
             if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
                 _vlm_prompt = self._apply_vlm_template_with_cache(messages, enable_thinking=_enable_thinking)
                 prompt_tokens = len(self._tokenizer.encode(_vlm_prompt)) if self._tokenizer else 0
+                # Add per-image token estimate so prompt_tokens reflects the
+                # actual model input size (text + image embeddings).
+                if image_paths:
+                    prompt_tokens += self._estimate_image_tokens() * len(image_paths)
             else:
                 prompt_text = self._format_prompt(messages)
                 prompt_tokens = len(self._tokenizer.encode(prompt_text)) if self._tokenizer else 0
@@ -1384,6 +1388,14 @@ class VLMEngine:
                 mx.eval(current)
                 tok_id = current.item()
                 tokens.append(tok_id)
+
+                # Advance JSON constraint state with the new token text
+                if json_constraint is not None:
+                    try:
+                        token_text = self._tokenizer.decode([tok_id])
+                        json_constraint.advance(token_text)
+                    except Exception:
+                        logger.debug("json constraint advance failed", exc_info=True)
                 if think_start_id is not None:
                     if not _in_thinking and tok_id == think_start_id:
                         _in_thinking = True
@@ -1472,12 +1484,18 @@ class VLMEngine:
         _in_thinking = False  # Track thinking state for current_state routing
         _think_scan_pos = 0  # Cursor for scanning thinking tags (avoids re-scanning already-seen text)
         _num_prompt_tokens = 0
-        # Estimate prompt tokens for output metadata
+        # Estimate prompt tokens for output metadata.
+        # VLM models receive both text tokens and image placeholder tokens,
+        # so we add a per-image estimate from the vision config (if available)
+        # to avoid severely undercounting prompt_tokens when images are present.
         if self._tokenizer is not None:
             try:
                 _num_prompt_tokens = len(self._tokenizer.encode(prompt))
             except Exception:
                 logger.debug("prompt token estimation failed in stream_vlm_vision", exc_info=True)
+        if image_paths:
+            _tokens_per_image = self._estimate_image_tokens()
+            _num_prompt_tokens += _tokens_per_image * len(image_paths)
         try:
             stream_kwargs: dict = {
                 "max_tokens": max_tokens,
@@ -1832,6 +1850,14 @@ class VLMEngine:
 
             token_id = current.item()
             tokens_list.append(token_id)
+
+            # Advance JSON constraint state with the new token text
+            if json_constraint is not None:
+                try:
+                    _tok_text = self._tokenizer.decode([token_id])
+                    json_constraint.advance(_tok_text)
+                except Exception:
+                    logger.debug("json constraint advance failed (stream)", exc_info=True)
             # Track thinking segment boundaries in VLM streaming
             if think_start_id is not None:
                 if not _in_thinking and token_id == think_start_id:
@@ -2403,6 +2429,38 @@ class VLMEngine:
         return tmp.name
 
     # ── Helpers ──
+
+    def _estimate_image_tokens(self) -> int:
+        """Estimate the number of vision tokens per image for this model.
+
+        Reads the vision config to get an accurate estimate when available,
+        otherwise uses a conservative default.  This is used to adjust
+        prompt_tokens in usage stats so they reflect the actual model input
+        (text tokens + image placeholder tokens).
+        """
+        if not self._config:
+            return 576  # conservative default (24x24 grid)
+        vision_cfg = self._config.get("vision_config", {})
+        if not vision_cfg:
+            thinker_cfg = self._config.get("thinker_config", {})
+            vision_cfg = thinker_cfg.get("vision_config", {})
+        # Common config keys for image token count
+        for key in ("image_size", "image_resolution"):
+            size = vision_cfg.get(key)
+            if isinstance(size, (list, tuple)) and len(size) >= 2:
+                # Approximate: (H/patch_size) * (W/patch_size)
+                patch_size = vision_cfg.get("patch_size", 14)
+                return (size[0] // patch_size) * (size[1] // patch_size)
+        # If image_size is a single int
+        size = vision_cfg.get("image_size")
+        if isinstance(size, int):
+            patch_size = vision_cfg.get("patch_size", 14)
+            return (size // patch_size) ** 2
+        # Qwen-style models use spatial_merge_size
+        spatial_merge = vision_cfg.get("spatial_merge_size", 1)
+        if spatial_merge > 1:
+            return 256 // (spatial_merge ** 2)
+        return 576  # default: 24x24 patch grid
 
     def _get_eos_ids(self) -> list[int]:
         from .text_utils import get_eos_token_ids
