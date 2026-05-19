@@ -187,6 +187,7 @@ class BlockPool:
             if self.enable_caching and block.block_hash is not None:
                 self._evict_cached_block(block)
             block.ref_count = 1
+            block.cache_only = False
         return blocks
 
     def touch(self, block: KVBlock) -> None:

@@ -1096,37 +1096,30 @@ class KVOffloadManager:
 
         # Try TieredKVCacheManager extraction method
         if hasattr(self._kv_manager, '_extract_kv_for_block'):
-            # Find the block by hash
             pool = getattr(hot_mgr, 'block_pool', None)
             if pool is not None:
-                for block in pool.blocks:
-                    if (
-                        hasattr(block, 'block_hash')
-                        and block.block_hash == block_hash
-                    ):
-                        return self._kv_manager._extract_kv_for_block(block)
+                block = pool.lookup_hash(block_hash)
+                if block is not None:
+                    return self._kv_manager._extract_kv_for_block(block)
 
         # Fallback: direct extraction from hot manager's KV layers
         if hasattr(hot_mgr, '_kv_layers') and hot_mgr._kv_layers:
             try:
                 pool = getattr(hot_mgr, 'block_pool', None)
                 if pool is not None:
-                    for block in pool.blocks:
-                        if (
-                            hasattr(block, 'block_hash')
-                            and block.block_hash == block_hash
-                        ):
-                            import mlx.core as mx
-                            kv_parts = []
-                            for layer_caches in hot_mgr._kv_layers:
-                                if block.block_id < len(layer_caches):
-                                    key_cache, val_cache = layer_caches[block.block_id]
-                                    if val_cache is not None:
-                                        kv_parts.append(mx.stack([key_cache, val_cache], axis=0))
-                                    else:
-                                        kv_parts.append(key_cache)
-                            if kv_parts:
-                                return mx.stack(kv_parts, axis=0) if len(kv_parts) > 1 else kv_parts[0]
+                    block = pool.lookup_hash(block_hash)
+                    if block is not None:
+                        import mlx.core as mx
+                        kv_parts = []
+                        for layer_caches in hot_mgr._kv_layers:
+                            if block.block_id < len(layer_caches):
+                                key_cache, val_cache = layer_caches[block.block_id]
+                                if val_cache is not None:
+                                    kv_parts.append(mx.stack([key_cache, val_cache], axis=0))
+                                else:
+                                    kv_parts.append(key_cache)
+                        if kv_parts:
+                            return mx.stack(kv_parts, axis=0) if len(kv_parts) > 1 else kv_parts[0]
             except Exception:
                 logger.debug("Direct KV extraction failed", exc_info=True)
 

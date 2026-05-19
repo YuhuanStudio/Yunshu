@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import OrderedDict
 """Yunshu N-gram Speculative Decoding — model-free draft token proposal.
 
 Three proposer modes:
@@ -104,7 +105,7 @@ class NgramHashPool:
 
     def __init__(self, config: NgramConfig) -> None:
         self.config = config
-        self._pool: dict[tuple[int, ...], list[int]] = {}
+        self._pool: OrderedDict[tuple[int, ...], list[int]] = OrderedDict()
         self._capacity = config.hashpool_capacity
         self._total_inserts = 0
         self._total_evictions = 0
@@ -132,10 +133,11 @@ class NgramHashPool:
                 cont_start = i + n
                 cont_end = min(cont_start + k, total)
                 if cont_start < total:
-                    self._pool[ngram] = token_ids[cont_start:cont_start + 1] if cont_end <= cont_start else token_ids[cont_start:cont_end]
+                    self._pool[ngram] = token_ids[cont_start:cont_end]
+                    self._pool.move_to_end(ngram)
                     self._total_inserts += 1
 
-        # Evict oldest entries if over capacity
+        # Evict oldest entries if over capacity (LRU via OrderedDict)
         if len(self._pool) > self._capacity:
             excess = len(self._pool) - self._capacity
             keys_to_evict = list(self._pool.keys())[:excess]

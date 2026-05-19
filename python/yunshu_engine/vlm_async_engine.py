@@ -403,6 +403,7 @@ class VLMAsyncEngineCore:
                 )
             except Exception:
                 logger.debug("failed", exc_info=True)
+            self._cleanup_request(request_id)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove request state."""

@@ -54,7 +54,7 @@ class TestRequestLifecycleState:
 
     def test_invalid_transition(self):
         state = RequestLifecycleState(request_id="r1")
-        assert not state.transition(RequestPhase.FINISHED)  # can't go QUEUED → FINISHED
+        assert not state.transition(RequestPhase.DECODING)  # can't go QUEUED → DECODING
 
     def test_queued_to_rejected(self):
         state = RequestLifecycleState(request_id="r1")

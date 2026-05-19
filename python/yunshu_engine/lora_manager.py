@@ -353,7 +353,7 @@ class LoRAAdapterManager:
                 if self._base_model is not None:
                     import mlx.core as mx
                     self._base_model_copy = mx.tree_map(
-                        lambda x: x, self._base_model.parameters()
+                        lambda x: mx.array(x), self._base_model.parameters()
                     )
 
                 # Re-fetch entry under _lock — adapter may have been

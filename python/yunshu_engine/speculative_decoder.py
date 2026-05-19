@@ -518,7 +518,7 @@ class SpeculativeDecoder:
             bonus_token = sampler(logits[0, bonus_pos:bonus_pos + 1, :])
         else:
             # All accepted: bonus from position K (prediction after all drafts)
-            bonus_token = sampler(bonus_logits)
+            bonus_token = sampler(logits[0, K:K+1, :])
         bonus_id = bonus_token.item()
 
         return VerifyResult(

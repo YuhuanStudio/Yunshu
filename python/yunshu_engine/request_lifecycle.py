@@ -98,7 +98,7 @@ class RequestLifecycleState:
     def transition(self, new_phase: RequestPhase) -> bool:
         """Attempt a state transition. Returns True if valid."""
         valid_transitions = {
-            RequestPhase.QUEUED: {RequestPhase.PREFILLING, RequestPhase.REJECTED, RequestPhase.ABORTED},
+            RequestPhase.QUEUED: {RequestPhase.PREFILLING, RequestPhase.REJECTED, RequestPhase.ABORTED, RequestPhase.FINISHED},
             RequestPhase.PREFILLING: {RequestPhase.DECODING, RequestPhase.REJECTED, RequestPhase.ABORTED},
             RequestPhase.DECODING: {RequestPhase.FINISHED, RequestPhase.ABORTED, RequestPhase.RETRYING},
             RequestPhase.REJECTED: {RequestPhase.RETRYING, RequestPhase.FINISHED},

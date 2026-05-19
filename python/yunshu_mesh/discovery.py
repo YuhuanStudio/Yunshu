@@ -264,10 +264,12 @@ class NodeDiscovery:
         logger.info("Node discovery stopped")
 
     def on_node_discovered(self, callback: Callable) -> None:
-        self._on_discovered_callbacks.append(callback)
+        with self._lock:
+            self._on_discovered_callbacks.append(callback)
 
     def on_node_lost(self, callback: Callable) -> None:
-        self._on_lost_callbacks.append(callback)
+        with self._lock:
+            self._on_lost_callbacks.append(callback)
 
     def get_discovered_nodes(self) -> list[MeshNode]:
         with self._lock:

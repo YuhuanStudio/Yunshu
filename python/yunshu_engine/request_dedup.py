@@ -177,9 +177,15 @@ class RequestDeduplicator:
                 # entry with a different hash (append a nonce) so both
                 # inferences run independently.
                 import hashlib
-                nonce = hashlib.sha256(
-                    (content_hash + request_id).encode()
-                ).hexdigest()[:16]
+                for _ in range(3):
+                    nonce = hashlib.sha256(
+                        (content_hash + request_id).encode()
+                    ).hexdigest()[:16]
+                    if nonce not in self._entries:
+                        break
+                    content_hash = nonce + request_id[:8]
+                else:
+                    content_hash = nonce
                 content_hash = nonce
 
             # Check capacity
