@@ -102,6 +102,8 @@ class JsonSchemaConstraint:
         self._in_string: bool = False
         self._string_start: int = 0  # position in text_buffer where string started
         self._number_start: int = 0
+        self._number_seen_digit: bool = False  # True once at least one digit consumed
+        self._number_has_dot: bool = False     # True once '.' consumed
         self._is_first_value: bool = True  # track first value in object/array
         # Snapshot stack for rollback (speculative draft validation)
         self._snapshots: list[tuple] = []
@@ -258,11 +260,11 @@ class JsonSchemaConstraint:
             return _HEX_CHARS
 
         if state == JsonState.NUMBER:
-            # After [1-9], may continue with more digits, decimal point,
-            # exponent, or terminate with structural chars / whitespace.
             chars = set(_DIGIT_CHARS)
-            chars.add('.')
-            chars.update('eE')
+            if self._number_seen_digit and not self._number_has_dot:
+                chars.add('.')
+            if self._number_seen_digit:
+                chars.update('eE')
             chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
             return chars
 
@@ -427,6 +429,8 @@ class JsonSchemaConstraint:
             self._is_first_value,
             self._literal_remaining,
             self._unicode_remaining,
+            self._number_seen_digit,
+            self._number_has_dot,
         ))
 
     def rollback(self) -> None:
@@ -445,6 +449,8 @@ class JsonSchemaConstraint:
             self._is_first_value,
             self._literal_remaining,
             self._unicode_remaining,
+            self._number_seen_digit,
+            self._number_has_dot,
         ) = self._snapshots.pop()
 
     def _process_text(self, text: str) -> None:
@@ -484,6 +490,8 @@ class JsonSchemaConstraint:
                     # Top-level number
                     self._state = JsonState.NUMBER_ZERO if ch == '0' else JsonState.NUMBER
                     self._number_start = buf_offset + i
+                    self._number_seen_digit = ch != '-'
+                    self._number_has_dot = False
                     self._schema_stack.append((JsonState.DONE, self._schema))
                 i += 1
                 continue
@@ -681,6 +689,8 @@ class JsonSchemaConstraint:
                 #   NUMBER_EXPONENT: after 'e'/'E', sign or digit required
                 #   NUMBER_EXPONENT_SIGN: after 'e+/e-', digit required
                 if ch in _DIGIT_CHARS:
+                    prior_seen_digit = self._number_seen_digit
+                    self._number_seen_digit = True
                     i += 1
                     if self._state == JsonState.NUMBER_ZERO:
                         # Leading zero followed by digit is invalid JSON (e.g., "007").
@@ -691,15 +701,20 @@ class JsonSchemaConstraint:
                     elif self._state == JsonState.NUMBER_FRACTION:
                         # After digit in fraction, exponent is now allowed.
                         # Transition to NUMBER so _get_expected_chars includes 'eE'.
+                        # _number_has_dot stays True, so '.' won't be re-allowed.
                         self._state = JsonState.NUMBER
                     elif self._state == JsonState.NUMBER_EXPONENT_SIGN:
                         self._state = JsonState.NUMBER_EXPONENT
+                    elif self._state == JsonState.NUMBER and ch == '0' and not prior_seen_digit:
+                        # e.g. after '-' then '0': treat as leading zero
+                        self._state = JsonState.NUMBER_ZERO
                     continue
                 if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO):
                     self._state = JsonState.NUMBER_FRACTION
+                    self._number_has_dot = True
                     i += 1
                     continue
-                if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO):
+                if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and self._number_seen_digit:
                     self._state = JsonState.NUMBER_EXPONENT
                     i += 1
                     continue
@@ -771,6 +786,8 @@ class JsonSchemaConstraint:
         elif ch == '-' or ch in _DIGIT_CHARS:
             self._state = JsonState.NUMBER_ZERO if ch == '0' else JsonState.NUMBER
             self._number_start = buf_pos
+            self._number_seen_digit = ch != '-'
+            self._number_has_dot = False
 
     def _enter_array_value(self, ch: str, buf_pos: int | None = None) -> None:
         """Enter a value state in array context."""
@@ -813,6 +830,8 @@ class JsonSchemaConstraint:
         elif ch == '-' or ch in _DIGIT_CHARS:
             self._state = JsonState.NUMBER_ZERO if ch == '0' else JsonState.NUMBER
             self._number_start = buf_pos
+            self._number_seen_digit = ch != '-'
+            self._number_has_dot = False
 
     def _value_completed(self) -> None:
         """Called when a primitive value has been fully generated."""
@@ -990,6 +1009,8 @@ class JsonSchemaConstraint:
         self._in_string = False
         self._string_start = 0
         self._number_start = 0
+        self._number_seen_digit = False
+        self._number_has_dot = False
         self._is_first_value = True
         self._literal_remaining = 0
         self._unicode_remaining = 0

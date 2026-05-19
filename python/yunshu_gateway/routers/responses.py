@@ -536,9 +536,10 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         _seq += 1
         return _seq
 
+    _metrics_recorded = False
     try:
       async def _token_source():
-        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok, accumulated_text
+        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok, accumulated_text, _metrics_recorded
         last_finish_reason = None
 
         # ── Lifecycle: response.created ──
@@ -594,6 +595,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if hasattr(output, 'completion_tokens') and output.completion_tokens:
                     completion_tok = output.completion_tokens
+                elif output.new_text:
+                    completion_tok += 1
                 if output.new_text:
                     accumulated_text += output.new_text
                 if output.finish_reason is not None:
@@ -646,6 +649,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 token_text = getattr(output, 'token_text', '')
                 if hasattr(output, 'completion_token_count') and output.completion_token_count:
                     completion_tok = output.completion_token_count
+                elif token_text:
+                    completion_tok += 1
                 if token_text:
                     accumulated_text += token_text
                 if getattr(output, 'finish_reason', None) is not None:
@@ -739,6 +744,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         )
 
         _record_metrics(prompt_tok, completion_tok)
+        _metrics_recorded = True
 
       async for chunk in with_sse_keepalive(_token_source(), http_request=request, cancel_event=_cancel_evt):
         yield chunk.encode("utf-8") if isinstance(chunk, str) else chunk
@@ -789,3 +795,8 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 pass
         if loaded_adapter is not None:
             _release_lora_adapter(engine, loaded_adapter)
+        if not _metrics_recorded and (prompt_tok > 0 or completion_tok > 0):
+            try:
+                _record_metrics(prompt_tok, completion_tok)
+            except Exception:
+                pass

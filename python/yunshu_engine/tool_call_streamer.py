@@ -410,8 +410,8 @@ class ToolCallStreamer:
                 ))
             self._json_buffer = ""
         elif self._state == StreamState.TAG_START:
-            # Was waiting for > but stream ended
-            text = TOOL_CALL_OPEN + self._buffer
+            # Was waiting for > but stream ended — buffer already contains the partial tag
+            text = self._buffer
             results.append(StreamOutput(text=text, state=self._state))
             self._buffer = ""
         elif self._state == StreamState.TAG_END:
