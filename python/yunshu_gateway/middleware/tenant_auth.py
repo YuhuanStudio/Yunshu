@@ -22,9 +22,13 @@ from starlette.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 
-# Paths served by the Anthropic router — must use Anthropic error format
-_ANTHROPIC_PATHS = ("/v1/messages", "/messages",
-                     "/v1/messages/count_tokens", "/messages/count_tokens")
+# Paths served by the Anthropic router — must use Anthropic error format.
+# Use exact matching, not endswith, to avoid overmatching paths like
+# /api/v1/admin/messages that merely end in '/messages'.
+_ANTHROPIC_PATHS = frozenset({
+    "/v1/messages", "/messages",
+    "/v1/messages/count_tokens", "/messages/count_tokens",
+})
 
 
 class _ErrorFormatter:
@@ -38,7 +42,7 @@ class _ErrorFormatter:
         # Anthropic 429: include Retry-After header
         if status_code == 429:
             headers["Retry-After"] = "1"
-        if path.endswith(_ANTHROPIC_PATHS):
+        if path in _ANTHROPIC_PATHS:
             error_type = "authentication_error" if status_code == 401 else "invalid_request_error"
             return JSONResponse(
                 status_code=status_code,
@@ -86,8 +90,11 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
     def _is_auth_enabled(self) -> bool:
         if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
             return False
-        # Auth enabled when static token OR RBAC keys are configured
-        if os.environ.get("YUNSHU_AUTH_TOKEN") is not None:
+        # Auth enabled when non-empty static token OR RBAC keys are configured.
+        # An empty YUNSHU_AUTH_TOKEN is treated as unset — setting it to '' should
+        # not silently enable auth with a token that can never match.
+        _static = os.environ.get("YUNSHU_AUTH_TOKEN")
+        if _static is not None and _static:
             return True
         try:
             rbac = getattr(self.app.state, "rbac_manager", None)
@@ -154,7 +161,10 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
                     )
                 request.state.tenant = tenant
                 return await call_next(request)
-        except ImportError:
+        except Exception:
+            # Catch ALL exceptions (not just ImportError) so that a broken
+            # TenantManager falls through to the final 401 instead of
+            # surfacing a 500 to the client.
             pass
 
         return _ErrorFormatter.auth_error(request, "Invalid or missing API key")

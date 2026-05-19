@@ -268,9 +268,6 @@ class BoundarySnapshotSSDStore:
                     # 0-D scalar array
                     arr = np.frombuffer(raw, dtype=np_dtype).copy()
                 result[key] = arr
-                np_dtype = np.dtype(dtype)
-                arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape).copy()
-                result[key] = arr
 
         return result
 

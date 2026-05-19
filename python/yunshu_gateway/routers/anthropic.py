@@ -1357,6 +1357,30 @@ async def count_tokens(req: AnthropicMessagesRequest) -> dict:
             _extract_text_from_content(req.system) if isinstance(req.system, list) else req.system
         )
         messages.append({"role": "system", "content": system_text})
+
+    # Include tool definitions in the system prompt so that the token count
+    # matches what the actual /messages endpoint would send.  Mirrors the
+    # tool-prompt injection in create_message (lines 532-552).
+    if req.tools:
+        tool_prompt = "\n\nYou have access to the following tools. When you need to call a tool, "
+        tool_prompt += 'output a tool call in the following format:\n<tool_call\\>{"name": "...", "arguments": {...}}</tool_call\\>\n\n'
+        tool_prompt += "Available tools:\n"
+        for tool in req.tools:
+            tool_prompt += f"- {tool.name}"
+            if tool.description:
+                tool_prompt += f": {tool.description}"
+            if tool.input_schema:
+                tool_prompt += f"\n  Parameters: {tool.input_schema}"
+            tool_prompt += "\n"
+        if req.tool_choice and isinstance(req.tool_choice, dict):
+            forced = req.tool_choice.get("name")
+            if forced:
+                tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] += tool_prompt
+        else:
+            messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+
     for m in req.messages:
         content = _extract_text_from_content(m.content)
         messages.append({"role": m.role, "content": content})
