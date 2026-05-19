@@ -18,20 +18,450 @@ Integration: plug into ConstrainedSampler alongside JsonSchemaConstraint.
 
 import logging
 import re
+import re._parser as _sre_parse
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
+# ── Regex DFA for prefix matching ────────────────────────────────────────────
+
+
+class _RegexDFA:
+    """Builds a DFA from a regex pattern to support prefix-valid checks.
+
+    The key capability: given a partial string, determine which characters
+    can be appended so that the result is still a prefix of some string that
+    fully matches the pattern.
+
+    This solves the fundamental problem with using re.match() for prefix
+    checking: re.match(r'\\d{3}', '1') returns None because the pattern
+    requires 3 digits, but '1' is a perfectly valid prefix of '123'.
+
+    Approach:
+    1. Parse regex via _sre_parse to get the parse tree
+    2. Build an NFA with epsilon transitions
+    3. Convert to DFA via subset construction
+    4. For each DFA state, compute the set of characters that transition
+       to another (non-dead) state
+    """
+
+    def __init__(self, pattern: str) -> None:
+        self._pattern = pattern
+        self._compiled = re.compile(pattern)
+        # Build DFA
+        self._nfa_start: int = 0
+        self._nfa_accept: set[int] = set()
+        self._nfa_transitions: dict[int, list[tuple[set[int] | None, int]]] = {}
+        self._nfa_epsilon: dict[int, list[int]] = {}
+        self._dfa_transitions: dict[frozenset[int], dict[int, frozenset[int]]] = {}
+        self._dfa_accept_states: set[frozenset[int]] = set()
+        self._dfa_start: frozenset[int] = frozenset()
+        self._nfa_counter = 0
+        self._build_dfa(pattern)
+
+    def _new_nfa_state(self) -> int:
+        s = self._nfa_counter
+        self._nfa_counter += 1
+        return s
+
+    def _build_dfa(self, pattern: str) -> None:
+        """Parse pattern and build DFA via NFA + subset construction."""
+        try:
+            parsed = _sre_parse.parse(pattern)
+        except re.error:
+            # If parsing fails, fall back — DFA will be empty, constraint
+            # will return None (unrestricted) for safety.
+            return
+
+        # Build NFA from parse tree
+        start = self._new_nfa_state()
+        accept = self._new_nfa_state()
+        self._nfa_accept = {accept}
+        self._nfa_start = start
+        self._build_nfa(parsed, start, accept)
+
+        # Convert NFA to DFA via subset construction
+        self._subset_construction()
+
+    def _build_nfa(
+        self,
+        parsed: _sre_parse.SubPattern,
+        start: int,
+        accept: int,
+    ) -> None:
+        """Recursively build NFA fragments from _sre_parse output."""
+        items = list(parsed)
+        if not items:
+            # Empty pattern — epsilon transition
+            self._nfa_epsilon.setdefault(start, []).append(accept)
+            return
+
+        # Build chain: connect each item sequentially
+        current = start
+        for i, item in enumerate(items):
+            op, av = item
+            if op == _sre_parse.LITERAL:
+                # Single character match
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                self._nfa_transitions.setdefault(current, []).append((set([av]), next_state))
+                current = next_state
+
+            elif op == _sre_parse.NOT_LITERAL:
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                # Match any character except av (within 0-127 for ASCII)
+                char_set = set(range(0, 127)) - {av}
+                self._nfa_transitions.setdefault(current, []).append(
+                    (char_set if char_set else None, next_state)
+                )
+                current = next_state
+
+            elif op == _sre_parse.ANY:
+                # Match any character (except newline by default)
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                char_set = set(range(1, 0x110000)) - {ord('\n')}
+                self._nfa_transitions.setdefault(current, []).append(
+                    (char_set, next_state)
+                )
+                current = next_state
+
+            elif op == _sre_parse.IN:
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                char_set = self._parse_charset(av)
+                self._nfa_transitions.setdefault(current, []).append(
+                    (char_set, next_state)
+                )
+                current = next_state
+
+            elif op == _sre_parse.BRANCH:
+                # av is (None, [branch1, branch2, ...])
+                _, branches = av
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                for branch in branches:
+                    self._build_nfa(branch, current, next_state)
+                current = next_state
+
+            elif op == _sre_parse.SUBPATTERN:
+                # av is (group, add_flags, del_flags, parsed_subpattern)
+                _, _, _, parsed_sub = av
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                self._build_nfa(parsed_sub, current, next_state)
+                current = next_state
+
+            elif op == _sre_parse.MAX_REPEAT or op == _sre_parse.MIN_REPEAT:
+                # av is (min, max, parsed_subpattern)
+                min_count, max_count, parsed_sub = av
+                next_state = accept if i == len(items) - 1 else self._new_nfa_state()
+                self._build_repeat_nfa(parsed_sub, min_count, max_count, current, next_state)
+                current = next_state
+
+            elif op == _sre_parse.AT:
+                # Anchors (^, $, \b, etc.) — treat as epsilon for
+                # prefix matching since we track state per character
+                if i == len(items) - 1:
+                    self._nfa_epsilon.setdefault(current, []).append(accept)
+                # Otherwise just continue (anchor doesn't consume input)
+
+            elif op == _sre_parse.ASSERT or op == _sre_parse.ASSERT_NOT:
+                # Lookahead/lookbehind — treat as epsilon (approximate)
+                if i == len(items) - 1:
+                    self._nfa_epsilon.setdefault(current, []).append(accept)
+
+            else:
+                # Unknown op — epsilon as fallback
+                if i == len(items) - 1:
+                    self._nfa_epsilon.setdefault(current, []).append(accept)
+
+    def _build_repeat_nfa(
+        self,
+        parsed: _sre_parse.SubPattern,
+        min_count: int,
+        max_count: int,
+        start: int,
+        accept: int,
+    ) -> None:
+        """Build NFA for repetition (quantifier) constructs.
+
+        Handles: *, +, ?, {n}, {n,}, {n,m}
+        Strategy:
+        - Build `min_count` mandatory copies in sequence
+        - For optional copies (between min and max), add epsilon bypass
+        - For unbounded (max == _sre_parse.MAXREPEAT), loop back
+        """
+        if min_count == 0 and max_count == 1:
+            # ? — zero or one
+            self._nfa_epsilon.setdefault(start, []).append(accept)
+            self._build_nfa(parsed, start, accept)
+            return
+
+        if max_count == _sre_parse.MAXREPEAT:
+            # Unbounded: *, +, {n,}
+            # Strategy: chain min mandatory copies, then add a loop
+            if min_count == 0:
+                # * or {0,} — epsilon to accept
+                self._nfa_epsilon.setdefault(start, []).append(accept)
+
+            current = start
+            for _ in range(min_count):
+                next_s = self._new_nfa_state()
+                self._build_nfa(parsed, current, next_s)
+                current = next_s
+
+            # Loop: from current, match one more and loop back
+            self._nfa_epsilon.setdefault(current, []).append(accept)
+            self._build_nfa(parsed, current, current)
+        else:
+            # Bounded: {n,m}
+            # Chain min mandatory copies, then (max - min) optional copies
+            current = start
+            for _ in range(min_count):
+                next_s = self._new_nfa_state()
+                self._build_nfa(parsed, current, next_s)
+                current = next_s
+
+            self._nfa_epsilon.setdefault(current, []).append(accept)
+
+            for _ in range(max_count - min_count):
+                next_s = self._new_nfa_state()
+                self._build_nfa(parsed, current, next_s)
+                self._nfa_epsilon.setdefault(next_s, []).append(accept)
+                current = next_s
+
+    def _parse_charset(self, items: list) -> set[int]:
+        """Parse _sre_parse IN items into a set of character ordinals."""
+        char_set: set[int] = set()
+        negate = False
+
+        for op, av in items:
+            if op == _sre_parse.NEGATE:
+                negate = True
+            elif op == _sre_parse.LITERAL:
+                char_set.add(av)
+            elif op == _sre_parse.RANGE:
+                lo, hi = av
+                char_set.update(range(lo, hi + 1))
+            elif op == _sre_parse.CATEGORY:
+                char_set.update(self._expand_category(av))
+            else:
+                pass  # Unknown
+
+        if negate:
+            # Negate within printable ASCII + common ranges
+            all_chars = set(range(0, 0x10000))
+            char_set = all_chars - char_set
+
+        return char_set
+
+    def _expand_category(self, category: int) -> set[int]:
+        """Expand _sre_parse category to a set of character ordinals."""
+        chars: set[int] = set()
+        if category == _sre_parse.CATEGORY_DIGIT:
+            chars.update(range(ord('0'), ord('9') + 1))
+        elif category == _sre_parse.CATEGORY_NOT_DIGIT:
+            for i in range(0, 0x10000):
+                if not chr(i).isdigit():
+                    chars.add(i)
+        elif category == _sre_parse.CATEGORY_SPACE:
+            for c in ' \t\n\r\f\v':
+                chars.add(ord(c))
+        elif category == _sre_parse.CATEGORY_NOT_SPACE:
+            for i in range(0, 0x10000):
+                if chr(i) not in ' \t\n\r\f\v':
+                    chars.add(i)
+        elif category == _sre_parse.CATEGORY_WORD:
+            chars.update(range(ord('a'), ord('z') + 1))
+            chars.update(range(ord('A'), ord('Z') + 1))
+            chars.update(range(ord('0'), ord('9') + 1))
+            chars.add(ord('_'))
+        elif category == _sre_parse.CATEGORY_NOT_WORD:
+            for i in range(0, 0x10000):
+                c = chr(i)
+                if not (c.isalnum() or c == '_'):
+                    chars.add(i)
+        return chars
+
+    def _epsilon_closure(self, states: frozenset[int]) -> frozenset[int]:
+        """Compute epsilon closure of a set of NFA states."""
+        closure = set(states)
+        stack = list(states)
+        while stack:
+            s = stack.pop()
+            for ns in self._nfa_epsilon.get(s, []):
+                if ns not in closure:
+                    closure.add(ns)
+                    stack.append(ns)
+        return frozenset(closure)
+
+    def _subset_construction(self) -> None:
+        """Convert NFA to DFA using subset construction algorithm."""
+        start_closure = self._epsilon_closure(frozenset({self._nfa_start}))
+        self._dfa_start = start_closure
+
+        # Check if start state is accept (empty string matches)
+        if start_closure & self._nfa_accept:
+            self._dfa_accept_states.add(start_closure)
+
+        worklist = [start_closure]
+        visited: set[frozenset[int]] = set()
+        # Collect all characters used in transitions
+        all_chars: set[int] = set()
+        for trans_list in self._nfa_transitions.values():
+            for char_set, _ in trans_list:
+                if char_set is not None:
+                    all_chars.update(char_set)
+
+        while worklist:
+            current = worklist.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+
+            # For each character, compute the next DFA state
+            char_to_next: dict[int, set[int]] = {}
+
+            for nfa_state in current:
+                for char_set, target in self._nfa_transitions.get(nfa_state, []):
+                    if char_set is None:
+                        continue
+                    for ch in char_set:
+                        if ch in all_chars or True:  # Process all
+                            char_to_next.setdefault(ch, set()).add(target)
+
+            for ch, target_states in char_to_next.items():
+                next_dfa = self._epsilon_closure(frozenset(target_states))
+                self._dfa_transitions.setdefault(current, {})[ch] = next_dfa
+
+                if next_dfa & self._nfa_accept:
+                    self._dfa_accept_states.add(next_dfa)
+
+                if next_dfa not in visited:
+                    worklist.append(next_dfa)
+
+    def is_prefix_valid(self, text: str) -> bool:
+        """Check if text is a valid prefix of some string matching the pattern.
+
+        Returns True if text can be extended to match the pattern.
+        """
+        if not self._dfa_transitions:
+            # DFA construction failed — fall back to regex-based check
+            return self._fallback_prefix_check(text)
+
+        state = self._dfa_start
+        for ch in text:
+            code = ord(ch)
+            trans = self._dfa_transitions.get(state, {})
+            if code not in trans:
+                return False
+            state = trans[code]
+
+        # After consuming all characters, we're in a valid state.
+        # The text is a valid prefix if the current state is an accept
+        # state OR if there's any path from this state to an accept state.
+        return True  # Being in any non-dead state means prefix is valid
+
+    def is_full_match(self, text: str) -> bool:
+        """Check if text fully matches the pattern."""
+        if not self._dfa_transitions:
+            return bool(self._compiled.fullmatch(text))
+
+        state = self._dfa_start
+        for ch in text:
+            code = ord(ch)
+            trans = self._dfa_transitions.get(state, {})
+            if code not in trans:
+                return False
+            state = trans[code]
+        return state in self._dfa_accept_states
+
+    def valid_next_chars(self, text: str, char_range: list[int]) -> set[int]:
+        """Return the set of character ordinals that are valid after text.
+
+        For each character codepoint, checks if text + chr(cp) is a valid
+        prefix or full match.
+        """
+        if not self._dfa_transitions:
+            # DFA construction failed — use fallback
+            return self._fallback_valid_chars(text, char_range)
+
+        # Run the DFA to current position
+        state = self._dfa_start
+        for ch in text:
+            code = ord(ch)
+            trans = self._dfa_transitions.get(state, {})
+            if code not in trans:
+                return set()  # Dead state — no valid continuation
+            state = trans[code]
+
+        # Now check which characters lead to a valid next state
+        trans = self._dfa_transitions.get(state, {})
+        valid = set()
+        for cp in char_range:
+            if cp in trans:
+                valid.add(cp)
+
+        return valid
+
+    def _fallback_prefix_check(self, text: str) -> bool:
+        """Fallback prefix check using regex when DFA construction fails.
+
+        Uses the approach: a string is a valid prefix if either:
+        1. It's a full match, OR
+        2. The pattern's match() consumes the entire string (meaning
+           the string is on a valid path through the pattern)
+        3. As a last resort, check if pattern + '.*' matches the text
+        """
+        if self._compiled.fullmatch(text):
+            return True
+        m = self._compiled.match(text)
+        if m and m.end() == len(text):
+            return True
+        # Try wrapping: check if the text could be a prefix by trying
+        # the original pattern with a wildcard suffix
+        try:
+            extended = re.compile(self._pattern + r'.*')
+            return bool(extended.fullmatch(text))
+        except re.error:
+            return False
+
+    def _fallback_valid_chars(self, text: str, char_range: list[int]) -> set[int]:
+        """Fallback valid-next-chars when DFA is unavailable."""
+        valid = set()
+        for cp in char_range:
+            ch = chr(cp)
+            candidate = text + ch
+            if self._compiled.fullmatch(candidate):
+                valid.add(cp)
+                continue
+            m = self._compiled.match(candidate)
+            if m and m.end() == len(candidate):
+                valid.add(cp)
+                continue
+            # Try extended pattern
+            try:
+                extended = re.compile(self._pattern + r'.*')
+                if extended.fullmatch(candidate):
+                    valid.add(cp)
+            except re.error:
+                pass
+        return valid
+
+
 class RegexConstraint:
     """Constrains output to match a regex pattern.
 
-    Uses incremental regex matching: after each token, checks which
-    single-character extensions of the current output still have a
-    valid full-match path. Only allows tokens starting with valid chars.
+    Uses a DFA (Deterministic Finite Automaton) built from the regex
+    pattern to perform correct prefix-validity checks. The DFA approach
+    fixes the fundamental flaw in using re.match() for prefix checking:
+    patterns like \\d{3}, \\d+-\\d+, or a+bc would fail because re.match()
+    requires the entire pattern to consume the string from the start,
+    while a partial string (e.g., '1' for \\d{3}) cannot be matched by
+    a pattern that has a minimum length requirement.
 
-    This is a character-level FSM approach — for each state in the
-    partial match, compute which characters can extend it.
+    The DFA is built once at construction time and reused for every
+    character validation, making per-step cost O(alphabet_size) instead
+    of O(alphabet_size * pattern_complexity).
+
+    Supports checkpoint/rollback for speculative decoding.
     """
 
     def __init__(self, pattern: str) -> None:
@@ -40,6 +470,8 @@ class RegexConstraint:
         self._text_buffer = ""
         self._done = False
         self._valid_chars_cache: dict[str, set[str] | None] = {}
+        # Build DFA for prefix matching
+        self._dfa = _RegexDFA(pattern)
 
     @property
     def state(self) -> str:
@@ -53,23 +485,33 @@ class RegexConstraint:
         if self._done:
             return
         self._text_buffer += token_text
-        # Check if current buffer is a full match
-        m = self._compiled.fullmatch(self._text_buffer)
-        if m:
+        # Check if current buffer is a full match via DFA (fast)
+        if self._dfa.is_full_match(self._text_buffer):
             self._done = True
+
+    def checkpoint(self) -> dict[str, Any]:
+        """Save current state for rollback (speculative decoding support)."""
+        return {
+            "text_buffer": self._text_buffer,
+            "done": self._done,
+        }
+
+    def rollback(self, saved: dict[str, Any]) -> None:
+        """Restore state from a checkpoint."""
+        self._text_buffer = saved["text_buffer"]
+        self._done = saved["done"]
+        # Clear cache since text_buffer changed — old cache entries are stale
+        self._valid_chars_cache.clear()
 
     def _valid_next_chars(self) -> set[str] | None:
         """Compute characters that can follow the current partial match.
 
-        Returns None if any character is valid, or a set of valid chars.
-        Results are cached per accumulated text state so repeated calls
-        for the same state are O(1).
+        Uses the DFA to determine which characters lead to a valid state
+        (either an accept state or a state from which an accept state is
+        reachable). This is O(alphabet_size) per call with caching.
 
-        Uses a three-pronged check:
-          1. fullmatch(candidate) — char completes the pattern
-          2. match(candidate) consuming ALL of candidate — candidate is a
-             valid prefix (the regex matched to the end of the candidate)
-          3. No match — candidate is not a valid prefix, skip
+        Returns None if any character is valid (permissive pattern),
+        or a set of valid characters otherwise.
         """
         if self._done:
             return set()
@@ -79,49 +521,32 @@ class RegexConstraint:
         if cache_key in self._valid_chars_cache:
             return self._valid_chars_cache[cache_key]
 
-        # Try extending with each printable ASCII char + common whitespace
-        # + common Unicode ranges (CJK, Hangul, Arabic, Thai, Emoji)
-        valid = set()
-        test_chars = [chr(i) for i in range(32, 127)]
-        test_chars.extend(['\n', '\t', '\r'])
+        # Build the set of character codepoints to test
+        char_range = list(range(32, 127))  # printable ASCII
+        char_range.extend([ord('\n'), ord('\t'), ord('\r')])
         # CJK Unified Ideographs (broader sample)
-        for cp in range(0x4E00, 0x4E00 + 500):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0x4E00, 0x4E00 + 500))
         # Hangul Syllables (Korean)
-        for cp in range(0xAC00, 0xAC00 + 100):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0xAC00, 0xAC00 + 100))
         # Hiragana + Katakana (Japanese)
-        for cp in range(0x3040, 0x30FF):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0x3040, 0x30FF))
         # Arabic
-        for cp in range(0x0600, 0x0660):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0x0600, 0x0660))
         # Thai
-        for cp in range(0x0E00, 0x0E50):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0x0E00, 0x0E50))
         # Devanagari (Hindi)
-        for cp in range(0x0900, 0x0970):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0x0900, 0x0970))
         # Common Emoji (first 200)
-        for cp in range(0x1F600, 0x1F6C8):
-            test_chars.append(chr(cp))
+        char_range.extend(range(0x1F600, 0x1F6C8))
         # Latin Extended
-        for cp in range(0x00C0, 0x0250):
-            test_chars.append(chr(cp))
-        total_tested = len(test_chars)
+        char_range.extend(range(0x00C0, 0x0250))
+        total_tested = len(char_range)
 
-        for ch in test_chars:
-            candidate = self._text_buffer + ch
-            # A char is valid if the candidate is a full match
-            if self._compiled.fullmatch(candidate) is not None:
-                valid.add(ch)
-                continue
-            # Or if candidate is a valid prefix that can be extended.
-            # Key: match must consume the ENTIRE candidate string to be
-            # considered a valid prefix (not just a prefix of candidate).
-            m = self._compiled.match(candidate)
-            if m is not None and m.end() == len(candidate):
-                valid.add(ch)
+        # Use DFA to find valid next character codepoints
+        valid_codepoints = self._dfa.valid_next_chars(self._text_buffer, char_range)
+
+        # Convert codepoints back to characters
+        valid = {chr(cp) for cp in valid_codepoints}
 
         # If >90% of tested chars are valid, treat as unrestricted.
         # This avoids false negatives for permissive patterns like ".*".
@@ -309,6 +734,24 @@ class ChoiceConstraint:
             allowed.update(eos_ids)
         return list(allowed)
 
+    def checkpoint(self) -> dict[str, Any]:
+        """Save current state for rollback (speculative decoding support)."""
+        return {
+            "text_buffer": self._text_buffer,
+            "done": self._done,
+            "matched_choice": self._matched_choice,
+            "has_partial_match": self._has_partial_match,
+            "failed": self._failed,
+        }
+
+    def rollback(self, saved: dict[str, Any]) -> None:
+        """Restore state from a checkpoint."""
+        self._text_buffer = saved["text_buffer"]
+        self._done = saved["done"]
+        self._matched_choice = saved["matched_choice"]
+        self._has_partial_match = saved["has_partial_match"]
+        self._failed = saved["failed"]
+
     def reset(self) -> None:
         self._text_buffer = ""
         self._done = False
@@ -436,6 +879,18 @@ class LarkGrammarConstraint:
         if len(valid) > 90:
             return None
         return valid
+
+    def checkpoint(self) -> dict[str, Any]:
+        """Save current state for rollback (speculative decoding support)."""
+        return {
+            "text_buffer": self._text_buffer,
+            "done": self._done,
+        }
+
+    def rollback(self, saved: dict[str, Any]) -> None:
+        """Restore state from a checkpoint."""
+        self._text_buffer = saved["text_buffer"]
+        self._done = saved["done"]
 
     def reset(self) -> None:
         self._text_buffer = ""

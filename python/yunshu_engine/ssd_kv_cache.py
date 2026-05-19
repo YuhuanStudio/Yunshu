@@ -658,21 +658,29 @@ class SSDKVCache:
             return meta is not None and meta.file_size > 0
 
     def delete_block(self, block_hash: bytes) -> None:
-        """Delete a block from both hot cache and disk."""
+        """Delete a block from both hot cache and disk.
+
+        Holds ``self._lock`` throughout the entire operation (including
+        write-queue mutation) to prevent a concurrent ``save_block()`` from
+        re-inserting the entry into ``self._index`` between the index removal
+        and the write-queue update.
+        """
         hex_hash = block_hash.hex()
         with self._lock:
             self._hot_cache.pop(hex_hash, None)
             meta = self._index.pop(hex_hash, None)
             self._sqlite_delete(hex_hash)
 
+            if meta is not None and meta.file_path:
+                with self._writer_lock:
+                    # Cancel any pending save for this hash to prevent orphaned files
+                    self._write_queue = [
+                        item for item in self._write_queue
+                        if not (item[0] == "save" and item[1] == hex_hash)
+                    ]
+                    self._write_queue.append(("delete", meta.file_path))
+
         if meta is not None and meta.file_path:
-            with self._writer_lock:
-                # Cancel any pending save for this hash to prevent orphaned files
-                self._write_queue = [
-                    item for item in self._write_queue
-                    if not (item[0] == "save" and item[1] == hex_hash)
-                ]
-                self._write_queue.append(("delete", meta.file_path))
             self._process_pending_writes()
 
     def clear(self) -> int:
