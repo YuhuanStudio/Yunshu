@@ -97,25 +97,35 @@ class MeshTopology:
                     return n.rank
             return -1
 
+    def _sorted_ranks(self) -> list[int]:
+        """Return sorted list of actual assigned ranks (not range)."""
+        return sorted(self._rank_map.keys())
+
     def get_neighbors(self, rank: int) -> list[int]:
         """Get neighbor ranks based on topology type."""
         with self._lock:
-            size = len(self._nodes)
-        if size == 0:
+            ranks = self._sorted_ranks()
+        if not ranks:
             return []
         if self.topo_type == TopologyType.RING:
+            idx = ranks.index(rank) if rank in ranks else -1
+            if idx < 0:
+                return []
             return [
-                (rank - 1) % size,
-                (rank + 1) % size,
+                ranks[(idx - 1) % len(ranks)],
+                ranks[(idx + 1) % len(ranks)],
             ]
         elif self.topo_type == TopologyType.FULLY_CONNECTED:
-            return [i for i in range(size) if i != rank]
+            return [r for r in ranks if r != rank]
         elif self.topo_type == TopologyType.PIPELINE:
+            idx = ranks.index(rank) if rank in ranks else -1
+            if idx < 0:
+                return []
             neighbors = []
-            if rank > 0:
-                neighbors.append(rank - 1)
-            if rank < size - 1:
-                neighbors.append(rank + 1)
+            if idx > 0:
+                neighbors.append(ranks[idx - 1])
+            if idx < len(ranks) - 1:
+                neighbors.append(ranks[idx + 1])
             return neighbors
         return []
 
@@ -128,9 +138,10 @@ class MeshTopology:
         - 2-4 nodes without JACCL: RING
         - >4 nodes: RING (scalability)
         """
+        from .node import MeshNodeState
         with self._lock:
-            size = len(self._nodes)
-            nodes = list(self._nodes)
+            nodes = [n for n in self._nodes if n.state != MeshNodeState.OFFLINE]
+            size = len(nodes)
 
         if size <= 1:
             return TopologyType.SINGLE
@@ -150,20 +161,19 @@ class MeshTopology:
         step i: rank sends to (rank + 1) % size, receives from (rank - 1) % size
         """
         with self._lock:
-            size = len(self._nodes)
-        if size == 0:
+            ranks = self._sorted_ranks()
+        if not ranks:
             return []
         if self.topo_type == TopologyType.RING:
-            # Ring reduce-scatter phase
-            send_rank = (step + 1) % size
-            recv_rank = (step - 1) % size
-            return [(recv_rank, send_rank)]
+            idx = step % len(ranks)
+            next_idx = (idx + 1) % len(ranks)
+            return [(ranks[idx], ranks[next_idx])]
 
         elif self.topo_type == TopologyType.FULLY_CONNECTED:
             # All-to-all: everyone sends to everyone
             pairs = []
-            for src in range(size):
-                for dst in range(size):
+            for src in ranks:
+                for dst in ranks:
                     if src != dst:
                         pairs.append((src, dst))
             return pairs
@@ -171,8 +181,8 @@ class MeshTopology:
         elif self.topo_type == TopologyType.PIPELINE:
             # Pipeline: each stage sends to the next
             pairs = []
-            for i in range(size - 1):
-                pairs.append((i, i + 1))
+            for i in range(len(ranks) - 1):
+                pairs.append((ranks[i], ranks[i + 1]))
             return pairs
 
         return []

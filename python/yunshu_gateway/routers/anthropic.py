@@ -719,8 +719,6 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
                 visible_text = visible_text[:idx]
                 text_block["text"] = visible_text
                 break
-    if matched_stop is None and result.finish_reason == "stop" and stop:
-        matched_stop = stop[0]
 
     # Include logprobs in the text content block if requested
     if req.logprobs:
@@ -1241,12 +1239,12 @@ async def _stream_anthropic(
         # so that the response always has at least one content block (Anthropic protocol requirement).
         # Always use text block, NOT thinking — thinking blocks should only appear when
         # the model actually produces reasoning output.
-        if not text_block_started and not thinking_block_started:
+        if not text_block_started and not thinking_block_started and not tool_use_block_started:
             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
             text_block_started = True
 
         # Close last content block (only if one was actually started)
-        if text_block_started or thinking_block_started:
+        if text_block_started or thinking_block_started or tool_use_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
 
         # message_delta (stop + usage)
@@ -1287,7 +1285,10 @@ async def _stream_anthropic(
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
-        _anth_tracker.unregister(message_id)
+        try:
+            _anth_tracker.unregister(message_id)
+        except Exception:
+            logger.debug("tracker unregister failed", exc_info=True)
         # Clean up temp files created for image blocks during streaming
         if temp_files:
             import os as _os
@@ -1296,8 +1297,7 @@ async def _stream_anthropic(
                     _os.unlink(_tf_path)
                 except OSError:
                     pass
-
-    _record_metrics(input_tokens, output_tokens)
+        _record_metrics(input_tokens, output_tokens)
 
 
 def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] | None:

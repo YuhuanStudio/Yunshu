@@ -127,11 +127,9 @@ class MetricsMixin(SchedulerMixin):
         )
         throughput_tps = throughput_60s / max(window_span, 0.001)
         p50_step = sorted(self._step_times)[len(self._step_times) // 2] if self._step_times else 0.0
-        p99_step = (
-            sorted(self._step_times)[min(int(len(self._step_times) * 0.99), len(self._step_times) - 1)]
-            if self._step_times
-            else 0.0
-        )
+        _sorted_steps = sorted(self._step_times)
+        _p99_idx = max(0, int(len(_sorted_steps) * 0.99) - 1) if _sorted_steps else 0
+        p99_step = _sorted_steps[_p99_idx] if _sorted_steps else 0.0
         return {
             "step_count": self._step_count,
             "uptime_seconds": round(uptime, 1),

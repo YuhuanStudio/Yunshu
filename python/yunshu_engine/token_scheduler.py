@@ -603,10 +603,11 @@ class PriorityInversionGuard:
             if priority_gap < self.min_priority_gap:
                 continue
 
-            # Check running time threshold — use output_length as proxy
-            # for time spent decoding (wait_time is queue wait, not run time)
-            running_time_proxy = running.output_length if running.output_length > 0 else running.wait_time
-            if running_time_proxy < self.running_time_threshold:
+            # Check running time threshold — use output_length * typical_tps
+            # to estimate decode time (output_length is token count,
+            # running_time_threshold is seconds)
+            estimated_decode_time = running.output_length * 0.02 if running.output_length > 0 else 0.0
+            if estimated_decode_time < self.running_time_threshold and running.wait_time < self.running_time_threshold:
                 continue
 
             # Inversion detected

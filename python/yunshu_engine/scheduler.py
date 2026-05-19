@@ -1860,6 +1860,8 @@ class Scheduler:
                     logger.debug("failed", exc_info=True)
 
             request.status = RequestStatus.PREEMPTED
+            # Reset submit time so timeout doesn't count time spent preempted
+            request._submit_time = time.monotonic()
             # Preserve cached prefix tokens — only reset beyond cache boundary
             prompt_len = getattr(request, 'num_prompt_tokens', 0) or len(request.prompt_token_ids)
             request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens, prompt_len)

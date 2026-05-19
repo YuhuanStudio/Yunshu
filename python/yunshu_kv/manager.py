@@ -583,20 +583,19 @@ class KVCacheManager:
         if blocks_to_free <= 0:
             return 0
 
-        evicted = 0
+        initial_free = self.block_pool.get_free_block_count()
         cached = self.block_pool.get_cached_blocks()
         # Sort by last_access_time (LRU: oldest first) for deterministic
         # eviction order instead of arbitrary dict iteration.
         cached.sort(key=lambda b: b.last_access_time)
 
         for block in cached:
-            if evicted >= blocks_to_free:
+            if self.block_pool.get_free_block_count() - initial_free >= blocks_to_free:
                 break
             if block.block_hash is None:
                 continue
 
             if block.ref_count > 1:
-                # Actively shared by multiple requests -- cannot evict
                 continue
 
             # Demote to warm tier if available
@@ -620,11 +619,7 @@ class KVCacheManager:
             if block.ref_count > 0:
                 continue
 
-            if block.cache_only and block.ref_count == 0:
-                block.cache_only = False
-                if block.prev is None and block.next is None:
-                    self.block_pool.free_queue.append(block)
-                evicted += 1
+        evicted = self.block_pool.get_free_block_count() - initial_free
 
         # Prune stale radix tree nodes (Bug 1: evict() was never called,
         # causing unbounded memory growth in the tree structure).

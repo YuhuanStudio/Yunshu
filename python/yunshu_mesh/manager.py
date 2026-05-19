@@ -378,6 +378,10 @@ class MeshManager:
             if node.state == MeshNodeState.OFFLINE:
                 return
             node.state = MeshNodeState.OFFLINE
+            # Also update the topology's copy of this node
+            topo_node = self._topology.get_node(node.rank)
+            if topo_node is not None and topo_node.node_id == node.node_id:
+                topo_node.state = MeshNodeState.OFFLINE
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
             if self._disagg_router:

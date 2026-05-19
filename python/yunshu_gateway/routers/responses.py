@@ -598,12 +598,16 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 elif output.new_text:
                     completion_tok += 1
                 if output.new_text:
-                    accumulated_text += output.new_text
+                    _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
+                    if _is_reasoning:
+                        reasoning_tok += 1
+                    else:
+                        accumulated_text += output.new_text
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
 
                 # ── Per-token: response.output_text.delta ──
-                if output.new_text:
+                if output.new_text and not _is_reasoning:
                     yield format_responses_text_delta(
                         delta=output.new_text,
                         item_id=msg_id,
@@ -647,17 +651,21 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
                 token_text = getattr(output, 'token_text', '')
+                _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                 if hasattr(output, 'completion_token_count') and output.completion_token_count:
                     completion_tok = output.completion_token_count
-                elif token_text:
+                elif token_text and not _is_reasoning:
                     completion_tok += 1
                 if token_text:
-                    accumulated_text += token_text
+                    if _is_reasoning:
+                        reasoning_tok += 1
+                    else:
+                        accumulated_text += token_text
                 if getattr(output, 'finish_reason', None) is not None:
                     last_finish_reason = output.finish_reason
 
                 # ── Per-token: response.output_text.delta ──
-                if token_text:
+                if token_text and not _is_reasoning:
                     yield format_responses_text_delta(
                         delta=token_text,
                         item_id=msg_id,

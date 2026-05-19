@@ -633,7 +633,6 @@ class KVSynchronizationService:
             consumer = self._block_consumer
 
             total_bytes = sum(b.data_size for b in blocks)
-            self._stats.bytes_received += total_bytes
 
             self._transfer_history[response.request_id] = response
             self._pending_transfers.pop(response.request_id, None)
@@ -644,6 +643,8 @@ class KVSynchronizationService:
         if consumer is not None and blocks:
             try:
                 loaded = consumer(blocks, model_name)
+                with self._lock:
+                    self._stats.bytes_received += total_bytes
             except Exception as e:
                 logger.debug("Block consumer failed: %s", e, exc_info=True)
 
