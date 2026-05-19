@@ -19,6 +19,7 @@ Event types:
   - SNAPSHOT: Periodic full state snapshot for faster recovery
 """
 
+import copy
 import json
 import logging
 import sqlite3
@@ -504,7 +505,7 @@ class EventLog:
                         self._stats.log_size_bytes = row[0]
                 except Exception:
                     logger.debug("failed to query log size", exc_info=True)
-            return self._stats
+            return copy.copy(self._stats)
 
     def get_stats(self) -> dict[str, Any]:
         """Return event log statistics."""

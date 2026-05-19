@@ -1757,16 +1757,16 @@ class ImageGenEngine:
                         preview_png = self._to_png(image)
 
                     try:
-                        _thread_queue.put_nowait({
+                        _thread_queue.put({
                             "step": step_num,
                             "total_steps": num_inference_steps,
                             "progress": progress,
                             "image": preview_png,
                             "is_final": False,
-                        })
+                        }, timeout=2.0)
                     except _queue_mod.Full:
-                        logger.warning("Image stream queue full — consumer likely gone, stopping")
-                        return
+                        logger.warning("Image stream queue full after retry — dropping preview chunk")
+                        continue
 
                 # Final decode
                 image = self._vae.decode(latents)

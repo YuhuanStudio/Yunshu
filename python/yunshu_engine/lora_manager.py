@@ -576,8 +576,12 @@ class LoRAAdapterManager:
         if unwrapped:
             self._base_model.update_modules(tree_unflatten(unwrapped))
 
-        # Restore original weights if we have a saved copy
-        if self._base_model_copy is not None:
+        # Only restore pre-merge weights if there are no currently merged adapters.
+        # If a merge was active, the weights are already correct (adapter was merged
+        # into the base model), and restoring _base_model_copy would undo the merge.
+        if self._base_model_copy is not None and not any(
+            e.is_merged for e in self._adapters.values() if e.is_loaded
+        ):
             import mlx.core as mx
             self._base_model.update(self._base_model_copy)
             mx.eval(self._base_model.parameters())

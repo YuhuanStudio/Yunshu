@@ -22,8 +22,21 @@ class CancelRequest(BaseModel):
 def _check_auth(request: Request) -> None:
     """Verify auth token when YUNSHU_AUTH_TOKEN is configured.
 
+    Also accepts valid RBAC API keys (ys_ prefixed) set by TenantAuthMiddleware.
+
     Raises HTTPException 401 if auth is required but missing/invalid.
     """
+    # Check RBAC key first (set by TenantAuthMiddleware for ys_-prefixed keys)
+    if hasattr(request, "state"):
+        rbac_key = getattr(request.state, "rbac_key", None)
+        if isinstance(rbac_key, str) and rbac_key:
+            return  # Valid RBAC key — already authenticated by middleware
+
+        # Check tenant attribute (set by TenantAuthMiddleware for static tokens)
+        tenant = getattr(request.state, "tenant", None)
+        if isinstance(tenant, str) and tenant:
+            return  # Authenticated via static token through middleware
+
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:
         return  # No auth configured

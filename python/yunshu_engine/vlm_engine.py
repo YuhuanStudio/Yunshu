@@ -732,8 +732,6 @@ class VLMEngine:
                 "completion_tokens": completion_token_count,
             }
         finally:
-            # Only clean up temp files created during this request, not
-            # files belonging to concurrent requests sharing the instance.
             _mine = (self._temp_files or [])[_temp_offset:]
             if _mine and self._temp_files is not None:
                 del self._temp_files[_temp_offset:]
@@ -1332,16 +1330,15 @@ class VLMEngine:
 
         with mx.stream(generation_stream):
             # SpecPrefill: for long text prompts, use attention-based sparse
-            # prefill to reduce computation by only processing high-attention tokens
+            # scoring to prioritize which tokens get prefill attention.
+            # NOTE: We do NOT truncate input_ids — that would permanently
+            # lose context. SpecPrefill is a no-op placeholder until proper
+            # attention-weighted prefill is implemented.
             if self._spec_prefill_enabled and input_ids.shape[0] > 8192:
-                try:
-                    from .spec_prefill import SparsePrefill
-                    sp = SparsePrefill()
-                    indices = sp.select_important_tokens(lm, input_ids[None], top_k=8192)
-                    input_ids = input_ids[indices]
-                    logger.debug(f"SpecPrefill: reduced from {input_ids.shape[0]} to {len(indices)} tokens")
-                except Exception:
-                    logger.debug("SpecPrefill failed, using full prefill", exc_info=True)
+                logger.info(
+                    f"SpecPrefill: input has {input_ids.shape[0]} tokens (>8192 threshold). "
+                    "Full prefill will be used — sparse attention prefill not yet implemented."
+                )
 
             # Prefill
             output = lm(input_ids[None], cache=cache)

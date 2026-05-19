@@ -865,6 +865,16 @@ class LarkGrammarConstraint:
         if self._parser is None:
             return None
 
+        has_interactive = hasattr(self._parser, 'parse_interactive')
+        if not has_interactive:
+            import logging
+            logging.getLogger(__name__).warning(
+                "LarkGrammarConstraint: parse_interactive unavailable (Lark < 1.2). "
+                "CFG constraint will be permissive — all characters allowed. "
+                "Upgrade to Lark >= 1.2 for proper grammar-constrained generation."
+            )
+            return None
+
         valid = set()
         test_chars = [chr(i) for i in range(32, 127)]
         test_chars.extend(['\n', '\t'])
@@ -873,21 +883,14 @@ class LarkGrammarConstraint:
             candidate = self._text_buffer + ch
             try:
                 self._parser.parse(candidate)
-                # Full parse succeeded — char completes the grammar
                 valid.add(ch)
             except Exception:
-                # Incomplete parse — the char might still be valid as a
-                # prefix. Use parse_interactive if available (Lark >= 1.2).
-                if hasattr(self._parser, 'parse_interactive'):
-                    try:
-                        interactive = self._parser.parse_interactive(candidate)
-                        interactive.exhaust_lexer()
-                        # If exhaust_lexer succeeds, the candidate is a valid prefix
-                        valid.add(ch)
-                    except Exception:
-                        pass
-                # If parse_interactive is unavailable, we cannot confirm
-                # the char is a valid prefix — do NOT add it.
+                try:
+                    interactive = self._parser.parse_interactive(candidate)
+                    interactive.exhaust_lexer()
+                    valid.add(ch)
+                except Exception:
+                    pass
 
         if len(valid) > len(test_chars) - 2:
             return None

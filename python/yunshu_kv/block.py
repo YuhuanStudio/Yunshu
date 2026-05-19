@@ -198,7 +198,9 @@ class BlockPool:
     def touch(self, block: KVBlock) -> None:
         """Increase ref count of a shared block (prefix cache hit)."""
         import time
-        if block.ref_count == 0 and not block.is_null:
+        if block.is_null:
+            return
+        if block.ref_count == 0:
             self.free_queue.remove(block)
         block.ref_count += 1
         block.cache_only = False
