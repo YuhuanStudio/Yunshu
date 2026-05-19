@@ -1794,8 +1794,6 @@ class VLMEngine:
             output = lm(current[None], cache=cache)
             logits = output.logits[:, -1, :]
 
-            tokens_list.append(current.item())
-
             if has_penalty:
                 if repetition_penalty != 1.0:
                     ctx = tokens_list[-20:]
@@ -1811,6 +1809,8 @@ class VLMEngine:
                 if logit_bias:
                     for tid, bias in logit_bias.items():
                         logits[..., tid] += bias
+
+            tokens_list.append(current.item())
 
             # JSON schema constraint masking
             if json_constraint is not None:

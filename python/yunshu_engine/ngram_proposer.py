@@ -265,9 +265,6 @@ class LCGHashPool:
         for probe in range(8):
             slot = self._slot(h, probe)
             if self._keys[slot] == 0 or self._keys[slot] == h:
-                # Empty slot or same key — overwrite
-                if self._keys[slot] == 0:
-                    self._total_evictions += 0
                 self._keys[slot] = h
                 self._values[slot] = value
                 return

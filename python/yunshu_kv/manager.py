@@ -525,18 +525,14 @@ class KVCacheManager:
             # Remove from hot prefix cache
             self.block_pool._evict_cached_block(block)
 
+            # Re-check ref_count after eviction — BlockPool.touch() may have
+            # reactivated this block between snapshot and now.
+            if block.ref_count > 0:
+                continue  # actively referenced, do not recycle
+
             if block.cache_only and block.ref_count == 0:
                 # Block is cache-only (was freed by its request and is now
                 # only held by the prefix cache). Safe to recycle.
-                # Guard: if block is already in the free queue (prev/next set),
-                # skip — double-append would corrupt the queue.
-                block.cache_only = False
-                if block.prev is None and block.next is None:
-                    self.block_pool.free_queue.append(block)
-            elif block.ref_count == 1 and block.block_hash is None:
-                # Block was prefix-cache-only with ref_count=1.
-                # Eviction cleared its hash above. Decrement and recycle.
-                block.ref_count = 0
                 block.cache_only = False
                 if block.prev is None and block.next is None:
                     self.block_pool.free_queue.append(block)
@@ -616,13 +612,11 @@ class KVCacheManager:
 
             self.block_pool._evict_cached_block(block)
 
+            # Re-check ref_count — concurrent touch() may have reactivated
+            if block.ref_count > 0:
+                continue
+
             if block.cache_only and block.ref_count == 0:
-                block.cache_only = False
-                if block.prev is None and block.next is None:
-                    self.block_pool.free_queue.append(block)
-                evicted += 1
-            elif block.ref_count == 1 and block.block_hash is None:
-                block.ref_count = 0
                 block.cache_only = False
                 if block.prev is None and block.next is None:
                     self.block_pool.free_queue.append(block)

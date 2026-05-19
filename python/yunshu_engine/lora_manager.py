@@ -319,14 +319,14 @@ class LoRAAdapterManager:
         # Save base weights once (idempotent — only saves if not already saved)
         self.save_base_weights()
 
-        # Serialize GPU mutations with unload_adapter so it cannot
-        # restore base weights while we are mid-merge.
-        with self._gpu_lock:
-            try:
-                # Re-verify adapter is still loaded under gpu_lock — a
-                # concurrent unload_adapter could have restored base between
-                # the _lock release and gpu_lock acquisition.
-                with self._lock:
+        # Hold _lock throughout to prevent AB/BA deadlock with unload_adapter
+        # (_lock is RLock so reentrant for load_adapter's nested acquisition).
+        # _gpu_lock is acquired inside _lock, matching the lock order used
+        # everywhere else (_lock -> _gpu_lock).
+        with self._lock:
+            with self._gpu_lock:
+                try:
+                    # Re-verify adapter is still loaded
                     entry = self._adapters.get(adapter_id)
                     if entry is None or not entry.is_loaded:
                         logger.warning(
@@ -334,31 +334,25 @@ class LoRAAdapterManager:
                         )
                         return False
 
-                import mlx.nn as nn
-                from mlx.utils import tree_unflatten
-                from mlx_lm.tuner.lora import LoRALinear
+                    import mlx.nn as nn
+                    from mlx.utils import tree_unflatten
+                    from mlx_lm.tuner.lora import LoRALinear
 
-                merged_layers = []
-                for name, module in self._base_model.named_modules():
-                    if isinstance(module, LoRALinear):
-                        merged_layers.append((name, module.linear))
+                    merged_layers = []
+                    for name, module in self._base_model.named_modules():
+                        if isinstance(module, LoRALinear):
+                            merged_layers.append((name, module.linear))
 
-                if merged_layers:
-                    self._base_model.update_modules(tree_unflatten(merged_layers))
+                    if merged_layers:
+                        self._base_model.update_modules(tree_unflatten(merged_layers))
 
-                # After merge, the model no longer has LoRA wrappers.
-                # Update the saved base copy so that future _restore_base
-                # calls restore to this post-merge state rather than the
-                # pre-merge state (which still had LoRA layers).
-                if self._base_model is not None:
-                    import mlx.core as mx
-                    self._base_model_copy = mx.tree_map(
-                        lambda x: mx.array(x), self._base_model.parameters()
-                    )
+                    if self._base_model is not None:
+                        import mlx.core as mx
+                        self._base_model_copy = mx.tree_map(
+                            lambda x: mx.array(x), self._base_model.parameters()
+                        )
 
-                # Re-fetch entry under _lock — adapter may have been
-                # unloaded while we were doing GPU work.
-                with self._lock:
+                    # Re-fetch entry — adapter may have been unregistered
                     if adapter_id not in self._adapters:
                         logger.warning(
                             "Adapter %s was unregistered during merge", adapter_id
@@ -366,11 +360,11 @@ class LoRAAdapterManager:
                         return False
                     entry = self._adapters[adapter_id]
                     entry.is_merged = True
-                logger.info(f"Merged LoRA adapter: {adapter_id}")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True)
-                return False
+                    logger.info(f"Merged LoRA adapter: {adapter_id}")
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True)
+                    return False
 
     def list_adapters(self) -> list[dict]:
         """List all registered adapters with their status."""
