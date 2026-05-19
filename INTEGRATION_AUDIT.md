@@ -37,6 +37,15 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6694 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-19 Wave 257 — API Compliance + Thread Safety)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 257: EventLog RLock 死鎖 | threading.Lock 嵌套 acquire 死鎖 (recover_state→get_last_snapshot→replay)。改用 RLock + 方法級加鎖 | 事件溯源線程安全 |
+| Wave 257: Completions response_format | 內聯解析不處理 choice/cfg grammar。改用 chat.py 共享 _parse_response_format | Completions 與 Chat API 行為一致 |
+| Wave 257: Embeddings token 計數 | encode() 含 BOS/EOS 特殊 token。改用 add_special_tokens=False | Token 計數匹配 OpenAI 行為 |
+| Wave 257: MCP 採樣參數 | generate 工具僅轉發 4 參數。新增 7 個: top_k, min_p, penalties, seed, enable_thinking | MCP 客戶端完整採樣控制 |
+
 ### 已完成修復 (2026-05-19 Wave 256 — Context Window + Grammar + Mesh + Routing)
 
 | 修復 | 描述 | 影響 |
