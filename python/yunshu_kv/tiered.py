@@ -146,6 +146,8 @@ class SSDCacheStore:
         """Store a KV block to SSD. Returns True if stored successfully."""
         if self._current_size_bytes >= self.max_size_bytes:
             self._evict_lru()
+            if self._current_size_bytes >= self.max_size_bytes:
+                return False  # Cannot free enough space
 
         if block_hash in self._index:
             # Already stored — just update access time

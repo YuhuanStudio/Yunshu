@@ -89,7 +89,7 @@ class ReasoningParser(ABC):
             return ReasoningOutput(
                 content=content,
                 reasoning=reasoning,
-                reasoning_tokens=max(1, len(reasoning) // 4),
+                reasoning_tokens=max(1, len(reasoning) // 4) if reasoning else 0,
             )
         return ReasoningOutput(content=text.strip())
 

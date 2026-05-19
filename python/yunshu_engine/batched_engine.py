@@ -2113,7 +2113,8 @@ class BatchedEngine:
                         if thinking_budget is not None and _in_thinking:
                             thinking_tokens_used += 1
                             if thinking_tokens_used >= thinking_budget and think_end_token is not None:
-                                # Force end of thinking phase
+                                _thinking_tokens.append(token)
+                                _in_thinking = False
                                 tokens.append(think_end_token)
                                 break
                         # Progressive KV quantization (C6: keep memory flat during generation)
@@ -3112,19 +3113,21 @@ class BatchedEngine:
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                            _thinking_tokens.append(token)
+                            _in_thinking = False
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
                             # Emit text before finalizing so consumer reads it
                             # before the stop chunk (consumer breaks on done=True).
                             if new_text:
-                                _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "reasoning" if _in_thinking else "normal"))
+                                _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "normal"))
                             detokenizer.finalize()
                             _remaining = detokenizer.last_segment
                             if _remaining:
-                                _put((_remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                                _put((_remaining, n_tok, None, len(_thinking_tokens), None, "normal"))
                             # Final stop chunk — consumer breaks on this
-                            _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                            _put(("", n_tok, "stop", len(_thinking_tokens), None, "normal"))
                             if _pipeline is not None:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)

@@ -83,6 +83,8 @@ class RequestOutputCollector:
                 _lp = new.logprobs
             elif isinstance(_lp, list) and isinstance(new.logprobs, list):
                 _lp = _lp + new.logprobs
+            elif _lp is not None:
+                pass  # keep existing accumulated logprobs
             else:
                 _lp = new.logprobs
         # Take max reasoning_tokens (scheduler provides cumulative count, not incremental)
