@@ -1561,6 +1561,10 @@ class BatchedEngine:
                 top_logprobs=top_logprobs,
                 thinking_budget=thinking_budget,
                 cancel_event=cancel_event,
+                json_schema=json_schema,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                logits_processors=logits_processors,
             )
 
         # N-gram speculative decoding (model-free, CPU-based proposal)
@@ -1587,6 +1591,7 @@ class BatchedEngine:
                 enable_thinking=enable_thinking,
                 thinking_budget=thinking_budget,
                 cancel_event=cancel_event,
+                logits_processors=logits_processors,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
@@ -2539,10 +2544,19 @@ class BatchedEngine:
             _external = cancel_event
 
             class _CompositeCancelEvent:
-                """Proxy that returns True if either the internal or external event is set."""
+                """Proxy that returns True if either the internal or external event is set.
+
+                Thread-safe: reads asyncio.Event._value directly (GIL-protected bool)
+                instead of calling .is_set() which is not safe from executor threads.
+                """
                 def is_set(self):
-                    if _internal is not None and _internal.is_set():
-                        return True
+                    if _internal is not None:
+                        # asyncio.Event: read _value (GIL-protected bool)
+                        if hasattr(_internal, '_value'):
+                            if _internal._value:
+                                return True
+                        elif _internal.is_set():
+                            return True
                     return _is_cancelled(_external)
 
             _cancel_event = _CompositeCancelEvent()
@@ -2587,11 +2601,16 @@ class BatchedEngine:
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     logit_bias=logit_bias,
-                    logprobs=logprobs, stop=stop, stop_token_ids=stop_token_ids,
+                    logprobs=logprobs, top_logprobs=top_logprobs,
+                    stop=stop, stop_token_ids=stop_token_ids,
                     seed=seed, cancel_event=_cancel_event,
                     enable_thinking=enable_thinking,
                     thinking_budget=thinking_budget,
                     timeout_seconds=timeout_seconds or 300.0,
+                    json_schema=json_schema,
+                    xtc_probability=xtc_probability,
+                    xtc_threshold=xtc_threshold,
+                    logits_processors=logits_processors,
                 ):
                     yield output
             finally:
@@ -2619,6 +2638,7 @@ class BatchedEngine:
                     xtc_threshold=xtc_threshold,
                     cancel_event=_cancel_event,
                     timeout_seconds=timeout_seconds or 300.0,
+                    logits_processors=logits_processors,
                 ):
                     yield output
             finally:
@@ -4276,6 +4296,7 @@ class BatchedEngine:
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         cancel_event: asyncio.Event | None = None,
+        logits_processors: list | None = None,
     ) -> GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -4292,6 +4313,9 @@ class BatchedEngine:
         tokenizer = self._tokenizer
         model = self._model
         proposer = self._ngram_proposer
+        # Reset cross-request state so indexed_len doesn't carry over from
+        # the previous request's token sequence.
+        proposer.reset()
 
         # Handle messages-format prompts (list of dicts) — apply chat template
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
@@ -4505,8 +4529,9 @@ class BatchedEngine:
                         # 2. Consecutive prefix match finds acceptance boundary
                         # 3. KV cache trimmed to remove rejected entries
                         # 4. Bonus token emitted from rejection point
-                        result = self._spec_draft_verifier.verify(
+                        result = self._spec_draft_verifier.verify_with_last_token(
                             model=model,
+                            last_token_id=tokens[-1],
                             draft_ids=draft_ids[:n_draft],
                             prompt_cache=cache,
                         )
@@ -4686,6 +4711,7 @@ class BatchedEngine:
         xtc_threshold: float = 0.0,
         cancel_event: asyncio.Event | None = None,
         timeout_seconds: float = 300.0,
+        logits_processors: list | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -4697,6 +4723,7 @@ class BatchedEngine:
         tokenizer = self._tokenizer
         model = self._model
         proposer = self._ngram_proposer
+        proposer.reset()
 
         # Handle messages-format prompts (list of dicts) — apply chat template
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
@@ -5145,6 +5172,10 @@ class BatchedEngine:
         top_logprobs: int | None = None,
         thinking_budget: int | None = None,
         cancel_event: asyncio.Event | None = None,
+        json_schema: dict | str | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        logits_processors: list | None = None,
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -5202,7 +5233,8 @@ class BatchedEngine:
         _mtp_sampler = make_sampler(
             temp=temperature, top_p=top_p,
             top_k=top_k if top_k > 0 else 0, min_p=min_p,
-        ) if temperature > 0 or top_p < 1.0 or top_k > 0 or min_p > 0 else None
+            xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+        ) if temperature > 0 or top_p < 1.0 or top_k > 0 or min_p > 0 or xtc_probability > 0 else None
 
         # Use incremental detokenizer for correct multi-byte UTF-8
         detokenizer = tokenizer.detokenizer
@@ -5341,6 +5373,7 @@ class BatchedEngine:
         presence_penalty: float = 0.0,
         logit_bias: dict[int, float] | None = None,
         logprobs: bool = False,
+        top_logprobs: int | None = None,
         stop: list[str] | None = None,
         stop_token_ids: list[int] | None = None,
         seed: int | None = None,
@@ -5348,6 +5381,10 @@ class BatchedEngine:
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
         timeout_seconds: float = 300.0,
+        json_schema: dict | str | None = None,
+        xtc_probability: float = 0.0,
+        xtc_threshold: float = 0.0,
+        logits_processors: list | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 
@@ -5400,7 +5437,8 @@ class BatchedEngine:
         _mtp_sampler = make_sampler(
             temp=temperature, top_p=top_p,
             top_k=top_k if top_k > 0 else 0, min_p=min_p,
-        ) if temperature > 0 or top_p < 1.0 or top_k > 0 or min_p > 0 else None
+            xtc_probability=xtc_probability, xtc_threshold=xtc_threshold,
+        ) if temperature > 0 or top_p < 1.0 or top_k > 0 or min_p > 0 or xtc_probability > 0 else None
 
         # Inflight prefix sharing: register for concurrent KV block sharing
         _inflight_req_id = f"mtp-s-{id(self)}-{int(time.monotonic()*1e6)}"

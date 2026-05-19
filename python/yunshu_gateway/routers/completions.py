@@ -642,6 +642,11 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                 decoded_top = []
                 for tlp in top_lps[:top_logprobs] if top_logprobs else []:
                     tlp_token = tlp.get("token", "")
+                    if not tlp_token and tokenizer and "token_id" in tlp:
+                        try:
+                            tlp_token = tokenizer.decode([tlp["token_id"]])
+                        except Exception:
+                            pass
                     decoded_top.append({
                         "token": tlp_token,
                         "logprob": tlp.get("logprob", 0.0),
@@ -698,11 +703,15 @@ def _format_streaming_logprobs(
         if not isinstance(lp_entry, dict):
             continue
         token_str = lp_entry.get("token", "")
+        if not token_str and "token_id" in lp_entry:
+            token_str = str(lp_entry["token_id"])
         top_lps = lp_entry.get("top_logprobs", [])
         # Decode top_logprobs with bytes field
         decoded_top = []
         for tlp in top_lps:
             tlp_token = tlp.get("token", "")
+            if not tlp_token and "token_id" in tlp:
+                tlp_token = str(tlp["token_id"])
             decoded_top.append({
                 "token": tlp_token,
                 "logprob": tlp.get("logprob", 0.0),

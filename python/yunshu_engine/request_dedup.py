@@ -113,7 +113,7 @@ class RequestDeduplicator:
             if kwargs[k] is not None:
                 parts.append(f"{k}={kwargs[k]}")
         content = "|".join(parts)
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        return hashlib.sha256(content.encode()).hexdigest()[:32]
 
     def check(
         self,

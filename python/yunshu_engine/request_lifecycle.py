@@ -456,8 +456,9 @@ class RequestLifecycleOrchestrator:
             # Use last_active_at for timeout: set at creation and reset on retry
             reference_time = state.last_active_at or state.created_at
             if now - reference_time > timeout_s:
-                self.on_request_failed(rid, error="timeout", retryable=False)
-                self._total_timeouts += 1
+                result = self.on_request_failed(rid, error="timeout", retryable=False)
+                if result is not None:
+                    self._total_timeouts += 1
                 timed_out.append(rid)
         return timed_out
 

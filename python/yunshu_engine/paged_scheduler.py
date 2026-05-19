@@ -197,7 +197,7 @@ class PagedScheduler(Scheduler):
                     self._kv_manager.cache_to_radix_tree(
                         all_tokens, cached_blocks, cached_hashes,
                     )
-        self._kv_manager.free_request(table)
+        self._kv_manager.free_request(table, request_id=req_id)
 
     def _preempt_request(self, request) -> None:
         """Preempt a running request, releasing its KV blocks back to the pool.

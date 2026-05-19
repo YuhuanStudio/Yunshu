@@ -571,6 +571,11 @@ def _format_logprobs(
                 for tlp in raw_top:
                     if isinstance(tlp, dict):
                         tlp_token = tlp.get("token", "")
+                        if not tlp_token and tokenizer and "token_id" in tlp:
+                            try:
+                                tlp_token = tokenizer.decode([tlp["token_id"]])
+                            except Exception:
+                                pass
                         decoded_top.append({
                             "token": tlp_token,
                             "logprob": tlp.get("logprob", 0.0),

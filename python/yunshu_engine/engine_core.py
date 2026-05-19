@@ -1821,6 +1821,26 @@ class EngineCore:
                         if stream_state is not None:
                             stream_state.mark_sent(req_output.completion_tokens)
 
+                    # Forward intermediate output to dedup shadow requests
+                    if not req_output.finished and self._request_dedup is not None:
+                        shadow_ids = [
+                            sid for sid, pid in self._dedup_shadows.items()
+                            if pid == rid
+                        ]
+                        for sid in shadow_ids:
+                            s_collector = self._output_collectors.get(sid)
+                            if s_collector is not None:
+                                from .request import RequestOutput as _RO
+                                s_collector.put(_RO(
+                                    request_id=sid,
+                                    new_token_ids=req_output.new_token_ids,
+                                    new_text=req_output.new_text,
+                                    output_text=req_output.output_text,
+                                    completion_tokens=req_output.completion_tokens,
+                                    finished=False,
+                                    prompt_tokens=req_output.prompt_tokens,
+                                ))
+
                     if req_output.finished:
                         self._num_requests_processed += 1
                         # FairnessTracker: record completion before finalize pops timestamp
@@ -1906,7 +1926,24 @@ class EngineCore:
                             self._lifecycle_orchestrator.on_decode_start(rid)
                         # Bug 4 fix: use actual completion_tokens (not hardcoded 1)
                         # During chunked prefill, multiple tokens are produced per step.
-                        self._budget_manager.consume(rid, tokens=req_output.completion_tokens)
+                        budget_result = self._budget_manager.consume(rid, tokens=req_output.completion_tokens)
+                        if budget_result is not None:
+                            # Budget exhausted — abort request so scheduler stops generating
+                            logger.info(f"Budget exhausted for {rid}: {budget_result}")
+                            self.scheduler.abort_request(rid)
+                            from .request import RequestOutput as _RO
+                            _bc = self._output_collectors.get(rid)
+                            if _bc is not None:
+                                _bc.put(_RO(
+                                    request_id=rid,
+                                    finished=True,
+                                    finish_reason=budget_result,
+                                    error=f"Budget exhausted: {budget_result}",
+                                    completion_tokens=req_output.completion_tokens,
+                                ))
+                                _bc.put(None)
+                            self._signal_finished(rid)
+                            self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
                         # Sliding window tracking
                         if self._sliding_window_mgr is not None:
                             try:
