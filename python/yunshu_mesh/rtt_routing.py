@@ -27,6 +27,8 @@ class NodeRTT:
     # Load tracking
     active_requests: int = 0
     max_requests: int = 32
+    # Health tracking
+    healthy: bool = True
 
     def update_rtt(self, measured_ms: float, alpha: float = 0.125) -> None:
         """Update RTT estimate using Jacobson/Karels algorithm."""
@@ -126,6 +128,30 @@ class RTTAwareRouter:
             if node:
                 node.active_requests = max(0, node.active_requests - 1)
 
+    def mark_unhealthy(self, node_id: str) -> None:
+        """Mark a node as unhealthy so it is excluded from routing decisions.
+
+        Called by the mesh layer when a node fails health checks (connection
+        errors, persistent timeouts, crash detection).
+        """
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node:
+                node.healthy = False
+                logger.warning("Node %s marked unhealthy, excluded from routing", node_id)
+
+    def mark_healthy(self, node_id: str) -> None:
+        """Mark a previously unhealthy node as healthy again.
+
+        Called by the mesh layer when a node passes health checks after
+        a failure period.
+        """
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node:
+                node.healthy = True
+                logger.info("Node %s marked healthy, re-enabled for routing", node_id)
+
     def route(self, exclude: set[str] | None = None) -> RoutingScore | None:
         """Select the best node for a new request."""
         with self._lock:
@@ -140,6 +166,7 @@ class RTTAwareRouter:
             (nid, node) for nid, node in self._nodes.items()
             if (exclude is None or nid not in exclude)
             and node.active_requests < node.max_requests
+            and node.healthy
         ]
 
         if not candidates:

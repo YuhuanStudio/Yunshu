@@ -297,6 +297,40 @@ class DisaggRouter:
             if node_id in self._nodes:
                 self._nodes[node_id].available = True
 
+    def _cleanup_stale_transfers(self) -> None:
+        """Remove transfers pending for more than 60 seconds (stale/leaked).
+
+        If a transfer never completes because a node crashed or the
+        network dropped the message, the kv_transfer_queue counter on
+        the source node would never be decremented.  This method must
+        be called with self._lock held.
+        """
+        now = time.monotonic()
+        stale_timeout = 60.0  # seconds
+        stale = [
+            t for t in self._pending_transfers
+            if t.status == "pending"
+            and (now - t.created_at) > stale_timeout
+        ]
+        for t in stale:
+            t.status = "failed"
+            self._stats.kv_transfer_failures += 1
+            if t.source_node in self._nodes:
+                self._nodes[t.source_node].kv_transfer_queue = max(
+                    0, self._nodes[t.source_node].kv_transfer_queue - 1
+                )
+            logger.warning(
+                "KV transfer stale cleanup: %s (%s → %s, age=%.1fs)",
+                t.request_id, t.source_node, t.target_node,
+                now - t.created_at,
+            )
+        if stale:
+            self._pending_transfers = [
+                t for t in self._pending_transfers if t.status in ("pending", "transferring")
+            ] + [
+                t for t in self._pending_transfers if t.status not in ("pending", "transferring")
+            ]
+
     def route_request(
         self,
         prompt_tokens: int,
@@ -308,6 +342,8 @@ class DisaggRouter:
         account for in-flight requests.
         """
         with self._lock:
+            self._cleanup_stale_transfers()
+
             if prompt_tokens >= self._config.prefill_threshold_tokens:
                 node_id = self._select_prefill_node()
                 role = NodeRole.PREFILL

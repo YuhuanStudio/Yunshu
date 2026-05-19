@@ -286,13 +286,13 @@ class GrammarBitmaskEngine:
     # require the saved dict as an argument or take no args at all.
     # We store the return value and only pass it if the constraint's
     # rollback() signature accepts an argument.
-    _checkpoint_state: Any = None
+    _checkpoint_stack: list = []
     _constraint_rollback_needs_arg: bool | None = None
 
     def checkpoint(self) -> None:
         if hasattr(self._constraint, "checkpoint"):
             result = self._constraint.checkpoint()
-            self._checkpoint_state = result
+            self._checkpoint_stack.append(result)
             # Probe whether rollback() expects an argument (takes >1 param
             # i.e. self + saved) by inspecting its signature once.
             if self._constraint_rollback_needs_arg is None and hasattr(self._constraint, "rollback"):
@@ -303,7 +303,7 @@ class GrammarBitmaskEngine:
     def rollback(self) -> None:
         if hasattr(self._constraint, "rollback"):
             if self._constraint_rollback_needs_arg:
-                saved = self._checkpoint_state
+                saved = self._checkpoint_stack.pop() if self._checkpoint_stack else None
                 if saved is not None:
                     self._constraint.rollback(saved)
                 else:
@@ -311,7 +311,9 @@ class GrammarBitmaskEngine:
                     self._constraint.rollback()
             else:
                 self._constraint.rollback()
-            self._checkpoint_state = None
+            # Pop the stack for no-arg rollback too (keeps stack depth correct)
+            if self._constraint_rollback_needs_arg is False and self._checkpoint_stack:
+                self._checkpoint_stack.pop()
 
     def get_stats(self) -> dict[str, Any]:
         stats = getattr(self._constraint, "get_stats", lambda: {})()

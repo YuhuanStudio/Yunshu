@@ -1160,6 +1160,49 @@ class EngineCore:
                     f"Context window truncation: {excess} tokens removed from prompt "
                     f"(max_seq_len={max_seq_len})"
                 )
+            elif excess > 0 and num_prompt_tokens <= excess:
+                # Prompt alone exceeds the context window — truncation would
+                # consume the entire prompt.  Return an error immediately so
+                # the caller gets a clear message instead of silently running
+                # with an overlength prompt that produces garbage output.
+                from .output_collector import RequestOutputCollector, RequestStreamState
+                from .request import RequestOutput
+                self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+                self._stream_states[req_id] = RequestStreamState(
+                    stream_interval=self.config.stream_interval
+                )
+                self._finished_events[req_id] = asyncio.Event()
+                error_output = RequestOutput(
+                    request_id=req_id,
+                    finished=True,
+                    finish_reason="error",
+                    error=(
+                        f"Prompt exceeds context window "
+                        f"({num_prompt_tokens} prompt tokens > {max_seq_len} max_seq_len)"
+                    ),
+                    prompt_tokens=num_prompt_tokens,
+                    completion_tokens=0,
+                )
+                self._output_collectors[req_id].put(error_output)
+                self._output_collectors[req_id].put(None)  # sentinel
+                self._finished_events[req_id].set()
+                # Clean up resources acquired before this point
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    get_inflight_tracker().unregister(req_id)
+                except Exception:
+                    logger.debug(f"inflight unregister failed in context window rejection for {req_id}", exc_info=True)
+                self._budget_manager.remove(req_id)
+                if loaded_lora and lora_adapter:
+                    try:
+                        from .lora_manager import get_lora_manager
+                        lora_mgr = get_lora_manager()
+                        if lora_mgr is not None:
+                            lora_mgr.release_adapter(lora_adapter)
+                    except Exception:
+                        logger.debug(f"LoRA release failed in context window rejection for {req_id}", exc_info=True)
+                self._fail_dedup_shadows(req_id, "Prompt exceeds context window", "error")
+                return req_id
 
         # ── Wave 42: Budget check (token/time/cost/thinking) ──
         budget = self._budget_manager.register(
