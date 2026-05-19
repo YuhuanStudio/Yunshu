@@ -20,6 +20,7 @@ import logging
 import re
 import re._parser as _sre_parse
 from typing import Any
+import weakref
 
 logger = logging.getLogger(__name__)
 
@@ -598,13 +599,12 @@ class RegexConstraint:
         return list(range(vocab_size))
 
     def _find_tokens_for_chars(self, tokenizer: Any, chars: set[str]) -> list[int]:
-        cache_key = id(tokenizer)
         if not hasattr(self.__class__, '_token_char_cache'):
-            self.__class__._token_char_cache = {}
-        if cache_key not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[cache_key] = _build_token_char_map(tokenizer)
+            self.__class__._token_char_cache = weakref.WeakKeyDictionary()
+        if tokenizer not in self.__class__._token_char_cache:
+            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
 
-        char_map = self.__class__._token_char_cache[cache_key]
+        char_map = self.__class__._token_char_cache[tokenizer]
         allowed = set()
         for ch in chars:
             if ch in char_map:
@@ -724,13 +724,12 @@ class ChoiceConstraint:
         has_eos = "__eos__" in valid_chars
 
         # Build allowed tokens from valid chars
-        cache_key = id(tokenizer)
         if not hasattr(self.__class__, '_token_char_cache'):
-            self.__class__._token_char_cache = {}
-        if cache_key not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[cache_key] = _build_token_char_map(tokenizer)
+            self.__class__._token_char_cache = weakref.WeakKeyDictionary()
+        if tokenizer not in self.__class__._token_char_cache:
+            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
 
-        char_map = self.__class__._token_char_cache[cache_key]
+        char_map = self.__class__._token_char_cache[tokenizer]
         allowed = set()
         for ch in valid_chars:
             if ch == "__eos__":
@@ -849,13 +848,12 @@ class LarkGrammarConstraint:
         if not valid_chars:
             return []
 
-        cache_key = id(tokenizer)
         if not hasattr(self.__class__, '_token_char_cache'):
-            self.__class__._token_char_cache = {}
-        if cache_key not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[cache_key] = _build_token_char_map(tokenizer)
+            self.__class__._token_char_cache = weakref.WeakKeyDictionary()
+        if tokenizer not in self.__class__._token_char_cache:
+            self.__class__._token_char_cache[tokenizer] = _build_token_char_map(tokenizer)
 
-        char_map = self.__class__._token_char_cache[cache_key]
+        char_map = self.__class__._token_char_cache[tokenizer]
         allowed = set()
         for ch in valid_chars:
             if ch in char_map:

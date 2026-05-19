@@ -42,6 +42,7 @@ import json
 import logging
 import os
 from typing import Any, Callable
+import weakref
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ class TokenStringTable:
     - full_vocab_ids: list of all token IDs (for "any token allowed" case)
     """
 
-    _cache: dict[int, "TokenStringTable"] = {}
+    _cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
     def __init__(self, tokenizer: Any, vocab_size: int) -> None:
         self.vocab_size = vocab_size
@@ -168,11 +169,10 @@ class TokenStringTable:
     @classmethod
     def get(cls, tokenizer: Any) -> "TokenStringTable":
         """Get or create the token table for a tokenizer (cached)."""
-        cache_key = id(tokenizer)
-        if cache_key not in cls._cache:
+        if tokenizer not in cls._cache:
             vocab_size = cls._detect_vocab_size(tokenizer)
-            cls._cache[cache_key] = cls(tokenizer, vocab_size)
-        return cls._cache[cache_key]
+            cls._cache[tokenizer] = cls(tokenizer, vocab_size)
+        return cls._cache[tokenizer]
 
     @staticmethod
     def _detect_vocab_size(tokenizer: Any) -> int:

@@ -962,13 +962,13 @@ class JsonSchemaConstraint:
         Uses precomputed token cache for efficiency on repeated calls.
         """
         # Build token-to-first-char mapping if not cached
-        cache_key = id(tokenizer)
         if not hasattr(self.__class__, '_token_char_cache'):
-            self.__class__._token_char_cache = {}
-        if cache_key not in self.__class__._token_char_cache:
-            self.__class__._token_char_cache[cache_key] = self._build_token_char_map(tokenizer)
+            import weakref
+            self.__class__._token_char_cache = weakref.WeakKeyDictionary()
+        if tokenizer not in self.__class__._token_char_cache:
+            self.__class__._token_char_cache[tokenizer] = self._build_token_char_map(tokenizer)
 
-        char_map = self.__class__._token_char_cache[cache_key]
+        char_map = self.__class__._token_char_cache[tokenizer]
         allowed = set()
         for ch in chars:
             if ch in char_map:
