@@ -305,3 +305,8 @@ class RBACManager:
 
     def get_permissions(self, role: Role) -> RolePermissions:
         return ROLE_PERMISSIONS.get(role, RolePermissions())
+
+    def is_enabled(self) -> bool:
+        """Return True if RBAC auth is active (at least one key configured)."""
+        with self._lock:
+            return len(self._keys) > 0

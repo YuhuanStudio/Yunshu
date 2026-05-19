@@ -4845,6 +4845,7 @@ class BatchedEngine:
                             n_tok += 1
                             stop_hit = token_id in stop_ids
                             if stop_hit:
+                                n_tok -= 1  # Exclude stop token from count
                                 # Stop token — don't add to detokenizer
                                 _put(("", n_tok, "stop", token_id))
                                 prefix_cache.add(ids, cache)
@@ -4856,7 +4857,10 @@ class BatchedEngine:
                             suffix_hit = False
                             if stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                            _put((detokenizer.last_segment, n_tok, "stop" if suffix_hit else None, token_id))
+                            _text = "" if suffix_hit else detokenizer.last_segment
+                            if suffix_hit:
+                                n_tok -= 1  # Exclude suffix-triggering token from count
+                            _put((_text, n_tok, "stop" if suffix_hit else None, token_id))
                             if suffix_hit:
                                 detokenizer.finalize()
                                 _remaining = detokenizer.last_segment
@@ -4903,6 +4907,7 @@ class BatchedEngine:
                             n_tok += 1
                             stop_hit = accepted_id in stop_ids
                             if stop_hit:
+                                n_tok -= 1  # Exclude stop token from count
                                 _put(("", n_tok, "stop", accepted_id))
                                 stopped = True
                             else:
@@ -4910,7 +4915,10 @@ class BatchedEngine:
                                 suffix_hit = False
                                 if stop_suffixes:
                                     suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                                _put((detokenizer.last_segment, n_tok, "stop" if suffix_hit else None, accepted_id))
+                                _text = "" if suffix_hit else detokenizer.last_segment
+                                if suffix_hit:
+                                    n_tok -= 1  # Exclude suffix-triggering token from count
+                                _put((_text, n_tok, "stop" if suffix_hit else None, accepted_id))
                                 if suffix_hit:
                                     stopped = True
                             if i >= accepted:
@@ -4944,6 +4952,7 @@ class BatchedEngine:
                             n_tok += 1
                             stop_hit = accepted_id in stop_ids
                             if stop_hit:
+                                n_tok -= 1  # Exclude stop token from count
                                 _put(("", n_tok, "stop", accepted_id))
                                 stopped = True
                             else:
@@ -4951,7 +4960,10 @@ class BatchedEngine:
                                 suffix_hit = False
                                 if stop_suffixes:
                                     suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
-                                _put((detokenizer.last_segment, n_tok, "stop" if suffix_hit else None, accepted_id))
+                                _text = "" if suffix_hit else detokenizer.last_segment
+                                if suffix_hit:
+                                    n_tok -= 1  # Exclude suffix-triggering token from count
+                                _put((_text, n_tok, "stop" if suffix_hit else None, accepted_id))
                                 if suffix_hit:
                                     stopped = True
                             if not is_accept:
