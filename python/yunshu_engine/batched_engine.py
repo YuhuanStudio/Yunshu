@@ -29,6 +29,20 @@ from typing import Any, AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _is_cancelled(event: Any) -> bool:
+    """Thread-safe cancel check. Works from the MLX executor thread.
+
+    asyncio.Event.is_set() reads ._value (GIL-protected bool), which is
+    safe from any thread in CPython.  Using the explicit attribute avoids
+    the thread-safety warning from calling asyncio APIs off the event loop.
+    """
+    if event is None:
+        return False
+    if isinstance(event, asyncio.Event):
+        return event._value
+    return event.is_set()
+
 _REASONING_EFFORT_MAP = {"low": 2048, "medium": 8192, "high": 32768}
 
 
@@ -2051,7 +2065,10 @@ class BatchedEngine:
                             max_tokens=remaining, sampler=sampler,
                             prompt_cache=cache, logits_processors=_lprocs,
                         ):
-                            if cancel_event is not None and cancel_event.is_set():
+                            if cancel_event is not None and (
+                                cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                                else cancel_event.is_set()
+                            ):
                                 mx.synchronize()
                                 break
                             tokens.append(token)
@@ -2111,7 +2128,7 @@ class BatchedEngine:
                                 logger.warning(f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
                                 break
                         # Cancellation check
-                        if cancel_event is not None and cancel_event.is_set():
+                        if _is_cancelled(cancel_event):
                             mx.synchronize()
                             break
                         # Thinking budget enforcement: cap thinking tokens
@@ -2358,7 +2375,7 @@ class BatchedEngine:
             # When cancel_event or timeout triggers, the loop breaks without
             # setting _stopped_by_suffix or _stopped_by_stop_id, so those
             # tokens correctly show up as "stop" only when genuinely stopped.
-            _cancelled = cancel_event is not None and cancel_event.is_set()
+            _cancelled = _is_cancelled(cancel_event)
             if _cancelled:
                 finish_reason = "stop"
             elif _stopped_by_suffix or _stopped_by_stop_id:
@@ -2526,7 +2543,7 @@ class BatchedEngine:
                 def is_set(self):
                     if _internal is not None and _internal.is_set():
                         return True
-                    return _external.is_set()
+                    return _is_cancelled(_external)
 
             _cancel_event = _CompositeCancelEvent()
 
@@ -3061,7 +3078,7 @@ class BatchedEngine:
                         _ptok = _pipeline.submit_stage1_result(logits=None, token_id=int(token))
                         _ptok = _pipeline.submit_stage2_result(_ptok, sampled_id=int(token))
                     # Check cancellation
-                    if cancel_event is not None and cancel_event.is_set():
+                    if _is_cancelled(cancel_event):
                         mx.synchronize()
                         mx.clear_cache()
                         # Flush remaining detokenizer bytes before cancelling
@@ -3893,7 +3910,7 @@ class BatchedEngine:
                 logger.debug("TTFT prometheus recording failed in spec decode path", exc_info=True)
 
         # Determine finish_reason with cancel awareness
-        _cancelled = cancel_event is not None and cancel_event.is_set()
+        _cancelled = _is_cancelled(cancel_event)
         if _cancelled:
             _finish_reason = "stop"
         elif hit_stop:
@@ -4061,7 +4078,7 @@ class BatchedEngine:
           _spec_ttft_ms_val = 0.0
           _spec_ttft_recorded = False
           while len(generated_tokens) < max_tokens:
-            if cancel_event is not None and cancel_event.is_set():
+            if _is_cancelled(cancel_event):
                 logger.debug("Cancel event triggered during spec decode streaming")
                 # Yield terminal stop chunk so consumer sees finished=True
                 if generated_tokens:
@@ -4446,7 +4463,7 @@ class BatchedEngine:
                     # Step 2: Decode loop with N-gram lookahead
                     remaining = max_tokens - 1
                     while remaining > 0:
-                        if cancel_event is not None and cancel_event.is_set():
+                        if _is_cancelled(cancel_event):
                             break
                         # Stop check: break outer loop if stop token was hit in
                         # a previous iteration's accepted/bonus tokens.
@@ -4604,7 +4621,7 @@ class BatchedEngine:
 
         # Determine finish_reason with cancel awareness.
         # Stop tokens are popped from `tokens`, so check the flags instead.
-        _cancelled = cancel_event is not None and cancel_event.is_set()
+        _cancelled = _is_cancelled(cancel_event)
         if _cancelled:
             finish_reason = "stop"
         elif _stopped_by_suffix or _stopped_by_stop_id:
@@ -4830,7 +4847,7 @@ class BatchedEngine:
                 # Decode with N-gram lookahead
                 remaining = max_tokens - 1
                 while remaining > 0:
-                    if cancel_event is not None and cancel_event.is_set():
+                    if _is_cancelled(cancel_event):
                         detokenizer.finalize()
                         _put(_sentinel)
                         return
@@ -5263,7 +5280,7 @@ class BatchedEngine:
                     break
 
         # Determine finish_reason with cancel awareness
-        _cancelled = cancel_event is not None and cancel_event.is_set()
+        _cancelled = _is_cancelled(cancel_event)
         if _cancelled:
             finish_reason = "stop"
         elif hit_stop or hit_suffix:
@@ -5452,7 +5469,7 @@ class BatchedEngine:
 
                 while len(generated) < max_tokens:
                     # Check cancel_event
-                    if cancel_event is not None and cancel_event.is_set():
+                    if _is_cancelled(cancel_event):
                         # Emit stop chunk before breaking so consumer sees finished=True
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
@@ -5544,7 +5561,7 @@ class BatchedEngine:
         try:
             while True:
                 # Check cancel_event from consumer side
-                if cancel_event is not None and cancel_event.is_set():
+                if _is_cancelled(cancel_event):
                     # Yield terminal stop chunk so consumer sees finished=True
                     yield GenerationOutput(
                         text=_clean_special_tokens(accumulated) if accumulated else "",
