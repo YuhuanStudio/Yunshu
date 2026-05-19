@@ -142,7 +142,7 @@ class TestOutputTokenTracking:
 
         # Should have tracked all non-stop token IDs
         assert state.output_token_ids == [0, 1]  # Token 2 is stop, not tracked
-        assert state.completion_token_count == 3  # All tokens including stop
+        assert state.completion_token_count == 2  # Stop token excluded per OpenAI convention
         assert "Hello" in state.generated_text
         assert "world" in state.generated_text
 

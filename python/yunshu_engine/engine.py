@@ -640,6 +640,15 @@ class Engine:
                         req.done_event.set()
                 self._active.clear()
                 self._uid_to_req.clear()
+                # Also fail waiting requests so they don't re-enter a broken batch
+                for ws in list(self._waiting):
+                    ws.finish_reason = "error"
+                    try:
+                        ws.output_queue.put_nowait(None)
+                    except Exception:
+                        pass
+                    ws.done_event.set()
+                self._waiting.clear()
                 await asyncio.sleep(0.1)
                 continue
 
@@ -778,9 +787,8 @@ class Engine:
                     token_text = self._tokenizer.decode([resp.token]) if self._tokenizer else ""
 
                 state.generated_text += token_text
-            elif is_finished:
-                # Stop token — don't decode, just count
-                state.completion_token_count += 1
+            # finish_reason="stop": stop token should NOT be counted per OpenAI API convention.
+            # finish_reason="length": already counted above in the not-is_stop branch.
 
             # Extract logprob if available
             logprob = 0.0

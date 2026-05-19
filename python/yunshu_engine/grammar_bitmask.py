@@ -75,9 +75,8 @@ class BitmaskApplicator:
 
         # bitmask is True where allowed; we want True where BLOCKED
         blocked = mx.logical_not(bitmask)
-        if self._neg_inf is None:
-            self._neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
-        return mx.where(blocked, self._neg_inf, logits)
+        neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
+        return mx.where(blocked, neg_inf, logits)
 
     def apply_allowlist(self, logits: Any, allowed_ids: list[int]) -> Any:
         """Convenience: build mask from an allowlist, then apply.

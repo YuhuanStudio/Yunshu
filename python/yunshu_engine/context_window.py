@@ -308,9 +308,9 @@ class ContextWindowManager:
         # Such dangling tool_calls would cause chat template errors.
         while window and window[-1].get("role") == "assistant" and window[-1].get("tool_calls"):
             window.pop(-1)
-            # After removing the trailing assistant, check for new orphans
-            while window and window[0].get("role") == "tool":
-                window.pop(0)
+            # After removing the trailing assistant, check for new trailing orphans
+            while window and window[-1].get("role") == "tool":
+                window.pop(-1)
 
         return deepcopy(system_msgs) + deepcopy(window)
 
