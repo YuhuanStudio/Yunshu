@@ -144,7 +144,7 @@ class EventLog:
         self._db_path = db_path or ":memory:"
         self._conn: sqlite3.Connection | None = None
         self._sequence: int = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._stats = EventLogStats()
         # In-memory state reconstruction cache
         self._node_states: dict[str, NodeState] = {}
@@ -252,23 +252,24 @@ class EventLog:
 
         if self._conn is None:
             raise RuntimeError("EventLog not initialized: connection is None")
-        rows = self._conn.execute(
-            "SELECT sequence, event_id, event_type, timestamp, node_id, payload "
-            "FROM events WHERE sequence >= ? ORDER BY sequence",
-            (from_sequence,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT sequence, event_id, event_type, timestamp, node_id, payload "
+                "FROM events WHERE sequence >= ? ORDER BY sequence",
+                (from_sequence,),
+            ).fetchall()
 
-        return [
-            ClusterEvent(
-                sequence=row[0],
-                event_id=row[1],
-                event_type=row[2],
-                timestamp=row[3],
-                node_id=row[4],
-                payload=json.loads(row[5]),
-            )
-            for row in rows
-        ]
+            return [
+                ClusterEvent(
+                    sequence=row[0],
+                    event_id=row[1],
+                    event_type=row[2],
+                    timestamp=row[3],
+                    node_id=row[4],
+                    payload=json.loads(row[5]),
+                )
+                for row in rows
+            ]
 
     def get_last_snapshot(self) -> int:
         """Find the sequence number of the last snapshot event.
@@ -280,11 +281,12 @@ class EventLog:
 
         if self._conn is None:
             raise RuntimeError("EventLog not initialized: connection is None")
-        row = self._conn.execute(
-            "SELECT MAX(sequence) FROM events WHERE event_type = ?",
-            (EventType.SNAPSHOT.value,),
-        ).fetchone()
-        return row[0] if row and row[0] is not None else 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(sequence) FROM events WHERE event_type = ?",
+                (EventType.SNAPSHOT.value,),
+            ).fetchone()
+            return row[0] if row and row[0] is not None else 0
 
     def take_snapshot(self, cluster_state: dict) -> ClusterEvent:
         """Record a full state snapshot for faster recovery.
@@ -320,44 +322,44 @@ class EventLog:
         with self._lock:
             self._node_states.clear()
 
-        # Find last snapshot
-        snapshot_seq = self.get_last_snapshot()
+            # Find last snapshot (nested lock acquisition safe with RLock)
+            snapshot_seq = self.get_last_snapshot()
 
-        if snapshot_seq > 0:
-            # Restore from snapshot
-            if self._conn is None:
-                raise RuntimeError("Database connection not initialized")
-            row = self._conn.execute(
-                "SELECT payload FROM events WHERE sequence = ?",
-                (snapshot_seq,),
-            ).fetchone()
-            if row:
-                snapshot_data = json.loads(row[0])
-                for nid, ns_data in snapshot_data.get("cluster_state", {}).items():
-                    self._node_states[nid] = NodeState(
-                        node_id=ns_data.get("node_id", nid),
-                        state=ns_data.get("state", "offline"),
-                        models=ns_data.get("models", []),
-                        capabilities=ns_data.get("capabilities", {}),
-                        last_health_check=ns_data.get("last_health_check", 0.0),
-                        last_health_status=ns_data.get("last_health_status", "unknown"),
-                        join_time=ns_data.get("join_time", 0.0),
-                        leave_time=ns_data.get("leave_time", 0.0),
-                    )
+            if snapshot_seq > 0:
+                # Restore from snapshot
+                if self._conn is None:
+                    raise RuntimeError("Database connection not initialized")
+                row = self._conn.execute(
+                    "SELECT payload FROM events WHERE sequence = ?",
+                    (snapshot_seq,),
+                ).fetchone()
+                if row:
+                    snapshot_data = json.loads(row[0])
+                    for nid, ns_data in snapshot_data.get("cluster_state", {}).items():
+                        self._node_states[nid] = NodeState(
+                            node_id=ns_data.get("node_id", nid),
+                            state=ns_data.get("state", "offline"),
+                            models=ns_data.get("models", []),
+                            capabilities=ns_data.get("capabilities", {}),
+                            last_health_check=ns_data.get("last_health_check", 0.0),
+                            last_health_status=ns_data.get("last_health_status", "unknown"),
+                            join_time=ns_data.get("join_time", 0.0),
+                            leave_time=ns_data.get("leave_time", 0.0),
+                        )
 
-        # Replay events after snapshot
-        events = self.replay(snapshot_seq + 1 if snapshot_seq > 0 else 0)
-        for event in events:
-            if event.event_type != EventType.SNAPSHOT.value:
-                self._apply_event(event)
+            # Replay events after snapshot (nested lock acquisition safe with RLock)
+            events = self.replay(snapshot_seq + 1 if snapshot_seq > 0 else 0)
+            for event in events:
+                if event.event_type != EventType.SNAPSHOT.value:
+                    self._apply_event(event)
 
-        self._stats.nodes_tracked = len(self._node_states)
-        logger.info(
-            f"Recovered cluster state: {len(self._node_states)} nodes, "
-            f"from snapshot_seq={snapshot_seq}, "
-            f"replayed {len(events)} events"
-        )
-        return dict(self._node_states)
+            self._stats.nodes_tracked = len(self._node_states)
+            logger.info(
+                f"Recovered cluster state: {len(self._node_states)} nodes, "
+                f"from snapshot_seq={snapshot_seq}, "
+                f"replayed {len(events)} events"
+            )
+            return dict(self._node_states)
 
     def _apply_event(self, event: ClusterEvent) -> None:
         """Apply an event to the in-memory node state."""

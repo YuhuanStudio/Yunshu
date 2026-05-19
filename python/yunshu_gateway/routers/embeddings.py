@@ -152,9 +152,19 @@ async def create_embedding(req: EmbeddingRequest):
             "index": i,
             "embedding": emb_value,
         })
-        # Use tokenizer for accurate token count, fallback to word count
+        # Use tokenizer for accurate token count, fallback to word count.
+        # Exclude special tokens (BOS/EOS) from the count to match OpenAI's
+        # behavior where prompt_tokens only includes content tokens.
         if tokenizer:
-            total_tokens += len(tokenizer.encode(text))
+            try:
+                total_tokens += len(tokenizer.encode(text, add_special_tokens=False))
+            except TypeError:
+                # Tokenizer doesn't support add_special_tokens — some MLX
+                # tokenizers only accept a single positional argument.
+                # The encode() result typically includes BOS (+1) and may
+                # include EOS (+1), so we subtract 2 as a heuristic.
+                # This is a rough adjustment; the count may still be slightly off.
+                total_tokens += len(tokenizer.encode(text)) - 2
         else:
             total_tokens += max(1, len(text) // 4)
 

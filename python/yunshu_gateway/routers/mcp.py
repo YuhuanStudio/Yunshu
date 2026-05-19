@@ -310,6 +310,13 @@ async def _handle_tools_list(params: dict | None, req_id: int | str | None) -> d
                     "max_tokens": {"type": "integer", "default": 512},
                     "temperature": {"type": "number", "default": 0.7},
                     "top_p": {"type": "number", "default": 1.0},
+                    "top_k": {"type": "integer", "default": 0},
+                    "min_p": {"type": "number", "default": 0.0},
+                    "repetition_penalty": {"type": "number", "default": 1.0},
+                    "frequency_penalty": {"type": "number", "default": 0.0},
+                    "presence_penalty": {"type": "number", "default": 0.0},
+                    "enable_thinking": {"type": "boolean"},
+                    "seed": {"type": "integer"},
                     "stop": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["model", "messages"],
@@ -403,6 +410,13 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
     max_tokens = args.get("max_tokens", 512)
     temperature = args.get("temperature", 0.7)
     top_p = args.get("top_p", 1.0)
+    top_k = args.get("top_k", 0)
+    min_p = args.get("min_p", 0.0)
+    repetition_penalty = args.get("repetition_penalty", 1.0)
+    frequency_penalty = args.get("frequency_penalty", 0.0)
+    presence_penalty = args.get("presence_penalty", 0.0)
+    enable_thinking = args.get("enable_thinking", None)
+    seed = args.get("seed", None)
     stop = args.get("stop")
 
     try:
@@ -423,6 +437,13 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                enable_thinking=enable_thinking,
+                seed=seed,
                 stop=stop,
             )
             text = result.text
@@ -433,6 +454,13 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                enable_thinking=enable_thinking,
+                seed=seed,
                 stop=stop,
             )
             text = state.generated_text

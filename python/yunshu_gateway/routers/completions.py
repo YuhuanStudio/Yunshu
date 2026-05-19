@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine, get_engine_for_model
-from .chat import _apply_lora_adapter, _release_lora_adapter, _normalize_finish_reason
+from .chat import _apply_lora_adapter, _release_lora_adapter, _normalize_finish_reason, _parse_response_format
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_completion_chunk, format_openai_done, format_openai_completion_usage_chunk
@@ -150,23 +150,8 @@ async def create_completion(req: CompletionRequest, request: Request):
     else:
         prompt = req.prompt
 
-    # Extract JSON schema from response_format or grammar
-    json_schema = None
-    if req.grammar:
-        gtype = req.grammar.get("type")
-        if gtype == "json":
-            schema = req.grammar.get("schema")
-            json_schema = schema if schema else {}
-        elif gtype in ("regex", "choice", "cfg"):
-            json_schema = req.grammar  # Pass through for ConstraintFactory
-    if json_schema is None and req.response_format:
-        rf = req.response_format
-        if rf.get("type") == "json_schema":
-            js = rf.get("json_schema")
-            if js:
-                json_schema = js.get("schema", js)
-        elif rf.get("type") == "json_object":
-            json_schema = {}
+    # Extract JSON schema from response_format or grammar (shared with chat router)
+    json_schema = _parse_response_format(req.response_format, req.grammar)
 
     completion_id = f"cmpl-{uuid.uuid4().hex[:24]}"
 
