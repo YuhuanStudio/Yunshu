@@ -346,11 +346,9 @@ class LoRAAdapterManager:
                     if merged_layers:
                         self._base_model.update_modules(tree_unflatten(merged_layers))
 
-                    if self._base_model is not None:
-                        import mlx.core as mx
-                        self._base_model_copy = mx.tree_map(
-                            lambda x: mx.array(x), self._base_model.parameters()
-                        )
+                    # Do NOT overwrite _base_model_copy here — save_base_weights()
+                    # already saved the pre-merge copy. Overwriting would permanently
+                    # lose the original base weights, making adapter switching impossible.
 
                     # Re-fetch entry — adapter may have been unregistered
                     if adapter_id not in self._adapters:

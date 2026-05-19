@@ -699,10 +699,11 @@ class JsonSchemaConstraint:
                     self._number_seen_digit = True
                     i += 1
                     if self._state == JsonState.NUMBER_ZERO:
-                        # Leading zero followed by digit is invalid JSON (e.g., "007").
-                        # Complete the current number and start a new value with this digit.
+                        # Leading zero followed by digit is invalid JSON (e.g., "07").
+                        # Complete the current number as "0" and skip the stray digit.
+                        # Do NOT try to start a new value — there is no separator.
                         self._value_completed()
-                        self._enter_value(ch)
+                        self._number_seen_digit = False
                         continue
                     elif self._state == JsonState.NUMBER_FRACTION:
                         # After digit in fraction, exponent is now allowed.
