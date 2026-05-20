@@ -2802,3 +2802,12 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 - **HIGH**: Anthropic error handlers don't close `tool_use_block_started` blocks — protocol violation. Fixed: add `tool_use_block_started` to close conditions
 - **HIGH**: json_schema `$ref` cycle detection missing — circular refs cause exponential growth to depth 10. Fixed: add `_seen_refs` set for cycle detection
 - **MEDIUM**: Replace all `_value` private attribute reads with `is_set()` public API across engine_core + speculative_decoder
+
+### Wave 305 — Remaining Wave 304 Agent Findings (7 files)
+- **MEDIUM**: scheduler `_active_partial_prefills` leak — timeout abort target gone from `self.running` but counter never decremented. Fixed: pop outside `if req is not None` block
+- **MEDIUM**: scheduler `fail_all_requests()` doesn't decrement `_total_prompt_tokens` — counter permanently inflated. Fixed: decrement per-failed-request
+- **MEDIUM**: `RegexConstraint.advance()` extendability check uses narrow ASCII-only char_range — premature `_done` for patterns with non-ASCII chars (CJK, Arabic, etc.). Fixed: use same extended range as `_valid_next_chars()`
+- **MEDIUM**: `LarkGrammarConstraint.advance()` sets `_done=True` on first full parse without checking if match can extend. Fixed: test single-char extensions before marking done
+- **MEDIUM**: mesh `check_node()`/`check_all_nodes()` return mutable references to shared `NodeHealthStatus` objects — data race with health monitor. Fixed: `copy.deepcopy()`
+- **MEDIUM**: `event_sourcing.take_snapshot()` increments counter before `append()` — counter diverges if append fails. Fixed: increment after append succeeds
+- **MEDIUM**: Prometheus exporter uses `time.time()` for uptime — affected by NTP/clock adjustments. Fixed: `time.monotonic()`

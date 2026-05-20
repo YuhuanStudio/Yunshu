@@ -539,9 +539,18 @@ class RegexConstraint:
         # but the model should keep generating — setting _done=True here
         # would prematurely terminate the output.
         if self._dfa.is_full_match(self._text_buffer):
-            # Check if ANY character can extend the match
+            # Check if ANY character can extend the match — use the same
+            # extended char range as _valid_next_chars() to avoid premature
+            # termination for patterns involving non-ASCII characters.
             char_range = list(range(32, 127))
             char_range.extend([ord('\n'), ord('\t'), ord('\r')])
+            char_range.extend(range(0x4E00, 0x4E00 + 500))  # CJK
+            char_range.extend(range(0xAC00, 0xAC00 + 100))  # Hangul
+            char_range.extend(range(0x3040, 0x30FF))  # Hiragana + Katakana
+            char_range.extend(range(0x0600, 0x0660))  # Arabic
+            char_range.extend(range(0x0E00, 0x0E50))  # Thai
+            char_range.extend(range(0x0900, 0x0970))  # Devanagari
+            char_range.extend(range(0x00C0, 0x0250))  # Latin Extended
             extendable = self._dfa.valid_next_chars(self._text_buffer, char_range)
             if not extendable:
                 self._done = True
@@ -871,7 +880,19 @@ class LarkGrammarConstraint:
         self._text_buffer += token_text
         try:
             self._parser.parse(self._text_buffer)
-            self._done = True
+            # Full match succeeded — but check if the match can be extended.
+            # Without this, patterns like `start: /[a-z]+/` terminate after
+            # the first character "a" because parse("a") succeeds.
+            extendable = False
+            for ch in "abcdefghijklmnopqrstuvwxyz0123456789":
+                try:
+                    self._parser.parse(self._text_buffer + ch)
+                    extendable = True
+                    break
+                except Exception:
+                    pass
+            if not extendable:
+                self._done = True
         except Exception:
             logger.debug("CFG parse incomplete, continuing generation", exc_info=True)
 

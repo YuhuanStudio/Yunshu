@@ -2308,6 +2308,11 @@ class Scheduler:
             if abort_on_timeout:
                 # Abort the request — return error to the client
                 req = self.running.get(req_id)
+                # Always decrement partial prefill counter — the request had
+                # one entry in _pending_prefill regardless of whether it's still
+                # in self.running.  Without this, a request removed from running
+                # by a concurrent _cleanup_finished leaks the counter permanently.
+                popped = self._pop_pending_prefill(req_id)
                 if req is not None:
                     req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_timeout")
                     uid = getattr(req, 'batch_uid', None)
@@ -2326,14 +2331,9 @@ class Scheduler:
                     self._total_prompt_tokens = max(
                         0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
                     )
-                    # Clean up per-request state — pop _pending_prefill directly
-                    # and decrement _active_partial_prefills here.  The cleanup
-                    # loop for errored_ids at the bottom of this method uses
-                    # "if popped is not None" to guard against double-decrement,
-                    # so since we already popped, that guard correctly skips the
-                    # second decrement.  We must decrement HERE because the
-                    # bottom loop's pop will return None for this entry.
-                    self._pop_pending_prefill(req_id)
+                    # Clean up per-request state.  _pop_pending_prefill was already
+                    # called above (outside the if block) so the bottom loop's guard
+                    # will correctly skip the second decrement.
                     for cleanup_dict in (
                         self._detokenizers, self._thinking_processors,
                         self._thinking_state, self._chunked_prefill_fairness,
@@ -3407,6 +3407,9 @@ class Scheduler:
             req = self.running.get(req_id)
             if req:
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
+                self._total_prompt_tokens = max(
+                    0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                )
         self.running.clear()
         self._uid_to_req.clear()
         return failed

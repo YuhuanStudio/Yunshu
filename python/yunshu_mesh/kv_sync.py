@@ -21,6 +21,7 @@ Health Monitor Flow:
 """
 
 import asyncio
+import copy
 import logging
 import threading
 import time
@@ -890,12 +891,12 @@ class MeshHealthMonitor:
                     healthy=False,
                     state=MeshNodeState.OFFLINE,
                 )
-            return self._node_status[node_id]
+            return copy.deepcopy(self._node_status[node_id])
 
     def check_all_nodes(self) -> dict[str, NodeHealthStatus]:
         """Check health status of all monitored nodes."""
         with self._lock:
-            return dict(self._node_status)
+            return {nid: copy.deepcopy(s) for nid, s in self._node_status.items()}
 
     def get_healthy_nodes(self) -> list[str]:
         """Return node IDs of all healthy nodes."""

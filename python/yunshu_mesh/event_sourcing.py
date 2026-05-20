@@ -299,13 +299,17 @@ class EventLog:
         Returns:
             The snapshot event.
         """
-        with self._lock:
-            self._stats.snapshots_taken += 1
-        return self.append(
+        event = self.append(
             event_type=EventType.SNAPSHOT.value,
             node_id="",
             payload={"cluster_state": cluster_state},
         )
+        # Increment counter AFTER append succeeds, under same lock scope.
+        # append() acquires _lock internally, so this is safe but the
+        # counter reflects only successful snapshots.
+        with self._lock:
+            self._stats.snapshots_taken += 1
+        return event
 
     def recover_state(self) -> dict[str, NodeState]:
         """Recover cluster state from event log.

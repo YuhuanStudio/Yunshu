@@ -600,13 +600,13 @@ class PrometheusMetrics:
         # Append an uptime gauge.
         sections.append("# HELP yunshu_exporter_uptime_seconds Prometheus exporter uptime")
         sections.append("# TYPE yunshu_exporter_uptime_seconds gauge")
-        sections.append(f"yunshu_exporter_uptime_seconds {time.time() - _BORN:.1f}")
+        sections.append(f"yunshu_exporter_uptime_seconds {time.monotonic() - _BORN:.1f}")
 
         return "\n".join(sections) + "\n"
 
 
 # Timestamp at module load for exporter uptime.
-_BORN = time.time()
+_BORN = time.monotonic()
 
 
 # ---------------------------------------------------------------------------
