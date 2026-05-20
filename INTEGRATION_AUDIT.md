@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 268-273: 8-agent deep audit — 40+ fixes: auth bypass, tenant lockout, scheduler abort, preemption livelock, VLM temp files, KV thread safety, TieredKV TOCTOU, spec decode cache snapshot, Anthropic streaming, streaming backpressure, dedup shadow timeout, LoRA timing, TeaCache concurrency, Whisper caching, WAV validation, metrics safety)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 268-277: 8-agent deep audit — 60+ fixes + architecture gap completion: auth, scheduler, KV thread safety, TieredKV TOCTOU, spec decode, streaming, dedup, LoRA, TeaCache, cancel propagation, prefill progress, hash collision, Prometheus, model eviction, hardware detection, JSON schema repair, FAIR scheduling)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,23 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 277 — Model Registry LRU Eviction, Hardware Detection, JSON Schema Repair, FAIR Scheduling)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 277: Model registry LRU 驅逐 | 記憶體壓力時不自動卸載模型。加入 post-load 壓力檢查 + LRU 驅逐 | OOM 防護 (FEATURE) |
+| Wave 277: GPU family + 記憶體頻寬 + ANE 偵測 | 硬體資訊缺少晶片型號、頻寬、神經引擎。加入 system_profiler + lookup table | 調度優化 (FEATURE) |
+| Wave 277: JSON schema 自動修復 | $ref/anyOf/missing type 造成約束解碼失敗。加入遞迴修復函數 | 結構化輸出 (FEATURE) |
+| Wave 277: FAIR 調度策略 | 僅 FCFS/PRIORITY 無公平性保證。加入 round-robin 優先級輪轉策略 | 低優先級飢餓 (FEATURE) |
+
+### 已完成修復 (2026-05-20 Wave 276 — Double-DONE Prevention, Hash Collision Detection, RadixTree Prometheus)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 276: Double [DONE] sentinel 防護 | done_emitted 在 yield 後設置，異常窗口內可重複發送。移到 yield 前 | SSE 協議 (HIGH) |
+| Wave 276: Prefix cache hash 碰撞偵測 | hash 匹配後未驗證 token IDs，碰撞時使用錯誤 KV cache。加入 token 比對 + 碰撞計數 | KV 數據損壞 (HIGH) |
+| Wave 276: RadixTree Prometheus 指標 | 節點/區塊/命中率/驅逐數未暴露。加入 4 個 Prometheus 指標 | 監控可見性 (FEATURE) |
 
 ### 已完成修復 (2026-05-20 Wave 275 — Streaming Token Accuracy, Cancel Propagation, Prefill Progress)
 
