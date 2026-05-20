@@ -4182,6 +4182,7 @@ class BatchedEngine:
                 completion_tokens=0,
                 error=f"Speculative generation timed out after {timeout_seconds}s",
                 ttft_ms=0.0,
+                cached_tokens=0,
             )
         except MemoryError:
             logger.warning("OOM during speculative generation — returning memory_limit finish reason")
@@ -4252,6 +4253,22 @@ class BatchedEngine:
         else:
             _finish_reason = "length"
 
+        # Reasoning parser: extract thinking tokens from spec decode output.
+        # Speculative decode uses a black-box generate() that does not track
+        # thinking tokens, so we parse the output text for reasoning content.
+        _spec_reasoning_tok = 0
+        if text:
+            try:
+                from .reasoning_parser import get_reasoning_parser
+                rp = get_reasoning_parser(self.model_name)
+                rp_out = rp.parse(text)
+                if rp_out.reasoning and rp_out.reasoning_tokens > 0:
+                    _spec_reasoning_tok = rp_out.reasoning_tokens
+                    if rp_out.content != text:
+                        text = rp_out.content
+            except Exception:
+                logger.debug("reasoning_parser failed in spec decode path", exc_info=True)
+
         return GenerationOutput(
             text=text,
             new_text=text,
@@ -4259,7 +4276,7 @@ class BatchedEngine:
             completion_tokens=len(token_ids),
             finished=True,
             finish_reason=_finish_reason,
-            reasoning_tokens=0,
+            reasoning_tokens=_spec_reasoning_tok,
             cached_tokens=0,
             logprobs=_logprobs,
             ttft_ms=round(_spec_ttft_s * 1000, 1),
@@ -4456,6 +4473,9 @@ class BatchedEngine:
                     finished=True,
                     finish_reason="stop",
                     ttft_ms=_spec_ttft_ms_val,
+                    reasoning_tokens=0,
+                    cached_tokens=0,
+                    logprobs=None,
                 )
                 break
 
@@ -5169,6 +5189,22 @@ class BatchedEngine:
             except Exception:
                 logger.debug("TTFT prometheus recording failed in n-gram spec path", exc_info=True)
 
+        # Reasoning parser: extract thinking tokens from n-gram spec output.
+        # N-gram spec decode does not track thinking tokens internally,
+        # so we parse the output text for reasoning content.
+        _ng_reasoning_tok = 0
+        if output_text:
+            try:
+                from .reasoning_parser import get_reasoning_parser
+                rp = get_reasoning_parser(self.model_name)
+                rp_out = rp.parse(output_text)
+                if rp_out.reasoning and rp_out.reasoning_tokens > 0:
+                    _ng_reasoning_tok = rp_out.reasoning_tokens
+                    if rp_out.content != output_text:
+                        output_text = rp_out.content
+            except Exception:
+                logger.debug("reasoning_parser failed in n-gram spec path", exc_info=True)
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -5178,7 +5214,7 @@ class BatchedEngine:
             finish_reason=finish_reason,
             cached_tokens=cached_tokens,
             ttft_ms=round(ttft_s * 1000, 1),
-            reasoning_tokens=0,
+            reasoning_tokens=_ng_reasoning_tok,
             logprobs=_ngram_logprobs,
         )
 

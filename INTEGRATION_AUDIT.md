@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–316: 32 waves, 670+ bugs fixed. Latest: Wave 316 — streaming text buffer 1MB cap in all 4 gateway routers (chat, completions, anthropic, responses), dead code removal (_resolve_schema_for_value), engine_core executor None cleanup, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–317: 33 waves, 680+ bugs fixed. Latest: Wave 317 — CRITICAL grammar param crash fix (P0), GenerationOutput reasoning_parser in spec+ngram paths, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
