@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–309: 26 waves, 540+ bugs fixed. Latest: Wave 309 — 8 parallel agents: stop suffix len(s)>1→len(ids)>1 fix, detokenizer offset reset, eos_token_ids plural, KV _snapshot_cache empty tensor, swap-and-pop stale hash index, mx.at[].set() eval, RadixTree evict block leak, DFlash dead code removal, scheduler abort recheck, Anthropic stream_options + output_tokens trimming, Responses previous_response_id + status incomplete, DeepSeek regex ▁ fix, max_completion_tokens param, LoRA lora_adapter param, 18 files, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–310: 27 waves, 570+ bugs fixed. Latest: Wave 310 — 6 agents: RadixTree boundary block + merge orphan + block leak warning + SSD deep-copy, LoRA merge-after-load guard + multi-engine dict, MTP json_schema fallback + streaming logprobs, Anthropic metadata + Responses incomplete status + lifecycle tracking, WebUI fixes, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
