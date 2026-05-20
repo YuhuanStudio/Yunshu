@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 270: 8-agent deep audit — 22 total fixes across 3 waves (268-270): auth bypass, tenant lockout, scheduler abort, preemption livelock, VLM temp files, set_finished, Anthropic message_stop, WebSocket RBAC, engine_core TOCTOU, KV eviction, streaming SSE, mesh dead nodes, Prometheus counter/histogram, request dedup collision, disagg load counter)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 268-272: 8-agent deep audit — 30+ fixes: auth bypass, tenant lockout, scheduler abort, preemption livelock, VLM temp files, KV thread safety, TieredKV TOCTOU, spec decode cache snapshot, Anthropic streaming, streaming backpressure, dedup shadow timeout, profiling sandbox)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,27 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 272 — Streaming Backpressure, Dedup Shadow Timeout, Profiling Sandbox, VLM Thinking Cursor)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 272: Streaming queue 丟棄 token | 隊列滿時靜默丟棄 token 導致輸出文字損壞。加入 3 次重試 + 1ms 間隔，僅在重試耗盡後丟棄並記錄警告 | 輸出正確性 (HIGH) |
+| Wave 272: Dedup shadow 請求超時 | shadow 請求永遠等待 primary 輸出，引擎崩潰時永不終結。加入 shadow 超時檢查循環 | 客戶端死鎖 (HIGH) |
+| Wave 272: Profiling output_path 可寫入 /tmp 根目錄 | 允許寫入 /tmp 下任意文件名。限制為 /tmp/yunshu_profiles/ 專用子目錄 | 安全改進 (HIGH) |
+| Wave 272: VLM thinking 掃描游標損壞 | stop 後綴截斷後 _think_scan_pos 指向已刪除部分。改為重置到新長度 | Thinking 狀態錯誤 (HIGH) |
+
+### 已完成修復 (2026-05-20 Wave 271 — KV Thread Safety, TieredKV TOCTOU, Spec Decode Cache Snapshot, Anthropic Tool Use Streaming)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 271: BlockPool 線程安全 | 共享 dict/list/計數器無鎖，並行 allocate/free 造成數據損壞。加入 threading.Lock 保護 7 個方法 | KV 數據完整性 (CRITICAL) |
+| Wave 271: RadixTree 線程安全 | match/insert/split/evict 無鎖保護。加入 threading.Lock + _unlocked 內部方法防止死鎖 | KV 樹結構完整性 (CRITICAL) |
+| Wave 271: KVCacheManager 線程安全 | allocate_for_prefill/free/evict 無鎖。加入 threading.Lock + _unlocked 內部方法 | KV 管理完整性 (HIGH) |
+| Wave 271: TieredKV contains/promote TOCTOU | contains() + promote() 分離調用間可被驅逐。改為直接調用 promote()，None 時繼續嘗試 SSD | 靜默數據丟失 (HIGH) |
+| Wave 271: SSD _save_index 鎖內 I/O | 持有 _lock 時執行文件寫入阻塞所有並發操作。改為鎖內快照 + 鎖外寫入 | 性能阻塞 (HIGH) |
+| Wave 271: Spec decode 快照/恢復是 no-op | 驗證時快照已前進的 cache 再恢復相同狀態。改為生成前保存快照 | 推測解碼品質 (HIGH) |
+| Wave 271: Anthropic tool_use 串流單塊參數 | 整個參數在單個 input_json_delta 發送。改為 8 字符增量分塊 | SDK 兼容性 (HIGH) |
 
 ### 已完成修復 (2026-05-20 Wave 270 — RequestDedup Hash Collision, DisaggRouter HYBRID Load Counter)
 
