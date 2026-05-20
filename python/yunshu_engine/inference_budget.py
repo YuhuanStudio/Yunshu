@@ -13,6 +13,7 @@ and stop requests that exceed their allocated resources.
 
 import logging
 import os
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -124,6 +125,7 @@ class InferenceBudgetManager:
         self._exhausted: dict[str, int] = defaultdict(int)
         self._total_tokens_consumed: int = 0
         self._global_token_window: list[tuple[float, int]] = []
+        self._lock = threading.Lock()
 
     @classmethod
     def from_env(cls) -> InferenceBudgetManager:
@@ -155,31 +157,33 @@ class InferenceBudgetManager:
             max_cost=max_cost,
             priority=priority,
         )
-        self._budgets[request_id] = budget
+        with self._lock:
+            self._budgets[request_id] = budget
         return budget
 
     def consume(self, request_id: str, tokens: int = 1, is_thinking: bool = False) -> str | None:
         """Consume tokens for a request. Returns exhaustion reason or None."""
-        budget = self._budgets.get(request_id)
-        if budget is None:
-            return "budget_not_found"
+        with self._lock:
+            budget = self._budgets.get(request_id)
+            if budget is None:
+                return "budget_not_found"
 
-        budget.consume_tokens(tokens, is_thinking)
-        self._total_tokens_consumed += tokens
+            budget.consume_tokens(tokens, is_thinking)
+            self._total_tokens_consumed += tokens
 
-        # Track global rate
-        if self._global_rate_limit > 0:
-            now = time.monotonic()
-            self._global_token_window.append((now, tokens))
-            self._prune_rate_window(now)
+            # Track global rate
+            if self._global_rate_limit > 0:
+                now = time.monotonic()
+                self._global_token_window.append((now, tokens))
+                self._prune_rate_window(now)
 
-        if budget.is_exhausted:
-            reason = budget.exhaustion_reason or "unknown"
-            self._exhausted[reason] += 1
-            return reason
+            if budget.is_exhausted:
+                reason = budget.exhaustion_reason or "unknown"
+                self._exhausted[reason] += 1
+                return reason
 
-        if is_thinking and budget.is_thinking_exhausted:
-            return "thinking_budget_reached"
+            if is_thinking and budget.is_thinking_exhausted:
+                return "thinking_budget_reached"
 
         return None
 
@@ -190,32 +194,36 @@ class InferenceBudgetManager:
         thinking budget exhaustion.
         """
         exhausted = []
-        for rid, budget in list(self._budgets.items()):
-            if budget.is_exhausted:
-                reason = budget.exhaustion_reason or "unknown"
-                exhausted.append((rid, reason))
-            elif budget.is_thinking_exhausted:
-                exhausted.append((rid, "thinking_budget_reached"))
+        with self._lock:
+            for rid, budget in list(self._budgets.items()):
+                if budget.is_exhausted:
+                    reason = budget.exhaustion_reason or "unknown"
+                    exhausted.append((rid, reason))
+                elif budget.is_thinking_exhausted:
+                    exhausted.append((rid, "thinking_budget_reached"))
         return exhausted
 
     def remove(self, request_id: str) -> InferenceBudget | None:
         """Remove a budget (request finished or cleaned up)."""
-        budget = self._budgets.pop(request_id, None)
-        if budget:
-            self._completed += 1
+        with self._lock:
+            budget = self._budgets.pop(request_id, None)
+            if budget:
+                self._completed += 1
         return budget
 
     def get_budget(self, request_id: str) -> InferenceBudget | None:
-        return self._budgets.get(request_id)
+        with self._lock:
+            return self._budgets.get(request_id)
 
     def is_rate_limited(self) -> bool:
         """Check if global token rate limit is exceeded."""
         if self._global_rate_limit <= 0:
             return False
-        now = time.monotonic()
-        self._prune_rate_window(now)
-        total = sum(n for _, n in self._global_token_window)
-        return total >= self._global_rate_limit
+        with self._lock:
+            now = time.monotonic()
+            self._prune_rate_window(now)
+            total = sum(n for _, n in self._global_token_window)
+            return total >= self._global_rate_limit
 
     def _prune_rate_window(self, now: float, window_seconds: float = 60.0) -> None:
         cutoff = now - window_seconds
@@ -225,19 +233,21 @@ class InferenceBudgetManager:
 
     @property
     def active_count(self) -> int:
-        return len(self._budgets)
+        with self._lock:
+            return len(self._budgets)
 
     def get_stats(self) -> dict:
-        avg_tokens = (
-            self._total_tokens_consumed / self._completed
-            if self._completed > 0
-            else 0.0
-        )
-        return {
-            "active_budgets": len(self._budgets),
-            "completed": self._completed,
-            "total_tokens_consumed": self._total_tokens_consumed,
-            "avg_tokens_per_request": round(avg_tokens, 1),
-            "exhaustion_breakdown": dict(self._exhausted),
-            "rate_limited": self.is_rate_limited(),
-        }
+        with self._lock:
+            avg_tokens = (
+                self._total_tokens_consumed / self._completed
+                if self._completed > 0
+                else 0.0
+            )
+            return {
+                "active_budgets": len(self._budgets),
+                "completed": self._completed,
+                "total_tokens_consumed": self._total_tokens_consumed,
+                "avg_tokens_per_request": round(avg_tokens, 1),
+                "exhaustion_breakdown": dict(self._exhausted),
+                "rate_limited": self.is_rate_limited(),
+            }

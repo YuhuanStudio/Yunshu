@@ -1623,6 +1623,7 @@ class BatchedEngine:
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds or 300.0,
+                lora_adapter=lora_adapter,
             )
 
         # MTP speculative decoding (built-in multi-token prediction heads)
@@ -1651,6 +1652,7 @@ class BatchedEngine:
                 xtc_threshold=xtc_threshold,
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds or 300.0,
+                lora_adapter=lora_adapter,
             )
 
         # N-gram speculative decoding (model-free, CPU-based proposal)
@@ -1679,6 +1681,7 @@ class BatchedEngine:
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds or 300.0,
+                lora_adapter=lora_adapter,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
@@ -2837,6 +2840,7 @@ class BatchedEngine:
                     json_schema=json_schema,
                     cancel_event=_cancel_event,
                     logits_processors=logits_processors,
+                    lora_adapter=lora_adapter,
                 ):
                     yield output
             finally:
@@ -2867,6 +2871,7 @@ class BatchedEngine:
                     xtc_probability=xtc_probability,
                     xtc_threshold=xtc_threshold,
                     logits_processors=logits_processors,
+                    lora_adapter=lora_adapter,
                 ):
                     yield output
             finally:
@@ -2897,6 +2902,7 @@ class BatchedEngine:
                     logits_processors=logits_processors,
                     enable_thinking=enable_thinking,
                     thinking_budget=thinking_budget,
+                    lora_adapter=lora_adapter,
                 ):
                     yield output
             finally:
@@ -4159,6 +4165,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
         timeout_seconds: float = 300.0,
+        lora_adapter: str | None = None,
     ) -> GenerationOutput:
         """Generate using speculative decoding (single-request EAGLE-3 path).
 
@@ -4237,7 +4244,7 @@ class BatchedEngine:
         if json_schema is not None:
             try:
                 from .json_schema import JsonSchemaConstraint
-                _spec_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+                _spec_constraint = JsonSchemaConstraint(json_schema)
             except Exception:
                 logger.warning("Grammar constraint setup failed for spec decode", exc_info=True)
         _prev_constraint = self._spec_decoder.constraint
@@ -4416,6 +4423,7 @@ class BatchedEngine:
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
+        lora_adapter: str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using speculative decoding (single-request path).
 
@@ -4505,7 +4513,7 @@ class BatchedEngine:
         if json_schema is not None:
             try:
                 from .json_schema import JsonSchemaConstraint
-                _spec_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+                _spec_constraint = JsonSchemaConstraint(json_schema)
             except Exception:
                 logger.warning("Grammar constraint setup failed for spec streaming", exc_info=True)
         _prev_constraint = self._spec_decoder.constraint
@@ -4901,6 +4909,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
         timeout_seconds: float = 300.0,
+        lora_adapter: str | None = None,
     ) -> GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -5388,6 +5397,7 @@ class BatchedEngine:
         logits_processors: list | None = None,
         enable_thinking: bool | None = None,
         thinking_budget: int | None = None,
+        lora_adapter: str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -6135,6 +6145,7 @@ class BatchedEngine:
         xtc_threshold: float = 0.0,
         logits_processors: list | None = None,
         timeout_seconds: float = 300.0,
+        lora_adapter: str | None = None,
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -6433,6 +6444,7 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         logits_processors: list | None = None,
+        lora_adapter: str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using MTP speculative decoding (queue-based).
 

@@ -744,13 +744,13 @@ class SpeculativeDecoder:
                 draft_tokens.append(tok_id)
                 draft_probs.append(float(d_logprobs[0, tok_id].item()))
                 d_input = next_tok.reshape(1, 1)
+                if tok_id in eos_ids:
+                    break
                 if self.constraint is not None and hasattr(self.constraint, 'advance'):
                     try:
                         self.constraint.advance(self.tokenizer.decode([tok_id]))
                     except Exception:
                         pass
-                if tok_id in eos_ids:
-                    break
 
             if not draft_tokens:
                 break
@@ -834,19 +834,23 @@ class SpeculativeDecoder:
                         self.constraint.rollback()
                     except Exception:
                         pass
-                # Advance constraint with accepted tokens only
+                # Advance constraint with accepted tokens only (skip EOS)
                 if self.constraint is not None and hasattr(self.constraint, 'advance'):
                     for tid in verify_result.accepted_ids:
+                        if tid in eos_ids:
+                            break
                         try:
                             self.constraint.advance(self.tokenizer.decode([tid]))
                         except Exception:
                             pass
-                    # Advance for the correction token
-                    correction = generated_tokens[-1]
-                    try:
-                        self.constraint.advance(self.tokenizer.decode([correction]))
-                    except Exception:
-                        pass
+                    else:
+                        # Advance for the correction token (only if no EOS in accepted)
+                        correction = generated_tokens[-1]
+                        if correction not in eos_ids:
+                            try:
+                                self.constraint.advance(self.tokenizer.decode([correction]))
+                            except Exception:
+                                pass
                 # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
                 # After rollback, cache had N-1 entries. After forward K+1: N+K.
                 # Only accepted+1 are valid (last_tok + accepted drafts).
@@ -886,7 +890,7 @@ class SpeculativeDecoder:
                             self.constraint._checkpoint_stack.pop()
                     except Exception:
                         pass
-                    if bonus_id >= 0:
+                    if bonus_id >= 0 and bonus_id not in eos_ids:
                         try:
                             self.constraint.advance(self.tokenizer.decode([bonus_id]))
                         except Exception:

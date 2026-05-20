@@ -813,6 +813,7 @@ class Engine:
                 completion_tokens=state.completion_token_count,
                 logprobs=logprob,
                 current_state=current_state,
+                finished=bool(finish_reason),
             )
 
             try:

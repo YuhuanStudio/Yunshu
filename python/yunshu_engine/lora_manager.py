@@ -148,6 +148,8 @@ class LoRAAdapterManager:
         the adapter is actually loaded.  Missing or unreadable config
         falls back to defaults (rank=8, scale=20.0).
         """
+        if ".." in Path(adapter_path).parts:
+            raise ValueError(f"Path traversal not allowed in adapter path: {adapter_path}")
         rank = 8
         scale = 20.0
         config_path = Path(adapter_path) / "adapter_config.json"

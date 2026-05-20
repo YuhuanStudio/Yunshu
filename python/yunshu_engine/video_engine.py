@@ -1284,7 +1284,7 @@ class VideoEngine:
             merged_layers = []
             for name, module in self._model.named_modules():
                 if isinstance(module, LoRALinear):
-                    merged_layers.append((name, module.linear))
+                    merged_layers.append((name, module.fuse(dequantize=False)))
 
             if merged_layers:
                 self._model.update_modules(tree_unflatten(merged_layers))

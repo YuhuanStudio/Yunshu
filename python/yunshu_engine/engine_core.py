@@ -945,6 +945,11 @@ class EngineCore:
             except Exception:
                 logger.debug("kv transfer server stop failed", exc_info=True)
 
+        # Mark stopped BEFORE clearing collectors so concurrent add_request()
+        # sees _stopped=True and rejects immediately instead of creating a
+        # collector that we then clear (leaving the consumer to hang).
+        self._stopped = True
+
         # Signal all active collectors with sentinel
         for collector in list(self._output_collectors.values()):
             try:
@@ -987,12 +992,6 @@ class EngineCore:
         except Exception:
             logger.debug("cache clear on executor failed", exc_info=True)
         self._executor = None
-
-        # Mark fully stopped AFTER all cleanup is done.
-        # This must come last so concurrent add_request() calls during the
-        # await yields above don't create collectors that we then clear.
-        # add_request() checks _stopped to decide whether to reject.
-        self._stopped = True
 
         logger.info("EngineCore stopped")
 
@@ -2940,6 +2939,18 @@ class EngineCore:
         if request_id in self._finalized_ids:
             return
         self._finalized_ids.add(request_id)
+        # Periodic pruning: remove entries whose requests are fully gone
+        # from all tracking dicts (no longer in scheduler, collectors, etc.)
+        if len(self._finalized_ids) > 500:
+            _active = (
+                set(self._output_collectors.keys())
+                | set(self._request_timestamps.keys())
+            )
+            try:
+                _active |= set(self.scheduler.requests.keys())
+            except Exception:
+                pass
+            self._finalized_ids -= (self._finalized_ids - _active)
         _block_id = hash(request_id) % (10**9)
         # Inflight prefix sharing
         try:
@@ -3046,11 +3057,12 @@ class EngineCore:
             self._finalize_request(req_id)
 
         # Count failed requests so get_stats() and Prometheus report
-        # accurate totals.  Without this, engine-loop crash recovery
-        # under-counts because the normal finish path (line 2195) is
-        # never reached for these requests.
-        if all_ids:
-            self._num_requests_processed += len(all_ids)
+        # accurate totals.  Deduplicate against _finalized_ids to
+        # avoid double-counting requests already finished in the normal
+        # path before the exception triggered _fail_active_requests.
+        new_fails = [rid for rid in all_ids if rid not in self._finalized_ids]
+        if new_fails:
+            self._num_requests_processed += len(new_fails)
 
     def _fail_dedup_shadows(self, primary_id: str, error_msg: str, finish_reason: str = "error") -> None:
         """Deliver error output to all dedup shadows of a failed primary request.

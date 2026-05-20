@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–331: 46 waves, 895+ bugs fixed. Latest: Wave 331 — KVPrefixCache hash collision guard, KVBlockCompactor numeric sort, preempt radix prompt-only cache, fast path reasoning strip, eviction loop fix, OOM running leak, Anthropic tool_use_block_started reset, streaming thinking token consistency, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–332: 47 waves, 920+ bugs fixed. Latest: Wave 332 — speculative decoder EOS-constraint corruption (CRITICAL), post-rollback re-advance EOS skip, all-accepted bonus EOS skip, JsonSchemaConstraint 2-arg TypeError, video LoRA merge fuse(), inference_budget thread safety, legacy engine finished flag, engine_core _stopped ordering, _finalized_ids unbounded growth, stats double-count, LoRA path traversal guard, LoRA passthrough to all 6 spec decode methods, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
