@@ -665,7 +665,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if hasattr(output, 'completion_tokens') and output.completion_tokens:
-                    completion_tok = output.completion_tokens
+                    completion_tok = max(completion_tok, output.completion_tokens)
                 elif output.new_text:
                     completion_tok += 1
                 _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
@@ -723,7 +723,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 token_text = getattr(output, 'token_text', '')
                 _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                 if hasattr(output, 'completion_token_count') and output.completion_token_count:
-                    completion_tok = output.completion_token_count
+                    completion_tok = max(completion_tok, output.completion_token_count)
                 elif token_text and not _is_reasoning:
                     completion_tok += 1
                 if token_text:

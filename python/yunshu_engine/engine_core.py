@@ -2292,6 +2292,12 @@ class EngineCore:
                         if collector is None:
                             continue
 
+                        # Lifecycle: transition QUEUED → PREFILLING on first output
+                        if rid not in self._finalized_ids:
+                            _lc_state = self._lifecycle_orchestrator.get_state(rid)
+                            if _lc_state is not None and _lc_state.phase.name == "QUEUED":
+                                self._lifecycle_orchestrator.on_prefill_start(rid)
+
                         # Output parser: extract reasoning/tool_calls from raw text
                         # (output_parser.py parse_output — model-specific extraction)
                         if req_output.finished and req_output.output_text:
@@ -2715,7 +2721,7 @@ class EngineCore:
                                             self._signal_finished(sid)
                                             self._cleanup_request(sid)
                                     self._signal_finished(rid)
-                                    self._finalize_request(rid)
+                                    self._finalize_request(rid, finish_reason="timeout")
 
                             # ── Shadow request timeout enforcement ──
                             # Shadow requests are never in scheduler.running, so the loop

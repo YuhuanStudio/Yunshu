@@ -125,7 +125,10 @@ class NgramHashPool:
         if total < min_n + 1:
             return
 
-        start = max(0, getattr(self, '_indexed_len', 0) - max_n)
+        _cur_len = getattr(self, '_indexed_len', 0)
+        if total < _cur_len:
+            _cur_len = 0
+        start = max(0, _cur_len - max_n)
         self._indexed_len = total
 
         for n in range(min_n, max_n + 1):

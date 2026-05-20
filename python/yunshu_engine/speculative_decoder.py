@@ -474,9 +474,13 @@ class SpeculativeDecoder:
             from mlx_lm.models.cache import trim_prompt_cache
             trim_prompt_cache(cache, 1)
         except Exception:
+            trimmed = False
             for c in cache:
                 if hasattr(c, "trim"):
                     c.trim(1)
+                    trimmed = True
+            if not trimmed:
+                logger.warning("Cannot rollback KV cache — verification logits may be misaligned")
 
         # Build aligned input: [last_token(s), d0, d1, ..., dK-1]
         last_tok = input_ids[:, -1:]  # [1, 1] — last token from previous step

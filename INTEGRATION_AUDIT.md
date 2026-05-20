@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–307: 24 waves, 470+ bugs fixed. Latest: Wave 307 — VLM TTFT+ServerMetrics+reasoning_tokens+timeout, WebUI SSE buffer+cache hit rate+KV tiers, Anthropic message_stop on error+grammar type+_prev_len, KVMigrationManager deadlock fix, flush_to_ssd lock, SSD get_stats lock, model_settings coercion, 9 files, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–307: 24 waves, 490+ bugs fixed. Latest: Wave 307 Part 2 — lifecycle QUEUED→PREFILLING transition fix, scheduler cached_tokens for prefix cache, timeout finish_reason, CompositeStrategy bonus_token forwarding, DFlash stochastic bonus, ngram shrink detection, spec decode trim warning, responses completion_tok max(), 8 files, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 

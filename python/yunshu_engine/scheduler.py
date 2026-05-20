@@ -1701,6 +1701,7 @@ class Scheduler:
                         cached_kv, _, matched = self._prefix_cache.get(ids_arr)
                         if cached_kv is not None and matched > 0:
                             remaining_tokens = tokens_to_insert[matched:]
+                            req.cached_tokens = matched
                             if matched > 32:
                                 logger.info(
                                     f"Batch prefix cache hit: {matched}/{len(tokens_to_insert)} tokens "

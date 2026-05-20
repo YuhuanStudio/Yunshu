@@ -1182,13 +1182,52 @@ class VLMEngine:
 
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
+        _timeout_seconds = kwargs.get('timeout', 300)
+        _prompt_tokens_count = 0
+        _completion_tokens_count = 0
+        _model_id = self.model_name
+
         try:
             while True:
-                output = await queue.get()
+                try:
+                    output = await asyncio.wait_for(queue.get(), timeout=_timeout_seconds)
+                except asyncio.TimeoutError:
+                    logger.warning(f"VLM stream timeout: no token for {_timeout_seconds}s")
+                    yield RequestOutput(
+                        request_id=req_id,
+                        new_text="",
+                        finish_reason="error",
+                        finished=True,
+                        error=f"Streaming timeout: no token for {_timeout_seconds}s",
+                    )
+                    break
                 if output is None:
                     break
+                if output.prompt_tokens > 0:
+                    _prompt_tokens_count = output.prompt_tokens
+                if output.completion_tokens > 0:
+                    _completion_tokens_count = output.completion_tokens
+                # Record TTFT in Prometheus on first token
+                if output.ttft_ms > 0 and _stream_ttft_recorded[0]:
+                    try:
+                        from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+                        pm = get_prometheus_metrics()
+                        pm.observe_histogram("ttft_seconds", _stream_ttft_val[0])
+                    except Exception:
+                        pass
+                    _stream_ttft_recorded[0] = False
                 yield output
         finally:
+            # Record in ServerMetrics for VLM streaming
+            try:
+                from .server_metrics import get_server_metrics
+                get_server_metrics().record_request_complete(
+                    prompt_tokens=_prompt_tokens_count,
+                    completion_tokens=_completion_tokens_count,
+                    model_id=_model_id,
+                )
+            except Exception:
+                pass
             self._active_count -= 1
             if not stream_task.done():
                 stream_task.cancel()
@@ -2348,6 +2387,7 @@ class VLMEngine:
                 error=str(e),
                 prompt_tokens=_num_prompt_tokens,
                 current_state=_error_state,
+                reasoning_tokens=_thinking_tokens,
             ))
 
     # ── Prompt Formatting ──

@@ -84,7 +84,8 @@ class SpecStrategy(ABC):
         ...
 
     @abstractmethod
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         """Accept verified tokens and update internal state.
 
         Called after the target model has verified the draft tokens.
@@ -93,6 +94,7 @@ class SpecStrategy(ABC):
         Args:
             draft_tokens: The draft tokens that were proposed.
             verified_up_to: Number of tokens verified as correct (0 = all rejected).
+            bonus_token: Optional correction/bonus token from the verifier.
         """
         ...
 
@@ -165,7 +167,8 @@ class NgramStrategy(SpecStrategy):
             metadata={"mode": self._config.mode},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
 
@@ -246,7 +249,8 @@ class CrossModelStrategy(SpecStrategy):
             metadata={"draft_length": K},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
 
@@ -322,7 +326,8 @@ class MTPStrategy(SpecStrategy):
             metadata={"draft_length": 1},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
 
@@ -409,7 +414,8 @@ class MedusaStrategy(SpecStrategy):
             metadata={"num_heads": num_heads, "draft_length": draft_len},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
 
@@ -486,14 +492,16 @@ class CompositeStrategy(SpecStrategy):
         # All strategies returned empty
         return DraftProposal(tokens=[], strategy_name="composite(empty)")
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         # Only forward accept to the strategy that actually proposed the draft.
         # Forwarding to ALL children would inflate acceptance stats for
         # non-participating strategies.
         if self._last_proposer is not None:
             for s in self._strategies:
                 if s.name == self._last_proposer:
-                    s.accept(draft_tokens, verified_up_to)
+                    s.accept(draft_tokens, verified_up_to,
+                             bonus_token=bonus_token)
                     break
         self._last_proposer = None
 
@@ -568,7 +576,8 @@ class GPUNgramStrategy(SpecStrategy):
             metadata={"mode": "gpu_ngram"},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         # Add accepted tokens to the GPU table for future matching
@@ -721,7 +730,8 @@ class LLMStrategy(SpecStrategy):
             },
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         if self._proposer is not None:
@@ -806,7 +816,8 @@ class Gemma4Strategy(SpecStrategy):
             },
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         if self._proposer is not None:
@@ -897,7 +908,8 @@ class DeltaNetInversionStrategy(SpecStrategy):
             metadata={"inversion_available": True},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
         # If fewer tokens accepted than proposed, trigger inversion recovery

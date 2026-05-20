@@ -422,9 +422,12 @@ class DFlashProposer:
         else:
             bonus_logits = logits_2d[-1]
 
-        # Sample from target distribution
-        bonus_probs = mx.softmax(bonus_logits, axis=-1)
-        bonus_token = int(mx.argmax(bonus_probs).item())
+        # Sample bonus/correction token from target distribution.
+        # Use categorical sampling (respects temperature) instead of
+        # greedy argmax, matching the target model's sampling behavior.
+        bonus_token = int(mx.random.categorical(
+            bonus_logits.reshape(1, -1), axis=-1
+        ).item())
 
         # Update stats
         self._stats.verify_time_ns += time.monotonic_ns() - t0
