@@ -1307,6 +1307,8 @@ class EngineCore:
                 frequency_penalty=frequency_penalty,
                 presence_penalty=presence_penalty,
                 seed=seed,
+                stop=stop,
+                stop_token_ids=stop_token_ids,
                 json_schema=str(json_schema) if json_schema else None,
                 thinking_budget=thinking_budget,
                 reasoning_effort=reasoning_effort,
@@ -2409,7 +2411,12 @@ class EngineCore:
                         self._slo_monitor.check_slo("ttft", _est_ttft_ms)
                     if _est_itl_ms > 0:
                         self._slo_monitor.check_slo("itl", _est_itl_ms)
-                    self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
+                    # Only check throughput SLO when the system is active.
+                    # When idle (throughput=0 and no running requests), recording
+                    # a violation inflates the violation rate and triggers
+                    # spurious auto-tuning decisions.
+                    if step_metrics.throughput_tok_s > 0 or len(self.scheduler.running) > 0:
+                        self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
                     # Fairness tracker: use incremental tokens (new_token_ids length)
                     # not cumulative completion_tokens, which grows every step.
                     for req_output in scheduler_output.outputs:

@@ -535,12 +535,13 @@ class TestSchedulerSpecAwareBudget:
         scheduler.running["req-1"] = req
         scheduler._uid_to_req[0] = "req-1"
 
-        # Compute spec-aware budget
-        budget = scheduler._spec_aware_scheduler.compute_spec_budget(1)
+        # Compute spec-aware budget — use enough running requests that the
+        # spec overhead actually rounds to >= 1 slot (0.1 * 10 = 1.0).
+        budget = scheduler._spec_aware_scheduler.compute_spec_budget(10)
         assert budget.total_slots == 64
-        assert budget.decode_slots == 1
-        assert budget.spec_slots > 0
-        assert budget.available_for_new < 63  # Reduced by spec overhead
+        assert budget.decode_slots == 10
+        assert budget.spec_slots >= 1  # 10 * 0.1 = 1.0 → rounds to 1
+        assert budget.available_for_new < 54  # Reduced by spec overhead
 
     def test_no_spec_overhead_when_spec_disabled(self):
         """When spec decode is disabled, no spec slots are reserved."""

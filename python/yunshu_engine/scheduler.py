@@ -253,7 +253,7 @@ class SpecAwareBatchScheduler:
             if self.tbo_enabled:
                 effective_overhead *= 0.5
                 self._stats["tbo_overlap_steps"] += 1
-            spec_slots = max(1, round(num_running * effective_overhead))
+            spec_slots = max(0, round(num_running * effective_overhead))
 
         available = max(0, total - decode_slots - spec_slots)
 
@@ -1316,6 +1316,7 @@ class Scheduler:
             if req.request_id in self._pending_abort_ids:
                 self._pending_abort_ids.discard(req.request_id)
                 req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
+                self.finished_ids.add(req.request_id)
                 self._failed_insert_ids.append(req.request_id)
                 continue
             submit = req._submit_time if req._submit_time > 0 else now
@@ -1808,7 +1809,10 @@ class Scheduler:
                         )
 
                 self._total_prompt_tokens += req.num_prompt_tokens
-                self._num_requests += 1
+                # Only count unique requests — skip re-inserted preempted requests
+                # which were already counted during their first insertion.
+                if getattr(req, 'num_preemptions', 0) == 0:
+                    self._num_requests += 1
 
                 # Track prefill progress
                 if self._prefill_tracker is not None:

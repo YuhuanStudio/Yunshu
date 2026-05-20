@@ -75,8 +75,8 @@ class CompletionRequest(BaseModel):
     stop: Optional[list[str]] = None
     stop_token_ids: Optional[list[int]] = None
     echo: bool = False
-    logprobs: int = Field(default=0, ge=0, le=20)
-    top_logprobs: Optional[int] = Field(default=None, ge=0, le=20)
+    logprobs: int = Field(default=0, ge=0, le=5)
+    top_logprobs: Optional[int] = Field(default=None, ge=0, le=5)
     seed: Optional[int] = None
     spec_decode: bool = False
     enable_thinking: Optional[bool] = None
@@ -88,6 +88,8 @@ class CompletionRequest(BaseModel):
     lora_adapter: Optional[str] = None
     grammar: Optional[dict] = None  # {"type": "regex", "pattern": "..."} etc.
     user: Optional[str] = None
+    suffix: Optional[str] = None  # OpenAI: suffix after inserted text completion
+    best_of: Optional[int] = Field(default=None, ge=1, le=128)  # OpenAI: server-side best-of selection
     priority: int = Field(default=0, ge=0, le=100)
     n: int = Field(default=1, ge=1, le=128)
     logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
@@ -102,6 +104,8 @@ class CompletionRequest(BaseModel):
             raise ValueError("prompt: cannot be empty or whitespace-only")
         if isinstance(self.prompt, list) and not self.prompt:
             raise ValueError("prompt: cannot be an empty list")
+        if self.top_logprobs is not None and self.logprobs <= 0:
+            raise ValueError("top_logprobs: can only be set when logprobs > 0")
         if self.stop and len(self.stop) > 16:
             raise ValueError("stop: maximum 16 stop sequences")
         if self.stop_token_ids and len(self.stop_token_ids) > 16:
@@ -116,6 +120,12 @@ class CompletionRequest(BaseModel):
             gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
             if gtype not in ("json", "regex", "choice", "cfg", None):
                 raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
+        # Validate best_of: must be >= n, and not used with streaming
+        if self.best_of is not None:
+            if self.best_of < self.n:
+                raise ValueError(f"best_of ({self.best_of}) must be >= n ({self.n})")
+            if self.stream:
+                raise ValueError("best_of is not supported when stream is True")
         return self
 
 
@@ -236,6 +246,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     lp = _format_logprobs(
                         result, getattr(engine, '_tokenizer', None),
                         req.top_logprobs if req.top_logprobs is not None else req.logprobs,
+                        echo=req.echo, prompt=prompt,
                     )
             else:
                 state = await engine.generate(
@@ -276,21 +287,26 @@ async def create_completion(req: CompletionRequest, request: Request):
                     lp = _format_logprobs(
                         state, getattr(engine, '_tokenizer', None),
                         req.top_logprobs if req.top_logprobs is not None else req.logprobs,
+                        echo=req.echo, prompt=prompt,
                     )
 
             if req.echo:
                 text = prompt + text
+            if req.suffix:
+                text = text + req.suffix
             _gen_result = result if is_batched else state
             _cached = getattr(_gen_result, 'cached_tokens', 0)
             return idx, pt, ct, fr, rt, lp, text, _cached
 
         n = max(req.n, 1)
-        if n == 1:
+        # best_of: generate more completions than returned, keep best by logprob
+        _generate_count = max(req.best_of, n) if req.best_of is not None else n
+        if _generate_count == 1:
             results = [await _gen_one(0)]
         else:
             import asyncio
             results = await asyncio.gather(
-                *[_gen_one(i) for i in range(n)], return_exceptions=True,
+                *[_gen_one(i) for i in range(_generate_count)], return_exceptions=True,
             )
             # Filter out exceptions, log them
             valid_results = []
@@ -304,6 +320,23 @@ async def create_completion(req: CompletionRequest, request: Request):
 
         if not results:
             raise HTTPException(status_code=500, detail="All choices failed to generate")
+
+        # best_of: select top n results by average log probability per token
+        if req.best_of is not None and len(results) > n:
+            def _avg_logprob(r):
+                """Compute average log probability for a result tuple."""
+                _, pt, ct, fr, rt, lp, text, _cached = r
+                if lp and "token_logprobs" in lp:
+                    probs = lp["token_logprobs"]
+                    # Filter out None values (some tokens may have null logprobs)
+                    valid_probs = [p for p in probs if p is not None]
+                    if valid_probs:
+                        return sum(valid_probs) / len(valid_probs)
+                return float('-inf')  # no logprobs -> lowest priority
+            results.sort(key=_avg_logprob, reverse=True)
+            results = results[:n]
+            # Re-index choices after best_of selection
+            results = [(i, *r[1:]) for i, r in enumerate(results)]
 
         prompt_tokens = results[0][1]
         total_completion_tokens = sum(r[2] for r in results)
@@ -475,7 +508,10 @@ async def _stream_completion(
                 _chunk_logprobs = None
                 if output.logprobs:
                     _chunk_logprobs, _choice_text_offset = _format_streaming_logprobs(
-                        output.logprobs, text_offset_start=_choice_text_offset,
+                        output.logprobs,
+                        text_offset_start=_choice_text_offset,
+                        top_logprobs=req.top_logprobs if req.top_logprobs is not None else req.logprobs,
+                        tokenizer=getattr(engine, '_tokenizer', None),
                     )
                 yield format_openai_completion_chunk(
                     completion_id=completion_id,
@@ -525,7 +561,10 @@ async def _stream_completion(
                 _chunk_lp = None
                 if req.logprobs and hasattr(output, 'logprobs'):
                     _chunk_lp, _choice_text_offset = _format_streaming_logprobs(
-                        output.logprobs, text_offset_start=_choice_text_offset,
+                        output.logprobs,
+                        text_offset_start=_choice_text_offset,
+                        top_logprobs=req.top_logprobs if req.top_logprobs is not None else req.logprobs,
+                        tokenizer=getattr(engine, '_tokenizer', None),
                     )
                 # Track emitted text for stop-sequence overcount correction
                 if output.token_text:
@@ -553,6 +592,15 @@ async def _stream_completion(
                     choice_index=choice_idx,
                     logprobs=_chunk_lp,
                 )
+
+        # Emit suffix text after completion if requested
+        if req.suffix:
+            yield format_openai_completion_chunk(
+                completion_id=completion_id,
+                model=req.model,
+                text=req.suffix,
+                choice_index=choice_idx,
+            )
 
         # Emit final chunk with finish_reason for this choice (even if zero tokens)
         yield format_openai_completion_chunk(
@@ -642,13 +690,26 @@ async def _stream_completion(
                     pass
 
 
-def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
+def _format_logprobs(state, tokenizer, top_logprobs: int, echo: bool = False, prompt: str = "") -> dict | None:
     """Format logprobs from request state into OpenAI Completions format.
+
+    OpenAI Completions API returns logprobs as a flat structure:
+      {
+        "tokens": ["tok1", "tok2", ...],
+        "token_logprobs": [-0.5, -1.2, ...],
+        "top_logprobs": [{"tok_a": -0.5, "tok_b": -1.0}, ...],  # Dict[str, float], NOT chat-style
+        "text_offset": [0, 3, ...]
+      }
+
+    Note: top_logprobs entries are Dict[str, float] (token -> logprob),
+    NOT the Chat Completions format with token/logprob/bytes keys.
 
     Args:
         state: Generation result with logprobs attribute.
         tokenizer: Tokenizer for decoding token IDs.
         top_logprobs: Maximum number of top logprobs to return per token.
+        echo: Whether echo mode is enabled (shifts text_offset by prompt length).
+        prompt: The prompt text, used for text_offset shift when echo=True.
     """
     raw_logprobs = getattr(state, 'logprobs', None)
     if not raw_logprobs:
@@ -656,7 +717,7 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
 
     token_logprobs = []
     text_offsets = []
-    _offset = 0
+    _offset = len(prompt) if echo else 0
     if isinstance(raw_logprobs, (list, tuple)):
         for lp_entry in raw_logprobs:
             if isinstance(lp_entry, dict):
@@ -667,8 +728,9 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                     except Exception:
                         logger.debug("tokenizer decode failed", exc_info=True)
                 top_lps = lp_entry.get("top_logprobs", [])
-                # Decode top_logprobs bytes if present, truncate to requested count
-                decoded_top = []
+                # OpenAI Completions API: top_logprobs is List[Dict[str, float]]
+                # Each dict maps token string -> logprob float value.
+                decoded_top = {}
                 for tlp in top_lps[:top_logprobs] if top_logprobs else []:
                     tlp_token = tlp.get("token", "")
                     if not tlp_token and tokenizer and "token_id" in tlp:
@@ -676,15 +738,11 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                             tlp_token = tokenizer.decode([tlp["token_id"]])
                         except Exception:
                             pass
-                    decoded_top.append({
-                        "token": tlp_token,
-                        "logprob": tlp.get("logprob", 0.0),
-                        "bytes": list(tlp_token.encode("utf-8")) if tlp_token else [],
-                    })
+                    if tlp_token:
+                        decoded_top[tlp_token] = tlp.get("logprob", 0.0)
                 token_logprobs.append({
                     "token": token_str,
                     "logprob": lp_entry.get("logprob", 0.0),
-                    "bytes": list(token_str.encode("utf-8")) if token_str else [],
                     "top_logprobs": decoded_top,
                 })
                 text_offsets.append(_offset)
@@ -693,8 +751,7 @@ def _format_logprobs(state, tokenizer, top_logprobs: int) -> dict | None:
                 token_logprobs.append({
                     "token": "",
                     "logprob": float(lp_entry),
-                    "bytes": [],
-                    "top_logprobs": [],
+                    "top_logprobs": {},
                 })
                 text_offsets.append(_offset)
 
@@ -713,6 +770,8 @@ def _format_streaming_logprobs(
     logprobs_list: list[dict],
     *,
     text_offset_start: int = 0,
+    top_logprobs: int | None = None,
+    tokenizer: object | None = None,
 ) -> tuple[dict | None, int]:
     """Format per-token logprobs from streaming GenerationOutput into OpenAI Completions format.
 
@@ -722,34 +781,50 @@ def _format_streaming_logprobs(
 
     Per the OpenAI Completions API, logprobs must include ``text_offset``
     (character offset of each token in the output text).
+
+    OpenAI Completions top_logprobs format: Dict[str, float] per token,
+    NOT the Chat Completions style with token/logprob/bytes keys.
     """
     if not logprobs_list:
         return None, text_offset_start
     entries = []
     offsets = []
     _offset = text_offset_start
+    # When top_logprobs is not specified, include all available top logprobs.
+    # Use a large default to avoid truncation (engine already limits this).
+    _max_top = top_logprobs if top_logprobs is not None else 999
     for lp_entry in logprobs_list:
         if not isinstance(lp_entry, dict):
             continue
         token_str = lp_entry.get("token", "")
         if not token_str and "token_id" in lp_entry:
-            token_str = str(lp_entry["token_id"])
+            if tokenizer is not None:
+                try:
+                    token_str = tokenizer.decode([lp_entry["token_id"]])
+                except Exception:
+                    token_str = str(lp_entry["token_id"])
+            else:
+                token_str = str(lp_entry["token_id"])
         top_lps = lp_entry.get("top_logprobs", [])
-        # Decode top_logprobs with bytes field
-        decoded_top = []
-        for tlp in top_lps:
+        # OpenAI Completions API: top_logprobs is Dict[str, float]
+        decoded_top = {}
+        for tlp in top_lps[:_max_top]:
+            if not isinstance(tlp, dict):
+                continue
             tlp_token = tlp.get("token", "")
             if not tlp_token and "token_id" in tlp:
-                tlp_token = str(tlp["token_id"])
-            decoded_top.append({
-                "token": tlp_token,
-                "logprob": tlp.get("logprob", 0.0),
-                "bytes": list(tlp_token.encode("utf-8")) if tlp_token else [],
-            })
+                if tokenizer is not None:
+                    try:
+                        tlp_token = tokenizer.decode([tlp["token_id"]])
+                    except Exception:
+                        tlp_token = str(tlp["token_id"])
+                else:
+                    tlp_token = str(tlp["token_id"])
+            if tlp_token:
+                decoded_top[tlp_token] = tlp.get("logprob", 0.0)
         entries.append({
             "token": token_str,
             "logprob": lp_entry.get("logprob", 0.0),
-            "bytes": list(token_str.encode("utf-8")) if token_str else [],
             "top_logprobs": decoded_top,
         })
         offsets.append(_offset)
