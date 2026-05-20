@@ -190,6 +190,9 @@ class PagedScheduler(Scheduler):
                                 self._kv_manager.allocate_block_for_decode(table)
                             except ValueError:
                                 logger.warning(f"KV cache exhausted for request {req_id}")
+                                if req.batch_uid is not None and req.batch_uid not in self._uids_to_remove:
+                                    self._uids_to_remove.append(req.batch_uid)
+                                req.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_oom")
                                 self.abort_request(req_id)
 
     def _finalize_request_blocks(self, req_id: str) -> None:

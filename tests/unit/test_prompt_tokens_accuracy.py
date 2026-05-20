@@ -261,13 +261,14 @@ class TestVLMEnginePromptTokens:
         engine._config = {}
         engine._running = True
         engine._active_count = 0
+        import threading
+        engine._active_count_lock = threading.Lock()
         engine._num_requests_processed = 0
         engine._total_reasoning_tokens = 0
         engine._start_time = 0.0
         engine._has_vision = False
         engine._is_vlm = False
         engine._temp_files = None
-        import threading
         engine._temp_files_lock = threading.Lock()
         engine._mrope_info = MagicMock(enabled=False)
         engine._rope_delta_manager = None

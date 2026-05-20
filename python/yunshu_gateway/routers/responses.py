@@ -97,6 +97,7 @@ class ResponsesRequest(BaseModel):
     grammar: Optional[dict] = None
     lora_adapter: Optional[str] = None
     stream_options: Optional[StreamOptions] = None  # {"include_usage": true}
+    store: Optional[bool] = None  # Whether to store the response for later retrieval
     user: Optional[str] = None
     priority: int = Field(default=0, ge=0, le=100)
     logits_processors: Optional[list] = None  # User-provided custom logits processors
@@ -496,6 +497,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             "id": response_id,
             "object": "response",
             "created_at": int(time.time()),
+            "completed_at": int(time.time()),
             "model": req.model,
             "status": _response_status,
             "output": all_output_items,
@@ -511,13 +513,13 @@ async def create_response(req: ResponsesRequest, request: Request):
     except MemoryError:
         return JSONResponse(
             status_code=507,
-            content={"error": {"message": "Insufficient GPU memory", "type": "server_error"}},
+            content={"error": {"message": "Insufficient GPU memory", "type": "server_error", "code": "insufficient_memory"}},
         )
     except Exception as e:
         logger.error(f"Responses API generation error: {e}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={"error": {"message": "Internal server error", "type": "server_error"}},
+            content={"error": {"message": "Internal server error", "type": "server_error", "code": "internal_error"}},
         )
     finally:
         _release_lora_adapter(engine, loaded_adapter)

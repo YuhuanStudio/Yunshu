@@ -1179,11 +1179,15 @@ class JsonSchemaConstraint:
             # value is done.
             if len(self._schema_stack) == 1 and return_state == JsonState.DONE:
                 # Top-level primitive — check if schema allows only primitives
-                if parent_type not in ("object", "array") and not isinstance(parent_type, list):
+                is_container = parent_type in ("object", "array") or (
+                    isinstance(parent_type, list) and
+                    any(t in ("object", "array") for t in parent_type)
+                )
+                if not is_container:
                     self._schema_stack.pop()
                     self._state = JsonState.DONE
                     return
-            if parent_type == "array":
+            if parent_type == "array" or (isinstance(parent_type, list) and "array" in parent_type):
                 self._state = JsonState.ARRAY_COMMA
             else:
                 self._state = JsonState.OBJECT_COMMA
@@ -1198,7 +1202,9 @@ class JsonSchemaConstraint:
             self._schema_stack.pop()
             # Only pop object_keys_remaining for objects (not arrays),
             # since _init_object_keys only pushes for objects.
-            if popped_type in ("object",) or (popped_schema and "properties" in popped_schema):
+            if (popped_type == "object"
+                or (isinstance(popped_type, list) and "object" in popped_type)
+                or (popped_schema and "properties" in popped_schema)):
                 if self._object_keys_remaining:
                     self._object_keys_remaining.pop()
             self._current_key = None

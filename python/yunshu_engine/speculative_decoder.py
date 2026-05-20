@@ -821,6 +821,12 @@ class SpeculativeDecoder:
                             self.constraint.advance(self.tokenizer.decode([tid]))
                         except Exception:
                             pass
+                    # Advance for the correction token
+                    correction = generated_tokens[-1]
+                    try:
+                        self.constraint.advance(self.tokenizer.decode([correction]))
+                    except Exception:
+                        pass
                 # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
                 # After rollback, cache had N-1 entries. After forward K+1: N+K.
                 # Only accepted+1 are valid (last_tok + accepted drafts).
@@ -846,7 +852,19 @@ class SpeculativeDecoder:
                 correction = generated_tokens[-1]
                 self.target(mx.array([[correction]]), cache=target_cache)
             else:
-                # All accepted: feed bonus token to target cache for the same
+                # All accepted: advance grammar constraint for all accepted + bonus
+                if self.constraint is not None and hasattr(self.constraint, 'advance'):
+                    for tid in draft_tokens:
+                        try:
+                            self.constraint.advance(self.tokenizer.decode([tid]))
+                        except Exception:
+                            pass
+                    if bonus_id >= 0:
+                        try:
+                            self.constraint.advance(self.tokenizer.decode([bonus_id]))
+                        except Exception:
+                            pass
+                # feed bonus token to target cache for the same
                 # reason — the bonus must be in cache before next verify_draft.
                 if bonus_id >= 0 and len(generated_tokens) < max_tokens:
                     self.target(mx.array([[bonus_id]]), cache=target_cache)

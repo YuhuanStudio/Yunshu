@@ -291,7 +291,8 @@ class KVCacheManager:
                             "warm tier KV data write failed for block %d",
                             new_block.block_id, exc_info=True,
                         )
-                    # ref_count is already 1 from allocate(); do NOT touch again
+                        self.block_pool.free([new_block])
+                        break
                     _warm_promoted_blocks.add(id(new_block))
                     matched_blocks.append(new_block)
                     matched_hashes.append(h)

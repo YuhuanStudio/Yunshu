@@ -166,6 +166,10 @@ class AnthropicMessagesRequest(BaseModel):
                 if budget is not None:
                     if not isinstance(budget, int) or budget < 1:
                         raise ValueError("thinking: budget_tokens must be a positive integer")
+            elif thinking_type == "disabled":
+                pass  # Explicitly disabling thinking is valid
+            elif thinking_type is not None:
+                raise ValueError(f"thinking.type must be 'enabled' or 'disabled', got '{thinking_type}'")
         # Validate response_format type if provided
         if self.response_format is not None:
             rf_type = self.response_format.get("type") if isinstance(self.response_format, dict) else None
@@ -1527,12 +1531,13 @@ def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] |
 
 
 @router.post("/messages/count_tokens")
-async def count_tokens(req: AnthropicMessagesRequest) -> dict:
+async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     """Token counting endpoint (Anthropic compatible).
 
     Returns Anthropic-format errors on failure:
       {"type": "error", "error": {"type": "...", "message": "..."}}
     """
+    _check_permission(request, "can_infer")
     try:
         engine, _ = await _resolve_engine(req.model)
     except HTTPException as e:

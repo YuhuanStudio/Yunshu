@@ -248,7 +248,7 @@ class ControlNetBlock:
         # Default: concatenation-based conditioning
         # Scale condition by strength and add to latents
         if condition_latents.ndim == 3 and latents.ndim == 4:
-            # condition: (C, H, W) → (C, 1, H, W)
+            # condition: (C, H, W) → (C, 1, H, W) for broadcast with latents (batch, C, H, W)
             condition_latents = condition_latents[:, np.newaxis, :, :]
 
         # Add scaled conditioning as a bias

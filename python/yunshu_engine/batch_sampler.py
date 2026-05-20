@@ -334,6 +334,8 @@ class BatchSampler:
                 continue
 
             row = result[i : i + 1]  # shape [1, vocab]
+            if not mx.any(mx.isfinite(row.reshape(-1))).item():
+                continue
             top_logprobs = mx.max(row, axis=-1, keepdims=True)
             scaled_min_p = top_logprobs + math.log(min_p)
             tokens_to_remove = row < scaled_min_p

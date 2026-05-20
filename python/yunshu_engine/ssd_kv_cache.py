@@ -587,6 +587,8 @@ class SSDKVCache:
             meta = self._index.get(hex_hash)
             if meta is None:
                 return None
+            if meta.file_size == 0:
+                return None
 
         # Load from disk (blocking, runs on inference thread)
         if meta is None:

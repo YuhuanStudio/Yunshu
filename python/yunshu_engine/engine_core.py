@@ -2993,8 +2993,10 @@ class EngineCore:
             self._fairness_tracker.remove_request(request_id)
         except Exception:
             logger.debug("fairness tracker cleanup failed", exc_info=True)
-        # Remove from scheduler
-        self.scheduler.remove_finished_request(request_id)
+        # Remove from scheduler (only if actually added — dedup shadows
+        # are short-circuited before reaching scheduler.add_request)
+        if request_id not in self._dedup_shadows:
+            self.scheduler.remove_finished_request(request_id)
 
     def _fail_active_requests(self, error_msg: str) -> None:
         """Fail all active requests (scheduler + dedup shadows) with an error.

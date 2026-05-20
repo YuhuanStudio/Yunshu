@@ -298,6 +298,7 @@ class VLMEngine:
         self._config: dict = {}
         self._running = False
         self._active_count = 0
+        self._active_count_lock = threading.Lock()
         self._num_requests_processed = 0
         self._total_reasoning_tokens = 0
         self._start_time = 0.0
@@ -620,7 +621,8 @@ class VLMEngine:
         image_paths.extend(video_frames)
         _enable_thinking = enable_thinking
 
-        self._active_count += 1
+        with self._active_count_lock:
+            self._active_count += 1
         with self._temp_files_lock:
             if self._temp_files is None:
                 self._temp_files = []
@@ -775,7 +777,8 @@ class VLMEngine:
                     timeout=_timeout_seconds,
                 )
             except asyncio.TimeoutError:
-                self._active_count -= 1
+                with self._active_count_lock:
+                    self._active_count -= 1
                 self._num_requests_processed += 1
                 logger.warning(f"VLM non-streaming generate timed out after {_timeout_seconds}s")
                 return {
@@ -788,12 +791,14 @@ class VLMEngine:
                     "completion_tokens": 0,
                 }
             except Exception:
-                self._active_count -= 1
+                with self._active_count_lock:
+                    self._active_count -= 1
                 self._num_requests_processed += 1
                 raise
 
             elapsed = time.monotonic() - t0
-            self._active_count -= 1
+            with self._active_count_lock:
+                self._active_count -= 1
             self._num_requests_processed += 1
             self._total_reasoning_tokens += reasoning_tokens
 
@@ -1236,7 +1241,8 @@ class VLMEngine:
                 except Exception:
                     pass
 
-        self._active_count += 1
+        with self._active_count_lock:
+            self._active_count += 1
         loop = asyncio.get_running_loop()
 
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
@@ -1287,7 +1293,8 @@ class VLMEngine:
                 )
             except Exception:
                 pass
-            self._active_count -= 1
+            with self._active_count_lock:
+                self._active_count -= 1
             if not stream_task.done():
                 stream_task.cancel()
                 try:
@@ -2757,8 +2764,6 @@ class VLMEngine:
 
         # SSRF validation: block private/internal IPs
         _VALIDATE_URL(url)
-
-        ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
 
         ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"

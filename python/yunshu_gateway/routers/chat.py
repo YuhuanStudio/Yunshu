@@ -1695,7 +1695,7 @@ async def _stream_response_multi(
                     # vLLM pattern: emit prefill progress as SSE comment
                     _pf_prog = getattr(output, 'prefill_progress', None)
                     if _pf_prog is not None:
-                        yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
+                        yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n"
                         continue
                     if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                         choice_completion_tok = output.completion_tokens

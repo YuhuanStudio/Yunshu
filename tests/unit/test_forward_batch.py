@@ -37,7 +37,7 @@ class TestRequestSlot:
         assert slot.is_finished
 
     def test_is_not_finished(self):
-        slot = RequestSlot(request_id="r1", prompt_tokens=[], max_tokens=100)
+        slot = RequestSlot(request_id="r1", prompt_tokens=[], max_tokens=100, eos_token_ids=[999])
         slot.generated_tokens = [1, 2, 3]
         assert not slot.is_finished
 

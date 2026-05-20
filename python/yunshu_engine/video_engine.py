@@ -256,9 +256,10 @@ class VideoEngine:
         self._lora_adapter_path = ""
         gc.collect()
         try:
+            import concurrent.futures
             import mlx.core as mx
-            mx.synchronize()
-            mx.clear_cache()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(lambda: (mx.synchronize(), mx.clear_cache())).result()
         except Exception:
             logger.debug("MLX cache clear in video stop failed", exc_info=True)
 

@@ -1143,11 +1143,10 @@ class KVOffloadManager:
         if block.ref_count > 1:
             return
         pool._evict_cached_block(block)
-        # Handle both ref_count==0 (already in free queue) and ref_count==1 (cache-only, not in free queue)
         if block.ref_count == 1:
             block.ref_count = 0
             pool.free_queue.append(block)
-        elif block.ref_count == 0 and block.prev is None and block.next is None:
+        elif block.ref_count == 0:
             pool.free_queue.append(block)
 
     async def _wait_for_completion(self, request_id: str) -> OffloadResult:

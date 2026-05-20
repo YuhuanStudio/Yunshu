@@ -1568,7 +1568,7 @@ class Scheduler:
                 # pre-filter loop but before we reached this point.
                 if req.request_id in self._pending_abort_ids:
                     self._pending_abort_ids.discard(req.request_id)
-                    req.set_finish("aborted")
+                    req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
                     self._failed_insert_ids.append(req.request_id)
                     continue
 
@@ -3146,6 +3146,7 @@ class Scheduler:
                         item = self.waiting._extract_item(entry)
                         if hasattr(item, 'request_id') and item.request_id in _aborted_ids_snapshot:
                             item.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
+                            self._failed_insert_ids.append(item.request_id)
                         else:
                             remaining.append(entry)
                     if len(remaining) != len(self.waiting._heap):

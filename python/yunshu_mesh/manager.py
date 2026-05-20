@@ -441,21 +441,19 @@ class MeshManager:
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
                 topo_node.mark_unhealthy(reason="peer_lost")
-            # Mark unavailable in DP/RTT routers immediately (traffic diversion),
-            # but defer disagg router removal until retries exhausted.
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
             self._rtt_router.mark_unhealthy(node.node_id)
             logger.info(f"Peer lost: {node.hostname} — scheduling retry before removal")
-        # Schedule exponential backoff retry on the event loop
-        if self._loop is not None and self._loop.is_running():
-            existing = self._retry_tasks.get(node.node_id)
-            if existing and not existing.done():
-                existing.cancel()
-            task = asyncio.ensure_future(
-                self._retry_peer_lost(node), loop=self._loop,
-            )
-            self._retry_tasks[node.node_id] = task
+            # Schedule retry inside _node_lock to prevent race on _retry_tasks
+            if self._loop is not None and self._loop.is_running():
+                existing = self._retry_tasks.get(node.node_id)
+                if existing and not existing.done():
+                    existing.cancel()
+                task = asyncio.ensure_future(
+                    self._retry_peer_lost(node), loop=self._loop,
+                )
+                self._retry_tasks[node.node_id] = task
 
     async def _retry_peer_lost(self, node: MeshNode, retry_count: int = 0) -> None:
         """Exponential backoff retry before permanently removing a peer."""
@@ -495,14 +493,14 @@ class MeshManager:
                 self._dp_router.mark_unavailable(node.node_id)
             self._rtt_router.mark_unhealthy(node.node_id)
             logger.info(f"Node timeout: {node.hostname} — scheduling retry before removal")
-        if self._loop is not None and self._loop.is_running():
-            existing = self._retry_tasks.get(node.node_id)
-            if existing and not existing.done():
-                existing.cancel()
-            task = asyncio.ensure_future(
-                self._retry_node_timeout(node), loop=self._loop,
-            )
-            self._retry_tasks[node.node_id] = task
+            if self._loop is not None and self._loop.is_running():
+                existing = self._retry_tasks.get(node.node_id)
+                if existing and not existing.done():
+                    existing.cancel()
+                task = asyncio.ensure_future(
+                    self._retry_node_timeout(node), loop=self._loop,
+                )
+                self._retry_tasks[node.node_id] = task
 
     async def _retry_node_timeout(self, node: MeshNode, retry_count: int = 0) -> None:
         """Exponential backoff retry before permanently removing a timed-out node."""

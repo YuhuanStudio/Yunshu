@@ -615,7 +615,7 @@ class TieredKVCacheManager:
             with self.hot.block_pool._lock:
                 for block in surplus:
                     if block.block_hash is not None:
-                        self.hot.block_pool._evict_cached_block(block)
+                        self.hot.block_pool._evict_cached_block_unlocked(block)
                     block.ref_count = 1
             self.hot.block_pool.free(surplus)
             # Rebuild the internal block list with promoted blocks spliced in.

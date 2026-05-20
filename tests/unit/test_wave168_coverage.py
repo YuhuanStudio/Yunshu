@@ -385,6 +385,7 @@ class TestVLMFinishReasonErrorPaths:
         engine._config = {}
         engine._running = True
         engine._active_count = 0
+        engine._active_count_lock = threading.Lock()
         engine._num_requests_processed = 0
         engine._total_reasoning_tokens = 0
         engine._start_time = 0.0
@@ -633,6 +634,7 @@ class TestPromptTokensWithKVPrefixCache:
         engine._config = {}
         engine._running = True
         engine._active_count = 0
+        engine._active_count_lock = threading.Lock()
         engine._num_requests_processed = 0
         engine._total_reasoning_tokens = 0
         engine._start_time = 0.0

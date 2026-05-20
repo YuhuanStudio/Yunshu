@@ -65,7 +65,7 @@ class RequestSlot:
     def is_finished(self) -> bool:
         if len(self.generated_tokens) >= self.max_tokens:
             return True
-        if self.generated_tokens and self.eos_token_ids and self.generated_tokens[-1] in self.eos_token_ids:
+        if self.eos_token_ids and any(t in self.eos_token_ids for t in self.generated_tokens):
             return True
         return False
 

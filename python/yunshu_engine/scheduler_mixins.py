@@ -542,20 +542,16 @@ class MemoryPressureMixin(SchedulerMixin):
                 self._admission_paused = True
             elif fraction >= self._warning_threshold:
                 if self._current_state == "critical":
-                    # Hysteresis: only exit critical when below threshold - hysteresis
                     if fraction < self._critical_threshold - self._hysteresis:
                         self._current_state = "warning"
                 else:
                     self._current_state = "warning"
                 self._admission_paused = False
-            elif self._current_state == "warning" and fraction < self._warning_threshold:
-                # Hysteresis: only exit warning when below warning - hysteresis
-                if fraction < self._warning_threshold - self._hysteresis:
-                    self._current_state = "normal"
-                    self._admission_paused = False
-            else:
+            elif fraction < self._warning_threshold - self._hysteresis:
                 self._current_state = "normal"
                 self._admission_paused = False
+            elif self._current_state != "critical":
+                pass
 
             if prev_state != self._current_state:
                 self._transitions += 1
