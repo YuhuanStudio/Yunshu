@@ -887,6 +887,10 @@ class VLMEngine:
 
         _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
+        _stream_ttft_t0 = [time.perf_counter()]
+        _stream_ttft_recorded = [False]
+        _stream_ttft_val = [0.0]
+
         def _stream_sync():
             nonlocal _has_detokenizer
             # Initialize eagerly so the error handler can reference it
@@ -905,7 +909,7 @@ class VLMEngine:
                         _re = kwargs.get('reasoning_effort')
                         if _re is not None:
                             _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(_re, 8192)
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, _safe_queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, _safe_queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb, _ttft_t0=_stream_ttft_t0, _ttft_recorded=_stream_ttft_recorded, _ttft_val=_stream_ttft_val)
                     return
 
                 input_ids = self._tokenize_with_cache(messages, enable_thinking=enable_thinking)
@@ -921,7 +925,7 @@ class VLMEngine:
                         _re = kwargs.get('reasoning_effort')
                         if _re is not None:
                             _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(_re, 8192)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, _safe_queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, _safe_queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb, _ttft_t0=_stream_ttft_t0, _ttft_recorded=_stream_ttft_recorded, _ttft_val=_stream_ttft_val)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -1007,9 +1011,14 @@ class VLMEngine:
                             finished=True,
                             completion_tokens=token_count,
                             prompt_tokens=_num_prompt_tokens,
+                            reasoning_tokens=_thinking_tokens,
                         ))
                         return
                     token_count += 1
+                    # Record TTFT on first token
+                    if not _stream_ttft_recorded[0]:
+                        _stream_ttft_recorded[0] = True
+                        _stream_ttft_val[0] = time.perf_counter() - _stream_ttft_t0[0]
                     is_eos = token_id in stop_ids
 
                     # Track thinking segment boundaries
@@ -1054,6 +1063,7 @@ class VLMEngine:
                             completion_tokens=token_count,
                             prompt_tokens=_num_prompt_tokens,
                             current_state="reasoning" if _in_thinking else "normal",
+                            reasoning_tokens=_thinking_tokens,
                         ))
                         return
 
@@ -1094,6 +1104,8 @@ class VLMEngine:
                         completion_tokens=token_count,
                         prompt_tokens=_num_prompt_tokens,
                         current_state=_cur_state,
+                        reasoning_tokens=_thinking_tokens,
+                        ttft_ms=round(_stream_ttft_val[0] * 1000, 1) if _stream_ttft_val[0] > 0 else 0.0,
                     )
                     _safe_queue.put_nowait(output)
 
@@ -1131,6 +1143,8 @@ class VLMEngine:
                     completion_tokens=token_count,
                     prompt_tokens=_num_prompt_tokens,
                     current_state=_final_state,
+                    reasoning_tokens=_thinking_tokens,
+                    ttft_ms=round(_stream_ttft_val[0] * 1000, 1) if _stream_ttft_val[0] > 0 else 0.0,
                 )
                 _safe_queue.put_nowait(output)
 
@@ -1583,6 +1597,9 @@ class VLMEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         thinking_budget: int | None = None,
+        _ttft_t0: list | None = None,
+        _ttft_recorded: list | None = None,
+        _ttft_val: list | None = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate().
 
@@ -1641,6 +1658,14 @@ class VLMEngine:
         if image_paths:
             _tokens_per_image = self._estimate_image_tokens()
             _num_prompt_tokens += _tokens_per_image * len(image_paths)
+        _cached_tokens = 0
+        if kv_prefix_state is not None and kv_prefix_state.token_ids is not None and self._tokenizer is not None:
+            try:
+                _cached_tokens = kv_prefix_state.find_prefix_length(
+                    self._tokenizer.encode(prompt)
+                )
+            except Exception:
+                logger.debug("KV prefix length computation failed", exc_info=True)
         try:
             stream_kwargs: dict = {
                 "max_tokens": max_tokens,
@@ -1681,6 +1706,10 @@ class VLMEngine:
                     ))
                     return
                 token_count += 1
+                # Record TTFT on first token
+                if _ttft_t0 is not None and _ttft_recorded is not None and not _ttft_recorded[0]:
+                    _ttft_recorded[0] = True
+                    _ttft_val[0] = time.perf_counter() - _ttft_t0[0]
                 text = result.text if hasattr(result, 'text') else ""
                 accumulated += text
                 # Track thinking state from text markers — scan only the
@@ -1805,6 +1834,8 @@ class VLMEngine:
                     prompt_tokens=_num_prompt_tokens,
                     current_state=_cur_state,
                     reasoning_tokens=_reasoning_tok,
+                    cached_tokens=_cached_tokens if token_count == 1 else 0,
+                    ttft_ms=round(_ttft_val[0] * 1000, 1) if _ttft_val is not None and _ttft_val[0] > 0 else 0.0,
                 ))
                 if finish_reason:
                     return
@@ -1925,6 +1956,9 @@ class VLMEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         thinking_budget: int | None = None,
+        _ttft_t0: list | None = None,
+        _ttft_recorded: list | None = None,
+        _ttft_val: list | None = None,
     ) -> None:
         """Streaming text generation for VLM models."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1998,6 +2032,11 @@ class VLMEngine:
         mx.eval(current)
         token_count = 1
 
+        # Record TTFT on first token (prefill complete)
+        if _ttft_t0 is not None and _ttft_recorded is not None and not _ttft_recorded[0]:
+            _ttft_recorded[0] = True
+            _ttft_val[0] = time.perf_counter() - _ttft_t0[0]
+
         _in_thinking = False
         _thinking_tokens = 0
         _think_single_token = False
@@ -2049,6 +2088,8 @@ class VLMEngine:
             completion_tokens=token_count,
             prompt_tokens=_num_prompt_tokens,
             current_state=_state,
+            reasoning_tokens=_thinking_tokens,
+            ttft_ms=round(_ttft_val[0] * 1000, 1) if _ttft_val is not None and _ttft_val[0] > 0 else 0.0,
         ))
         if finish_reason:
             return
@@ -2078,6 +2119,7 @@ class VLMEngine:
                     finished=True,
                     completion_tokens=token_count,
                     prompt_tokens=_num_prompt_tokens,
+                    reasoning_tokens=_thinking_tokens,
                 ))
                 return
             output = lm(current[None], cache=cache)
@@ -2165,6 +2207,7 @@ class VLMEngine:
                     completion_tokens=token_count,
                     current_state=_state,
                     prompt_tokens=_num_prompt_tokens,
+                    reasoning_tokens=_thinking_tokens,
                 ))
                 return
             is_eos = token_id in stop_ids
@@ -2231,6 +2274,7 @@ class VLMEngine:
                 completion_tokens=token_count,
                 prompt_tokens=_num_prompt_tokens,
                 current_state=_state,
+                reasoning_tokens=_thinking_tokens,
             ))
 
             if finish_reason:
@@ -2276,6 +2320,7 @@ class VLMEngine:
               completion_tokens=token_count,
               prompt_tokens=_num_prompt_tokens,
               current_state=_final_state,
+              reasoning_tokens=_thinking_tokens,
           ))
         except Exception as e:
             logger.error(f"VLM text streaming error: {e}", exc_info=True)

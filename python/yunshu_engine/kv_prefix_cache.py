@@ -842,9 +842,14 @@ class KVPrefixCache:
         if self._ssd_cache is None:
             return 0
 
+        with self._lock:
+            snapshot_prompts = list(self._prompts)
+            snapshot_caches = list(self._caches)
+            snapshot_hashes = list(self._block_hashes)
+
         count = 0
-        for i, (prompt, cache) in enumerate(zip(self._prompts, self._caches)):
-            block_hashes = self._block_hashes[i]
+        for i, (prompt, cache) in enumerate(zip(snapshot_prompts, snapshot_caches)):
+            block_hashes = snapshot_hashes[i]
             for bi, bh in enumerate(block_hashes):
                 bh_bytes = bh.to_bytes(8, "little") if isinstance(bh, int) else bh
                 if self._ssd_cache.has_block(bh_bytes):

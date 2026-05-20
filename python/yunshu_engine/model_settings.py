@@ -119,12 +119,15 @@ class ModelSettings:
                 current = getattr(self, key)
                 if current != value:
                     try:
-                        field_type = self.__dataclass_fields__[key].type
-                        if field_type in ("int", int) and isinstance(value, (int, float)):
+                        ft = self.__dataclass_fields__[key].type
+                        # With `from __future__ import annotations`, ft is
+                        # always a string.  Match both bare and Optional types
+                        # (e.g. "int" and "int | None").
+                        if "int" in ft and "float" not in ft and isinstance(value, (int, float)):
                             value = int(value)
-                        elif field_type in ("float", float) and isinstance(value, (int, float)):
+                        elif "float" in ft and isinstance(value, (int, float)):
                             value = float(value)
-                        elif field_type in ("bool", bool):
+                        elif "bool" in ft and not isinstance(ft, type) and isinstance(value, (bool, int)):
                             value = bool(value)
                     except Exception:
                         logger.debug("settings field type coercion failed", exc_info=True)

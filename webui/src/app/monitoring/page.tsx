@@ -624,12 +624,40 @@ export default function MonitoringPage() {
           )}
 
           {/* RadixTree Stats */}
-          {radixTree && radixTree.enabled && (
+          {radixTree && radixTree.enabled && (() => {
+            const matchHits = Number(radixTree.match_hits || 0);
+            const matchTotal = Number(radixTree.match_total || 0);
+            const matchRate = matchTotal > 0 ? (matchHits / matchTotal) * 100 : null;
+            return (
             <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
               <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
                 <HardDrive className="w-4 h-4 text-[var(--color-accent)]" />
                 RadixTree Prefix Cache
               </h3>
+              {/* Cache Hit Rate — prominent display */}
+              <div className="mb-4 p-3 rounded-lg bg-[var(--color-bg-primary)] border border-[var(--color-border)] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-[var(--color-accent)]" />
+                  <span className="text-sm font-medium">Cache Hit Rate</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {matchRate !== null && (
+                    <span className={`text-lg font-bold tabular-nums ${
+                      matchRate >= 80 ? "text-emerald-500" :
+                      matchRate >= 50 ? "text-amber-500" :
+                      "text-[var(--color-danger)]"
+                    }`}>
+                      {matchRate.toFixed(1)}%
+                    </span>
+                  )}
+                  {matchRate === null && (
+                    <span className="text-lg font-bold text-[var(--color-text-secondary)]">N/A</span>
+                  )}
+                  <span className="text-xs text-[var(--color-text-secondary)] tabular-nums">
+                    {matchHits.toLocaleString()} / {matchTotal.toLocaleString()} hits
+                  </span>
+                </div>
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
                 <div>
                   <div className="text-xs text-[var(--color-text-secondary)]">Total Nodes</div>
@@ -667,7 +695,8 @@ export default function MonitoringPage() {
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Hardware Profile */}
           {hwProfile && !hwProfile.error && (
@@ -1254,24 +1283,87 @@ export default function MonitoringPage() {
           })()}
 
           {/* KV Migration */}
-          {kvMigration && kvMigration.enabled !== false && Object.keys(kvMigration).length > 1 && (
+          {kvMigration && kvMigration.enabled !== false && Object.keys(kvMigration).length > 1 && (() => {
+            const tierNames = ["hot", "warm", "ssd", "cold"];
+            const tierColors: Record<string, string> = {
+              hot: "bg-red-500",
+              warm: "bg-amber-500",
+              ssd: "bg-blue-500",
+              cold: "bg-emerald-500",
+            };
+            const tierLabels: Record<string, string> = {
+              hot: "Hot",
+              warm: "Warm",
+              ssd: "SSD",
+              cold: "Cold",
+            };
+            const tiers = tierNames
+              .map((tier) => {
+                const tierData = kvMigration[`${tier}_tier`] as Record<string, unknown> | undefined;
+                if (!tierData) return null;
+                const used = Number(tierData.used_blocks || 0);
+                const total = Number(tierData.total_blocks || 0);
+                const pct = tierData.pct_full != null ? Number(tierData.pct_full) : (total > 0 ? (used / total) * 100 : 0);
+                return { tier, used, total, pct };
+              })
+              .filter(Boolean) as { tier: string; used: number; total: number; pct: number }[];
+            const hasTiers = tiers.length > 0;
+            const otherEntries = Object.entries(kvMigration)
+              .filter(([k]) => !["enabled", "reason"].includes(k) && !tierNames.some((t) => k === `${t}_tier`))
+              .filter(([k, v]) => !(hasTiers && ["tier_utilization", "tiers"].includes(k)));
+            return (
             <div className="bg-[var(--color-bg-secondary)] rounded-xl border border-[var(--color-border)] p-4">
               <h3 className="font-semibold text-sm flex items-center gap-2 mb-3">
                 <ArrowRightLeft className="w-4 h-4 text-[var(--color-accent)]" />
                 KV Migration (Multi-Tier)
               </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
-                {Object.entries(kvMigration).filter(([k]) => !["enabled", "reason"].includes(k)).map(([k, v]) => (
-                  <div key={k}>
-                    <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
-                    <div className="font-medium tabular-nums">
-                      {typeof v === "number" ? (v > 1024 * 1024 ? fmtBytes(v) : v.toLocaleString()) : typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}
+              {/* Structured tier visualization */}
+              {hasTiers && (
+                <div className="space-y-3 mb-4">
+                  {tiers.map(({ tier, used, total, pct }) => (
+                    <div key={tier}>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${tierColors[tier] || "bg-gray-400"}`} />
+                          <span className="font-medium">{tierLabels[tier] || tier}</span>
+                        </span>
+                        <span className="tabular-nums text-[var(--color-text-secondary)]">
+                          {used.toLocaleString()} / {total.toLocaleString()} blocks
+                          <span className={`ml-2 font-medium ${
+                            pct >= 90 ? "text-[var(--color-danger)]" :
+                            pct >= 70 ? "text-amber-500" :
+                            "text-emerald-500"
+                          }`}>
+                            ({pct.toFixed(1)}%)
+                          </span>
+                        </span>
+                      </div>
+                      <div className="w-full bg-[var(--color-bg-tertiary)] rounded-full h-2">
+                        <div
+                          className={`${tierColors[tier] || "bg-gray-400"} h-2 rounded-full transition-all duration-700`}
+                          style={{ width: `${Math.min(pct, 100)}%` }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
+              {/* Remaining KV migration stats */}
+              {otherEntries.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+                  {otherEntries.map(([k, v]) => (
+                    <div key={k}>
+                      <div className="text-xs text-[var(--color-text-secondary)]">{k.replace(/_/g, " ")}</div>
+                      <div className="font-medium tabular-nums">
+                        {typeof v === "number" ? (v > 1024 * 1024 ? fmtBytes(v) : v.toLocaleString()) : typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+            );
+          })()}
 
           {/* Attention Eviction (H2O) */}
           {attentionEviction && attentionEviction.enabled !== false && (attentionEviction.models as Record<string, unknown>[])?.length > 0 && (

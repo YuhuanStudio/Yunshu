@@ -140,7 +140,7 @@ class AnthropicMessagesRequest(BaseModel):
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: Optional[dict] = None
     timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
-    grammar: Optional[str] = None  # Grammar constraint (regex, choice, CFG)
+    grammar: Optional[dict] = None  # Grammar constraint (regex, choice, CFG)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -1127,8 +1127,8 @@ async def _stream_anthropic(
                     if matched_stop:
                         continue
                     output_tokens += 1
+                    _prev_len = len(accumulated_text)
                     if not (has_tools and _tool_streamer):
-                        _prev_len = len(accumulated_text)
                         accumulated_text += _token_text
                         _token_boundaries.append(len(accumulated_text))
 
@@ -1426,6 +1426,7 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n".encode("utf-8")
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
+        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Anthropic streaming error", exc_info=True)
         # Emit message_start if it was never sent (error before first engine output)
@@ -1436,6 +1437,7 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n".encode("utf-8")
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
+        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _anth_tracker is not None:

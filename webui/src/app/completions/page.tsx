@@ -122,15 +122,20 @@ export default function CompletionsPage() {
         const decoder = new TextDecoder();
         let resultId = "";
         let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+        let buffer = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          for (const line of chunk.split("\n")) {
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             const data = line.slice(6).trim();
-            if (data === "[DONE]") break;
+            if (data === "[DONE]") continue;
             try {
               const parsed = JSON.parse(data);
               resultId = parsed.id || resultId;

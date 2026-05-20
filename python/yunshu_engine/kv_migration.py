@@ -421,15 +421,16 @@ class KVMigrationManager:
             Number of migrations scheduled.
         """
         scheduled = 0
+        to_enqueue: list[tuple] = []
         with self._lock:
             for block_id, temp in list(self._temperatures.items()):
                 target_tier = self._frequency_to_tier(temp.access_frequency)
                 if target_tier != temp.tier:
-                    with self._queue_lock:
-                        self._migration_queue.append(
-                            (block_id, temp.tier, target_tier)
-                        )
-                    scheduled += 1
+                    to_enqueue.append((block_id, temp.tier, target_tier))
+        if to_enqueue:
+            with self._queue_lock:
+                self._migration_queue.extend(to_enqueue)
+            scheduled = len(to_enqueue)
 
         if scheduled > 0:
             logger.debug("Auto-migration: scheduled %d block moves", scheduled)
@@ -469,9 +470,9 @@ class KVMigrationManager:
 
     def get_stats(self) -> dict:
         """Return migration statistics."""
+        with self._queue_lock:
+            pending_queue_size = len(self._migration_queue)
         with self._lock:
-            with self._queue_lock:
-                pending_queue_size = len(self._migration_queue)
             return {
                 "gpu_to_cpu_count": self._stats.gpu_to_cpu_count,
                 "cpu_to_ssd_count": self._stats.cpu_to_ssd_count,

@@ -375,14 +375,17 @@ class SSDCacheStore:
                     pass
 
     def get_stats(self) -> dict:
+        with self._lock:
+            num_entries = len(self._index)
+            size_bytes = self._current_size_bytes
         return {
-            "num_entries": len(self._index),
-            "size_bytes": self._current_size_bytes,
+            "num_entries": num_entries,
+            "size_bytes": size_bytes,
             "max_size_bytes": self.max_size_bytes,
-            "size_gb": round(self._current_size_bytes / 1024**3, 2),
+            "size_gb": round(size_bytes / 1024**3, 2),
             "max_size_gb": round(self.max_size_bytes / 1024**3, 2),
             "utilization_pct": (
-                self._current_size_bytes / self.max_size_bytes * 100
+                size_bytes / self.max_size_bytes * 100
                 if self.max_size_bytes > 0 else 0
             ),
         }
