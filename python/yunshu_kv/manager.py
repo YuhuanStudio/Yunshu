@@ -599,17 +599,13 @@ class KVCacheManager:
             if block.ref_count > 1:
                 continue  # actively shared by multiple requests
 
-            # Remove from hot prefix cache (safe now: ref_count <= 1)
-            self.block_pool._evict_cached_block(block)
-
-            # ref_count == 1 means cache-only block (no active request holds it).
-            # _evict_cached_block cleared its hash, so it's no longer in the
-            # prefix cache, but it's also not in the free queue. Without
-            # recycling it here, the block is orphaned forever.
-            # Use BlockPool.free() instead of direct manipulation to keep
-            # free_queue linked-list and num_free_blocks consistent.
-            if block.ref_count == 1:
-                self.block_pool.free([block])
+            # Atomically evict from prefix cache and free the block under a
+            # single block_pool lock acquisition. The old two-step approach
+            # (_evict_cached_block + free) used separate lock scopes, which
+            # allowed concurrent allocate() to pop the block from the free
+            # queue between the two steps — effectively stealing and then
+            # "un-allocating" the block from its new owner.
+            self.block_pool.evict_and_free(block)
 
         freed_block_count = self.block_pool.get_free_block_count() - initial_free
 
@@ -698,13 +694,9 @@ class KVCacheManager:
             if block.ref_count > 1:
                 continue
 
-            self.block_pool._evict_cached_block(block)
-
-            # ref_count == 1: cache-only block orphaned after hash clear.
-            # Recycle it via BlockPool.free() to keep free_queue linked-list
-            # and num_free_blocks consistent (not direct manipulation).
-            if block.ref_count == 1:
-                self.block_pool.free([block])
+            # Atomically evict + free under a single block_pool lock.
+            # See _evict_for_memory_unlocked for the TOCTOU rationale.
+            self.block_pool.evict_and_free(block)
 
         evicted = self.block_pool.get_free_block_count() - initial_free
 
@@ -798,26 +790,27 @@ class KVCacheManager:
         serializer = KVCacheSerializer()
         old_block, key_data, value_data = serializer.deserialize_block(data)
 
-        # Allocate a fresh block from the pool instead of reusing old block_id
-        new_block = self.block_pool.allocate(1)[0]
+        with self._lock:
+            # Allocate a fresh block from the pool instead of reusing old block_id
+            new_block = self.block_pool.allocate(1)[0]
 
-        # Write data into cache tensors at the NEW block's slot
-        if self._key_cache is not None and self._value_cache is not None:
-            try:
-                import mlx.core as mx
-                if isinstance(self._key_cache, mx.array):
-                    self._key_cache = self._key_cache.at[new_block.block_id].set(key_data)
-                    self._value_cache = self._value_cache.at[new_block.block_id].set(value_data)
-                else:
+            # Write data into cache tensors at the NEW block's slot
+            if self._key_cache is not None and self._value_cache is not None:
+                try:
+                    import mlx.core as mx
+                    if isinstance(self._key_cache, mx.array):
+                        self._key_cache = self._key_cache.at[new_block.block_id].set(key_data)
+                        self._value_cache = self._value_cache.at[new_block.block_id].set(value_data)
+                    else:
+                        self._key_cache[new_block.block_id] = key_data
+                        self._value_cache[new_block.block_id] = value_data
+                except ImportError:
                     self._key_cache[new_block.block_id] = key_data
                     self._value_cache[new_block.block_id] = value_data
-            except ImportError:
-                self._key_cache[new_block.block_id] = key_data
-                self._value_cache[new_block.block_id] = value_data
 
-        # Register in prefix cache with the hash from disk
-        if old_block.block_hash is not None:
-            self.block_pool.cache_block(new_block, old_block.block_hash)
+            # Register in prefix cache with the hash from disk
+            if old_block.block_hash is not None:
+                self.block_pool.cache_block(new_block, old_block.block_hash)
 
         return new_block
 
@@ -881,41 +874,42 @@ class KVCacheManager:
         offset += 4
 
         loaded = 0
-        for _ in range(num_cached):
-            (frame_len,) = struct.unpack_from(">I", data, offset)
-            offset += 4
-            frame = data[offset : offset + frame_len]
-            offset += frame_len
+        with self._lock:
+            for _ in range(num_cached):
+                (frame_len,) = struct.unpack_from(">I", data, offset)
+                offset += 4
+                frame = data[offset : offset + frame_len]
+                offset += frame_len
 
-            old_block, key_data, value_data = serializer.deserialize_block(frame)
+                old_block, key_data, value_data = serializer.deserialize_block(frame)
 
-            # Allocate a fresh block instead of reusing old block_id
-            try:
-                new_block = self.block_pool.allocate(1)[0]
-            except ValueError:
-                logger.warning(
-                    "load_cached: ran out of free blocks after loading %d/%d",
-                    loaded, num_cached,
-                )
-                break
-
-            # Write data into cache tensors at the new block's slot
-            if self._key_cache is not None and self._value_cache is not None:
+                # Allocate a fresh block instead of reusing old block_id
                 try:
-                    import mlx.core as mx
-                    if isinstance(self._key_cache, mx.array):
-                        self._key_cache = self._key_cache.at[new_block.block_id].set(key_data)
-                        self._value_cache = self._value_cache.at[new_block.block_id].set(value_data)
-                    else:
+                    new_block = self.block_pool.allocate(1)[0]
+                except ValueError:
+                    logger.warning(
+                        "load_cached: ran out of free blocks after loading %d/%d",
+                        loaded, num_cached,
+                    )
+                    break
+
+                # Write data into cache tensors at the new block's slot
+                if self._key_cache is not None and self._value_cache is not None:
+                    try:
+                        import mlx.core as mx
+                        if isinstance(self._key_cache, mx.array):
+                            self._key_cache = self._key_cache.at[new_block.block_id].set(key_data)
+                            self._value_cache = self._value_cache.at[new_block.block_id].set(value_data)
+                        else:
+                            self._key_cache[new_block.block_id] = key_data
+                            self._value_cache[new_block.block_id] = value_data
+                    except ImportError:
                         self._key_cache[new_block.block_id] = key_data
                         self._value_cache[new_block.block_id] = value_data
-                except ImportError:
-                    self._key_cache[new_block.block_id] = key_data
-                    self._value_cache[new_block.block_id] = value_data
 
-            if old_block.block_hash is not None:
-                self.block_pool.cache_block(new_block, old_block.block_hash)
+                if old_block.block_hash is not None:
+                    self.block_pool.cache_block(new_block, old_block.block_hash)
 
-            loaded += 1
+                loaded += 1
 
         return loaded

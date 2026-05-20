@@ -31,9 +31,14 @@ class BlockTable:
     def append_block(self, block: KVBlock) -> None:
         """Add a new physical block at the end.
 
-        The new block starts empty — total_tokens is unchanged (previous
-        partial block's occupancy is already tracked via _last_block_occupancy).
+        Finalizes the previous block (if any) by adding its full
+        block_size worth of tokens to total_tokens. The new block
+        starts empty.
         """
+        # Finalize the previous block: when appending a new block,
+        # the previous block must be full (that's why we need a new one).
+        if self._blocks:
+            self.total_tokens += self.block_size
         self._blocks.append(block)
         self._last_block_occupancy = 0
 

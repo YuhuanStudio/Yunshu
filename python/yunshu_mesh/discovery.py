@@ -197,13 +197,16 @@ class NodeDiscovery:
             if is_new:
                 self._discovered_nodes[node.node_id] = node
             else:
-                # Update existing node in-place to preserve shared references
+                # Update existing node in-place to preserve shared references.
+                # Hold the existing node's lock so concurrent to_dict() or
+                # heartbeat readers see a consistent snapshot.
                 existing = self._discovered_nodes[node.node_id]
-                existing.ip = node.ip
-                existing.port = node.port
-                existing.capabilities = node.capabilities
-                if node.hostname:
-                    existing.hostname = node.hostname
+                with existing._lock:
+                    object.__setattr__(existing, 'ip', node.ip)
+                    object.__setattr__(existing, 'port', node.port)
+                    object.__setattr__(existing, 'capabilities', node.capabilities)
+                    if node.hostname:
+                        object.__setattr__(existing, 'hostname', node.hostname)
             self._discovered_times[node.node_id] = time.monotonic()
             callbacks = list(self._on_discovered_callbacks)
             # Prune stale nodes that haven't been seen in a while

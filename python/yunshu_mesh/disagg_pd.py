@@ -360,10 +360,12 @@ class DisaggRouter:
                 now - t.created_at,
             )
         if stale:
+            # Prune stale (now-failed) entries to prevent unbounded growth.
+            # Keep only active (pending/transferring) entries; the failed
+            # ones are no longer useful.
             self._pending_transfers = [
-                t for t in self._pending_transfers if t.status in ("pending", "transferring")
-            ] + [
-                t for t in self._pending_transfers if t.status not in ("pending", "transferring")
+                t for t in self._pending_transfers
+                if t.status in ("pending", "transferring")
             ]
 
     def route_request(

@@ -587,7 +587,10 @@ class ASREngine:
         # double I/O and double memory allocation for large audio files.
         _audio_raw: bytes | None = None
 
-        # VAD pre-check: skip transcription if no speech detected
+        # VAD pre-check: skip transcription if no speech detected.
+        # Only run VAD on WAV files — non-WAV formats (MP3, FLAC, etc.)
+        # are compressed and cannot be decoded by np.frombuffer, which
+        # would produce garbage data and false VAD results.
         if self._vad is not None:
             try:
                 import numpy as np
@@ -595,7 +598,8 @@ class ASREngine:
                     _audio_raw = f.read()
                 # Try to detect WAV header and extract raw PCM + sample rate
                 file_sr: int | None = None
-                if _audio_raw[:4] == b"RIFF":
+                is_wav = _audio_raw[:4] == b"RIFF"
+                if is_wav:
                     # Extract sample rate from the fmt chunk (bytes 24-27)
                     if len(_audio_raw) >= 28 and _audio_raw[12:16] == b"fmt ":
                         file_sr = struct.unpack_from('<I', _audio_raw, 24)[0]
@@ -607,8 +611,10 @@ class ASREngine:
                     else:
                         pcm = _audio_raw
                 else:
-                    pcm = _audio_raw
-                samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                    # Non-WAV: skip VAD — compressed audio cannot be decoded
+                    # as raw PCM.  Let the ASR model handle it directly.
+                    pcm = None
+                samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0 if pcm is not None else np.array([], dtype=np.float32)
                 # Resample to VAD's expected sample rate if different
                 # (VAD models typically expect 16kHz)
                 vad_sr = self._vad.sample_rate
@@ -681,14 +687,18 @@ class ASREngine:
                         else:
                             segments.append({"text": str(s)})
 
+                # Resolve language — must always be a string for API contracts.
+                # Priority: model result > caller-provided hint > "und" (unknown).
+                resolved_lang = raw_lang or language or "und"
+
                 return {
                     "text": result.text or "",
-                    "language": raw_lang or language,
+                    "language": resolved_lang,
                     "segments": segments,
                     "duration": getattr(result, "total_time", 0.0),
                 }
 
-            return {"text": str(result), "language": language, "segments": [], "duration": 0.0}
+            return {"text": str(result), "language": language or "und", "segments": [], "duration": 0.0}
 
         t0 = time.monotonic()
         loop = asyncio.get_running_loop()

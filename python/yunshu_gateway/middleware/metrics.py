@@ -54,6 +54,9 @@ class _Metrics:
 
     request_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     request_latency: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    # True total observation count and sum per endpoint (not affected by truncation).
+    latency_total_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    latency_total_sum: dict[str, float] = field(default_factory=lambda: defaultdict(float))
     prompt_tokens: int = 0
     completion_tokens: int = 0
     inference_count: int = 0
@@ -68,6 +71,9 @@ class _Metrics:
             if status >= 400:
                 self.error_count += 1
             self.request_latency[endpoint].append(latency)
+            # Track true totals (immune to truncation) for Prometheus summary.
+            self.latency_total_count[endpoint] += 1
+            self.latency_total_sum[endpoint] += latency
             if len(self.request_latency[endpoint]) > 1000:
                 self.request_latency[endpoint] = self.request_latency[endpoint][-500:]
 
@@ -92,6 +98,8 @@ class _Metrics:
             latency_snapshot = {
                 ep: list(lats) for ep, lats in self.request_latency.items()
             }
+            latency_counts = dict(self.latency_total_count)
+            latency_sums = dict(self.latency_total_sum)
             prompt_tok = self.prompt_tokens
             completion_tok = self.completion_tokens
             inf_count = self.inference_count
@@ -117,7 +125,6 @@ class _Metrics:
         for endpoint, latencies in sorted(latency_snapshot.items()):
             if latencies:
                 sorted_lat = sorted(latencies)
-                avg = sum(latencies) / len(latencies)
                 n = len(sorted_lat)
                 # Nearest-rank percentile: p-th percentile is at index
                 # ceil(p/100 * n) - 1, clamped to [0, n-1].
@@ -126,17 +133,22 @@ class _Metrics:
                 p50 = sorted_lat[p50_idx]
                 p99 = sorted_lat[p99_idx]
                 esc_ep = _esc_prom(endpoint)
+                # Use true total count and sum (immune to list truncation)
+                # so PromQL rate()/increase() compute correct values.
+                true_count = latency_counts.get(endpoint, n)
+                true_sum = latency_sums.get(endpoint, sum(latencies))
                 lines.append(
                     f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.5"}} {p50:.4f}'
                 )
                 lines.append(
                     f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.99"}} {p99:.4f}'
                 )
+                # Prometheus summary requires _sum and _count fields.
                 lines.append(
-                    f'yunshu_request_latency_seconds_avg{{endpoint="{esc_ep}"}} {avg:.4f}'
+                    f'yunshu_request_latency_seconds_sum{{endpoint="{esc_ep}"}} {true_sum:.4f}'
                 )
                 lines.append(
-                    f'yunshu_request_latency_seconds_count{{endpoint="{esc_ep}"}} {len(latencies)}'
+                    f'yunshu_request_latency_seconds_count{{endpoint="{esc_ep}"}} {true_count}'
                 )
 
         lines.append("")

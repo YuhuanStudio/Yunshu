@@ -490,7 +490,13 @@ class VLMEngine:
         # Always load on the MLX executor thread — required for mlx-vlm models
         # whose weights must share the same GPU stream as compute
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self.load)
+        try:
+            await loop.run_in_executor(self._executor, self.load)
+        except Exception:
+            # load() failed — do NOT set _running=True.  The engine has no
+            # model and must not be used.  Re-raise so the caller knows.
+            self._running = False
+            raise
         self._running = True
         self._start_time = time.monotonic()
 
@@ -1296,19 +1302,37 @@ class VLMEngine:
                     break
 
         # Enforce thinking budget if provided
-        if thinking_budget is not None:
+        # thinking_budget is a TOKEN count, not a character count.
+        # Since vlm_generate doesn't expose raw tokens, tokenize the thinking
+        # content to get an accurate token count for budget comparison.
+        _budget_hit = False
+        _thinking_tokens = 0
+        if thinking_budget is not None and self._tokenizer is not None:
             think_start = _result_text.find("<think")
             if think_start >= 0:
                 think_end = _result_text.find("</think", think_start)
                 if think_end >= 0:
                     think_content = _result_text[think_start:think_end]
-                    if len(think_content) > thinking_budget:
-                        # Truncate thinking content to budget, preserve closing tag
+                    try:
+                        _thinking_tokens = len(self._tokenizer.encode(think_content))
+                    except Exception:
+                        # Fallback: rough character-to-token ratio (~4 chars/token)
+                        _thinking_tokens = len(think_content) // 4
+                    if _thinking_tokens > thinking_budget:
+                        # Budget exceeded — truncate thinking content.
+                        # Estimate character cutoff from token budget using
+                        # the actual ratio observed in this thinking segment.
+                        if _thinking_tokens > 0:
+                            chars_per_token = len(think_content) / _thinking_tokens
+                            max_chars = int(thinking_budget * chars_per_token)
+                        else:
+                            max_chars = thinking_budget * 4
                         _result_text = (
                             _result_text[:think_start]
-                            + _result_text[think_start:think_start + thinking_budget]
+                            + _result_text[think_start:think_start + max_chars]
                             + _result_text[think_end:]
                         )
+                        _budget_hit = True
 
         # Capture mRoPE deltas after vision prefill
         if self._mrope_info and self._mrope_info.enabled:
@@ -1320,7 +1344,7 @@ class VLMEngine:
         # Return 5-tuple: (text, thinking_tokens, token_count, stop_hit, budget_hit)
         # vlm_generate doesn't expose raw token list, estimate from text
         _est_tokens = len(self._tokenizer.encode(_result_text)) if _result_text and self._tokenizer else 0
-        return _result_text, 0, _est_tokens, _stop_hit, False
+        return _result_text, _thinking_tokens, _est_tokens, _stop_hit, _budget_hit
 
     # ── VLM text generation (for mlx-vlm models) ──
 
@@ -1699,12 +1723,26 @@ class VLMEngine:
                     finish_reason = result.finish_reason
                 elif token_count >= max_tokens:
                     finish_reason = "length"
-                # Check multi-token stop suffixes against accumulated text
+                # Check multi-token stop suffixes against accumulated text.
+                # Search from a position that accounts for the longest suffix
+                # length — a stop suffix may straddle the emit boundary (part
+                # in already-emitted text, part in held-back text), so we must
+                # look back far enough to catch it.
                 if not finish_reason and stop_suffixes:
+                    _max_suffix_len = max(len(s) for s in stop_suffixes)
+                    _search_start = max(0, _emitted_pos - _max_suffix_len + 1)
+                    _search_region = accumulated[_search_start:]
                     for s in stop_suffixes:
-                        if s in accumulated[_emitted_pos:]:
+                        if s in _search_region:
                             # Full stop sequence found — trim it and everything after
-                            idx = accumulated.find(s, _emitted_pos)
+                            idx = accumulated.find(s, _search_start)
+                            # Don't trim into already-emitted text; only trim if
+                            # the suffix starts at or after the emit boundary.
+                            if idx < _emitted_pos:
+                                # Suffix straddles emit boundary — clamp to avoid
+                                # losing already-emitted text. The suffix itself is
+                                # still detected and generation stops.
+                                idx = _emitted_pos
                             accumulated = accumulated[:idx]
                             finish_reason = "stop"
                             # Reset thinking scan cursor since accumulated text
@@ -1778,9 +1816,29 @@ class VLMEngine:
                 prompt_tokens=_num_prompt_tokens,
                 current_state=_exhausted_state,
                 reasoning_tokens=_thinking_token_count,
-            ))            # Post-streaming bookkeeping (cache stats, encoder cache, KV prefix).
-            # Wrapped in try/except to prevent double finished=True if any of
-            # these operations raise after the finished output was already emitted.
+            ))
+            # Post-streaming bookkeeping (cache stats, encoder cache, KV prefix).
+            # Note: this only runs on the generator-exhausted path.  The
+            # finally block below handles bookkeeping for ALL exit paths
+            # (cancel, stop, budget, error).
+        except Exception as e:
+            _error_state = "reasoning" if _in_thinking else "normal"
+            queue.put_nowait(RequestOutput(
+                request_id=req_id,
+                new_text="",
+                finish_reason="error",
+                finished=True,
+                completion_tokens=token_count,
+                prompt_tokens=_num_prompt_tokens,
+                error=str(e),
+                current_state=_error_state,
+                reasoning_tokens=_thinking_token_count,
+            ))
+        finally:
+            # Always run bookkeeping regardless of how the stream ended:
+            # cancel, stop suffix, thinking budget, error, or exhaustion.
+            # This ensures vision cache stats, encoder cache entries, and KV
+            # prefix states are updated even when the loop exits early.
             try:
                 if self._vision_cache is not None:
                     vc_stats_after = self._vision_cache.stats
@@ -1805,20 +1863,6 @@ class VLMEngine:
                         self._ensure_kv_prefix_state(image_hash)
             except Exception:
                 logger.debug("post-stream bookkeeping failed", exc_info=True)
-
-        except Exception as e:
-            _error_state = "reasoning" if _in_thinking else "normal"
-            queue.put_nowait(RequestOutput(
-                request_id=req_id,
-                new_text="",
-                finish_reason="error",
-                finished=True,
-                completion_tokens=token_count,
-                prompt_tokens=_num_prompt_tokens,
-                error=str(e),
-                current_state=_error_state,
-                reasoning_tokens=_thinking_token_count,
-            ))
 
     def _stream_vlm_text(
         self,
@@ -1901,6 +1945,7 @@ class VLMEngine:
             stop_ids.update(stop_token_ids)
 
         has_detokenizer = hasattr(self._tokenizer, 'detokenizer')
+        detokenizer = None
         if has_detokenizer:
             detokenizer = self._tokenizer.detokenizer
             detokenizer.reset()
@@ -2085,6 +2130,7 @@ class VLMEngine:
                 return
             is_eos = token_id in stop_ids
             token_text = ""
+            _pre_suffix_text = ""  # Text before the stop suffix in this token
             suffix_hit = False
 
             if not is_eos:
@@ -2097,6 +2143,22 @@ class VLMEngine:
                     if stop_suffixes:
                         if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                             suffix_hit = True
+                            # Extract the non-suffix portion of this token's text.
+                            # last_segment may contain text before the suffix that
+                            # should still be emitted. Trim the suffix from it.
+                            _segment = detokenizer.last_segment
+                            for s in stop_suffixes:
+                                if _segment.endswith(s):
+                                    _pre_suffix_text = _segment[:-len(s)]
+                                    break
+                            # Also check if the suffix spans across last_segment
+                            # boundary (suffix started in a previous token's text)
+                            if not _pre_suffix_text and _text_len_before < len(detokenizer.text):
+                                _full_new = detokenizer.text[_text_len_before:]
+                                for s in stop_suffixes:
+                                    if _full_new.endswith(s):
+                                        _pre_suffix_text = _full_new[:-len(s)]
+                                        break
                         else:
                             token_text = detokenizer.last_segment
                     else:
@@ -2107,6 +2169,19 @@ class VLMEngine:
 
             finish_reason = "stop" if (is_eos or suffix_hit) else None
             _state = "reasoning" if _in_thinking else "normal"
+
+            # Emit any text before the stop suffix that would otherwise be lost
+            if suffix_hit and _pre_suffix_text:
+                queue.put_nowait(RequestOutput(
+                    request_id=req_id,
+                    new_text=_pre_suffix_text,
+                    new_token_ids=[token_id],
+                    finish_reason=None,
+                    finished=False,
+                    completion_tokens=token_count,
+                    prompt_tokens=_num_prompt_tokens,
+                    current_state=_state,
+                ))
 
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
@@ -2167,7 +2242,7 @@ class VLMEngine:
             logger.error(f"VLM text streaming error: {e}", exc_info=True)
             _error_state = "reasoning" if _in_thinking else "normal"
             # Flush remaining detokenizer bytes before reporting error
-            if has_detokenizer:
+            if has_detokenizer and detokenizer is not None:
                 try:
                     remaining = detokenizer.finalize()
                     if remaining:

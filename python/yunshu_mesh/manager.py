@@ -342,7 +342,12 @@ class MeshManager:
         }
 
     def handle_node_failure(self, node_id: str) -> None:
-        """Handle a node failure — update topology, log event."""
+        """Handle a node failure — update topology, log event.
+
+        Guards against stale failure events: if the node has recovered
+        since the timeout was detected (e.g. a heartbeat arrived between
+        the timeout check and this call), the failure is silently ignored.
+        """
         with self._node_lock:
             failed_node = None
             for n in self._topology.nodes:
@@ -350,6 +355,31 @@ class MeshManager:
                     failed_node = n
                     break
             if failed_node:
+                # Stale-failure guard: read the node's current state.
+                # If the node already recovered (is no longer OFFLINE /
+                # RECOVERING) then this failure event is stale — a heartbeat
+                # arrived between the timeout detection and this call.
+                # Skip to avoid undoing a valid recovery.
+                with failed_node._lock:
+                    current_state = failed_node.state
+                if current_state not in (
+                    MeshNodeState.OFFLINE,
+                    MeshNodeState.RECOVERING,
+                    MeshNodeState.INITIALIZING,
+                ):
+                    # Node is healthy (READY / BUSY / DRAINING).
+                    # A legitimate failure would have been caught by
+                    # _on_node_timeout which already marks OFFLINE under
+                    # _node_lock.  If we reach here with a non-OFFLINE
+                    # state, the node recovered — skip.
+                    logger.info(
+                        "Stale failure event for %s (state=%s) — skipped",
+                        node_id, current_state.name,
+                    )
+                    return
+                if current_state == MeshNodeState.OFFLINE:
+                    # Already OFFLINE — nothing to do.
+                    return
                 failed_node.mark_unhealthy(reason="node_failure")
                 self._publish_event("node_state_change", node_id, {
                     "new_state": "offline",
@@ -396,7 +426,10 @@ class MeshManager:
         """Callback: peer disappeared."""
         _event = None
         with self._node_lock:
-            if node.state == MeshNodeState.OFFLINE:
+            # Read state under the node's lock for thread safety.
+            with node._lock:
+                current_state = node.state
+            if current_state == MeshNodeState.OFFLINE:
                 return
             node.mark_unhealthy(reason="peer_lost")
             topo_node = self._topology.get_node(node.rank)
@@ -416,8 +449,11 @@ class MeshManager:
         """Callback: heartbeat timeout."""
         _failure_id = None
         with self._node_lock:
-            # Guard: skip if already handled by _on_peer_lost or a prior timeout
-            if node.state == MeshNodeState.OFFLINE:
+            # Guard: skip if already handled by _on_peer_lost or a prior timeout.
+            # Read state under the node's lock for thread safety.
+            with node._lock:
+                current_state = node.state
+            if current_state == MeshNodeState.OFFLINE:
                 return
             node.mark_unhealthy(reason="node_timeout")
             if self._dp_router:
@@ -433,8 +469,11 @@ class MeshManager:
         """Callback: node recovered after timeout."""
         _event = None
         with self._node_lock:
-            # Guard: skip if node is already READY (duplicate recovery callback)
-            if node.state == MeshNodeState.READY:
+            # Guard: skip if node is already READY (duplicate recovery callback).
+            # Read state under the node's lock for thread safety.
+            with node._lock:
+                current_state = node.state
+            if current_state == MeshNodeState.READY:
                 return
             # Use mark_healthy to go through RECOVERING → READY path
             node.mark_healthy()

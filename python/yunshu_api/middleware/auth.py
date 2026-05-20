@@ -33,6 +33,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.token = token
 
     async def dispatch(self, request: Request, call_next):
+        # CORS preflight (OPTIONS) must pass through without auth —
+        # browsers send OPTIONS without Authorization headers, and the
+        # inner CORSMiddleware needs to respond before any auth check.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         # Allow public endpoints without auth
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)

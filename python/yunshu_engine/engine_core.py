@@ -1609,7 +1609,11 @@ class EngineCore:
         return req_id
 
     async def abort_request(self, request_id: str) -> None:
-        """Deferred abort (oMLX pattern: enqueued, processed at next step)."""
+        """Deferred abort (oMLX pattern: enqueued, processed at next step).
+
+        Also fails any dedup shadow requests so their consumers don't hang
+        waiting for output from a primary that will never produce more tokens.
+        """
         from .request import RequestOutput
         self.scheduler.abort_request(request_id)
         # Put error output to wake up any waiting consumer
@@ -1622,11 +1626,38 @@ class EngineCore:
                 error="Request aborted",
             ))
             collector.put(None)  # sentinel
+
+        # Bug fix: fail dedup shadows so their consumers don't hang forever.
+        # Without this, shadow requests whose primary is aborted would never
+        # receive a sentinel or finished event, causing generate()/stream_outputs()
+        # to hang until the engine-wide timeout enforcement rescues them.
+        if self._request_dedup is not None:
+            shadow_ids = [
+                sid for sid, pid in list(self._dedup_shadows.items())
+                if pid == request_id
+            ]
+            for sid in shadow_ids:
+                s_collector = self._output_collectors.get(sid)
+                if s_collector is not None:
+                    s_collector.put(RequestOutput(
+                        request_id=sid,
+                        finished=True,
+                        finish_reason="abort",
+                        error=f"Primary request {request_id} was aborted",
+                    ))
+                    s_collector.put(None)
+                self._signal_finished(sid)
+                self._cleanup_request(sid)
+
         self._signal_finished(request_id)
         self._cleanup_request(request_id)
 
     async def abort_all_requests(self) -> None:
-        """Abort all active requests (error recovery)."""
+        """Abort all active requests (error recovery).
+
+        Also fails dedup shadow requests that are not tracked by the scheduler
+        but have collectors waiting for output from a primary.
+        """
         from .request import RequestOutput
         failed_ids = self.scheduler.fail_all_requests()
         for req_id in failed_ids:
@@ -1641,6 +1672,25 @@ class EngineCore:
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
+
+        # Bug fix: also fail dedup shadow requests not tracked by the scheduler.
+        # fail_all_requests() only returns scheduler-tracked IDs, so shadow
+        # requests (short-circuited in add_request, never added to scheduler)
+        # are missed. Without this, shadow consumers hang forever.
+        if self._request_dedup is not None:
+            for sid in list(self._dedup_shadows.keys()):
+                if sid not in failed_ids:
+                    s_collector = self._output_collectors.get(sid)
+                    if s_collector is not None:
+                        s_collector.put(RequestOutput(
+                            request_id=sid,
+                            finished=True,
+                            finish_reason="abort",
+                            error="All requests aborted (dedup shadow)",
+                        ))
+                        s_collector.put(None)
+                    self._signal_finished(sid)
+                    self._cleanup_request(sid)
 
     async def stream_outputs(
         self,
@@ -1665,6 +1715,7 @@ class EngineCore:
             return
 
         _cancelled = False
+        _cleaned_up = False
         try:
             while True:
                 # Check cancel_event at the top of each iteration.
@@ -1736,11 +1787,15 @@ class EngineCore:
                 # Propagate cancellation to scheduler (SGLang pattern).
                 # This removes the request from running/waiting queues and
                 # frees KV blocks. Safe to call even if already finalized.
+                # abort_request calls _cleanup_request internally, so mark
+                # _cleaned_up to avoid double cleanup below.
+                _cleaned_up = True
                 try:
                     await self.abort_request(request_id)
                 except Exception:
                     logger.debug("cancel-driven abort failed", exc_info=True)
-            self._cleanup_request(request_id)
+            if not _cleaned_up:
+                self._cleanup_request(request_id)
 
     async def generate(
         self,
@@ -2109,9 +2164,13 @@ class EngineCore:
                                 from .request import RequestOutput as _RO
                                 s_collector.put(_RO(
                                     request_id=sid,
-                                    new_token_ids=req_output.new_token_ids,
+                                    # Bug fix: deep-copy mutable list fields so shadow
+                                    # collector doesn't share state with primary. Without
+                                    # this, _merge or downstream mutation would corrupt
+                                    # the primary's accumulated output.
+                                    new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
                                     new_text=req_output.new_text,
-                                    output_token_ids=req_output.output_token_ids,
+                                    output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
                                     output_text=req_output.output_text,
                                     completion_tokens=req_output.completion_tokens,
                                     finished=False,
@@ -2158,9 +2217,12 @@ class EngineCore:
                                     if shadow_collector is not None:
                                         shadow_output = _RO(
                                             request_id=shadow_id,
-                                            new_token_ids=req_output.new_token_ids,
+                                            # Bug fix: deep-copy mutable list fields to
+                                            # prevent shared-state corruption between
+                                            # primary and shadow collectors.
+                                            new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
                                             new_text=req_output.new_text,
-                                            output_token_ids=req_output.output_token_ids,
+                                            output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
                                             output_text=req_output.output_text,
                                             finished=True,
                                             finish_reason=req_output.finish_reason,
@@ -2749,9 +2811,13 @@ class EngineCore:
         self._finished_events.pop(request_id, None)
         self._request_timestamps.pop(request_id, None)
         self._kv_prefix_hashes.pop(request_id, None)
-        # Remove from idempotency/TTFT guards so they don't grow unboundedly.
-        # Safe to discard even if never added (no KeyError from set.discard).
-        self._finalized_ids.discard(request_id)
+        # Bug fix: do NOT discard from _finalized_ids here.  The idempotency
+        # guard in _finalize_request relies on _finalized_ids persisting
+        # across calls.  Discarding it here means a second _cleanup_request
+        # call (e.g., from abort_request + stream_outputs finally) would
+        # bypass the guard and double-release LoRA adapters, memory, KV
+        # blocks, budget, etc.  Bounded growth is acceptable — cleared in
+        # stop() along with all other per-request state.
         self._ttft_done.discard(request_id)
 
     def _get_max_seq_len(self) -> int:

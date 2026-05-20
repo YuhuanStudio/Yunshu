@@ -70,7 +70,10 @@ class MeshTopology:
                 rank = len(self._nodes)
                 while rank in self._rank_map:
                     rank += 1
-            node.rank = rank
+            # Use node's own lock for rank assignment so concurrent
+            # to_dict() readers see a consistent value.
+            with node._lock:
+                object.__setattr__(node, 'rank', rank)
             self._nodes.append(node)
             self._rank_map[rank] = node
             return rank

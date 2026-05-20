@@ -428,6 +428,40 @@ class BlockPool:
 
         return new_block, key_cache, value_cache
 
+    def evict_and_free(self, block: KVBlock) -> bool:
+        """Atomically evict a block from the prefix cache and free it.
+
+        Combines _evict_cached_block + free into a single lock acquisition
+        to prevent TOCTOU races with concurrent allocate(). Without this,
+        a cache_only block in the free queue could be popped by allocate()
+        between the separate _evict_cached_block and free lock scopes,
+        and then free() would incorrectly decrement the new owner's
+        ref_count (returning an in-use block to the free queue).
+
+        Returns:
+            True if the block was evicted from the prefix cache.
+        """
+        with self._lock:
+            if block.block_hash is None:
+                return False
+            if block.ref_count > 1:
+                # Actively shared by multiple requests — cannot evict.
+                return False
+
+            evicted = self._evict_cached_block_unlocked(block)
+
+            # After eviction, block_hash is None and cache_only is False.
+            # If ref_count == 1, the block was held only by the prefix cache
+            # (no active request). Free it to return it to the pool.
+            # If ref_count == 0, the block was cache_only (already in the
+            # free queue). Its hash was cleared above — no further action
+            # needed; it's already a recyclable free block.
+            if block.ref_count == 1 and not block.is_null:
+                block.ref_count -= 1  # 1 → 0
+                self.free_queue.append(block)
+
+            return evicted
+
     @property
     def cow_stats(self) -> dict:
         """Return COW statistics."""

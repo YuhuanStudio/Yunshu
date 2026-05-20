@@ -636,14 +636,12 @@ class RealtimeSession:
                 logger.debug("metrics recording failed", exc_info=True)
 
         except asyncio.CancelledError:
-            await self.send_event(_event(
-                RealtimeEvent.RESPONSE_DONE,
-                response={
-                    "id": response_id,
-                    "object": "realtime.response",
-                    "status": "cancelled",
-                },
-            ))
+            # Do NOT send response.done here. The caller (_handle_response_cancel)
+            # is responsible for the full teardown sequence: audio.done THEN
+            # response.done. Sending response.done here causes wrong protocol
+            # ordering (response.done before audio.done) and duplicates the
+            # response.done event.
+            pass
         except MemoryError:
             logger.error("Realtime generation OOM", exc_info=True)
             await self.send_event(_event(
@@ -687,6 +685,8 @@ class RealtimeSession:
 
         Cancels the active response task. If audio was being streamed,
         sends response.audio.done to signal the client to truncate playback.
+        Per OpenAI Realtime API protocol, audio.done must be sent BEFORE
+        response.done.
         """
         task = self._active_response
         if task and not task.done():
@@ -696,10 +696,7 @@ class RealtimeSession:
             item_id = getattr(task, '_item_id', '')
             # Capture audio modality BEFORE awaiting the task, because the task's
             # finally block clears self._active_modalities to [].
-            _had_audio = (
-                "audio" in self._active_modalities
-                or not self._active_modalities
-            )
+            _had_audio = "audio" in self._active_modalities
             # Signal the cancel_event so the engine can stop mid-generation
             if self._cancel_event is not None:
                 self._cancel_event.set()
@@ -710,7 +707,9 @@ class RealtimeSession:
                 await task
             except asyncio.CancelledError:
                 pass
-            # Signal audio truncation if audio modality was active.
+            # Per OpenAI Realtime API protocol ordering:
+            # 1. audio.done FIRST (if audio modality was active)
+            # 2. response.done SECOND
             if _had_audio:
                 await self.send_event(_event(
                     RealtimeEvent.RESPONSE_AUDIO_DONE,
@@ -719,6 +718,14 @@ class RealtimeSession:
                     output_index=0,
                     content_index=0,
                 ))
+            await self.send_event(_event(
+                RealtimeEvent.RESPONSE_DONE,
+                response={
+                    "id": response_id,
+                    "object": "realtime.response",
+                    "status": "cancelled",
+                },
+            ))
 
     async def _synthesize_audio_response(
         self, text: str, response_id: str, item_id: str,
@@ -797,6 +804,18 @@ class RealtimeSession:
                     break
         except Exception as e:
             logger.error(f"TTS error in realtime session: {e}", exc_info=True)
+            # Always send audio.done on error so the client is not stuck waiting
+            # for a terminal audio event that will never arrive.
+            try:
+                await self.send_event(_event(
+                    RealtimeEvent.RESPONSE_AUDIO_DONE,
+                    response_id=response_id,
+                    item_id=item_id,
+                    output_index=0,
+                    content_index=0,
+                ))
+            except Exception:
+                logger.debug("Failed to send audio.done after TTS error", exc_info=True)
 
     async def _handle_input_audio_buffer_append(self, event: dict) -> None:
         """Handle input_audio_buffer.append — receive audio chunk.
@@ -892,7 +911,9 @@ class RealtimeSession:
         Sends the accumulated audio buffer through ASR, then adds the
         transcribed text as a user conversation item.
         """
-        audio_data = getattr(self, '_audio_buffer', bytearray())
+        # Snapshot the buffer as bytes immediately to prevent race conditions
+        # where audio appended during await yields is incorrectly included.
+        audio_data = bytes(self._audio_buffer)
         if not audio_data:
             return
 
@@ -958,11 +979,16 @@ class RealtimeSession:
         Called when VAD detects speech has ended. Commits the accumulated audio
         buffer (transcribes via ASR), then creates a response automatically.
         Matches OpenAI Realtime API behavior when turn_detection type is server_vad.
+
+        The response availability check happens BEFORE committing the buffer so
+        that audio data is not lost if a response is already in progress.
         """
+        # Check response availability first — if a response is already running,
+        # do NOT commit the buffer (audio would be lost with no response generated).
+        if self._active_response is not None and not self._active_response.done():
+            return
         await self._handle_input_audio_buffer_commit({"type": "input_audio_buffer.commit"})
-        # Only create response if no active response is running
-        if self._active_response is None or self._active_response.done():
-            await self._handle_response_create({"type": "response.create", "response": {}})
+        await self._handle_response_create({"type": "response.create", "response": {}})
 
     def _build_messages(self) -> list[dict]:
         """Build messages list from conversation items."""

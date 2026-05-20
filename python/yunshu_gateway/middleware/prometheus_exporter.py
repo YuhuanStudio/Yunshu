@@ -180,13 +180,23 @@ class _Histogram:
             # are sorted ascending, we increment every bucket with
             # upper >= value.
             bc = self._bucket_counts[key]
+            # Find the first bucket with upper >= value.
+            placed = False
             for i, upper in enumerate(self._buckets):
                 if value <= upper:
                     # value <= this bucket AND all subsequent (larger)
                     # buckets — increment them all in one pass.
                     for j in range(i, len(self._buckets)):
                         bc[j] += 1
+                    placed = True
                     break
+            # If value exceeds ALL bucket upper bounds, every bucket
+            # still counts it (all have upper >= value).  Without this,
+            # the +Inf bucket count would be less than _count, violating
+            # Prometheus consistency.
+            if not placed:
+                for j in range(len(self._buckets)):
+                    bc[j] += 1
             # Cap per-label-series to prevent unbounded growth.
             # Keep _sums, _counts, and _bucket_counts as running totals
             # (monotonically non-decreasing) — only truncate the observations list.

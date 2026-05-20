@@ -164,8 +164,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 if self._key_buckets[key_name].capacity != rpm:
                     old_bucket = self._key_buckets[key_name]
                     new_bucket = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
-                    if old_bucket.capacity > 0:
-                        ratio = min(old_bucket.tokens / old_bucket.capacity, 1.0)
+                    # Read old bucket state under its own lock to avoid
+                    # racing with concurrent consume() on another thread.
+                    with old_bucket._lock:
+                        old_cap = old_bucket.capacity
+                        old_tok = old_bucket.tokens
+                    if old_cap > 0:
+                        ratio = min(old_tok / old_cap, 1.0)
                         new_bucket.tokens = ratio * rpm
                     self._key_buckets[key_name] = new_bucket
                 else:
@@ -198,7 +203,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if rbac_key is not None and rbac_key.requests_per_minute is not None:
             bucket = self._get_key_bucket(rbac_key.name, rbac_key.requests_per_minute)
             if not bucket.consume():
-                retry_after = int(60 / rbac_key.requests_per_minute) + 1
+                retry_after = int(60 / max(rbac_key.requests_per_minute, 1)) + 1
                 if is_websocket:
                     # WebSocket upgrades can't return JSON bodies; return HTTP 429
                     return Response(status_code=429, content="Rate limit exceeded")
@@ -244,7 +249,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         bucket = self._bucket_cache.get_or_create(client_ip)
 
         if not bucket.consume():
-            retry_after = int(60 / self._rpm) + 1
+            retry_after = int(60 / max(self._rpm, 1)) + 1
             if is_websocket:
                 return Response(status_code=429, content="Rate limit exceeded")
             # Anthropic endpoints: return Anthropic error format

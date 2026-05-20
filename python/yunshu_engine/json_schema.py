@@ -150,6 +150,12 @@ def _repair_json_schema(
     ):
         schema["additionalProperties"] = False
 
+    # 6. Strip if/then/else — these conditional schema keywords cannot be
+    #    enforced during token-level constrained generation and would confuse
+    #    _get_type_from_schema if left in place.
+    for kw in ("if", "then", "else"):
+        schema.pop(kw, None)
+
     # Recurse into sub-schemas
     if "properties" in schema and isinstance(schema["properties"], dict):
         for key, value in schema["properties"].items():
@@ -170,6 +176,17 @@ def _repair_json_schema(
                 _repair_json_schema(o, _depth + 1, _root_defs) if isinstance(o, dict) else o
                 for o in schema[key]
             ]
+
+    # Recurse into definitions/$defs so that $ref chains and nested schemas
+    # inside definition entries are also repaired.  Without this, a definition
+    # containing {"$ref": "#/definitions/Other"} would never be resolved.
+    for defs_key in ("definitions", "$defs"):
+        if defs_key in schema and isinstance(schema[defs_key], dict):
+            for def_name, def_schema in schema[defs_key].items():
+                if isinstance(def_schema, dict):
+                    schema[defs_key][def_name] = _repair_json_schema(
+                        def_schema, _depth + 1, _root_defs
+                    )
 
     return schema
 
@@ -615,6 +632,33 @@ class JsonSchemaConstraint:
         }
         return mapping.get(schema_type, {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'})
 
+    def _resolve_to_concrete_schema(self, schema: dict, target_type: str) -> dict | None:
+        """Resolve a schema (possibly anyOf/oneOf) to find a concrete sub-schema
+        matching *target_type* (e.g. "object" or "array").
+
+        Returns the first matching sub-schema, or None if no match exists.
+        This is needed because _get_type_from_schema returns a *list* for
+        anyOf/oneOf schemas, so callers like _enter_value that check
+        ``type == "object"`` would otherwise miss the concrete sub-schema
+        and fall back to a generic ``{"type": "object"}`` — losing all
+        property constraints.
+        """
+        if "anyOf" in schema:
+            for opt in schema["anyOf"]:
+                if not isinstance(opt, dict):
+                    continue
+                t = self._get_type_from_schema(opt)
+                if t == target_type or (isinstance(t, list) and target_type in t):
+                    return opt
+        if "oneOf" in schema:
+            for opt in schema["oneOf"]:
+                if not isinstance(opt, dict):
+                    continue
+                t = self._get_type_from_schema(opt)
+                if t == target_type or (isinstance(t, list) and target_type in t):
+                    return opt
+        return None
+
     def _is_integer_schema(self, schema: dict | None) -> bool:
         """Check if a schema requires an integer (no decimal/exponent allowed)."""
         if schema is None:
@@ -635,7 +679,15 @@ class JsonSchemaConstraint:
 
         if parent_type == "object" or "properties" in parent_schema:
             if self._current_key and "properties" in parent_schema:
-                return parent_schema["properties"].get(self._current_key)
+                result = parent_schema["properties"].get(self._current_key)
+                if result is not None:
+                    return result
+            # Key not found in properties — check additionalProperties schema.
+            # If additionalProperties is a dict, it defines the value schema
+            # for unknown keys.  If True (or absent), return None to allow any type.
+            add_props = parent_schema.get("additionalProperties")
+            if isinstance(add_props, dict):
+                return add_props
             return None  # any type allowed for additional properties
 
         if parent_type == "array" or "items" in parent_schema:
@@ -1017,14 +1069,14 @@ class JsonSchemaConstraint:
             self._string_start = buf_pos + 1  # position after the opening quote
         elif ch == '{':
             value_schema = self._get_current_value_schema()
-            obj_schema = value_schema if value_schema and self._get_type_from_schema(value_schema) == "object" else {"type": "object"}
+            obj_schema = self._resolve_object_schema(value_schema)
             self._init_object_keys(obj_schema)
             self._schema_stack.append((JsonState.OBJECT_COMMA, obj_schema))
             self._state = JsonState.OBJECT_OPEN
             self._is_first_value = True
         elif ch == '[':
             value_schema = self._get_current_value_schema()
-            arr_schema = value_schema if value_schema and self._get_type_from_schema(value_schema) == "array" else {"type": "array"}
+            arr_schema = self._resolve_array_schema(value_schema)
             self._schema_stack.append((JsonState.ARRAY_COMMA, arr_schema))
             self._state = JsonState.ARRAY_OPEN
             self._is_first_value = True
@@ -1047,6 +1099,32 @@ class JsonSchemaConstraint:
             value_schema = self._get_current_value_schema()
             self._is_integer = self._is_integer_schema(value_schema)
 
+    def _resolve_object_schema(self, value_schema: dict | None) -> dict:
+        """Resolve a value schema to a concrete object schema, unwrapping anyOf/oneOf."""
+        if value_schema is None:
+            return {"type": "object"}
+        # Direct match
+        schema_type = self._get_type_from_schema(value_schema)
+        if schema_type == "object":
+            return value_schema
+        # anyOf/oneOf: find the first object-typed option
+        concrete = self._resolve_to_concrete_schema(value_schema, "object")
+        if concrete is not None:
+            return concrete
+        return {"type": "object"}
+
+    def _resolve_array_schema(self, value_schema: dict | None) -> dict:
+        """Resolve a value schema to a concrete array schema, unwrapping anyOf/oneOf."""
+        if value_schema is None:
+            return {"type": "array"}
+        schema_type = self._get_type_from_schema(value_schema)
+        if schema_type == "array":
+            return value_schema
+        concrete = self._resolve_to_concrete_schema(value_schema, "array")
+        if concrete is not None:
+            return concrete
+        return {"type": "array"}
+
     def _enter_array_value(self, ch: str, buf_pos: int | None = None) -> None:
         """Enter a value state in array context."""
         if buf_pos is None:
@@ -1055,15 +1133,13 @@ class JsonSchemaConstraint:
             self._state = JsonState.STRING
             self._string_start = buf_pos + 1  # position after the opening quote
         elif ch == '{':
-            # Get items schema
+            # Get items schema and resolve anyOf/oneOf to find object option
             items_schema = {"type": "object"}
             if self._schema_stack:
                 _, parent_schema = self._schema_stack[-1]
-                items_schema = parent_schema.get("items", {"type": "object"})
-                if isinstance(items_schema, dict) and self._get_type_from_schema(items_schema) == "object":
-                    pass
-                else:
-                    items_schema = {"type": "object"}
+                raw_items = parent_schema.get("items", {"type": "object"})
+                if isinstance(raw_items, dict):
+                    items_schema = self._resolve_object_schema(raw_items)
             self._init_object_keys(items_schema)
             self._schema_stack.append((JsonState.ARRAY_COMMA, items_schema))
             self._state = JsonState.OBJECT_OPEN
@@ -1072,7 +1148,9 @@ class JsonSchemaConstraint:
             items_schema = {"type": "array"}
             if self._schema_stack:
                 _, parent_schema = self._schema_stack[-1]
-                items_schema = parent_schema.get("items", {"type": "array"})
+                raw_items = parent_schema.get("items", {"type": "array"})
+                if isinstance(raw_items, dict):
+                    items_schema = self._resolve_array_schema(raw_items)
             self._schema_stack.append((JsonState.ARRAY_COMMA, items_schema))
             self._state = JsonState.ARRAY_OPEN
             self._is_first_value = True

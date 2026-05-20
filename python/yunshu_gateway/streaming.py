@@ -1213,8 +1213,18 @@ def format_anthropic_chunk(
     model: str,
     delta_text: str,
     event_type: str = "content_block_delta",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    stop_reason: str = "end_turn",
 ) -> str:
-    """Format a single SSE chunk in Anthropic Messages format."""
+    """Format a single SSE chunk in Anthropic Messages format.
+
+    Supports event types:
+    - content_block_delta: text delta (delta_text carries the text)
+    - message_start: initial message with usage (input_tokens/output_tokens)
+    - message_delta: final delta with stop_reason and output_tokens
+    - ping: keepalive event (Anthropic uses this instead of SSE comments)
+    """
     data = {
         "type": event_type,
         "index": 0,
@@ -1228,11 +1238,14 @@ def format_anthropic_chunk(
             "role": "assistant",
             "content": [],
             "model": model,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
         }
     elif event_type == "message_delta":
-        data["delta"] = {"stop_reason": "end_turn"}
-        data["usage"] = {"output_tokens": 1}
+        data["delta"] = {"stop_reason": stop_reason}
+        data["usage"] = {"output_tokens": output_tokens}
+    elif event_type == "ping":
+        # Anthropic keepalive event — used instead of SSE comments
+        data = {"type": "ping"}
 
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 

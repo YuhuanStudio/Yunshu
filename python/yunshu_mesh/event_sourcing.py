@@ -489,14 +489,17 @@ class EventLog:
         if self._conn is None:
             raise RuntimeError("EventLog not initialized: connection is None")
 
-        # Guard: refuse to prune if no snapshot exists, as this would
-        # destroy all events and make crash recovery impossible.
-        last_snapshot = self.get_last_snapshot()
-        if last_snapshot == 0:
-            logger.warning("Cannot prune events: no snapshot exists yet")
-            return 0
-
         with self._lock:
+            # Guard: refuse to prune if no snapshot exists, as this would
+            # destroy all events and make crash recovery impossible.
+            # Must be checked under lock to prevent TOCTOU race where
+            # another thread prunes or creates a snapshot between the check
+            # and the DELETE.
+            last_snapshot = self.get_last_snapshot()
+            if last_snapshot == 0:
+                logger.warning("Cannot prune events: no snapshot exists yet")
+                return 0
+
             cursor = self._conn.execute(
                 "DELETE FROM events WHERE sequence < ? AND event_type != ?",
                 (sequence, EventType.SNAPSHOT.value),

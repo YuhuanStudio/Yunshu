@@ -156,6 +156,7 @@ class VideoEngine:
 
         # TeaCache for diffusion acceleration (opt-in via YUNSHU_VIDEO_TEACACHE)
         self._teacache = None
+        self._teacache_lock = threading.Lock()
         teacache_env = os.environ.get("YUNSHU_VIDEO_TEACACHE", "").strip()
         if teacache_env in ("1", "true", "yes"):
             from .teacache import TeaCacheConfig, TeaCacheHook
@@ -176,6 +177,10 @@ class VideoEngine:
 
     @property
     def is_loaded(self) -> bool:
+        # Video engine uses lazy model loading — start() marks the engine as
+        # ready to accept requests (which may fall back to placeholder frames
+        # when no model is on disk).  Report loaded when running, and indicate
+        # whether a real model is available via get_stats()["model_loaded"].
         return self._running
 
     def _detect_model_type(self) -> str:
@@ -246,6 +251,7 @@ class VideoEngine:
         self._teacache = None
         self._lora_loaded = False
         self._lora_merged = False
+        self._lora_adapter_path = ""
         gc.collect()
         try:
             import mlx.core as mx
@@ -618,16 +624,22 @@ class VideoEngine:
                 num_frames=num_frames,
                 num_steps=num_steps,
                 guide_scale=guide_scale,
-                seed=seed if seed >= 0 else int(time.time_ns()) % (2**31),
+                seed=seed,  # already randomized by generate() if originally < 0
                 scheduler=scheduler,
             )
 
-            # Wire TeaCache into the pipeline's denoising loop
-            if self._teacache is not None:
-                self._teacache.reset()
-                self._native_pipeline._teacache_hook = self._teacache
-
+            # Wire TeaCache into the pipeline's denoising loop.
+            # Hold the teacache lock for the entire generation to prevent
+            # concurrent requests from corrupting shared cache state (same
+            # pattern as image_engine's _teacache_lock).
+            tc_lock = self._teacache_lock if self._teacache is not None else None
+            if tc_lock is not None:
+                tc_lock.acquire()
             try:
+                if self._teacache is not None:
+                    self._teacache.reset()
+                    self._native_pipeline._teacache_hook = self._teacache
+
                 if image is not None:
                     # Load image bytes directly as an MLX array for the
                     # native pipeline — avoids unnecessary disk write.
@@ -652,6 +664,8 @@ class VideoEngine:
                 # to prevent stale state in subsequent generations.
                 if hasattr(self._native_pipeline, '_teacache_hook'):
                     self._native_pipeline._teacache_hook = None
+                if tc_lock is not None:
+                    tc_lock.release()
         except Exception as e:
             logger.error(f"Native pipeline generation failed: {e}", exc_info=True)
             return None
@@ -803,6 +817,7 @@ class VideoEngine:
             "model": self._model_path,
             "model_type": self._model_type,
             "loaded": self.is_loaded,
+            "model_loaded": self._model is not None or self._native_pipeline is not None,
             "running": self._running,
             "frames_processed": frames_processed,
             "frames_streamed": frames_streamed,

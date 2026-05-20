@@ -286,10 +286,9 @@ class MeshNode:
     def _get_local_ip() -> str:
         """Get the local IP address for mesh networking."""
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
             return ip
         except Exception:
             logger.debug("failed to detect local IP", exc_info=True)

@@ -519,7 +519,13 @@ class TestVADAutoTrigger:
 
     @pytest.mark.asyncio
     async def test_auto_commit_skips_if_response_active(self):
-        """Should not create response if one is already running."""
+        """Should not commit buffer or create response if one is already running.
+
+        Fix: _auto_commit_and_respond now checks response availability BEFORE
+        committing the buffer. Previously it committed first (losing audio data)
+        then checked, which meant audio was silently dropped when a response was
+        already active.
+        """
         ws = MagicMock()
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
@@ -533,7 +539,8 @@ class TestVADAutoTrigger:
 
         await session._auto_commit_and_respond()
 
-        session._handle_input_audio_buffer_commit.assert_called_once()
+        # Both commit AND create should be skipped — buffer is preserved
+        session._handle_input_audio_buffer_commit.assert_not_called()
         session._handle_response_create.assert_not_called()
 
         active_task.cancel()
@@ -544,25 +551,55 @@ class TestResponseCancelTruncation:
 
     @pytest.mark.asyncio
     async def test_cancel_sends_audio_done(self):
-        """response.cancel should send RESPONSE_AUDIO_DONE for truncation."""
+        """response.cancel should send RESPONSE_AUDIO_DONE for truncation when audio modality is active."""
         ws = MagicMock()
         ws.send_json = AsyncMock()
         session = RealtimeSession(ws)
 
-        # Create a cancellable task
+        # Create a cancellable task with audio modality
         async def _slow():
             await asyncio.sleep(100)
         task = asyncio.create_task(_slow())
         task._response_id = "resp_test123"
         task._item_id = "item_test456"
         session._active_response = task
+        session._active_modalities = ["text", "audio"]
 
         await session._handle_response_cancel({"type": "response.cancel"})
 
-        # Should have sent audio done event
+        # Should have sent audio done event (audio was in modalities)
         calls = ws.send_json.call_args_list
         event_types = [c[0][0]["type"] for c in calls]
         assert "response.audio.done" in event_types
+        # response.done should also be sent with cancelled status
+        assert "response.done" in event_types
+
+        task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_cancel_no_audio_done_without_audio_modality(self):
+        """response.cancel should NOT send RESPONSE_AUDIO_DONE when audio is not in modalities."""
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        session = RealtimeSession(ws)
+
+        # Create a cancellable task with text-only modality
+        async def _slow():
+            await asyncio.sleep(100)
+        task = asyncio.create_task(_slow())
+        task._response_id = "resp_test789"
+        task._item_id = "item_test012"
+        session._active_response = task
+        session._active_modalities = ["text"]
+
+        await session._handle_response_cancel({"type": "response.cancel"})
+
+        # Should NOT have sent audio done event (audio was not in modalities)
+        calls = ws.send_json.call_args_list
+        event_types = [c[0][0]["type"] for c in calls]
+        assert "response.audio.done" not in event_types
+        # But response.done should still be sent
+        assert "response.done" in event_types
 
         task.cancel()
 

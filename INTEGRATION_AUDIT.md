@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 284: 6-agent deep audit — 37 bugs fixed: SSD AB/BA + self-deadlock, Anthropic SSE async/NameError/double-count, SpeculativeDecoder KV corruption (3 CRITICAL), scheduler preemption ITL/slots/mRoPE/insert leak, grammar allOf/oneOf/integer/enum/const, batched engine streaming thinking/suffix/SpecPrefill)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 287: 8-agent parallel deep audit — 44 bugs fixed: engine_core abort/dedup/double-cleanup (3 CRITICAL), KV eviction TOCTOU block stealing (CRITICAL), mesh data races (2 CRITICAL), realtime protocol ordering (CRITICAL), VLM 7 bugs, Prometheus summary/histogram, grammar $defs/if-then-else/anyOf, multimodal 6 bugs, monitoring + auth 6 bugs)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -35,7 +35,50 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 287 — 8-agent parallel deep audit: 44+ bugs across engine_core lifecycle, KV ref counting, VLM, mesh, multimodal, grammar, monitoring, realtime)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 287: abort_request 不處理 dedup shadows | abort 時 shadow 的 collector/sentinel/event 不被觸發，consumer 永久掛起 | 掛起 (CRITICAL) |
+| Wave 287: abort_all_requests 不處理 dedup shadows | fail_all 不追蹤 shadow request，consumer 永久掛起 | 掛起 (CRITICAL) |
+| Wave 287: _cleanup_request 破壞 _finalized_ids 冪等性 | discard 允許重複 finalize：double-release LoRA/memory/KV | 雙重釋放 (CRITICAL) |
+| Wave 287: stream_outputs 雙重 cleanup | cancel 路徑 abort + finally 各 cleanup 一次。加入 _cleaned_up flag | 雙重釋放 (HIGH) |
+| Wave 287: Dedup shadow 共享可變 list | new_token_ids/output_token_ids 按引用傳遞。改為 list() 淺拷貝 | 數據損壞 (HIGH) |
+| Wave 287: KV eviction TOCTOU 允許 block stealing | evict 和 free 分兩次鎖，allocate 可在中間偷走 block。新增 evict_and_free 原子方法 | KV 損壞 (CRITICAL) |
+| Wave 287: BlockTable.append_block total_tokens 永遠 0 | 不 finalized 前一 block 的 token。加入 block_size 累加 | 容量計算錯誤 (HIGH) |
+| Wave 287: load_prefix/load_cached 未持 manager._lock | allocate + cache_block 無鎖，併發 eviction/free 可破壞狀態。包裹鎖 | 併發損壞 (HIGH) |
+| Wave 287: VLM _stream_vlm_text detokenizer NameError | detokenizer 可能未賦值。初始化為 None + is not None guard | NameError (HIGH) |
+| Wave 287: VLM vision post-stream bookkeeping 跳過 | cancel/stop/budget 提前 return 跳過 cache/encoder/KV 更新。移入 finally | 統計不準 (HIGH) |
+| Wave 287: VLM thinking budget 用字元數非 token 數 | len(think_content) vs token count。改為 tokenize 後計算 | 預算錯誤 (HIGH) |
+| Wave 287: VLM stop suffix 丟失非 suffix 文字 | token_text 設 "" 但 last_segment 含前綴文字。提取並 emit 非 suffix 部分 | 文字丟失 (HIGH) |
+| Wave 287: VLM stop suffix 跨 emit 邊界漏檢 | 搜尋從 _emitted_pos 開始，suffix 可能起點在前。向前擴展搜尋 | stop 漏檢 (HIGH) |
+| Wave 287: VLM start() 設 _running=True 即使 load 失敗 | load 拋異常後 is_running=True 但 is_loaded=False。try/except 包裹 | 狀態不一致 (HIGH) |
+| Wave 287: Mesh topology add_node 設 rank 無 node 鎖 | bare field assignment 競爭 to_dict()。包裹 node._lock | 數據競爭 (CRITICAL) |
+| Wave 287: Mesh discovery _add_discovered 無 node 鎖 | 同上。包裹 node._lock | 數據競爭 (CRITICAL) |
+| Wave 287: Mesh handle_node_failure 可覆蓋已恢復節點 | 心跳恢復後仍被標記 OFFLINE。加入 stale-failure guard | 節點閃爍 (HIGH) |
+| Wave 287: Mesh callbacks 讀 node.state 無鎖 | _on_peer_lost/_on_node_timeout/_on_node_recovered 直接讀。包裹鎖 | 撕裂讀取 (HIGH) |
+| Wave 287: ASR VAD 處理壓縮音頻為 raw PCM | MP3/FLAC bytes 被當作 int16，產生垃圾 VAD 結果。檢測 WAV header | 語音跳過 (HIGH) |
+| Wave 287: ASR 返回 language: None | 下游 JSON 序列化 TypeError。加入 "und" fallback | TypeError (HIGH) |
+| Wave 287: Video TeaCache 無 thread-safe | 無鎖保護，併發請求損壞 cache 狀態。加入 _teacache_lock | 輸出損壞 (HIGH) |
+| Wave 287: Image streaming 阻塞 GPU executor | put(timeout=2) 填滿時阻塞唯一 GPU thread。改為 put_nowait + drop | GPU 全域阻塞 (MEDIUM) |
+| Wave 287: JSON schema repair 不遞迴 definitions/$defs | $ref 鏈不解析，定義內 schema 不修復。加入遞迴 | 約束失效 (HIGH) |
+| Wave 287: JSON schema repair 不移除 if/then/else | 條件 schema 洩漏到約束。移除 | 約束汙染 (MEDIUM) |
+| Wave 287: anyOf/oneOf 物件丟失屬性約束 | _enter_value 比較 list == "object" 失敗。新增 unwrap helper | 約束失效 (HIGH) |
+| Wave 287: additionalProperties dict 不約束未知鍵 | 未知鍵返回 None (any)。檢查 additionalProperties dict schema | 約束失效 (MEDIUM) |
+| Wave 287: Prometheus histogram 超出最大 bucket 時丟失觀測 | 值超最大 bucket 時無 bucket 遞增。加入 placed flag | 監控不一致 (HIGH) |
+| Wave 287: Prometheus summary _count 用截斷列表長度 | 截斷後 count 振盪。加入 latency_total_count 追蹤真實總數 | 監控不準 (HIGH) |
+| Wave 287: Prometheus summary 缺少 _sum 欄位 | 用 _avg 替代 _sum，違反 Prometheus 規範。改為 _sum | 指標解析失敗 (HIGH) |
+| Wave 287: Rate limiter ZeroDivisionError RPM=0 | 60/RPM 在 RPM=0 時崩潰。max(RPM, 1) | 500 錯誤 (MEDIUM) |
+| Wave 287: L2 Auth 阻擋 CORS preflight | OPTIONS 無 Authorization 被 401。加入 OPTIONS 豁免 | CORS 失敗 (MEDIUM) |
+| Wave 287: Rate limiter TOCTOU 讀 bucket tokens | RPM 變更時讀 tokens/capacity 無鎖。包裹 bucket._lock | Token 不一致 (HIGH) |
+| Wave 287: Realtime cancel 在 audio.done 前發 response.done | 違反協議順序。移除 CancelledError 的 response.done，由 cancel handler 統一 | 協議違規 (CRITICAL) |
+| Wave 287: Realtime TTS error 不發 audio.done | 錯誤時 client 永久等待。加入 except block audio.done | 掛起 (HIGH) |
+| Wave 287: Realtime 空 modalities 觸發 phantom audio.done | 空列表被當作 True。改為 "audio" in modalities 檢查 | 幽靈事件 (HIGH) |
+| Wave 287: Realtime auto-commit 丟失音頻 | commit 在檢查 response 可用性之前。先檢查再 commit | 音頻丟失 (HIGH) |
+| Wave 287: Realtime audio buffer reference（非快照） | await yield 期間新追加的音頻被包含。bytes() 快照 | 數據洩漏 (MEDIUM) |
+| Wave 287: format_anthropic_chunk 硬編碼 token 計數 | input_tokens:0, output_tokens:1。改為參數化 | 計數不準 (HIGH) |
 
 ### 已完成修復 (2026-05-20 Wave 284 — 6-agent deep audit: 33+ bugs across batched engine streaming, KV block/SSD deadlocks, gateway SSE protocol, scheduler fairness, spec decode KV corruption, grammar JSON schema)
 

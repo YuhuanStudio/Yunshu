@@ -1782,15 +1782,15 @@ class ImageGenEngine:
                         preview_png = self._to_png(image)
 
                     try:
-                        _thread_queue.put({
+                        _thread_queue.put_nowait({
                             "step": step_num,
                             "total_steps": num_inference_steps,
                             "progress": progress,
                             "image": preview_png,
                             "is_final": False,
-                        }, timeout=2.0)
+                        })
                     except _queue_mod.Full:
-                        logger.warning("Image stream queue full after retry — dropping preview chunk")
+                        logger.warning("Image stream queue full — dropping preview chunk")
                         continue
 
                 # Final decode
