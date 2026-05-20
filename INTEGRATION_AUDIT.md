@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–319: 35 waves, 700+ bugs fixed. Latest: Wave 319 — spec decode + MTP penalty/logit params (SP-PEN, MTP-PEN) now applied to bonus + correction tokens via _apply_spec_bonus_penalties, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–321: 36 waves, 730+ bugs fixed. Latest: Wave 321 — 8-agent deep audit, 30+ bugs (scheduler AttributeError CRITICAL, mesh deadlock CRITICAL, KV block leak CRITICAL, spec decode grammar advancement, batch sampler NaN, hysteresis bypass, forward_batch EOS detection), 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -37,7 +37,34 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
 
-### 已完成修復 (2026-05-21 Wave 315 — 3 agents, 10+ bugs: spec decode constraint desync, mesh node retry, OOM rollback, executor safety)
+### 已完成修復 (2026-05-21 Wave 321 — 8 parallel agents, 30+ bugs: scheduler AttributeError CRITICAL, mesh deadlock, KV block leak, spec decode grammar, batch sampler NaN, hysteresis bypass)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| scheduler.py set_finish→set_finished | req.set_finish("aborted") AttributeError on abort | 所有 abort 崩潰 (CRITICAL) |
+| chat.py str/bytes mixing | 多選 streaming prefill-progress .encode() 造成 TypeError | n>1 streaming 崩潰 (CRITICAL) |
+| kv_offload.py block leak | prev/next 檢查錯誤導致 block 永久洩漏 | GPU 記憶體耗盡 (CRITICAL) |
+| mesh manager deadlock | _node_lock vs node._lock 順序反轉 | 節點恢復死鎖 (CRITICAL) |
+| MemoryPressure hysteresis bypass | critical→normal 跳過 warning 級別 | 記憶體震盪 OOM (HIGH) |
+| batch_sampler min-p NaN guard | min-p 無 NaN/-inf 保護 | 取樣垃圾 token (HIGH) |
+| Anthropic count_tokens auth | 缺少 _check_permission | 認證繞過 (HIGH) |
+| Aborted waiting requests leak | _failed_insert_ids 未記錄 | 資源洩漏 (HIGH) |
+| PagedScheduler OOM abort | abort_request 不移除 BatchGenerator UID | GPU 資源浪費 (HIGH) |
+| Tiered KV deadlock | _evict_cached_block 在 _lock 內 | 分層快取死鎖 (HIGH) |
+| SSD phantom entry I/O | load_block 嘗試讀取 file_size==0 項目 | I/O 浪費 (HIGH) |
+| Warm promotion garbage blocks | KV 寫入失敗仍使用 block | 輸出損壞 (HIGH) |
+| Spec decode grammar advance | 修正/全接受路徑未 advance constraint | 結構化輸出失效 (HIGH) |
+| _finalize_request on shadows | shadow 請求從未加入 scheduler | 狀態損壞 (HIGH) |
+| forward_batch EOS detection | is_finished 只檢查最後 token | spec decode 後 EOS 漏檢 (HIGH) |
+| VLM _active_count race | 多執行緒 +=/-= 無鎖 | 計數錯誤 (HIGH) |
+| json_schema anyOf/oneOf list | _value_completed/_pop_schema 不處理 list 類型 | JSON 約束失效 (HIGH) |
+| VideoEngine Metal thread | stop() 在非 executor 執行緒呼叫 GPU | 崩潰風險 (HIGH) |
+| mesh _retry_tasks race | _retry_tasks 在 _node_lock 外存取 | 重試丟失 (HIGH) |
+| Responses API completed_at | 非串流回應缺少 completed_at 欄位 | API 不兼容 (MEDIUM) |
+| Responses API error code | 錯誤回應缺少 code 欄位 | API 不兼容 (MEDIUM) |
+| Responses API store field | 請求 schema 缺少 store 欄位 | API 不兼容 (MEDIUM) |
+| Anthropic thinking validation | thinking.type=disabled 未驗證 | API 不兼容 (MEDIUM) |
+| VLM duplicate ext extraction | 重複副檔名提取行 | 死代碼 (LOW) |
 
 | 修復 | 描述 | 影響 |
 |------|------|------|
