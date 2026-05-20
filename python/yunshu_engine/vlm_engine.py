@@ -1223,6 +1223,7 @@ class VLMEngine:
         num_audios = len(audio_paths) if audio_paths else 0
         prompt = self._apply_vlm_template_with_cache(
             messages, enable_thinking=enable_thinking, num_audios=num_audios,
+            max_images=len(image_paths) if image_paths else None,
         )
 
         # Compute image hash for KV prefix cache lookup
@@ -1329,9 +1330,10 @@ class VLMEngine:
         _budget_hit = False
         _thinking_tokens = 0
         if thinking_budget is not None and self._tokenizer is not None:
-            think_start = _result_text.find("<think")
+            # Use _find_think_tag to avoid false positives with <thinking>, <think_more>, etc.
+            think_start = self._find_think_tag(_result_text, "<think")
             if think_start >= 0:
-                think_end = _result_text.find("</think", think_start)
+                think_end = self._find_think_tag(_result_text, "</think", search_start=think_start + 1)
                 if think_end >= 0:
                     think_content = _result_text[think_start:think_end]
                     try:
@@ -1595,6 +1597,7 @@ class VLMEngine:
         num_audios = len(audio_paths) if audio_paths else 0
         prompt = self._apply_vlm_template_with_cache(
             messages, enable_thinking=enable_thinking, num_audios=num_audios,
+            max_images=len(image_paths) if image_paths else None,
         )
 
         # Compute image hash for KV prefix cache lookup
@@ -1683,6 +1686,7 @@ class VLMEngine:
                 # Track thinking state from text markers — scan only the
                 # newly-appended portion to avoid permanent matches on tags
                 # that appeared earlier in the accumulated text.
+                _prev_in_thinking = _in_thinking
                 _scan = accumulated[_think_scan_pos:]
                 while _scan:
                     if _in_thinking:
@@ -1703,8 +1707,10 @@ class VLMEngine:
                             break
                 _think_scan_pos = len(accumulated) - len(_scan)
                 _cur_state = "reasoning" if _in_thinking else "normal"
-                # Count tokens generated while in thinking state
-                if _in_thinking:
+                # Count tokens generated while in thinking state.
+                # Skip counting on the token that triggered a state transition
+                # (<think/</think tags themselves are not reasoning content).
+                if _in_thinking and _prev_in_thinking:
                     _thinking_token_count += 1
                 # Thinking budget enforcement — stop generation when the budget
                 # is exceeded while in a thinking segment.  Flush held-back
@@ -1838,6 +1844,22 @@ class VLMEngine:
             # (cancel, stop, budget, error).
         except Exception as e:
             _error_state = "reasoning" if _in_thinking else "normal"
+            # Flush any held-back accumulated text before emitting the error
+            # output. Without this, text that was buffered for stop suffix
+            # prefix detection is silently lost on error.
+            _held_error_text = accumulated[_emitted_pos:] if accumulated else ""
+            if _held_error_text:
+                try:
+                    queue.put_nowait(RequestOutput(
+                        request_id=req_id,
+                        new_text=_held_error_text,
+                        finish_reason=None,
+                        finished=False,
+                        prompt_tokens=_num_prompt_tokens,
+                        current_state=_error_state,
+                    ))
+                except Exception:
+                    pass  # queue full or closed — best effort flush
             queue.put_nowait(RequestOutput(
                 request_id=req_id,
                 new_text="",
@@ -2285,9 +2307,18 @@ class VLMEngine:
 
     # ── Prompt Formatting ──
 
-    def _build_vlm_messages(self, messages: list[dict]) -> list[dict]:
-        """Build messages with image/audio references for processor's chat template."""
+    def _build_vlm_messages(self, messages: list[dict], max_images: int | None = None) -> list[dict]:
+        """Build messages with image/audio references for processor's chat template.
+
+        Args:
+            max_images: If set, limits the number of image placeholders to this
+                count.  This must match the actual number of image paths passed
+                to the model (after single-image truncation).  Without this,
+                the template would contain more image placeholders than actual
+                images, causing a mismatch for SINGLE_IMAGE_ONLY_MODELS.
+        """
         vlm_messages = []
+        _image_count = 0
         for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, list):
@@ -2295,7 +2326,10 @@ class VLMEngine:
                 for part in content:
                     if isinstance(part, dict):
                         if part.get("type") == "image_url":
-                            parts.append({"type": "image"})
+                            if max_images is None or _image_count < max_images:
+                                parts.append({"type": "image"})
+                                _image_count += 1
+                            # Skip excess image placeholders beyond max_images
                         elif part.get("type") == "input_audio":
                             parts.append({"type": "audio"})
                         elif part.get("type") == "audio_url":
@@ -2364,11 +2398,19 @@ class VLMEngine:
         messages: list[dict],
         enable_thinking: bool | None = None,
         num_audios: int = 0,
+        max_images: int | None = None,
     ) -> str:
         """Apply VLM processor chat template with caching.
 
         Caches the _processor.apply_chat_template() result for the VLM vision
         path. On cache hit, skips the template application entirely.
+
+        Args:
+            max_images: Limits image placeholders in the template to match the
+                actual number of image paths that will be passed to the model.
+                Critical for SINGLE_IMAGE_ONLY_MODELS where _extract_images()
+                truncates to 1 image but messages may contain multiple image_url
+                entries.
         """
         # Build cache key from messages + template kwargs
         key_parts = [json.dumps(messages, sort_keys=True, ensure_ascii=False)]
@@ -2376,6 +2418,8 @@ class VLMEngine:
             key_parts.append(f"thinking={enable_thinking}")
         if num_audios > 0:
             key_parts.append(f"audios={num_audios}")
+        if max_images is not None:
+            key_parts.append(f"max_images={max_images}")
         cache_key = hashlib.blake2b(
             "|".join(key_parts).encode(), digest_size=16,
         ).hexdigest()
@@ -2385,7 +2429,7 @@ class VLMEngine:
             logger.debug("VLM template cache hit: %d chars", len(cached))
             return cached
 
-        vlm_messages = self._build_vlm_messages(messages)
+        vlm_messages = self._build_vlm_messages(messages, max_images=max_images)
         tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
         if enable_thinking is not None:
             tpl_kwargs["enable_thinking"] = enable_thinking
@@ -2575,19 +2619,23 @@ class VLMEngine:
             self._temp_files.append(tmp.name)
         try:
             ctx = ssl.create_default_context()
-            req = urllib.request.Request(url, headers={"User-Agent": "Yunshu/1.0"})
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
-                lambda: urllib.request.urlretrieve(url, tmp.name),
+                lambda: urllib.request.urlretrieve(
+                    urllib.request.Request(url, headers={"User-Agent": "Yunshu/1.0"}),
+                    tmp.name,
+                ),
             )
         except Exception:
             logger.debug("image download failed, trying fallback SSL", exc_info=True)
-            # Fallback: try with less strict SSL for some CDNs
+            # Fallback: try with less strict SSL for some CDNs.
+            # Use Request object so User-Agent header is still sent.
             try:
+                _req = urllib.request.Request(url, headers={"User-Agent": "Yunshu/1.0"})
                 await loop.run_in_executor(
                     None,
-                    lambda: urllib.request.urlretrieve(url, tmp.name, context=ctx),
+                    lambda: urllib.request.urlretrieve(_req, tmp.name),
                 )
             except Exception as e:
                 logger.warning(f"Failed to download image from {url}: {e}")
@@ -2739,6 +2787,25 @@ class VLMEngine:
         return tmp.name
 
     # ── Helpers ──
+
+    @staticmethod
+    def _find_think_tag(text: str, tag: str, search_start: int = 0) -> int:
+        """Find a thinking tag (<think or </think) avoiding false positives.
+
+        Matches the tag only when followed by a non-alphanumeric character
+        (>, whitespace, newline, or end-of-string).  This prevents false
+        matches on <thinking>, <think_more>, etc.
+        """
+        idx = search_start
+        while True:
+            pos = text.find(tag, idx)
+            if pos < 0:
+                return -1
+            end = pos + len(tag)
+            if end >= len(text) or not text[end].isalnum():
+                return pos
+            # False positive (e.g. <thinking>) — keep searching
+            idx = end
 
     def _estimate_image_tokens(self) -> int:
         """Estimate the number of vision tokens per image for this model.

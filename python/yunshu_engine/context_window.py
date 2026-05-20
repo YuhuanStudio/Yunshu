@@ -359,11 +359,33 @@ class ContextWindowManager:
         # Ensure the window doesn't end with an assistant message whose
         # tool_calls have no matching tool responses (they were truncated).
         # Such dangling tool_calls would cause chat template errors.
+        #
+        # We must be careful to only remove tool messages that are genuinely
+        # orphaned (no preceding assistant with tool_calls that they could
+        # belong to). Simply stripping all trailing tool messages would
+        # discard valid tool responses belonging to an earlier assistant.
         while window and window[-1].get("role") == "assistant" and window[-1].get("tool_calls"):
             window.pop(-1)
-            # After removing the trailing assistant, check for new trailing orphans
+            # After removing the trailing assistant, remove trailing tool
+            # messages ONLY if they are orphaned (no preceding assistant
+            # with tool_calls exists in the window to claim them).
             while window and window[-1].get("role") == "tool":
-                window.pop(-1)
+                # Walk backwards to find if there's an assistant(tool_calls)
+                # that could own this tool message. If found, the tool is
+                # valid and we must stop removing.
+                has_owner = False
+                for j in range(len(window) - 2, -1, -1):
+                    prev_role = window[j].get("role")
+                    if prev_role == "assistant" and window[j].get("tool_calls"):
+                        has_owner = True
+                        break
+                    # Stop searching at any non-tool, non-assistant boundary
+                    if prev_role not in ("tool", "assistant"):
+                        break
+                if not has_owner:
+                    window.pop(-1)
+                else:
+                    break
 
         return deepcopy(system_msgs) + deepcopy(window)
 
@@ -393,15 +415,52 @@ class ContextWindowManager:
         # trailing tool messages that belong to the last tool call)
         recent_count = self._min_recent_turns * 2
         recent = non_system[-recent_count:]  # user+assistant pairs
-        # Extend recent to include any tool call groups at the boundary
-        while recent and recent[0].get("role") == "tool":
-            # This tool message at the start of 'recent' is orphaned without
-            # its assistant tool_calls message. Include one more message.
-            recent_count += 1
-            if recent_count > len(non_system):
-                recent = list(non_system)
+        # Extend recent to include any tool call groups at the boundary.
+        # We must handle two cases:
+        #   (a) Leading orphaned tool messages (no preceding assistant tool_calls).
+        #   (b) An assistant(tool_calls) at the boundary whose tool responses
+        #       would be split — we need to extend until ALL its tool responses
+        #       are included.
+        while True:
+            if not recent:
                 break
-            recent = non_system[-recent_count:]
+            first_role = recent[0].get("role")
+            # Case (a): orphaned tool result at the boundary
+            if first_role == "tool":
+                recent_count += 1
+                if recent_count > len(non_system):
+                    recent = list(non_system)
+                    break
+                recent = non_system[-recent_count:]
+                continue
+            # Case (b): assistant(tool_calls) whose tool responses may be split.
+            # Check that all following tool messages in the original list are
+            # included in recent.
+            if first_role == "assistant" and recent[0].get("tool_calls"):
+                # Find the index of recent[0] in non_system
+                boundary_idx = len(non_system) - len(recent)
+                # Count tool messages following this assistant in non_system
+                expected_tools = 0
+                k = boundary_idx + 1
+                while k < len(non_system) and non_system[k].get("role") == "tool":
+                    expected_tools += 1
+                    k += 1
+                # Count tool messages following the assistant in recent
+                actual_tools = 0
+                for m in recent[1:]:
+                    if m.get("role") == "tool":
+                        actual_tools += 1
+                    else:
+                        break
+                if actual_tools < expected_tools:
+                    # Tool group is split — extend to include all tool responses
+                    recent_count += (expected_tools - actual_tools)
+                    if recent_count > len(non_system):
+                        recent = list(non_system)
+                        break
+                    recent = non_system[-recent_count:]
+                    continue
+            break
 
         middle = non_system[:-len(recent)] if len(non_system) > len(recent) else []
 

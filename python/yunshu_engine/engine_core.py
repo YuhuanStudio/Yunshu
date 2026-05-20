@@ -365,7 +365,7 @@ class EngineCore:
         # Auto-tuner (adaptive config: performance profiler + SLO monitor + hill-climbing)
         from .auto_tuner import AutoTuner, PerformanceProfiler, SLOMonitor, AdaptiveBatchSizer
         self._profiler = PerformanceProfiler()
-        self._profiler.start_profiling()
+        self._profiler_started = False  # started in start(), stopped in stop()
         self._slo_monitor = SLOMonitor()
         self._auto_tuner = AutoTuner(profiler=self._profiler, slo_monitor=self._slo_monitor)
         self._adaptive_batch_sizer = AdaptiveBatchSizer()
@@ -425,6 +425,7 @@ class EngineCore:
         self._loop_task: asyncio.Task | None = None
         self._start_time: float | None = None
         self._wake_event: asyncio.Event | None = None  # Event-driven wake-up for idle loop
+        self._stopped = False  # True after stop() completes; reset by start()
 
         # ── Wave 43: Additional production wiring ──
 
@@ -761,10 +762,27 @@ class EngineCore:
         """Start the engine loop."""
         if self._running:
             return
+        # Guard against stale _loop_task from a failed/incomplete stop()
+        if self._loop_task is not None and not self._loop_task.done():
+            logger.warning("start() called with stale _loop_task, cancelling")
+            self._loop_task.cancel()
+            try:
+                await self._loop_task
+            except asyncio.CancelledError:
+                pass
+            self._loop_task = None
         self._running = True
         self._was_started = True
+        self._stopped = False
         self._start_time = time.monotonic()
         self._wake_event = asyncio.Event()
+        # Start profiler (deferred from __init__ to avoid resource leak if init fails)
+        if not self._profiler_started:
+            try:
+                self._profiler.start_profiling()
+                self._profiler_started = True
+            except Exception:
+                logger.debug("profiler start failed", exc_info=True)
         # Start KV offload manager (async tier migration, §12.3)
         if self._kv_offload_manager is not None:
             try:
@@ -861,6 +879,8 @@ class EngineCore:
         # Phase 3: SHUTTING_DOWN — full cleanup
         self._running = False
         self._shutdown_requested = False
+        self._start_time = None  # Reset so get_stats() uptime is 0 after stop
+        self._wake_event = None  # Clear stale event; recreated by start()
 
         # Stop KV migration background thread
         try:
@@ -869,10 +889,12 @@ class EngineCore:
             logger.debug("KV migration stop failed", exc_info=True)
 
         # Stop performance profiler
-        try:
-            self._profiler.stop_profiling()
-        except Exception:
-            logger.debug("profiler stop failed", exc_info=True)
+        if self._profiler_started:
+            try:
+                self._profiler.stop_profiling()
+                self._profiler_started = False
+            except Exception:
+                logger.debug("profiler stop failed", exc_info=True)
 
         # Stop KV offload manager
         if self._kv_offload_manager is not None:
@@ -957,6 +979,12 @@ class EngineCore:
         except Exception:
             logger.debug("cache clear on executor failed", exc_info=True)
 
+        # Mark fully stopped AFTER all cleanup is done.
+        # This must come last so concurrent add_request() calls during the
+        # await yields above don't create collectors that we then clear.
+        # add_request() checks _stopped to decide whether to reject.
+        self._stopped = True
+
         logger.info("EngineCore stopped")
 
     async def add_request(
@@ -1001,7 +1029,13 @@ class EngineCore:
         # engine test suite calls add_request on an EngineCore without start(),
         # driving the scheduler loop manually. Only reject when the engine was
         # explicitly stopped (i.e., stop() was called after a successful start).
-        if self._was_started and not self._running:
+        # Use _stopped flag (set atomically at the END of stop()) instead of
+        # _running to avoid a race: stop() sets _running=False early but clears
+        # collectors later (with await yields in between). A concurrent
+        # add_request during that window would create collectors that stop()
+        # then clears, orphaning the consumer. _stopped is only set after all
+        # cleanup is complete.
+        if self._stopped:
             from .output_collector import RequestOutputCollector, RequestStreamState
             from .request import RequestOutput
             self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)

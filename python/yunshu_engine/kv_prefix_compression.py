@@ -357,6 +357,9 @@ class KVPrefixCompressor:
         - High access (>= median): kept at full fidelity
         - Low access (< median): compressed with higher factor
         - Zero access: compressed with maximum factor
+
+        Output preserves original block order so callers and decompressors
+        can rely on positional correspondence.
         """
         if not blocks:
             return np.array([]), []
@@ -365,37 +368,49 @@ class KVPrefixCompressor:
         sorted_counts = sorted(access_counts)
         median = sorted_counts[n // 2] if n > 0 else 0
 
-        kept_blocks = []
-        kept_ids = []
-        compressed_blocks = []
-        compressed_ids = []
-
-        for i, (block, count) in enumerate(zip(blocks, access_counts)):
+        # Classify each index as kept or compressible
+        kept_indices: set[int] = set()
+        compressible_indices: list[int] = []
+        for i, count in enumerate(access_counts):
             if count >= median and count > 0:
-                kept_blocks.append(block)
-                kept_ids.append(i)
+                kept_indices.add(i)
             else:
-                compressed_blocks.append(block)
-                compressed_ids.append(i)
+                compressible_indices.append(i)
 
-        # Compress low-frequency blocks via mean pooling
-        if compressed_blocks:
+        # Build a map from original index → pooled block (for compressible groups)
+        compressed_map: dict[int, np.ndarray] = {}
+        if compressible_indices:
             K = max(1, self._compression_factor)
-            pool_groups = []
-            pool_ids = []
-            for start in range(0, len(compressed_blocks), K):
-                end = min(start + K, len(compressed_blocks))
-                group = compressed_blocks[start:end]
-                stacked = np.stack(group, axis=0)
+            for start in range(0, len(compressible_indices), K):
+                end = min(start + K, len(compressible_indices))
+                group_orig_ids = compressible_indices[start:end]
+                group_blocks = [blocks[gi] for gi in group_orig_ids]
+                stacked = np.stack(group_blocks, axis=0)
                 pooled = np.mean(stacked, axis=0)
-                pool_groups.append(pooled)
-                pool_ids.append(compressed_ids[start])
+                # Map all original indices in this group to the representative
+                # block (the first one in the group).
+                representative_id = group_orig_ids[0]
+                compressed_map[representative_id] = pooled
+                # Non-representative indices in this group are consumed; only
+                # the representative appears in the output list.
 
-            all_blocks = kept_blocks + pool_groups
-            all_ids = kept_ids + pool_ids
-        else:
-            all_blocks = kept_blocks
-            all_ids = kept_ids
+        # Reconstruct in original order: kept blocks at their positions,
+        # compressed representatives at their positions.
+        all_blocks: list[np.ndarray] = []
+        all_ids: list[int] = []
+        # Track which compressible indices have been emitted (as representatives)
+        emitted_compressible: set[int] = set()
+        for i in range(n):
+            if i in kept_indices:
+                all_blocks.append(blocks[i])
+                all_ids.append(i)
+            elif i in compressed_map:
+                # This is a representative of a pooled group
+                all_blocks.append(compressed_map[i])
+                all_ids.append(i)
+                # Mark the other indices in this group as emitted
+                # (they won't appear in the output)
+                emitted_compressible.add(i)
 
         if all_blocks:
             return np.stack(all_blocks, axis=0), all_ids
@@ -551,10 +566,13 @@ class SlidingWindowKVManager:
 
         blocks = self._request_blocks[request_id]
 
-        # Check if we already have this block.  Since block_ids are
-        # monotonically increasing and appended in order, only the last
-        # block needs checking — O(1) instead of rebuilding a set.
-        if not blocks or blocks[-1].block_id != block_idx:
+        # Check if we already have this block.  System prompt blocks
+        # registered via register_request() have block_ids starting at 0,
+        # so checking only blocks[-1] is insufficient — a new block at
+        # block_idx=0 could collide with an existing system prompt block.
+        # Use a set for O(1) dedup when the list is non-trivial.
+        existing_ids = {b.block_id for b in blocks}
+        if block_idx not in existing_ids:
             blocks.append(kv_block)
 
         return self._evict_outside_window(request_id)
@@ -650,6 +668,10 @@ class SlidingWindowKVManager:
 
         trimmed = 0
         try:
+            # Import once before the loop to avoid repeated import overhead.
+            # mlxcache arrays require mx.concatenate for slicing + joining.
+            import mlx.core as mx  # noqa: F811
+
             for i, layer_cache in enumerate(kv_cache):
                 if layer_cache is None:
                     continue
@@ -665,12 +687,10 @@ class SlidingWindowKVManager:
                             effective_window = max(0, window_tokens)
                             if effective_window == 0:
                                 # Only keep system prefix — no window tokens yet
-                                import mlx.core as mx
                                 new_key = key[:system_tokens]
                                 new_value = value[:system_tokens]
                             else:
                                 # Keep system prefix + window suffix
-                                import mlx.core as mx
                                 new_key = mx.concatenate(
                                     [key[:system_tokens], key[seq_len - effective_window:]],
                                     axis=0,
@@ -686,7 +706,6 @@ class SlidingWindowKVManager:
                             kv_cache[i] = (new_key, new_value)
                             trimmed += trim_from_start
                         elif trim_from_start > 0:
-                            import mlx.core as mx
                             new_key = key[trim_from_start:]
                             new_value = value[trim_from_start:]
                             # CRITICAL: same write-back fix as above.

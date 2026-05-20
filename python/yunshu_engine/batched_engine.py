@@ -5097,7 +5097,8 @@ class BatchedEngine:
                         # First token is stop — don't add to detokenizer, signal stop
                         n_tok -= 1  # Exclude stop token from completion count
                         _put(("", n_tok, "stop", first_token))
-                        prefix_cache.add(ids, cache)
+                        if prefix_cache is not None:
+                            prefix_cache.add(ids, cache)
                         mx.synchronize()
                         _unregister_inflight()
                         return
@@ -5138,7 +5139,8 @@ class BatchedEngine:
                                 n_tok -= 1  # Exclude stop token from count
                                 # Stop token — don't add to detokenizer
                                 _put(("", n_tok, "stop", token_id))
-                                prefix_cache.add(ids, cache)
+                                if prefix_cache is not None:
+                                    prefix_cache.add(ids, cache)
                                 mx.synchronize()
                                 _unregister_inflight()
                                 return
@@ -5155,7 +5157,8 @@ class BatchedEngine:
                                 _remaining = detokenizer.last_segment
                                 if _remaining:
                                     _put((_remaining, n_tok, None, token_id))
-                                prefix_cache.add(ids, cache)
+                                if prefix_cache is not None:
+                                    prefix_cache.add(ids, cache)
                                 mx.synchronize()
                                 _unregister_inflight()
                                 return
@@ -5291,11 +5294,13 @@ class BatchedEngine:
                         _remaining = detokenizer.last_segment
                         if _remaining:
                             _put((_remaining, n_tok, None, 0))
-                        prefix_cache.add(ids, cache)
+                        if prefix_cache is not None:
+                            prefix_cache.add(ids, cache)
                         mx.synchronize()
                         return
 
-            prefix_cache.add(ids, cache)
+            if prefix_cache is not None:
+                prefix_cache.add(ids, cache)
             detokenizer.finalize()
             remaining = detokenizer.last_segment
             if remaining:
@@ -5313,6 +5318,20 @@ class BatchedEngine:
         _ng_gen_t0 = time.perf_counter()
         try:
             while True:
+                # Check cancel_event from consumer side (mirrors MTP streaming path)
+                if _is_cancelled(cancel_event):
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated) if accumulated else "",
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=n_tok,
+                        finished=True,
+                        finish_reason="stop",
+                        ttft_ms=_ng_ttft_ms_val,
+                        cached_tokens=0,
+                        reasoning_tokens=0,
+                    )
+                    break
                 try:
                     item = await asyncio.wait_for(_q.get(), timeout=timeout_seconds)
                 except asyncio.TimeoutError:
@@ -5401,6 +5420,18 @@ class BatchedEngine:
         finally:
             if not future.done():
                 future.cancel()
+                try:
+                    await future
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Drain queue to unblock any pending call_soon_threadsafe from
+            # the executor thread, preventing GPU work from continuing after
+            # the consumer has stopped iterating.
+            while not _q.empty():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     async def _generate_mtp(
         self,
@@ -5832,6 +5863,8 @@ class BatchedEngine:
 
                 from .n_confirmed_patch import clear_rollback, restore_rollback
 
+                _early_stop = False  # Set True when while loop breaks due to stop/cancel
+
                 while len(generated) < max_tokens:
                     # Check cancel_event
                     if _is_cancelled(cancel_event):
@@ -5841,6 +5874,7 @@ class BatchedEngine:
                         if _remaining:
                             _put((_remaining, len(generated), None, None))
                         _put(("", len(generated), "stop", None))
+                        _early_stop = True
                         break
 
                     # MTP draft — always greedy
@@ -5867,6 +5901,7 @@ class BatchedEngine:
                         if draft in eos_ids:
                             # Stop token — don't add to detokenizer, exclude from count
                             _put(("", len(generated) - 1, "stop", draft))
+                            _early_stop = True
                             break
 
                         detokenizer.add_token(draft)
@@ -5884,6 +5919,7 @@ class BatchedEngine:
                                         break
                             if _remaining:
                                 _put((_remaining, len(generated) - 1, None, draft))
+                            _early_stop = True
                             break
 
                         # Bonus token
@@ -5891,6 +5927,7 @@ class BatchedEngine:
                         if v1 in eos_ids:
                             # Stop token — don't add to detokenizer, exclude from count
                             _put(("", len(generated) - 1, "stop", v1))
+                            _early_stop = True
                             break
 
                         detokenizer.add_token(v1)
@@ -5908,6 +5945,7 @@ class BatchedEngine:
                                         break
                             if _remaining:
                                 _put((_remaining, len(generated) - 1, None, v1))
+                            _early_stop = True
                             break
                         primary = v1
                         primary_h = verify_h[:, -1:, :]
@@ -5921,6 +5959,7 @@ class BatchedEngine:
                         if v0 in eos_ids:
                             # Stop token — don't add to detokenizer, exclude from count
                             _put(("", len(generated) - 1, "stop", v0))
+                            _early_stop = True
                             break
 
                         detokenizer.add_token(v0)
@@ -5938,6 +5977,7 @@ class BatchedEngine:
                                         break
                             if _remaining:
                                 _put((_remaining, len(generated) - 1, None, v0))
+                            _early_stop = True
                             break
                         primary = v0
                         # Re-feed correction token through rolled-back cache to
@@ -5951,12 +5991,15 @@ class BatchedEngine:
                         mx.synchronize()
                         primary_h = _hid_corr[:, -1:, :]
 
-                # Emit "length" finish chunk when max_tokens exhausted
-                detokenizer.finalize()
-                _remaining = detokenizer.last_segment
-                if _remaining:
-                    _put((_remaining, len(generated), None, None))
-                _put(("", len(generated), "length", None))
+                # Emit "length" finish chunk only when max_tokens exhausted naturally.
+                # If the loop broke early (stop/cancel), a terminal chunk was already
+                # emitted inside the loop — skip the spurious second one.
+                if not _early_stop:
+                    detokenizer.finalize()
+                    _remaining = detokenizer.last_segment
+                    if _remaining:
+                        _put((_remaining, len(generated), None, None))
+                    _put(("", len(generated), "length", None))
             except Exception as e:
                 logger.error(f"MTP streaming generation failed: {e}", exc_info=True)
                 # Finalize detokenizer to flush partial UTF-8 bytes before
