@@ -98,6 +98,7 @@ class ToolCallStreamer:
         self._state = StreamState.TEXT
         self._buffer = ""
         self._json_buffer = ""  # Accumulated JSON inside tool call
+        self._pending_json_text = ""  # Saved JSON when closing tag is split across tokens
 
     @property
     def state(self) -> StreamState:
@@ -297,8 +298,13 @@ class ToolCallStreamer:
                 if remaining:
                     results.extend(self._handle_text_state(""))
             else:
-                # Partial closing tag — keep buffering
-                pass
+                # Partial closing tag (</tool_call without >) — switch to
+                # TAG_END state so the closing tag completion is tracked
+                # separately from the JSON body.  Save the completed JSON
+                # text so it can be parsed once the > arrives.
+                self._pending_json_text = json_text
+                self._buffer = after_close  # partial closing tag remainder
+                self._state = StreamState.TAG_END
 
         return results
 
@@ -306,7 +312,8 @@ class ToolCallStreamer:
         """Waiting for > to complete the closing </tool_call...> tag.
 
         This state is reached when we detect </tool_call but haven't
-        seen the closing > yet.
+        seen the closing > yet. _pending_json_text holds the JSON body
+        that was accumulated before the partial closing tag was detected.
         """
         results: list[StreamOutput] = []
         self._buffer += token
@@ -315,12 +322,26 @@ class ToolCallStreamer:
         if close_idx != -1:
             remaining = self._buffer[close_idx + 1:]
             self._buffer = ""
+
+            # Parse the saved JSON text now that we have the complete closing tag
+            json_text = getattr(self, '_pending_json_text', '')
+            self._pending_json_text = ''
+            self._json_buffer = ''
+
+            tool_call = self._parse_tool_json(json_text) if json_text else None
+            if tool_call:
+                results.append(StreamOutput(
+                    tool_call=tool_call,
+                    state=StreamState.TAG_END,
+                ))
+
             self._state = StreamState.TEXT
             if remaining:
-                results.extend(self._handle_text_state(""))
+                results.extend(self._handle_text_state(remaining))
         elif len(self._buffer) > self._flush_threshold:
-            # Not a valid closing tag
-            text = TOOL_CALL_CLOSE + self._buffer
+            # Not a valid closing tag — emit saved JSON + partial tag as text
+            text = getattr(self, '_pending_json_text', '') + TOOL_CALL_CLOSE + self._buffer
+            self._pending_json_text = ''
             self._buffer = ""
             self._state = StreamState.TEXT
             results.append(StreamOutput(text=text, state=self._state))
@@ -448,3 +469,4 @@ class ToolCallStreamer:
         self._state = StreamState.TEXT
         self._buffer = ""
         self._json_buffer = ""
+        self._pending_json_text = ""

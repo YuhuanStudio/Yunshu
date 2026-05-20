@@ -2708,10 +2708,18 @@ class EngineCore:
         """Convert chat messages to text using the model's chat template."""
         if self._tokenizer and hasattr(self._tokenizer, "apply_chat_template"):
             try:
-                clean = [
-                    {"role": m.get("role", "user"), "content": m.get("content", "")}
-                    for m in messages
-                ]
+                clean = []
+                for m in messages:
+                    content = m.get("content", "")
+                    # When content is a list (multimodal: text + image_url),
+                    # extract only text parts so apply_chat_template gets a string.
+                    if isinstance(content, list):
+                        text_parts = [
+                            p.get("text", "") for p in content
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        ]
+                        content = "\n".join(t for t in text_parts if t)
+                    clean.append({"role": m.get("role", "user"), "content": content})
                 kwargs: dict[str, Any] = {
                     "tokenize": False,
                     "add_generation_prompt": True,

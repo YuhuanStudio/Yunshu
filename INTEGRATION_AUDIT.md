@@ -37,6 +37,15 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-20 Wave 278 — Tool Call Streamer Split Tag, Multimodal Content Stripping, Mesh Thread Safety, VLM Temp File Cleanup)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 278: Tool call streamer 分段標籤修復 | `</tool_call` 跨 token 時不做狀態轉換，新 token 繼續追加到 json_buffer 導致 JSON 損壞。加入 TAG_END 狀態 + _pending_json_text 分離保存 | 工具調用解析 (HIGH) |
+| Wave 278: engine_core 多模態內容提取 | `_messages_to_text` 將 list content (text+image) 原樣傳給 chat template。加入 text part 提取，只傳文字內容 | VLM/多模態提示 (HIGH) |
+| Wave 278: Mesh manager 執行緒安全 | `get_cluster_status()`, `handle_node_failure()`, `setup_pipeline()` 存取 _topology.nodes 未持鎖。加入 _node_lock 保護 | 分散式競態 (HIGH) |
+| Wave 278: VLM 暫存檔清理執行緒安全 | `_cleanup_temp_files()` 讀取 _temp_files 未持鎖，stop() 可與生成並行執行。加入 snapshot+clear 模式 | 檔案洩漏 (MEDIUM) |
+
 ### 已完成修復 (2026-05-20 Wave 277 — Model Registry LRU Eviction, Hardware Detection, JSON Schema Repair, FAIR Scheduling)
 
 | 修復 | 描述 | 影響 |

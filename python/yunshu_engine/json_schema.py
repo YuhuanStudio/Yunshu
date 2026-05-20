@@ -845,8 +845,9 @@ class JsonSchemaConstraint:
                     i += 1
                     if self._state == JsonState.NUMBER_ZERO:
                         # Leading zero followed by digit is invalid JSON (e.g., "07").
-                        # Complete the current number as "0" and skip the stray digit.
-                        # Do NOT try to start a new value — there is no separator.
+                        # Complete the current number as "0". The stray digit is
+                        # consumed (advanced past) since there is no separator —
+                        # generating invalid JSON is a model error, not a parser bug.
                         self._value_completed()
                         self._number_seen_digit = False
                         continue

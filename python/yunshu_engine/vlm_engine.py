@@ -2463,7 +2463,12 @@ class VLMEngine:
 
     def _cleanup_temp_files(self, files: list[str] | None = None) -> None:
         import shutil
-        targets = files if files is not None else self._temp_files
+        if files is not None:
+            targets = files
+        else:
+            with self._temp_files_lock:
+                targets = list(self._temp_files or [])
+                self._temp_files = []
         if targets:
             for path in targets:
                 try:

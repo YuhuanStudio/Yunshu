@@ -188,21 +188,23 @@ class MeshManager:
             self._pipeline = PipelineParallel(num_layers, 1)
             return self._pipeline
 
-        node_mems = [
-            n.capabilities.total_memory_gb * 0.7  # Reserve 30% for activations
-            for n in self._topology.nodes
-            if n.state == MeshNodeState.READY
-        ]
+        with self._node_lock:
+            node_mems = [
+                n.capabilities.total_memory_gb * 0.7  # Reserve 30% for activations
+                for n in self._topology.nodes
+                if n.state == MeshNodeState.READY
+            ]
+            topo_size = self._topology.size
 
         self._pipeline = auto_partition_model(
             num_layers=num_layers,
-            num_nodes=self._topology.size,
+            num_nodes=topo_size,
             node_memory_gb=node_mems,
             model_memory_per_layer_gb=model_memory_per_layer_gb,
         )
 
         logger.info(
-            f"Pipeline: {num_layers} layers across {self._topology.size} nodes: "
+            f"Pipeline: {num_layers} layers across {topo_size} nodes: "
             f"{[s.num_layers for s in self._pipeline.stages]}"
         )
         return self._pipeline
@@ -298,8 +300,12 @@ class MeshManager:
         hb = getattr(self, '_heartbeat_mon', None)
         health = hb.check_health() if hb else {}
 
+        with self._node_lock:
+            nodes_snapshot = list(self._topology.nodes)
+        local_node_id = self._local_node.node_id if self._local_node else ""
+
         nodes = []
-        for n in self._topology.nodes:
+        for n in nodes_snapshot:
             info = n.to_dict()
             info["healthy"] = health.get(n.node_id, True)
             nodes.append(info)
@@ -309,8 +315,8 @@ class MeshManager:
         # The health dict only tracks peers, not the local node, so always
         # count the local node as healthy when present in the node list.
         local_is_in_nodes = any(
-            n.node_id == (self._local_node.node_id if self._local_node else "")
-            for n in self._topology.nodes
+            n.node_id == local_node_id
+            for n in nodes_snapshot
         )
         if health:
             healthy_count = sum(1 for h in health.values() if h)
@@ -329,25 +335,24 @@ class MeshManager:
 
     def handle_node_failure(self, node_id: str) -> None:
         """Handle a node failure — update topology, log event."""
-        # Avoid looking up via re-ranked index; search by node_id directly
-        failed_node = None
-        for n in self._topology.nodes:
-            if n.node_id == node_id:
-                failed_node = n
-                break
-        if failed_node:
-            failed_node.mark_unhealthy(reason="node_failure")
-            self._publish_event("node_state_change", node_id, {
-                "new_state": "offline",
-                "reason": "failure",
-            })
-            logger.warning(f"Node failure: {failed_node.hostname} ({node_id})")
-            # Re-evaluate topology
-            if self._topology.size > 1:
-                new_type = self._topology.auto_select()
-                if new_type != self._topology.topo_type:
-                    self._topology.topo_type = new_type
-                    logger.info(f"Topology changed to {new_type.value} after node failure")
+        with self._node_lock:
+            failed_node = None
+            for n in self._topology.nodes:
+                if n.node_id == node_id:
+                    failed_node = n
+                    break
+            if failed_node:
+                failed_node.mark_unhealthy(reason="node_failure")
+                self._publish_event("node_state_change", node_id, {
+                    "new_state": "offline",
+                    "reason": "failure",
+                })
+                logger.warning(f"Node failure: {failed_node.hostname} ({node_id})")
+                if self._topology.size > 1:
+                    new_type = self._topology.auto_select()
+                    if new_type != self._topology.topo_type:
+                        self._topology.topo_type = new_type
+                        logger.info(f"Topology changed to {new_type.value} after node failure")
 
     def _on_peer_discovered(self, node: MeshNode) -> None:
         """Callback: new peer discovered."""
