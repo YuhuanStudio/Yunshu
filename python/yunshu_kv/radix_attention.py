@@ -614,7 +614,8 @@ class RadixTree:
             for child in node.children.values():
                 _walk(child, depth + 1)
 
-        _walk(self.root, 0)
+        with self._lock:
+            _walk(self.root, 0)
         match_rate = (self._match_hits / self._match_total) if self._match_total > 0 else 0.0
         return {
             "total_nodes": self._total_nodes,

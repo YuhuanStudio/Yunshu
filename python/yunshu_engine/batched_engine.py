@@ -4601,8 +4601,9 @@ class BatchedEngine:
                     break
                 _effective_spec_K = max(1, remaining - 1)
 
+            _spec_target_trimmed = False  # Set by _spec_step if SP-PEN trims target cache
+
             def _spec_step():
-                # generate_draft: current_ids is [1,1] single token.
                 # First iteration: last prompt token (already in cache from prefill,
                 # so forward pass advances the cache by 1 and returns logits).
                 # Subsequent iterations: last accepted/bonus token.
@@ -4631,8 +4632,8 @@ class BatchedEngine:
                     import mlx.core as _sp_mx
                     K_local = len(draft_result.token_ids)
                     ac = verify_result.accepted_count
-                    if ac < K_local:
-                        # Trim rejected entries from target cache
+                    _already_trimmed = K_local > 0 and ac < K_local
+                    if _already_trimmed:
                         from mlx_lm.models.cache import trim_prompt_cache
                         _trim_n = K_local - ac
                         try:
@@ -4641,9 +4642,11 @@ class BatchedEngine:
                             for _c in target_cache:
                                 if hasattr(_c, "trim"):
                                     _c.trim(_trim_n)
+                        nonlocal _spec_target_trimmed
+                        _spec_target_trimmed = True
                     # Feed last accepted token (or current_ids if none accepted) to get bonus logits
                     _bonus_input = mx.array([[verify_result.accepted_ids[-1]]]) if verify_result.accepted_ids else current_ids
-                    _bonus_out = self._model(_bonus_input, cache=target_cache)
+                    _bonus_out = self._spec_decoder.target(_bonus_input, cache=target_cache)
                     _bonus_logits = _bonus_out.logits if hasattr(_bonus_out, 'logits') else _bonus_out
                     _bonus_logits = _bonus_logits[0, -1, :]
                     # Build token history: prompt + all generated so far + accepted drafts
@@ -4655,8 +4658,15 @@ class BatchedEngine:
                         presence_penalty=presence_penalty,
                         logit_bias=logit_bias,
                     )
-                    # Re-sample bonus token from penalized logits
-                    _bonus_id = int(_sp_mx.argmax(_bonus_logits).item())
+                    # Re-sample bonus token from penalized logits using configured sampler
+                    from mlx_lm.sample_utils import make_sampler as _make_sp_sampler
+                    _sp_sampler = _make_sp_sampler(
+                        temperature=temperature,
+                        top_p=top_p,
+                        top_k=top_k if top_k and top_k > 0 else -1,
+                        min_p=min_p if min_p and min_p > 0 else 0.0,
+                    )
+                    _bonus_id = int(_sp_sampler(_sp_mx.expand_dims(_bonus_logits, axis=(0, 1))).item())
                     # Overwrite bonus token in verify_result (simple reconstruction)
                     verify_result = type(verify_result)(
                         accepted_count=verify_result.accepted_count,
@@ -4802,11 +4812,12 @@ class BatchedEngine:
             def _update_caches():
                 nonlocal draft_snap
 
-                if accepted_count < K:
+                if accepted_count < K and not _spec_target_trimmed:
                     # Partial acceptance: trim target cache to remove rejected entries.
                     # verify_draft fed K+1 tokens (last_tok + K drafts).
                     # We want to keep: last_tok + accepted_count drafts = accepted_count + 1
                     # Trim: (K+1) - (accepted_count + 1) = K - accepted_count entries.
+                    # Skip if SP-PEN already trimmed in _spec_step.
                     from mlx_lm.models.cache import trim_prompt_cache
                     trim_count = K - accepted_count
                     try:

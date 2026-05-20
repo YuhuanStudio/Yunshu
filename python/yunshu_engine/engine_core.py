@@ -1889,6 +1889,8 @@ class EngineCore:
                                 await p
                             except (asyncio.CancelledError, Exception):
                                 pass
+                        # Check BOTH tasks — they may have completed simultaneously
+                        # Cancel check takes precedence (avoids yielding output after abort)
                         if _cancel_waiter in done:
                             if isinstance(cancel_event, asyncio.Event):
                                 _cancelled = cancel_event._value
@@ -1897,6 +1899,13 @@ class EngineCore:
                             if _cancelled:
                                 break
                             # Poll interval expired but not cancelled — retry
+                            # But also consume any output that arrived simultaneously
+                            if _get_task in done:
+                                output = _get_task.result()
+                                if output is not None:
+                                    yield output
+                                    if output.finished:
+                                        break
                             continue
                         if _get_task in done:
                             output = _get_task.result()

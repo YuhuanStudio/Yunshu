@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–327b: 42 waves, 825+ bugs fixed. Latest: Wave 327b — grammar constraint advance in draft loop, LoRA fast path (generate+stream), engine_core threading.Event polling loop, json_schema definitions _seen_refs copy, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–328: 43 waves, 840+ bugs fixed. Latest: Wave 328 — SP-PEN wrong model ref+argmax sampler, double-trim target cache guard, kv_offload double-free via evict_and_free, scheduler O(n*log n) preemption sort + fail_all waiting queue, VLM repetition_penalty full history, stream_outputs simultaneous cancel+output race, radix get_stats lock, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,20 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 328 — 10 HIGH/MEDIUM fixes from 8 parallel agents: SP-PEN model ref + sampler, double-trim guard, kv_offload double-free, scheduler preemption O(n*log n) + waiting queue fail, VLM repetition_penalty, stream_outputs race, radix get_stats lock)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| SP-PEN uses self._model instead of self._spec_decoder.target | bonus forward pass 用錯模型 → 使用非 target 模型推導 logits | 推測解碼輸出錯誤 (CRITICAL) |
+| SP-PEN uses argmax instead of configured sampler | bonus token 固定取 argmax → 溫度/top_p/top_k 設定全部無效 | 推測解碼品質差 (HIGH) |
+| SP-PEN double-trim target cache | _spec_step 和 _update_caches 都會 trim target_cache → 過度 trim 導致 KV 狀態不一致 | KV 損壞 (HIGH) |
+| _free_hot_block manual ref_count corruption | 手動操作 ref_count + free_queue.append → 可能 double-free block | 記憶體損壞 (HIGH) |
+| _preempt_lowest_priority O(n*count) | 每次迴圈掃描所有 running → count 次 full scan = O(n*count) | 效能問題 (HIGH) |
+| fail_all_requests ignores waiting queue | 只 fail running，waiting queue 請求 collector 永遠等不到 sentinel → hang | 請求 hang (HIGH) |
+| VLM repetition_penalty only last 20 tokens | tokens[-20:] 忽略更早出現的 token → 重複懲罰不完整 | 輸出品質差 (MEDIUM) |
+| stream_outputs cancel+output simultaneous race | cancel_waiter done 時未檢查 get_task 是否也 done → 輸出丟失 | 輸出丟失 (MEDIUM) |
+| radix_attention get_stats no lock | 讀取 tree 不持鎖 → 併發修改時統計不一致 | 統計錯誤 (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 327b — remaining Wave 327 findings, 5 fixes: grammar advance in draft, LoRA fast path, threading.Event polling, json_schema _seen_refs)
 

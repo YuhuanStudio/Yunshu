@@ -1128,26 +1128,21 @@ class KVOffloadManager:
     def _free_hot_block(self, hot_mgr: Any, block_hash: int) -> None:
         """Evict and free a hot-tier block after successful offload.
 
-        Without this, the block remains in the hot tier consuming memory
-        even though its data has been safely moved to a lower tier.
+        Uses evict_and_free() instead of manual ref_count manipulation
+        to avoid inflating the free block count (double-free) when
+        ref_count was already 0 after _evict_cached_block_unlocked.
         """
         if hot_mgr is None:
             return
         pool = getattr(hot_mgr, 'block_pool', None)
         if pool is None:
             return
-        with pool._lock:
-            block = pool._hash_to_block.get(block_hash)
-            if block is None:
-                return
-            if block.ref_count > 1:
-                return
-            pool._evict_cached_block_unlocked(block)
-            if block.ref_count == 1:
-                block.ref_count = 0
-                pool.free_queue.append(block)
-            elif block.ref_count == 0:
-                pool.free_queue.append(block)
+        block = pool.lookup_hash(block_hash)
+        if block is None:
+            return
+        if block.ref_count > 1:
+            return
+        pool.evict_and_free(block)
 
     async def _wait_for_completion(self, request_id: str) -> OffloadResult:
         """Wait for an offload request to complete.

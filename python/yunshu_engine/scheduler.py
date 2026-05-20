@@ -1975,57 +1975,42 @@ class Scheduler:
         Caps individual requests at _MAX_PREEMPTIONS_PER_REQUEST to prevent
         livelock where the same request is preempted and re-inserted every step.
 
+        Single-sort optimization: builds a sorted candidate list once instead
+        of scanning all running requests count times (O(n log n) vs O(n*count)).
+
         Args:
             count: Number of requests to preempt.
 
         Returns:
             Number of requests actually preempted.
         """
-        preempted = 0
-        for _ in range(count):
-            if not self.running:
-                break
+        if not self.running or count <= 0:
+            return 0
 
-            # Exclude requests already preempted too many times, and requests
-            # pending abort (preempting an aborted request wastes KV extraction
-            # work and can cause the abort to miss the request if it's been
-            # moved from running to waiting between _process_aborts and here).
-            eligible = {
-                rid for rid in self.running
-                if self.running[rid].num_preemptions < self._MAX_PREEMPTIONS_PER_REQUEST
-                and rid not in self._pending_abort_ids
-            }
-            if not eligible:
-                break
+        # Build sorted candidate list: prefill first, then decode.
+        # Within each group: lowest priority first, newest arrival first.
+        def _sort_key(rid: str) -> tuple:
+            req = self.running[rid]
+            is_decode = 1 if req.output_token_ids else 0
+            return (is_decode, req.sampling_params.priority, -req.arrival_time)
 
-            # Find lowest-priority running request, preferring prefill-stage
-            # requests over decode-stage to avoid discarding generated tokens.
-            prefill_candidates = [
-                rid for rid in eligible
-                if not self.running[rid].output_token_ids
-            ]
-            if prefill_candidates:
-                victim_id = min(
-                    prefill_candidates,
-                    key=lambda rid: (
-                        self.running[rid].sampling_params.priority,
-                        -self.running[rid].arrival_time,
-                    ),
-                )
-            else:
-                # All eligible requests are in decode stage — last resort
-                victim_id = min(
-                    eligible,
-                    key=lambda rid: (
-                        self.running[rid].sampling_params.priority,
-                        -self.running[rid].arrival_time,
-                    ),
-                )
-            victim = self.running.pop(victim_id)
-            self._preempt_request(victim)
-            preempted += 1
+        eligible = [
+            rid for rid in self.running
+            if self.running[rid].num_preemptions < self._MAX_PREEMPTIONS_PER_REQUEST
+            and rid not in self._pending_abort_ids
+        ]
+        if not eligible:
+            return 0
 
-        return preempted
+        eligible.sort(key=_sort_key)
+        to_preempt = eligible[:count]
+
+        for victim_id in to_preempt:
+            victim = self.running.pop(victim_id, None)
+            if victim is not None:
+                self._preempt_request(victim)
+
+        return len(to_preempt)
 
     def _preempt_request(self, request: Request) -> None:
         """Preempt a running request and return it to the waiting queue.
@@ -3488,7 +3473,7 @@ class Scheduler:
         return SequenceStateMachine(transitions, initial="normal")
 
     def fail_all_requests(self) -> list[str]:
-        """Fail all active requests (error recovery)."""
+        """Fail all active requests (running + waiting queue) for error recovery."""
         failed = list(self.running.keys())
         for req_id in failed:
             req = self.running.get(req_id)
@@ -3498,6 +3483,14 @@ class Scheduler:
                     0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
                 )
         self.running.clear()
+
+        # Also fail waiting queue requests — they have collectors that need sentinels
+        while self.waiting:
+            req = self.waiting.pop()
+            if req is not None:
+                req.set_finished(RequestStatus.FINISHED_ERROR, reason="error")
+                failed.append(req.request_id)
+
         self._uid_to_req.clear()
         return failed
 

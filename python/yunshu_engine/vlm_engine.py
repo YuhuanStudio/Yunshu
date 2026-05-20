@@ -1621,7 +1621,7 @@ class VLMEngine:
 
                 if has_penalty:
                     if repetition_penalty != 1.0:
-                        ctx = list(set(tokens[-20:]))
+                        ctx = list(set(tokens))
                         sel = logits[..., ctx]
                         sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
                         logits = logits.at[..., mx.array(ctx)].set(sel)
@@ -2238,7 +2238,7 @@ class VLMEngine:
 
             if has_penalty:
                 if repetition_penalty != 1.0:
-                    ctx = list(set(tokens_list[-20:]))
+                    ctx = list(set(tokens_list))
                     sel = logits[..., ctx]
                     sel = mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
                     logits = logits.at[..., mx.array(ctx)].set(sel)
