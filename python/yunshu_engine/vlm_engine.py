@@ -351,14 +351,14 @@ class VLMEngine:
 
         # Wave 61: MultimodalPipelineCoordinator — unified 7-stage pipeline
         from .staged_pipeline import (
-            MultimodalPipelineCoordinator, PipelineStage, PipelineRequest,
+            MultimodalPipelineCoordinator,
         )
         self._pipeline = MultimodalPipelineCoordinator()
         self._register_pipeline_processors()
 
         # Wave 43: Async concurrent VLM engine (opt-in via YUNSHU_VLM_ASYNC=1)
         self._async_core = None
-        import yunshu_engine.vlm_async_engine as _vae  # ensure module is loaded
+        import yunshu_engine.vlm_async_engine  # ensure module is loaded
 
     @property
     def model_name(self) -> str:
