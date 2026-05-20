@@ -74,7 +74,7 @@ class MeshTopology:
                 rank = node.rank
             else:
                 # Assign the first unused rank (handles sparse rank maps).
-                rank = len(self._nodes)
+                rank = 0
                 while rank in self._rank_map:
                     rank += 1
             # Use node's own lock for rank assignment so concurrent

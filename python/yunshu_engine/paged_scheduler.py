@@ -193,7 +193,9 @@ class PagedScheduler(Scheduler):
                                 if req.batch_uid is not None and req.batch_uid not in self._uids_to_remove:
                                     self._uids_to_remove.append(req.batch_uid)
                                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_oom")
-                                self.abort_request(req_id)
+                                self.running.pop(req_id, None)
+                                self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
+                                self._finalize_request_blocks(req_id)
 
     def _finalize_request_blocks(self, req_id: str) -> None:
         """Cache completed blocks and free the block table for a finished request.

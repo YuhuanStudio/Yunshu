@@ -246,6 +246,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
                     timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
                 )
                 text = result.text
                 pt = result.prompt_tokens
@@ -288,6 +289,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
                     timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
                 )
                 text = state.generated_text
                 pt = state.prompt_token_count
@@ -479,6 +481,7 @@ async def _stream_completion(
                 logits_processors=req.logits_processors,
                 cancel_event=_comp_cancel_evt,
                 timeout_seconds=req.timeout,
+                lora_adapter=loaded_adapter,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -566,6 +569,7 @@ async def _stream_completion(
                 logits_processors=req.logits_processors,
                 cancel_event=_comp_cancel_evt,
                 timeout_seconds=req.timeout,
+                lora_adapter=loaded_adapter,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens

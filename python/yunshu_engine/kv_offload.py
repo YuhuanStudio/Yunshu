@@ -1136,13 +1136,12 @@ class KVOffloadManager:
         pool = getattr(hot_mgr, 'block_pool', None)
         if pool is None:
             return
-        block = pool.lookup_hash(block_hash)
-        if block is None:
-            return
-        # Only free if block has no active request references
-        if block.ref_count > 1:
-            return
         with pool._lock:
+            block = pool._hash_to_block.get(block_hash)
+            if block is None:
+                return
+            if block.ref_count > 1:
+                return
             pool._evict_cached_block_unlocked(block)
             if block.ref_count == 1:
                 block.ref_count = 0

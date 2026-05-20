@@ -39,7 +39,7 @@ class FakeReqOutput:
 
 class FakeScheduler:
     def __init__(self):
-        self._waiting = []
+        self.waiting = []
         self._requests = {}
 
     def add_request(self, req):
@@ -152,7 +152,7 @@ class TestProfilingMixin:
     def test_captures_samples(self):
         p = ProfilingMixin()
         sched = FakeScheduler()
-        sched._waiting = [MagicMock()]  # has waiting requests = prefill
+        sched.waiting = [MagicMock()]  # has waiting requests = prefill
         p.pre_step(sched)
         p.post_step(sched, FakeOutput([FakeReqOutput()]))
         assert len(p._samples) == 1
@@ -161,7 +161,7 @@ class TestProfilingMixin:
     def test_decode_phase_detection(self):
         p = ProfilingMixin()
         sched = FakeScheduler()
-        sched._waiting = []  # no waiting = decode phase
+        sched.waiting = []  # no waiting = decode phase
         p.pre_step(sched)
         p.post_step(sched, FakeOutput([FakeReqOutput()]))
         assert p._samples[0].phase == "decode"
@@ -182,7 +182,7 @@ class TestProfilingMixin:
     def test_get_stats(self):
         p = ProfilingMixin()
         sched = FakeScheduler()
-        sched._waiting = [MagicMock()]
+        sched.waiting = [MagicMock()]
         p.pre_step(sched)
         p.post_step(sched, FakeOutput([FakeReqOutput()]))
         stats = p.get_stats()
@@ -192,7 +192,7 @@ class TestProfilingMixin:
     def test_export_traces(self):
         p = ProfilingMixin()
         sched = FakeScheduler()
-        sched._waiting = [MagicMock()]
+        sched.waiting = [MagicMock()]
         p.pre_step(sched)
         p.post_step(sched, FakeOutput([FakeReqOutput()]))
         traces = p.export_traces()
@@ -203,7 +203,7 @@ class TestProfilingMixin:
     def test_memory_snapshot(self):
         p = ProfilingMixin()
         sched = FakeScheduler()
-        sched._waiting = [MagicMock()]
+        sched.waiting = [MagicMock()]
         p.pre_step(sched)
         # MLX may not be available in test, memory fields default to 0
         p.post_step(sched, FakeOutput([FakeReqOutput()]))

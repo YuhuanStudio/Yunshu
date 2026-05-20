@@ -253,6 +253,10 @@ class RadixTree:
             # the split point.  Give the child a reference to it.
             boundary_block = new_node.blocks[-1]
             child.blocks.insert(0, boundary_block)
+            if new_node.block_hashes:
+                child.block_hashes.insert(0, new_node.block_hashes[-1])
+            else:
+                child.block_hashes.insert(0, 0)
 
         # Ref-count bookkeeping after split.
         # Before the split, child had ref_count R meaning R requests'

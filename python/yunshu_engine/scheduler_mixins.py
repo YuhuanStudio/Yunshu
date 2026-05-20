@@ -201,7 +201,7 @@ class ProfilingMixin(SchedulerMixin):
             logger.debug("operation failed", exc_info=True)
 
         phase = "decode"
-        if hasattr(scheduler, '_waiting') and scheduler._waiting:
+        if hasattr(scheduler, 'waiting') and scheduler.waiting:
             phase = "prefill"
 
         sample = ProfilingSample(

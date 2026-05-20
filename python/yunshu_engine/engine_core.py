@@ -1720,6 +1720,7 @@ class EngineCore:
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._finalize_request(req_id)
+            self._fail_dedup_shadows(req_id, f"Scheduler rejected: {error_reason}", "error")
             return req_id
 
         # Wake engine loop from idle sleep (event-driven scheduling)
@@ -2522,6 +2523,7 @@ class EngineCore:
                                             ))
                                             _sc.put(None)
                                         self._signal_finished(_sid)
+                                        self._finalize_request(_sid)
                                 self._signal_finished(rid)
                                 self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
                                 # Request is fully finalized — skip remaining per-output

@@ -2171,13 +2171,14 @@ async def _stream_response(
                 logits_processors=req.logits_processors,
                 cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
+                lora_adapter=loaded_adapter,
             ):
                 token_text = output.new_text
                 # vLLM pattern: emit prefill progress as SSE comment for
                 # client-side progress bars during long chunked prefills.
                 _pf_prog = getattr(output, 'prefill_progress', None)
                 if _pf_prog is not None:
-                    yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
+                    yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n"
                     continue  # progress outputs carry no text
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason

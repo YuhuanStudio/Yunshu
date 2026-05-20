@@ -485,6 +485,9 @@ class MeshManager:
                 self._dp_router.remove_node(node.node_id)
             if self._rtt_router:
                 self._rtt_router.remove_node(node.node_id)
+            hb = getattr(self, '_heartbeat_mon', None)
+            if hb:
+                hb.remove_node(node.node_id)
         self._publish_event("node_leave", node.node_id, {"hostname": node.hostname})
 
     def _on_node_timeout(self, node: MeshNode) -> None:
@@ -538,24 +541,19 @@ class MeshManager:
                 self._dp_router.remove_node(node.node_id)
             if self._rtt_router:
                 self._rtt_router.remove_node(node.node_id)
+            hb = getattr(self, '_heartbeat_mon', None)
+            if hb:
+                hb.remove_node(node.node_id)
         self.handle_node_failure(node.node_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
         _event = None
         with self._node_lock:
-            # Guard: skip if node is already READY (duplicate recovery callback).
-            # Read state under the node's lock for thread safety.
-            with node._lock:
-                current_state = node.state
-            if current_state == MeshNodeState.READY:
-                return
             # Cancel any pending retry task for this node
             retry_task = self._retry_tasks.pop(node.node_id, None)
             if retry_task and not retry_task.done():
                 retry_task.cancel()
-            # Use mark_healthy to go through RECOVERING → READY path
-            node.mark_healthy()
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
                 topo_node.mark_healthy()

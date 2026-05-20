@@ -162,7 +162,11 @@ class RTTAwareRouter:
             node = self._nodes.get(node_id)
             if node:
                 node.healthy = True
-                logger.info("Node %s marked healthy, re-enabled for routing", node_id)
+                node.rtt_ema = 0.0
+                node.rtt_var = 0.0
+                node.probe_count = 0
+                node.last_probe = 0.0
+                logger.info("Node %s marked healthy, RTT measurements reset", node_id)
 
     def route(self, exclude: set[str] | None = None) -> RoutingScore | None:
         """Select the best node for a new request."""

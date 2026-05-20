@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–326: 41 waves, 800+ bugs fixed. Latest: Wave 326 — 8-agent deep audit, 11+ fixes (engine_core dedup hash remapping, shadow guard fix, completions prefill-progress .encode(), gateway LoRA lifecycle passthrough (8 call sites), spec decode cancel between draft/verify, video_engine LoRA TOCTOU race), 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–327: 42 waves, 815+ bugs fixed. Latest: Wave 327 — 8-agent deep audit, 18+ fixes (engine_core dedup shadow hang, batched_engine spec decode _prev_constraint + uninit vars, mesh recovery callback short-circuit, gateway LoRA passthrough 12 sites (completions+anthropic+chat streaming), radix tree split block_hashes desync, kv_offload TOCTOU, paged_scheduler abort mid-step, profiling mixin _waiting attr, mesh heartbeat remove_node, RTT reset on recovery, topology rank reuse), 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,24 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 327 — 8 parallel agents, 60+ found, 18+ fixes: engine_core shadow hang, batched_engine spec decode, mesh recovery, gateway LoRA 12 sites, radix split block_hashes, kv_offload TOCTOU, paged_scheduler abort, profiling _waiting, heartbeat remove_node, RTT reset, topology rank)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| engine_core scheduler rejection shadow hang | _fail_dedup_shadows 未呼叫 → shadow consumers 永久等待 | 請求掛死 (CRITICAL) |
+| batched_engine _prev_constraint undefined | 非串流 spec decode 錯誤路徑 NameError 崩潰 | 伺服器崩潰 (CRITICAL) |
+| batched_engine streaming spec uninit vars | generated_tokens/detokenizer/prompt_tokens 未初始化 | 串流 spec 崩潰 (CRITICAL) |
+| mesh recovery callback short-circuits | _recv_loop 已 mark_healthy → _on_node_recovered 提前返回 → dp/rtt/disagg 路由永久禁用 | 容量損失 (CRITICAL) |
+| gateway LoRA passthrough 12 sites | completions (4) + anthropic (4) + chat streaming batched 未傳 lora_adapter | LoRA 靜默失效 (HIGH) |
+| radix tree split block_hashes desync | boundary block 未插入 block_hashes → merge 時 hash/block 錯位 | 前綴快取損壞 (HIGH) |
+| kv_offload _free_hot_block TOCTOU | lookup_hash 在鎖外 → block 被併發 allocator 偷走 | GPU 記憶體損壞 (HIGH) |
+| paged_scheduler abort mid-step | abort_request 延遲處理 → 當前步浪費 GPU + 下一步 double-cleanup | GPU 浪費 (HIGH) |
+| profiling mixin _waiting attr | 檢查 _waiting (不存在) → phase 永遠 decode | 監控失準 (MEDIUM) |
+| heartbeat remove_node | 無 remove_node → 移除節點持續觸發 timeout callback | 資源洩漏 (HIGH) |
+| RTT router mark_healthy reset | 恢復未重置 RTT → 過時數據影響路由 15-20 週期 | 路由次優 (MEDIUM) |
+| topology rank reuse | rank 從 len(_nodes) 開始而非 0 → 低編號浪費 | 僅美觀 (LOW) |
+| anthropic LoRA lifecycle restructure | 移動 acquire 到分流前，移除內部重複 acquire/release | 雙重 acquire 防止 (HIGH) |
 
 ### 已完成修復 (2026-05-21 Wave 326 — 8 parallel agents, 60+ found, 11+ fixes: engine_core dedup hash remap, shadow guard, completions .encode(), gateway LoRA passthrough 8 sites, spec decode cancel, video LoRA TOCTOU)
 

@@ -605,9 +605,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             },
         )
 
+    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
+
     if req.stream:
         return StreamingResponse(
-            _stream_anthropic(engine, messages, req, stop, request, is_batched=is_batched, temp_files=_temp_files),
+            _stream_anthropic(engine, messages, req, stop, request, is_batched=is_batched, temp_files=_temp_files, lora_adapter=loaded_adapter),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
@@ -625,11 +627,10 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     except Exception:
         _ns_tracker = None
 
-    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     try:
         if is_batched:
-            return await _non_stream_batched(engine, messages, req, stop, cancel_event=_ns_cancel_event)
-        return await _non_stream_legacy(engine, messages, req, stop, cancel_event=_ns_cancel_event)
+            return await _non_stream_batched(engine, messages, req, stop, cancel_event=_ns_cancel_event, lora_adapter=loaded_adapter)
+        return await _non_stream_legacy(engine, messages, req, stop, cancel_event=_ns_cancel_event, lora_adapter=loaded_adapter)
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _ns_tracker is not None:
@@ -685,7 +686,7 @@ def _convert_logit_bias(req):
     return None
 
 
-async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
+async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lora_adapter=None):
     """Non-streaming response via BatchedEngine."""
     from fastapi.responses import JSONResponse
     enable_thinking = req.thinking and req.thinking.get("type") == "enabled"
@@ -720,6 +721,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
             logits_processors=req.logits_processors,
             cancel_event=cancel_event,
             timeout_seconds=req.timeout,
+            lora_adapter=lora_adapter,
         )
     except MemoryError:
         return JSONResponse(
@@ -835,7 +837,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
     return JSONResponse(resp)
 
 
-async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
+async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lora_adapter=None):
     """Non-streaming response via Engine or BatchedEngine."""
     from fastapi.responses import JSONResponse
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -870,6 +872,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
             logits_processors=req.logits_processors,
             cancel_event=cancel_event,
             timeout_seconds=req.timeout,
+            lora_adapter=lora_adapter,
         )
     except MemoryError:
         return JSONResponse(
@@ -981,7 +984,8 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
 
 
 async def _stream_anthropic(
-    engine, messages, req, stop, request, is_batched=False, temp_files=None
+    engine, messages, req, stop, request, is_batched=False, temp_files=None,
+    lora_adapter=None,
 ) -> AsyncIterator[bytes]:
     """Anthropic SSE streaming with keepalive, disconnect detection, and tool-use deltas."""
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -1085,6 +1089,7 @@ async def _stream_anthropic(
                 logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event if _anth_gen else None,
                 timeout_seconds=req.timeout,
+                lora_adapter=lora_adapter,
             ):
                 # Use engine's current_state (token-level tracking) for
                 # thinking routing — more accurate than text-level ThinkingParser
@@ -1268,6 +1273,7 @@ async def _stream_anthropic(
                 logits_processors=req.logits_processors,
                 cancel_event=_anth_gen.cancel_event if _anth_gen else None,
                 timeout_seconds=req.timeout,
+                lora_adapter=lora_adapter,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens and not input_tokens:
                     input_tokens = output.prompt_tokens
@@ -1453,7 +1459,6 @@ async def _stream_anthropic(
         }
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
 
-    loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     try:
         async for event in with_sse_keepalive(
             _token_source(),
@@ -1486,7 +1491,7 @@ async def _stream_anthropic(
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
-        _release_lora_adapter(engine, loaded_adapter)
+        _release_lora_adapter(engine, lora_adapter)
         if _anth_tracker is not None:
             try:
                 _anth_tracker.unregister(message_id)

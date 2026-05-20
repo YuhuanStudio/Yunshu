@@ -4207,6 +4207,7 @@ class BatchedEngine:
                 _spec_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
             except Exception:
                 logger.warning("Grammar constraint setup failed for spec decode", exc_info=True)
+        _prev_constraint = self._spec_decoder.constraint
         self._spec_decoder.constraint = _spec_constraint
 
         def _run_spec():
@@ -4523,6 +4524,11 @@ class BatchedEngine:
         # current_ids is the last prompt token, which will be fed into both
         # caches by generate_draft and verify_draft respectively — no double-feed.
         current_ids = input_array[:, -1:]  # [1, 1] last prompt token
+
+        generated_tokens: list[int] = []
+        prompt_tokens = len(input_ids)
+        detokenizer = self._tokenizer.detokenizer
+        detokenizer.reset()
 
         try:
           _spec_ttft_ms_val = 0.0

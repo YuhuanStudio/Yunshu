@@ -95,6 +95,14 @@ class HeartbeatMonitor:
                 logger.debug("failed to close heartbeat socket", exc_info=True)
         logger.info("Heartbeat monitor stopped")
 
+    def remove_node(self, node_id: str) -> None:
+        """Remove a node from monitoring (called on permanent removal)."""
+        with self._nodes_lock:
+            self._nodes.pop(node_id, None)
+            self._last_heartbeat.pop(node_id, None)
+            self._missed_counts.pop(node_id, None)
+            self._timed_out.discard(node_id)
+
     def _send_loop(self) -> None:
         while self._running:
             if self._local_node and self._socket:
