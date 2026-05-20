@@ -277,6 +277,8 @@ class KVPrefixCache:
         self._pre_evict_callback: Any | None = None
         # Block eviction checker: callable(block_hash) -> bool (e.g., MemoryGuard.should_evict_block)
         self._block_evict_checker: Any | None = None
+        # Hash collision counter (vLLM pattern: verify token IDs on hash match)
+        self._hash_collisions: int = 0
 
     def add(
         self,
@@ -347,14 +349,39 @@ class KVPrefixCache:
         h = _token_hash(prompt_tokens)
         if h in self._hash_index:
             idx = self._hash_index[h]
-            cached = self._caches[idx]
-            matched = len(prompt_tokens)
-            result = self._snapshot_cache(cached)
-            self._touch(idx)
-            logger.info(
-                f"KV prefix cache exact hit: {matched}/{len(prompt_tokens)} tokens"
-            )
-            return result, 0, matched
+            # vLLM pattern: verify token IDs to detect hash collisions.
+            # A blake2b collision is astronomically unlikely but a bug in
+            # the hash function or a corrupted index could cause it, and
+            # reusing the wrong KV cache would produce garbage output.
+            cached_prompt = self._prompts[idx]
+            if len(cached_prompt) != len(prompt_tokens):
+                # Length mismatch means the hash collides with a different entry.
+                self._hash_collisions += 1
+                logger.warning(
+                    f"KV prefix cache hash collision detected (length mismatch: "
+                    f"query={len(prompt_tokens)}, cached={len(cached_prompt)}). "
+                    f"Falling back to scan."
+                )
+            else:
+                actual_prefix = get_prefix_length(prompt_tokens, cached_prompt)
+                if actual_prefix != len(prompt_tokens):
+                    # Tokens differ despite same hash — collision.
+                    self._hash_collisions += 1
+                    logger.warning(
+                        f"KV prefix cache hash collision detected (token mismatch: "
+                        f"matched={actual_prefix}/{len(prompt_tokens)}). "
+                        f"Falling back to scan."
+                    )
+                else:
+                    # Verified: tokens match the hash entry.
+                    cached = self._caches[idx]
+                    matched = len(prompt_tokens)
+                    result = self._snapshot_cache(cached)
+                    self._touch(idx)
+                    logger.info(
+                        f"KV prefix cache exact hit: {matched}/{len(prompt_tokens)} tokens"
+                    )
+                    return result, 0, matched
 
         # Medium path: hash-chain prefix index lookup
         query_blocks = _compute_block_hashes(np_array(prompt_tokens))
@@ -745,6 +772,7 @@ class KVPrefixCache:
             "min_prefix_length": self._min_prefix,
             "block_size": _BLOCK_SIZE,
             "eviction_strategy": type(self._eviction_strategy).__name__,
+            "hash_collisions": self._hash_collisions,
         }
         if self._ssd_cache is not None:
             try:

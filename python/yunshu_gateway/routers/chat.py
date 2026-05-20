@@ -1506,8 +1506,8 @@ async def _stream_vlm_response(
             _record_metrics(vlm_prompt_tok, vlm_completion_tok)
         metrics_recorded = True
 
-        yield format_openai_done()
         done_emitted = True
+        yield format_openai_done()
     done_emitted = False
     metrics_recorded = False
     try:
@@ -1669,8 +1669,8 @@ async def _stream_response_multi(
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
-                        yield format_openai_done()
                         done_emitted = True
+                        yield format_openai_done()
                         return
                     if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                         total_prompt_tok = output.prompt_tokens
@@ -1790,8 +1790,8 @@ async def _stream_response_multi(
                         yield _format_choice_chunk(
                             completion_id, req.model, choice_idx, "", "stop",
                         )
-                        yield format_openai_done()
                         done_emitted = True
+                        yield format_openai_done()
                         return
                     if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                         total_prompt_tok = output.prompt_tokens
@@ -1920,8 +1920,8 @@ async def _stream_response_multi(
                 reasoning_tokens=total_reasoning_tok,
                 cached_tokens=total_cached_tok,
             )
-        yield format_openai_done()
         done_emitted = True
+        yield format_openai_done()
     done_emitted = False
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
     try:
@@ -2396,8 +2396,8 @@ async def _stream_response(
                 cached_tokens=cached_tok,
             )
 
-        yield format_openai_done()
         done_emitted = True
+        yield format_openai_done()
     done_emitted = False
     try:
       async for event in with_sse_keepalive(

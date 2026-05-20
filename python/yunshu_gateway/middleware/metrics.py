@@ -301,6 +301,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                             pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
                             pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
                             pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
+                            # RadixTree blocks and match rate (SGLang pattern)
+                            pm.set_gauge("radix_tree_blocks", radix_stats.get("total_blocks", 0), labels=ml)
+                            pm.set_gauge("radix_tree_match_rate", radix_stats.get("match_rate", 0.0), labels=ml)
+                            pm.set_counter("radix_tree_match_total", radix_stats.get("match_total", 0), labels=ml)
+                            pm.set_counter("radix_tree_match_hits", radix_stats.get("match_hits", 0), labels=ml)
                             # Scheduler monitoring gauges from engine_core
                             try:
                                 core = getattr(eng, '_engine_core', None)

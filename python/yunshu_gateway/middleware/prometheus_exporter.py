@@ -391,6 +391,11 @@ class PrometheusMetrics:
             "yunshu_kv_prefix_cache_misses_total",
             "Total KV prefix cache misses",
         )
+        # KV prefix cache hash collision counter (vLLM pattern)
+        self._counters["kv_prefix_cache_hash_collisions"] = _Counter(
+            "yunshu_kv_prefix_cache_hash_collisions_total",
+            "Total hash collisions detected in KV prefix cache exact-match path",
+        )
 
         # RadixTree eviction counters (cumulative totals)
         self._counters["radix_evictions_lru"] = _Counter(
@@ -416,6 +421,23 @@ class PrometheusMetrics:
         self._gauges["radix_total_tokens"] = _Gauge(
             "yunshu_radix_total_tokens",
             "Total tokens stored in the RadixTree",
+        )
+        # RadixTree block and match rate gauges (SGLang pattern)
+        self._gauges["radix_tree_blocks"] = _Gauge(
+            "yunshu_radix_tree_blocks",
+            "Number of KV blocks in use by the RadixTree",
+        )
+        self._gauges["radix_tree_match_rate"] = _Gauge(
+            "yunshu_radix_tree_match_rate",
+            "RadixTree cache hit rate (fraction of matches with >=1 token matched)",
+        )
+        self._counters["radix_tree_match_total"] = _Counter(
+            "yunshu_radix_tree_match_total",
+            "Total RadixTree match() calls",
+        )
+        self._counters["radix_tree_match_hits"] = _Counter(
+            "yunshu_radix_tree_match_hits_total",
+            "Total RadixTree match() calls that matched >=1 token",
         )
 
         # Chunked prefill gauges (Wave 108)

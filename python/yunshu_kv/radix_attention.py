@@ -100,6 +100,9 @@ class RadixTree:
         self._eviction_strategy = eviction_strategy  # lru, lfu, fifo
         self._block_size = block_size
         self._eviction_stats = {"lru": 0, "lfu": 0, "fifo": 0, "total_freed_blocks": 0}
+        # Match statistics for Prometheus monitoring (SGLang pattern)
+        self._match_total: int = 0
+        self._match_hits: int = 0
         # Thread safety: all tree mutations are protected by a single lock.
         # Using threading.Lock (not RLock) for minimal overhead on hot paths.
         self._lock = threading.Lock()
@@ -153,6 +156,12 @@ class RadixTree:
                     break
 
             remaining = token_ids[pos:]
+            # Track match statistics (SGLang pattern for Prometheus export).
+            # A "hit" means at least one token was matched from the tree,
+            # avoiding a full prefill for the matched portion.
+            self._match_total += 1
+            if pos > 0:
+                self._match_hits += 1
             return node, remaining
 
     def _split_node(
@@ -551,6 +560,7 @@ class RadixTree:
                 _walk(child, depth + 1)
 
         _walk(self.root, 0)
+        match_rate = (self._match_hits / self._match_total) if self._match_total > 0 else 0.0
         return {
             "total_nodes": self._total_nodes,
             "total_blocks": total_blocks,
@@ -561,6 +571,9 @@ class RadixTree:
             "max_depth": max_depth,
             "eviction_strategy": self._eviction_strategy,
             "eviction_stats": dict(self._eviction_stats),
+            "match_total": self._match_total,
+            "match_hits": self._match_hits,
+            "match_rate": match_rate,
         }
 
 

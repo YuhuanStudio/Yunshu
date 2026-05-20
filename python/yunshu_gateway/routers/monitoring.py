@@ -387,6 +387,7 @@ async def prometheus_export(request: Request) -> str:
                         pm.set_gauge("kv_prefix_cache_entries", prefix.get("entries", 0), labels=ml)
                         pm.set_counter("kv_prefix_cache_hits", prefix.get("hits", 0), labels=ml)
                         pm.set_counter("kv_prefix_cache_misses", prefix.get("misses", 0), labels=ml)
+                        pm.set_counter("kv_prefix_cache_hash_collisions", prefix.get("hash_collisions", 0), labels=ml)
                 except Exception:
                     logger.debug("KV cache gauge population failed", exc_info=True)
 
@@ -402,6 +403,11 @@ async def prometheus_export(request: Request) -> str:
                         pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
                         pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
                         pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
+                        # RadixTree blocks and match rate (SGLang pattern)
+                        pm.set_gauge("radix_tree_blocks", radix_stats.get("total_blocks", 0), labels=ml)
+                        pm.set_gauge("radix_tree_match_rate", radix_stats.get("match_rate", 0.0), labels=ml)
+                        pm.set_counter("radix_tree_match_total", radix_stats.get("match_total", 0), labels=ml)
+                        pm.set_counter("radix_tree_match_hits", radix_stats.get("match_hits", 0), labels=ml)
                 except Exception:
                     logger.debug("RadixTree gauge population failed", exc_info=True)
 

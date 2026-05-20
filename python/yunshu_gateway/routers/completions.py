@@ -551,9 +551,9 @@ async def _stream_completion(
         if prompt_tok > 0 or _total_completion > 0:
             _record_metrics(prompt_tok, _total_completion)
 
-        yield format_openai_done()
         metrics_recorded = True
         _done_emitted = True
+        yield format_openai_done()
     metrics_recorded = False
     _done_emitted = False
     loaded_adapter = _apply_lora_adapter(engine, req.lora_adapter)
