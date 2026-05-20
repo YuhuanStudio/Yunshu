@@ -118,7 +118,7 @@ export default function AudioPage() {
         setStreamChunks(chunkCount);
         setStreamProgress(`Streaming... ${chunkCount} chunks received`);
       }
-      const blob = new Blob(chunks, { type: "audio/wav" });
+      const blob = new Blob(chunks as BlobPart[], { type: "audio/wav" });
       setAudioUrl(URL.createObjectURL(blob));
       setGenTime((performance.now() - start) / 1000);
       setStreamProgress(`Completed — ${chunkCount} chunks in ${((performance.now() - start) / 1000).toFixed(1)}s`);

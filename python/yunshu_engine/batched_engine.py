@@ -1831,6 +1831,30 @@ class BatchedEngine:
                 input_ids = [eos_id]
             prompt_tokens = len(input_ids)
 
+        # ── Context window truncation (fast path) ──
+        # The engine-loop path does this at add_request(), but the fast
+        # path bypasses that. Truncate from the left to keep the most
+        # recent context and leave room for generation tokens.
+        _max_ctx = getattr(model, 'max_seq_len', None)
+        if _max_ctx is None:
+            _max_ctx = getattr(
+                getattr(model, 'config', None), 'max_seq_len', None
+            ) or getattr(
+                getattr(model, 'args', None), 'max_seq_len', None
+            )
+        if _max_ctx and _max_ctx > 0 and prompt_tokens > _max_ctx:
+            _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+            _generation_budget = max_tokens + _thinking_overhead
+            _allowed = max(1, _max_ctx - _generation_budget)
+            _original_prompt_tokens = prompt_tokens
+            input_ids = input_ids[-_allowed:]
+            prompt_tokens = len(input_ids)
+            logger.warning(
+                "Fast path prompt truncated to fit context window: %d → %d tokens "
+                "(max_seq_len=%d, generation_budget=%d)",
+                _original_prompt_tokens, prompt_tokens, _max_ctx, _generation_budget,
+            )
+
         stop_ids = set()
         if hasattr(tokenizer, 'eos_token_id'):
             stop_ids.add(tokenizer.eos_token_id)
@@ -2962,6 +2986,30 @@ class BatchedEngine:
                 input_ids = [eos_id]
             prompt_tokens = len(input_ids)
 
+        # ── Context window truncation (streaming fast path) ──
+        # The engine-loop path does this at add_request(), but the
+        # streaming fast path bypasses that. Truncate from the left to
+        # keep the most recent context and leave room for generation.
+        _max_ctx = getattr(model, 'max_seq_len', None)
+        if _max_ctx is None:
+            _max_ctx = getattr(
+                getattr(model, 'config', None), 'max_seq_len', None
+            ) or getattr(
+                getattr(model, 'args', None), 'max_seq_len', None
+            )
+        if _max_ctx and _max_ctx > 0 and prompt_tokens > _max_ctx:
+            _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+            _generation_budget = max_tokens + _thinking_overhead
+            _allowed = max(1, _max_ctx - _generation_budget)
+            _original_prompt_tokens = prompt_tokens
+            input_ids = input_ids[-_allowed:]
+            prompt_tokens = len(input_ids)
+            logger.warning(
+                "Streaming fast path prompt truncated to fit context window: %d → %d tokens "
+                "(max_seq_len=%d, generation_budget=%d)",
+                _original_prompt_tokens, prompt_tokens, _max_ctx, _generation_budget,
+            )
+
         stop_ids = set()
         if hasattr(tokenizer, 'eos_token_id'):
             stop_ids.add(tokenizer.eos_token_id)
@@ -3253,7 +3301,7 @@ class BatchedEngine:
                                 _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         except Exception:
                             logger.debug("detokenizer finalize in timeout cancel failed", exc_info=True)
-                        _put(("", n_tok, "stop", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
+                        _put(("", n_tok, "timeout", len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         if _pipeline is not None:
                             _pipeline.finish()
                         if _prefill_tracker is not None:
@@ -3453,7 +3501,7 @@ class BatchedEngine:
                         prompt_tokens=prompt_tokens,
                         completion_tokens=n_tok,
                         finished=True,
-                        finish_reason="error",
+                        finish_reason="timeout",
                         error=f"Streaming timeout: no token for {timeout_seconds}s",
                         ttft_ms=round(_stream_ttft_box[0] * 1000, 1) if _stream_ttft_box[0] > 0 else 0.0,
                         cached_tokens=_cached_tokens_box[0],
@@ -3755,9 +3803,6 @@ class BatchedEngine:
             k = int(os.environ.get("YUNSHU_NGRAM_K", "5"))
             mode = os.environ.get("YUNSHU_NGRAM_MODE", "lps").strip()
             self._ngram_proposer = NgramProposer(NgramConfig(max_n=max_n, k=k, mode=mode))
-            # Also create unified SpecProposer wrapper
-            from .spec_proposer import NgramSpecProposer
-            self._spec_proposer = NgramSpecProposer(NgramConfig(max_n=max_n, k=k, mode=mode))
             logger.info(f"N-gram proposer initialized: max_n={max_n}, k={k}, mode={mode}")
 
         # Adaptive spec controller (requires N-gram proposer active)
@@ -4493,10 +4538,14 @@ class BatchedEngine:
 
         tokenizer = self._tokenizer
         model = self._model
-        proposer = self._ngram_proposer
-        # Reset cross-request state so indexed_len doesn't carry over from
-        # the previous request's token sequence.
-        proposer.reset()
+        # Create a per-request NgramProposer to avoid race conditions
+        # when concurrent requests call reset()/propose() on a shared instance.
+        from .ngram_proposer import NgramProposer as _NgramProposer, NgramConfig as _NgramConfig
+        proposer = _NgramProposer(_NgramConfig(
+            max_n=self._ngram_proposer.config.max_n,
+            k=self._ngram_proposer.config.k,
+            mode=self._ngram_proposer.config.mode,
+        ))
 
         # Handle messages-format prompts (list of dicts) — apply chat template
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
@@ -4951,8 +5000,14 @@ class BatchedEngine:
 
         tokenizer = self._tokenizer
         model = self._model
-        proposer = self._ngram_proposer
-        proposer.reset()
+        # Create a per-request NgramProposer to avoid race conditions
+        # when concurrent requests call reset()/propose() on a shared instance.
+        from .ngram_proposer import NgramProposer as _NgramProposer, NgramConfig as _NgramConfig
+        proposer = _NgramProposer(_NgramConfig(
+            max_n=self._ngram_proposer.config.max_n,
+            k=self._ngram_proposer.config.k,
+            mode=self._ngram_proposer.config.mode,
+        ))
 
         # Handle messages-format prompts (list of dicts) — apply chat template
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):

@@ -164,7 +164,7 @@ class TestSuffixProposer:
         assert len(result) > 0
         proposer.end("req-1")
 
-    def test_accept_updates_trie(self):
+    def test_accept_updates_generated_history(self):
         proposer = SuffixProposer(SuffixConfig(
             min_suffix_length=2, max_window=100, max_draft=5,
         ))
@@ -173,8 +173,8 @@ class TestSuffixProposer:
         proposer.accept([1, 2, 3, 4, 5], 5)
         # The generated history should now have these tokens
         assert proposer._generated["req-1"] == [1, 2, 3, 4, 5]
-        # Trie should be rebuilt
-        assert proposer._tries["req-1"].root.children != {}
+        # Trie is NOT rebuilt — draft() uses linear scan via _generated
+        assert proposer._tries["req-1"].root.children == {}
         proposer.end("req-1")
 
     def test_accept_partial(self):
@@ -256,14 +256,13 @@ class TestSuffixProposer:
             min_suffix_length=2, max_window=10, max_draft=5,
         ))
         proposer.begin("req-1")
-        # Accept more tokens than max_window
+        # Accept more tokens than max_window — _generated stores all
         long_tokens = list(range(100))
         proposer.accept(long_tokens, 100)
-        # Only last 10 should be in the trie
-        trie = proposer._tries["req-1"]
-        stats = trie.get_stats()
-        # Trie should have entries (from the windowed tokens)
-        assert stats["total_inserts"] > 0
+        # All 100 tokens are in _generated (the source for linear scan)
+        assert proposer._generated["req-1"] == long_tokens
+        # Trie is NOT rebuilt by accept() — draft() uses _generated directly
+        assert proposer._tries["req-1"].get_stats()["total_inserts"] == 0
         proposer.end("req-1")
 
     def test_code_pattern_repetition(self):

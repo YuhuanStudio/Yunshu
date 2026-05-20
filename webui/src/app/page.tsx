@@ -392,7 +392,7 @@ export default function DashboardPage() {
                   className="flex-1 bg-[var(--color-bg-tertiary)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[var(--color-accent)] min-w-0"
                 />
                 <button
-                  onClick={handleLoad}
+                  onClick={() => handleLoad()}
                   disabled={!loadInput.trim() || actionModelId !== null}
                   className="flex items-center gap-1 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
                 >

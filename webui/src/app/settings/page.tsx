@@ -86,6 +86,8 @@ export default function SettingsPage() {
     setTimeout(() => setCopiedIdx(-1), 2000);
   };
 
+  const baseUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:8000";
+
   const codeBlocks = [
     {
       label: "Start server",
@@ -103,8 +105,6 @@ export default function SettingsPage() {
       code: `from yunshu_sdk import YunshuClient\nclient = YunshuClient("${baseUrl}")\nresp = client.chat.completions.create(\n    model="Qwen3.5-9B-MLX-4bit",\n    messages=[{"role": "user", "content": "Hello!"}]\n)`,
     },
   ];
-
-  const baseUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:8000";
 
   const endpoints = [
     { label: "Gateway", url: baseUrl },

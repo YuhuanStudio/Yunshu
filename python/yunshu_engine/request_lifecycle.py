@@ -421,9 +421,9 @@ class RequestLifecycleOrchestrator:
         # Timeouts are counted separately in check_timeouts; don't double-count
         if error != "timeout":
             self._total_rejected += 1
+            self._model_counts[state.model]["rejected"] += 1
         if was_active:
             self._active_count = max(0, self._active_count - 1)
-        self._model_counts[state.model]["rejected"] += 1
         self._concurrency.report_failure(error)
         # Remove from pending queue if present
         try:

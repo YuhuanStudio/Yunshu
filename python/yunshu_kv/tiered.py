@@ -359,10 +359,13 @@ class SSDCacheStore:
         Must be called **after** releasing ``_lock``.  Safe to call even
         when there is nothing pending (no-op).
         """
-        pending_write = self._pending_index_write
-        pending_unlinks = self._pending_unlinks
-        self._pending_index_write = None
-        self._pending_unlinks = None
+        # Swap pending fields under the lock into locals so that
+        # _evict_lru_locked() can safely repopulate them while we do I/O.
+        with self._lock:
+            pending_write = self._pending_index_write
+            pending_unlinks = self._pending_unlinks
+            self._pending_index_write = None
+            self._pending_unlinks = None
 
         if pending_write is not None:
             index_path, entries = pending_write

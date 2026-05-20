@@ -992,6 +992,7 @@ async def _stream_anthropic(
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
     _streaming_finish_reason: str | None = None
+    reasoning_tok: int = 0  # reasoning tokens emitted as thinking_delta
     _token_boundaries: list[int] = []  # cumulative text length after each output token
 
     # Register with request tracker for cancellation support
@@ -1046,7 +1047,7 @@ async def _stream_anthropic(
     async def _token_source():
         nonlocal input_tokens, output_tokens, block_index, cached_tokens
         nonlocal thinking_block_started, text_block_started, tool_use_block_started
-        nonlocal accumulated_text, matched_stop, _message_start_emitted, _streaming_finish_reason
+        nonlocal accumulated_text, matched_stop, _message_start_emitted, _streaming_finish_reason, reasoning_tok
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -1112,6 +1113,7 @@ async def _stream_anthropic(
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
+                    reasoning_tok += 1
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
                 elif _token_text:
                     # Visible text content
@@ -1178,10 +1180,30 @@ async def _stream_anthropic(
                                     _prev_len = len(accumulated_text)
                                     accumulated_text += _tc_out.text
                                     _token_boundaries.append(len(accumulated_text))
-                                    if not text_block_started:
-                                        text_block_started = True
-                                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text}})}\n\n"
+                                    # Check for stop sequences after streamer text
+                                    # is accumulated (the pre-streamer check at
+                                    # line ~1139 operates on empty text when tools
+                                    # are active, so we must check here instead).
+                                    _stop_hit = False
+                                    if stop:
+                                        for seq in stop:
+                                            if seq in accumulated_text:
+                                                accumulated_text = accumulated_text[:accumulated_text.find(seq)]
+                                                matched_stop = seq
+                                                _stop_hit = True
+                                                break
+                                    if _stop_hit:
+                                        _safe_len = len(accumulated_text) - _prev_len
+                                        if _safe_len > 0:
+                                            if not text_block_started:
+                                                text_block_started = True
+                                                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text[:_safe_len]}})}\n\n"
+                                    else:
+                                        if not text_block_started:
+                                            text_block_started = True
+                                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text}})}\n\n"
                                 elif _tc_out.tool_call:
                                     if not tool_use_block_started:
                                         if text_block_started:
@@ -1262,6 +1284,7 @@ async def _stream_anthropic(
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
+                    reasoning_tok += 1
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
                 elif _token_text:
                     # Visible text content
@@ -1391,18 +1414,20 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
 
         # message_delta (stop + usage)
-        # Per Anthropic streaming spec, message_delta usage ONLY contains output_tokens.
+        # Per Anthropic streaming spec, message_delta usage contains output_tokens
+        # and optionally output_tokens_details (reasoning_tokens).
         # cache_creation_input_tokens / cache_read_input_tokens are in message_start
         # (emitted deferred above when the first engine output arrives).
         stop_reason = _map_stop_reason(
             _streaming_finish_reason, matched_stop, has_tool_calls=tool_use_block_started
         )
+        _delta_usage: dict = {"output_tokens": output_tokens}
+        if reasoning_tok > 0:
+            _delta_usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tok}
         delta_data = {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": matched_stop},
-            "usage": {
-                "output_tokens": output_tokens,
-            },
+            "usage": _delta_usage,
         }
         yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
 

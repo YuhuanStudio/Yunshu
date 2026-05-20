@@ -349,14 +349,11 @@ class SuffixProposer:
             return
         gen_list.extend(accepted)
 
-        # Rebuild trie with updated generated tokens
-        gen = self._generated[active_id]
-        if len(gen) >= self.config.min_suffix_length:
-            trie = self._tries[active_id]
-            trie.clear()
-            # Only index up to max_window tokens
-            window_gen = gen[-self.config.max_window :]
-            trie.insert(window_gen)
+        # NOTE: The trie is intentionally NOT rebuilt here.  The draft()
+        # method uses _find_suffix_in_history() (a linear scan) and never
+        # queries the trie.  Rebuilding the trie on every accept() was pure
+        # wasted CPU and memory.  The _generated list maintained above is
+        # sufficient for the linear-scan suffix lookup.
 
     def end(self, request_id: str) -> None:
         """Clean up per-request state.

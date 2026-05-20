@@ -1734,6 +1734,10 @@ class EngineCore:
         waiting for output from a primary that will never produce more tokens.
         """
         from .request import RequestOutput
+        # Look up request to preserve token counts in abort output
+        req = self.scheduler.requests.get(request_id)
+        prompt_tok = req.num_prompt_tokens if req else 0
+        completion_tok = req.num_output_tokens if req else 0
         self.scheduler.abort_request(request_id)
         # Put error output to wake up any waiting consumer
         collector = self._output_collectors.get(request_id)
@@ -1743,6 +1747,8 @@ class EngineCore:
                 finished=True,
                 finish_reason="abort",
                 error="Request aborted",
+                prompt_tokens=prompt_tok,
+                completion_tokens=completion_tok,
             ))
             collector.put(None)  # sentinel
 

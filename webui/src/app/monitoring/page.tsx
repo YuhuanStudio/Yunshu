@@ -602,7 +602,7 @@ export default function MonitoringPage() {
                       <div key={idx} className="flex items-center gap-3 text-sm py-1">
                         <div className="flex-1">
                           <div className="flex justify-between text-xs mb-0.5">
-                            <span>{req.request_id}</span>
+                            <span>{String(req.request_id)}</span>
                             <span>{String(req.progress_pct || 0)}%</span>
                           </div>
                           <div className="w-full bg-[var(--color-bg-tertiary)] rounded-full h-1.5">
