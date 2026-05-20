@@ -639,6 +639,7 @@ def _normalize_finish_reason(reason: str | None) -> str:
 async def _build_multi_choice(
     engine, req, messages, completion_id, is_batched, json_schema,
     cancel_event=None,
+    lora_adapter=None,
 ):
     """Build n > 1 completions by running parallel generation calls."""
     import asyncio
@@ -676,6 +677,7 @@ async def _build_multi_choice(
                 logprobs=req.logprobs,
                 top_logprobs=req.top_logprobs,
                 logits_processors=req.logits_processors,
+                lora_adapter=lora_adapter,
                 cancel_event=cancel_event,
                 timeout_seconds=req.timeout,
             )
@@ -716,6 +718,7 @@ async def _build_multi_choice(
                 logits_processors=req.logits_processors,
                 cancel_event=cancel_event,
                 timeout_seconds=req.timeout,
+                lora_adapter=lora_adapter,
             )
             text = state.generated_text
             pt = state.prompt_token_count
@@ -962,6 +965,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 return await _build_multi_choice(
                     engine, req, messages, completion_id, is_batched, json_schema,
                     cancel_event=_ns_cancel_event,
+                    lora_adapter=loaded_adapter,
                 )
 
             try:
@@ -995,6 +999,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         logits_processors=req.logits_processors,
                         cancel_event=_ns_cancel_event,
                         timeout_seconds=req.timeout,
+                        lora_adapter=loaded_adapter,
                     )
                     raw_text = result.text
                     prompt_tok = result.prompt_tokens
@@ -1035,6 +1040,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                         logits_processors=req.logits_processors,
                         cancel_event=_ns_cancel_event,
                         timeout_seconds=req.timeout,
+                        lora_adapter=loaded_adapter,
                     )
                     raw_text = state.generated_text
                     prompt_tok = state.prompt_token_count
@@ -1284,6 +1290,7 @@ async def _handle_vlm_chat(
 
     n = max(req.n, 1)
     loaded_adapter = _apply_lora_adapter(vlm_engine, req.lora_adapter)
+    gen_kwargs["lora_adapter"] = loaded_adapter
     try:
         if n == 1:
             results = [await _vlm_gen_one(0)]
@@ -1423,6 +1430,7 @@ async def _stream_vlm_response(
             logits_processors=req.logits_processors,
             cancel_event=_vlm_cancel_evt,
             timeout_seconds=req.timeout,
+            lora_adapter=loaded_adapter,
         )
         if json_schema:
             stream_kwargs["json_schema"] = json_schema
@@ -1676,6 +1684,7 @@ async def _stream_response_multi(
                     logits_processors=req.logits_processors,
                     cancel_event=_multi_cancel_evt,
                     timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
                 )
                 async for output in stream:
                     if _multi_cancel_evt is not None and _multi_cancel_evt.is_set():
@@ -1800,6 +1809,7 @@ async def _stream_response_multi(
                     logits_processors=req.logits_processors,
                     cancel_event=_multi_cancel_evt,
                     timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
                 )
                 async for output in stream:
                     if _multi_cancel_evt is not None and _multi_cancel_evt.is_set():
@@ -2287,6 +2297,7 @@ async def _stream_response(
                 logits_processors=req.logits_processors,
                 cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
+                lora_adapter=loaded_adapter,
             ):
                 # Track token counts for usage reporting
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:

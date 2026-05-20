@@ -140,6 +140,7 @@ class VideoEngine:
         self._lora_adapter_path: str = ""
         self._lora_loaded: bool = False
         self._lora_merged: bool = False
+        self._lora_lock = threading.Lock()
 
         # Wave 43: Native MLX video pipeline (Wan2.2/LTX2)
         self._native_pipeline = None  # Created lazily after model load
@@ -231,8 +232,9 @@ class VideoEngine:
         self._running = True
 
         # Auto-load LoRA if env var set and model already loaded
-        if self._lora_adapter_path and not self._lora_loaded:
-            self.load_lora_adapter(self._lora_adapter_path)
+        with self._lora_lock:
+            if self._lora_adapter_path and not self._lora_loaded:
+                self.load_lora_adapter(self._lora_adapter_path)
 
         logger.info("Video engine started")
 
@@ -251,9 +253,10 @@ class VideoEngine:
         self._base_model_weights = None
         self._native_pipeline = None
         self._teacache = None
-        self._lora_loaded = False
-        self._lora_merged = False
-        self._lora_adapter_path = ""
+        with self._lora_lock:
+            self._lora_loaded = False
+            self._lora_merged = False
+            self._lora_adapter_path = ""
         gc.collect()
         try:
             import concurrent.futures
@@ -273,9 +276,10 @@ class VideoEngine:
         self._base_model_weights = None
         self._native_pipeline = None
         self._teacache = None
-        self._lora_loaded = False
-        self._lora_merged = False
-        self._lora_adapter_path = ""
+        with self._lora_lock:
+            self._lora_loaded = False
+            self._lora_merged = False
+            self._lora_adapter_path = ""
         gc.collect()
         try:
             import asyncio
@@ -1167,11 +1171,10 @@ class VideoEngine:
             logger.error(f"No adapter_config.json in {adapter_path}")
             return False
 
-        with self._stats_lock:
+        with self._lora_lock:
             if self._lora_loaded:
                 logger.warning("LoRA adapter already loaded, unload first")
                 return False
-            # Mark as loading to prevent concurrent loads
             self._lora_loaded = True
 
         import json
@@ -1233,7 +1236,7 @@ class VideoEngine:
         Returns:
             True if adapter was unloaded successfully.
         """
-        with self._stats_lock:
+        with self._lora_lock:
             if not self._lora_loaded:
                 return False
 
@@ -1248,8 +1251,9 @@ class VideoEngine:
                 mx.eval(self._model.parameters())
                 self._base_model_weights = None
 
-            self._lora_loaded = False
-            self._lora_adapter_path = ""
+            with self._lora_lock:
+                self._lora_loaded = False
+                self._lora_adapter_path = ""
             with self._stats_lock:
                 self._stats.lora_loaded = False
                 self._stats.lora_adapter_id = ""

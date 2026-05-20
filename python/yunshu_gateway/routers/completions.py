@@ -497,7 +497,7 @@ async def _stream_completion(
                 # client-side progress bars during long chunked prefills.
                 _pf_prog = getattr(output, 'prefill_progress', None)
                 if _pf_prog is not None:
-                    yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
+                    yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n"
                     continue  # progress outputs carry no text
                 # Track emitted text for stop-sequence overcount correction
                 if output.new_text:

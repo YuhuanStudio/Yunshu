@@ -753,6 +753,11 @@ class SpeculativeDecoder:
                 token_ids=draft_tokens,
                 logprobs=draft_probs,
             )
+            if cancel_event is not None and (
+                cancel_event.is_set() if isinstance(cancel_event, asyncio.Event)
+                else cancel_event.is_set()
+            ):
+                break
             verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache, temperature=temperature)
 
             # SP-PEN: Apply penalty/bias to bonus token via extra target forward pass

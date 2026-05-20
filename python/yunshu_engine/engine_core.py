@@ -1429,8 +1429,8 @@ class EngineCore:
 
                 return req_id
             else:
-                self._request_dedup.register(req_id, content_hash)
-            self._dedup_hashes[req_id] = content_hash
+                dedup_entry = self._request_dedup.register(req_id, content_hash)
+            self._dedup_hashes[req_id] = dedup_entry.content_hash
 
         # ── Wave 42: Lifecycle tracking ──
         self._lifecycle_orchestrator.on_request_added(req_id)
@@ -2971,12 +2971,14 @@ class EngineCore:
         # are fanned-out by the engine loop before reaching here, so
         # calling complete() again would be redundant (and the entry
         # may already be removed by TTL pruning).
+        is_shadow = request_id in self._dedup_shadows
         if self._request_dedup is not None:
             content_hash = self._dedup_hashes.pop(request_id, None)
-            is_shadow = request_id in self._dedup_shadows
             self._dedup_shadows.pop(request_id, None)
             if content_hash and not is_shadow:
                 self._request_dedup.complete(content_hash)
+        else:
+            self._dedup_shadows.pop(request_id, None)
         # Checkpoint
         if self._checkpoint_mgr is not None:
             self._checkpoint_mgr.delete(request_id)
@@ -2993,7 +2995,7 @@ class EngineCore:
             logger.debug("fairness tracker cleanup failed", exc_info=True)
         # Remove from scheduler (only if actually added — dedup shadows
         # are short-circuited before reaching scheduler.add_request)
-        if request_id not in self._dedup_shadows:
+        if not is_shadow:
             self.scheduler.remove_finished_request(request_id)
 
     def _fail_active_requests(self, error_msg: str) -> None:

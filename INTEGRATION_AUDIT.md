@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–325: 40 waves, 788+ bugs fixed. Latest: Wave 325 — 8-agent deep audit, 13+ fixes (scheduler memory guard deadlock, radix tree double-count, topology re-discovery, lora_adapter passthrough, anthropic output_tokens, spec decode thinking budget cap, json_schema allOf/patternProperties, disagg request_completed, topology import typo), 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–326: 41 waves, 800+ bugs fixed. Latest: Wave 326 — 8-agent deep audit, 11+ fixes (engine_core dedup hash remapping, shadow guard fix, completions prefill-progress .encode(), gateway LoRA lifecycle passthrough (8 call sites), spec decode cancel between draft/verify, video_engine LoRA TOCTOU race), 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,17 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 326 — 8 parallel agents, 60+ found, 11+ fixes: engine_core dedup hash remap, shadow guard, completions .encode(), gateway LoRA passthrough 8 sites, spec decode cancel, video LoRA TOCTOU)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| engine_core dedup hash remapping | register() 返回可能 remap 過的 content_hash，但 _dedup_hashes 存原始值 → wrong entry completed | 陰影請求永不完成 (CRITICAL) |
+| engine_core shadow guard scope | is_shadow 在 if block 外引用 → UnboundLocalError when _request_dedup is None | 崩潰 (HIGH) |
+| completions prefill-progress .encode() | SSE comment yield bytes 而非 str → TypeError on non-bytes response | SSE 崩潰 (HIGH) |
+| gateway LoRA passthrough (8 sites) | _apply_lora_adapter 已 acquire 但未傳 lora_adapter= 至 engine.chat/generate/generate_stream | LoRA 靜默失效 (HIGH) |
+| spec decode cancel draft→verify | generate_draft 和 verify_draft 之間無 cancel_event 檢查 | 取消延遲 (MEDIUM) |
+| video_engine LoRA TOCTOU race | _lora_loaded check/set 無鎖保護 → 併發 load + unload 腐蝕狀態 | GPU 狀態損壞 (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 325 — 8 parallel agents, 60+ found, 13+ fixes: scheduler deadlock, radix stats, topology re-discovery, lora passthrough, anthropic output_tokens, spec decode budget cap, json_schema allOf, disagg request_completed)
 
