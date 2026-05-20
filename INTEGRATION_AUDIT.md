@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 268: 8-agent deep audit — profiling auth bypass, tenant finish_request leak, scheduler abort finalization, set_finished overwrite, Anthropic message_stop, VLM temp files race, WebSocket RBAC, model discovery size, event sourcing TOCTOU, preemption livelock, Prometheus counter/histogram fixes)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 270: 8-agent deep audit — 22 total fixes across 3 waves (268-270): auth bypass, tenant lockout, scheduler abort, preemption livelock, VLM temp files, set_finished, Anthropic message_stop, WebSocket RBAC, engine_core TOCTOU, KV eviction, streaming SSE, mesh dead nodes, Prometheus counter/histogram, request dedup collision, disagg load counter)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,22 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 270 — RequestDedup Hash Collision, DisaggRouter HYBRID Load Counter)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 270: RequestDedup hash 碰撞可覆蓋 in-flight 條目 | 3 次循環後回退鍵未檢查唯一性，可能覆蓋現有條目孤立 shadow 請求。加入 while 循環確保唯一 | Shadow 請求死鎖 (HIGH) |
+| Wave 270: DisaggRouter HYBRID 負載計數器不對稱 | route_request 以 HYBRID 遞增雙計數器，request_completed 只遞減單一角色計數器。加入 HYBRID 檢測邏輯 | 路由飢餓 (HIGH) |
+
+### 已完成修復 (2026-05-20 Wave 269 — EngineCore TOCTOU, KV Eviction, Streaming SSE, Mesh Pipeline)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 269: EngineCore generate() TOCTOU 競態 | event.wait() 後重新獲取 collector 但 abort_request 已移除。改為提前存儲本地引用 | 返回 None 結果 (HIGH) |
+| Wave 269: KV eviction 直接操作 free_queue | evict_for_memory/memory_pressure_evict 直接操作 free_queue 繞過 BlockPool.free()。改為調用 free() | 連結列表損壞 (HIGH) |
+| Wave 269: Gateway streaming error 格式錯誤 | error handlers 發送裸 JSON 而非有效 chunk 格式，OpenAI SDK 解析失敗。改為 SSE 註釋格式 | 客戶端解析錯誤 (HIGH) |
+| Wave 269: Mesh pipeline 包含離線節點 | setup_pipeline 遍歷所有節點含 OFFLINE。加入 state == READY 過濾 | Pipeline 分配到死節點 (HIGH) |
 
 ### 已完成修復 (2026-05-20 Wave 268 — 8-Agent Deep Audit: Auth, Scheduler, VLM, Mesh, Gateway, Prometheus, Model Discovery, Context Window)
 
