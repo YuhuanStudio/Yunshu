@@ -1893,7 +1893,7 @@ class EngineCore:
                         # Cancel check takes precedence (avoids yielding output after abort)
                         if _cancel_waiter in done:
                             if isinstance(cancel_event, asyncio.Event):
-                                _cancelled = cancel_event._value
+                                _cancelled = cancel_event.is_set()
                             else:
                                 _cancelled = cancel_event.is_set()
                             if _cancelled:
@@ -2464,6 +2464,7 @@ class EngineCore:
                                     )
                             self._signal_finished(_rid)
                             self._finalize_request(_rid)
+                            self._fail_dedup_shadows(_rid, f"Output distribution failed: {_output_err}", "error")
 
                 # Update adaptive batch scheduler metrics
                 if scheduler_output.outputs:
@@ -2892,6 +2893,7 @@ class EngineCore:
                                         pass
                                 self._signal_finished(_rid)
                                 self._finalize_request(_rid)
+                                self._fail_dedup_shadows(_rid, f"Post-step processing error: {_post_step_err}", "error")
                 except Exception:
                     logger.debug("post-step error cleanup failed", exc_info=True)
 

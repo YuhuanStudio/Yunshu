@@ -11,7 +11,7 @@ import logging
 import socket
 import threading
 import time
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .node import MeshNode, MeshNodeState
 
@@ -94,6 +94,14 @@ class HeartbeatMonitor:
             except Exception:
                 logger.debug("failed to close heartbeat socket", exc_info=True)
         logger.info("Heartbeat monitor stopped")
+
+    def add_node(self, node: Any) -> None:
+        """Add a node to heartbeat monitoring (for dynamically discovered peers)."""
+        with self._nodes_lock:
+            self._nodes[node.node_id] = node
+            self._last_heartbeat[node.node_id] = time.monotonic()
+            self._missed_counts[node.node_id] = 0
+            self._timed_out.discard(node.node_id)
 
     def remove_node(self, node_id: str) -> None:
         """Remove a node from monitoring (called on permanent removal)."""

@@ -185,15 +185,19 @@ class AnthropicMessagesRequest(BaseModel):
 
 
 def _resolve_json_schema(req) -> dict | str | None:
-    """Resolve json_schema from req.json_schema or req.response_format.
+    """Resolve json_schema from req.json_schema, req.grammar, or req.response_format.
 
     The Anthropic API doesn't have a standard structured output mechanism,
-    but clients may send response_format (OpenAI-style) or json_schema directly.
+    but clients may send response_format (OpenAI-style), json_schema, or grammar directly.
     """
     # Direct json_schema field takes priority
     js = getattr(req, 'json_schema', None)
     if js is not None:
         return js
+    # Grammar constraint (regex, choice, CFG) — only if actually provided
+    grammar = getattr(req, 'grammar', None)
+    if grammar is not None and isinstance(grammar, (dict, str)):
+        return grammar
     # Fall back to OpenAI-style response_format
     rf = getattr(req, 'response_format', None)
     if rf is not None:

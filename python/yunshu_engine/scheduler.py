@@ -1258,7 +1258,7 @@ class Scheduler:
             if is_cache_corruption_error(e):
                 logger.warning("Cache corruption detected — resetting BatchGenerator")
                 self.deep_reset()
-            return SchedulerOutput(outputs=[])
+            return SchedulerOutput(outputs=outputs)
 
         # 7. Step counter
         self._step_counter += 1
@@ -3492,6 +3492,23 @@ class Scheduler:
                 failed.append(req.request_id)
 
         self._uid_to_req.clear()
+        # Clean up per-request state dicts to prevent stale entries
+        for rid in failed:
+            self._detokenizers.pop(rid, None)
+            self._thinking_processors.pop(rid, None)
+            self._thinking_state.pop(rid, None)
+            self._pending_prefill.pop(rid, None)
+            self._spec_drafts.pop(rid, None)
+            self._spec_draft_start_pos.pop(rid, None)
+            self._spec_stats.pop(rid, None)
+            self._spec_draft_cache_snapshots.pop(rid, None)
+            self._last_token_time.pop(rid, None)
+            self._itl_samples.pop(rid, None)
+            self._chunked_prefill_fairness.pop(rid, None)
+            self._chunked_prefill_enqueued_at.pop(rid, None)
+            if hasattr(self, '_attention_score_tracker'):
+                self._attention_score_tracker.pop(rid, None)
+        self._active_partial_prefills = 0
         return failed
 
     def remove_finished_request(self, request_id: str) -> None:

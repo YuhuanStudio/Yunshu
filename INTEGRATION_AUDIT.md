@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–328: 43 waves, 840+ bugs fixed. Latest: Wave 328 — SP-PEN wrong model ref+argmax sampler, double-trim target cache guard, kv_offload double-free via evict_and_free, scheduler O(n*log n) preemption sort + fail_all waiting queue, VLM repetition_penalty full history, stream_outputs simultaneous cancel+output race, radix get_stats lock, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–329: 44 waves, 860+ bugs fixed. Latest: Wave 329 — spec decode double grammar advance fix, SP-PEN bonus cache undo, N-gram penalty double-count, constraint restore on OOM, logprobs OOB guard, detokenizer offset, responses.py LoRA passthrough 4 sites, mesh heartbeat add_node + recovery node_id guard, engine_core shadow fail on output/post-step errors, scheduler step exception preserve outputs + fail_all cleanup, Anthropic grammar passthrough, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,26 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 329 — 8-agent deep audit, 20+ CRITICAL/HIGH/MEDIUM fixes: spec decode double grammar advance, SP-PEN cache undo, N-gram penalty history, constraint restore, logprobs OOB, detokenizer offset, responses LoRA 4 sites, mesh heartbeat add_node + recovery guard, engine_core shadow fail 2 sites, scheduler step exception preserve, fail_all cleanup, Anthropic grammar)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Spec decode double grammar advance on all-accepted | inline draft loop 已 advance 每個 token, all-accepted 路徑又再次 advance → constraint 狀態機超前 2 tokens | 結構化輸出損壞 (CRITICAL) |
+| SP-PEN bonus token double-fed into target cache | SP-PEN forward probe 加入 1 entry 但未 trim, 下次 verify_draft 再次 feed → KV cache 雙重填充 | 推測解碼輸出損壞 (CRITICAL) |
+| Responses API LoRA never passed to engine | 4 個 engine call site 全部缺少 lora_adapter=loaded_adapter → Responses API LoRA 完全失效 | LoRA 失效 (CRITICAL) |
+| Mesh discovered nodes not added to heartbeat | _on_peer_discovered 不註冊 HeartbeatMonitor → 動態發現節點永不觸發故障檢測 | 叢集不穩定 (CRITICAL) |
+| Mesh late recovery restores wrong node | _on_node_recovered 不驗證 node_id → rank 重用後恢復錯誤節點 | 路由錯誤 (CRITICAL) |
+| N-gram spec prompt tokens double-counted in penalty | list(input_ids) + all_token_ids 但 all_token_ids 已含 prompt → 重複懲罰 prompt tokens | 輸出品質差 (HIGH) |
+| Constraint not restored on RuntimeError OOM path | memory error path return 前未恢復 constraint → 下個請求使用錯誤 constraint | 結構化輸出錯誤 (HIGH) |
+| Spec streaming logprobs OOB when thinking budget forces </think | _yielded_token_count 可超過 len(new_tokens) → IndexError | 崩潰 (HIGH) |
+| Detokenizer offset stale after suffix rebuild | suffix match 後 rebuild detokenizer 但 offset 設為舊值 → last_segment 返回錯誤文字 | 輸出錯誤 (HIGH) |
+| Engine core output distribution error leaves shadows hanging | output distribution exception 只 fail primary, shadow collector 無 sentinel → hang | 請求 hang (HIGH) |
+| Engine core post-step catch-all doesn't fail shadows | post-step exception 只 finalize primary, shadow 永遠等待 | 請求 hang (HIGH) |
+| Scheduler step() exception discards already-generated outputs | return SchedulerOutput(outputs=[]) 丟棄已生成的 error outputs → client hang | 請求 hang (HIGH) |
+| fail_all_requests doesn't clean per-request state dicts | running/waiting 清理但 12 個 per-request dict 未清理 → 記憶體洩漏 + 陳腐狀態 | 記憶體洩漏 (HIGH) |
+| Anthropic grammar parameter silently ignored | req.grammar 接受但 _resolve_json_schema 不讀取 → grammar constraint 永不生效 | 功能缺失 (HIGH) |
+| stream_outputs accesses asyncio.Event._value private API | cancel_event._value 非公開 API → 未來 Python 版本可能失效 | 相容性 (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 328 — 10 HIGH/MEDIUM fixes from 8 parallel agents: SP-PEN model ref + sampler, double-trim guard, kv_offload double-free, scheduler preemption O(n*log n) + waiting queue fail, VLM repetition_penalty, stream_outputs race, radix get_stats lock)
 

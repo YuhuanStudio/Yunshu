@@ -4311,6 +4311,7 @@ class BatchedEngine:
                     await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
                 except Exception:
                     pass
+                self._spec_decoder.constraint = _prev_constraint
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -4649,6 +4650,16 @@ class BatchedEngine:
                     _bonus_out = self._spec_decoder.target(_bonus_input, cache=target_cache)
                     _bonus_logits = _bonus_out.logits if hasattr(_bonus_out, 'logits') else _bonus_out
                     _bonus_logits = _bonus_logits[0, -1, :]
+                    # Undo the bonus forward — next iteration's verify_draft will feed
+                    # current_ids (= bonus) into target_cache, and we must not have
+                    # the SP-PEN probe already in the cache or it double-populates.
+                    try:
+                        from mlx_lm.models.cache import trim_prompt_cache
+                        trim_prompt_cache(target_cache, 1)
+                    except Exception:
+                        for _c in target_cache:
+                            if hasattr(_c, "trim"):
+                                _c.trim(1)
                     # Build token history: prompt + all generated so far + accepted drafts
                     _token_hist = list(input_ids) + generated_tokens + verify_result.accepted_ids
                     _bonus_logits = _apply_spec_bonus_penalties(
@@ -4734,11 +4745,9 @@ class BatchedEngine:
                     # the .tokens attribute.  Re-decode all remaining tokens
                     # to produce clean text without the suffix.
                     _kept_tokens = list(detokenizer.tokens[:-1]) if detokenizer.tokens else []
-                    _saved_offset = detokenizer.offset
                     detokenizer.reset()
                     for _t in _kept_tokens:
                         detokenizer.add_token(_t)
-                    detokenizer.offset = _saved_offset
                     break
 
             # Compute TTFT before first yield
@@ -4776,7 +4785,8 @@ class BatchedEngine:
             _chunk_logprobs = None
             if logprobs and new_tokens:
                 _chunk_logprobs = []
-                for i in range(_yielded_token_count):
+                _lp_count = min(_yielded_token_count, len(new_tokens))
+                for i in range(_lp_count):
                     tid = new_tokens[i]
                     tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
                     lp = verify_result.target_logprobs[i] if i < len(verify_result.target_logprobs) else 0.0
@@ -5748,7 +5758,7 @@ class BatchedEngine:
                         )
                         if _has_ng_pen and accepted < n_draft:
                             _ng_bonus_logits = batch_logits[0, accepted, :]
-                            _ng_token_hist = list(input_ids) + all_token_ids
+                            _ng_token_hist = all_token_ids
                             _ng_bonus_logits = _apply_spec_bonus_penalties(
                                 _ng_bonus_logits, _ng_token_hist, len(input_ids),
                                 repetition_penalty=repetition_penalty,
@@ -5833,7 +5843,7 @@ class BatchedEngine:
                             # Apply penalties at the first rejection position only
                             if _has_ng_pen_cpu and i == accepted:
                                 _ng_bonus_logits_cpu = batch_logits[0, i, :]
-                                _ng_token_hist_cpu = list(input_ids) + all_token_ids
+                                _ng_token_hist_cpu = all_token_ids
                                 _ng_bonus_logits_cpu = _apply_spec_bonus_penalties(
                                     _ng_bonus_logits_cpu, _ng_token_hist_cpu, len(input_ids),
                                     repetition_penalty=repetition_penalty,

@@ -379,6 +379,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
                     timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
                 )
                 text = result.text
                 pt = result.prompt_tokens
@@ -414,6 +415,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                     logits_processors=req.logits_processors,
                     cancel_event=_ns_cancel_event,
                     timeout_seconds=req.timeout,
+                    lora_adapter=loaded_adapter,
                 )
                 text = state.generated_text
                 pt = state.prompt_token_count
@@ -669,6 +671,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 logits_processors=req.logits_processors,
                 cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
+                lora_adapter=loaded_adapter,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens
@@ -727,6 +730,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 logits_processors=req.logits_processors,
                 cancel_event=_cancel_evt,
                 timeout_seconds=req.timeout,
+                lora_adapter=loaded_adapter,
             ):
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
                     prompt_tok = output.prompt_tokens

@@ -420,6 +420,9 @@ class MeshManager:
                     gpu_cores=caps.gpu_cores if caps else 0,
                 )
             self._rtt_router.add_node(node.node_id, max_requests=100)
+            hb = getattr(self, '_heartbeat_mon', None)
+            if hb:
+                hb.add_node(node)
             _event = ("node_join", node.node_id, {
                 "hostname": node.hostname,
                 "rank": rank,
@@ -555,8 +558,11 @@ class MeshManager:
             if retry_task and not retry_task.done():
                 retry_task.cancel()
             topo_node = self._topology.get_node(node.rank)
-            if topo_node is not None and topo_node.node_id == node.node_id:
-                topo_node.mark_healthy()
+            if topo_node is None or topo_node.node_id != node.node_id:
+                # Node was permanently removed or rank reassigned — skip recovery
+                logger.warning(f"Skipping recovery for {node.hostname}: node not in topology or rank mismatch")
+                return
+            topo_node.mark_healthy()
             if self._dp_router:
                 self._dp_router.mark_available(node.node_id)
             if self._disagg_router:

@@ -884,12 +884,6 @@ class SpeculativeDecoder:
                             self.constraint._checkpoint_stack.pop()
                     except Exception:
                         pass
-                if self.constraint is not None and hasattr(self.constraint, 'advance'):
-                    for tid in draft_tokens:
-                        try:
-                            self.constraint.advance(self.tokenizer.decode([tid]))
-                        except Exception:
-                            pass
                     if bonus_id >= 0:
                         try:
                             self.constraint.advance(self.tokenizer.decode([bonus_id]))
