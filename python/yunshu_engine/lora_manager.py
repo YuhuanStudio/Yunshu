@@ -44,8 +44,13 @@ _global_lora_lock = threading.Lock()
 
 
 def get_lora_manager() -> LoRAAdapterManager | None:
-    """Return the global LoRAAdapterManager singleton, or None if not initialized."""
-    return _global_lora_manager
+    """Return the global LoRAAdapterManager singleton, or None if not initialized.
+
+    Thread-safe: acquires _global_lora_lock for visibility guarantee matching
+    set_lora_manager().
+    """
+    with _global_lora_lock:
+        return _global_lora_manager
 
 
 def set_lora_manager(mgr: LoRAAdapterManager | None) -> None:
@@ -81,7 +86,13 @@ class LoRAAdapterManager:
         self._active_adapter_id: str | None = None  # Currently applied adapter
 
     def set_base_model(self, model) -> None:
-        self._base_model = model
+        """Set the base model for LoRA operations.
+
+        Thread-safe: acquires _lock to prevent races with concurrent
+        load_adapter / unload_adapter calls that read _base_model.
+        """
+        with self._lock:
+            self._base_model = model
 
     def shutdown(self) -> None:
         """Release all adapters and saved weights on engine shutdown."""

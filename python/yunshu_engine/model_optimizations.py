@@ -973,10 +973,13 @@ class ModelWarmupManager:
             from mlx_lm.generate import generate_step
             from mlx_lm.sample_utils import make_sampler
         except ImportError:
-            # MLX not available — record prompts for stats but can't run
-            for prompt in prompts:
-                self._prompts_warmed.append(prompt)
-            return len(prompts)
+            # MLX not available — cannot warm up. Do NOT count prompts as
+            # warmed; the caller should not believe warmup succeeded.
+            logger.warning(
+                "MLX not available for KV cache warmup — skipping %d prompts",
+                len(prompts),
+            )
+            return 0
 
         sampler = make_sampler(temp=0.0)
         compiled_ok = 0
@@ -1169,12 +1172,24 @@ class ModelWarmupManager:
                 n_tokens = len(ids)
                 result.prompts_prefilled += 1
                 result.total_tokens_prefilled += n_tokens
-                mx.clear_cache()
+                # NOTE: do NOT call mx.clear_cache() here — it destroys the
+                # Metal compile cache, causing every subsequent prompt to
+                # trigger full kernel recompilation.  The cache is cleared
+                # once after all prompts are processed (below).
                 logger.info(f"Warm prompt prefilled: {n_tokens} tokens")
 
             except Exception as exc:
                 result.prompts_failed += 1
                 logger.warning(f"Warm prompt prefill failed: {exc}")
+
+        # Clear Metal buffer pool once after all prompts are processed,
+        # releasing temporary GPU memory from the prefill forward passes.
+        # Doing this inside the loop would destroy the Metal compile cache
+        # and force full kernel recompilation for every prompt.
+        try:
+            mx.clear_cache()
+        except Exception:
+            pass
 
         elapsed = time.monotonic() - start
         result.prefill_time_s = round(elapsed, 4)

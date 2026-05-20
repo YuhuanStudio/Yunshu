@@ -50,7 +50,12 @@ class RequestSlot:
 
     @property
     def total_tokens(self) -> int:
-        return self.num_prompt_tokens + len(self.generated_tokens)
+        # Use len(prompt_tokens) as the authoritative count when the list
+        # is non-empty.  num_prompt_tokens may be stale if only prompt_tokens
+        # was set (e.g. from_schedule_batch relies on this property for
+        # token budget accounting).
+        prompt_count = self.num_prompt_tokens or len(self.prompt_tokens)
+        return prompt_count + len(self.generated_tokens)
 
     @property
     def remaining_tokens(self) -> int:
@@ -104,7 +109,7 @@ class ScheduleBatch:
 
     @property
     def total_prompt_tokens(self) -> int:
-        return sum(s.num_prompt_tokens for s in self.slots)
+        return sum(s.num_prompt_tokens or len(s.prompt_tokens) for s in self.slots)
 
     @property
     def total_generated_tokens(self) -> int:
@@ -249,10 +254,15 @@ class ForwardBatch:
                     if slot.is_prefill:
                         pos.extend(range(length))
                     else:
-                        # Decode step: position for the next token to generate.
-                        # After N generated tokens, the next position is
-                        # num_prompt_tokens + N (0-indexed positions).
-                        start = slot.num_prompt_tokens + len(slot.generated_tokens)
+                        # Decode step: position of the last generated token.
+                        # generated_tokens[-1:] (1 token) is at position
+                        # num_prompt_tokens + (N-1) where N = len(generated_tokens).
+                        # When generated_tokens is empty this is a fallback decode
+                        # slot (shouldn't happen) — use num_prompt_tokens as position.
+                        if slot.generated_tokens:
+                            start = slot.num_prompt_tokens + len(slot.generated_tokens) - 1
+                        else:
+                            start = slot.num_prompt_tokens
                         pos.extend(range(start, start + length))
                 position_ids = mx.array(pos, dtype=mx.int32)
             except ImportError:
@@ -293,8 +303,8 @@ class BatchResult:
     """
 
     request_ids: list[str] = field(default_factory=list)
-    # Generated token IDs per request
-    generated_token_ids: list[int] = field(default_factory=list)
+    # Generated token IDs per request (list of lists for spec decode)
+    generated_token_ids: list[list[int]] = field(default_factory=list)
     # Logits for the generated tokens (for logprobs)
     logits: Any = None  # mx.array or None
     # Per-request finish reasons
@@ -320,7 +330,7 @@ class BatchResult:
         results = {}
         for i, rid in enumerate(self.request_ids):
             results[rid] = {
-                "token_id": self.generated_token_ids[i] if i < len(self.generated_token_ids) else 0,
+                "token_ids": self.generated_token_ids[i] if i < len(self.generated_token_ids) else [],
                 "finish_reason": self.finish_reasons[i] if i < len(self.finish_reasons) else None,
                 "spec_accepted": self.spec_accepted_count[i] if i < len(self.spec_accepted_count) else 0,
                 "spec_rejected": self.spec_rejected_count[i] if i < len(self.spec_rejected_count) else 0,
@@ -389,11 +399,13 @@ class BatchComposer:
         )
 
         # Phase 1: Carry forward active decode requests
+        decode_count = 0
         if active_slots:
             for slot in active_slots:
                 if not slot.is_prefill and not slot.is_finished:
-                    if batch.num_slots < self._max_batch:
+                    if batch.num_slots < self._max_batch and decode_count < self._max_decode:
                         batch.add_slot(slot)
+                        decode_count += 1
 
         # Phase 2: Add new prefill requests by priority
         new_requests = sorted(
@@ -412,13 +424,13 @@ class BatchComposer:
                 break
             if prefill_count >= self._max_prefill:
                 break
-            if token_budget > 0 and slot.num_prompt_tokens > token_budget:
+            if token_budget > 0 and (slot.num_prompt_tokens or len(slot.prompt_tokens)) > token_budget:
                 continue
 
             batch.add_slot(slot)
             prefill_count += 1
             if token_budget > 0:
-                token_budget -= slot.num_prompt_tokens
+                token_budget -= slot.num_prompt_tokens or len(slot.prompt_tokens)
 
         self._total_batches_composed += 1
         self._total_requests_scheduled += batch.num_slots

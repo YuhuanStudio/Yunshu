@@ -258,6 +258,20 @@ class ContextWindowManager:
         if not messages:
             return []
 
+        # If ALL messages are system/developer and they exceed the budget,
+        # there are no removable messages.  Return them as-is (better to
+        # send overlength system prompts than an empty conversation) and
+        # log a warning so the operator can adjust.
+        if not any(m.get("role") not in self._PROTECTED_ROLES for m in messages):
+            total = self._count_messages_tokens(messages)
+            if total > max_tokens:
+                logger.warning(
+                    "All messages are system/developer (%d tokens) but "
+                    "max_tokens=%d — returning without truncation",
+                    total, max_tokens,
+                )
+            return deepcopy(messages)
+
         result = deepcopy(messages)
         # Indices of removable (non-protected) messages
         removable_indices = [
@@ -311,13 +325,32 @@ class ContextWindowManager:
         system_msgs = [m for m in messages if m.get("role") in self._PROTECTED_ROLES]
         non_system = [m for m in messages if m.get("role") not in self._PROTECTED_ROLES]
 
-        # Start from the most recent and work backwards
-        window = []
+        # Pre-compute system token cost to avoid recounting every iteration.
+        system_token_cost = self._count_messages_tokens(system_msgs)
+
+        # If system messages alone exceed the budget, we cannot fit anything.
+        # Return only the system messages (truncating them would lose the prompt).
+        if system_token_cost > max_tokens:
+            logger.warning(
+                "System messages (%d tokens) alone exceed max_tokens (%d); "
+                "returning system messages without truncation",
+                system_token_cost, max_tokens,
+            )
+            return deepcopy(system_msgs)
+
+        remaining_budget = max_tokens - system_token_cost
+
+        # Build window from most recent backwards, appending to a list (O(1))
+        # and reversing at the end instead of insert(0, ...) which is O(n^2).
+        window_rev: list[dict] = []
+        current_cost = 0
         for msg in reversed(non_system):
-            candidate = system_msgs + [msg] + window
-            if self._count_messages_tokens(candidate) > max_tokens:
+            msg_cost = self._count_messages_tokens([msg])
+            if current_cost + msg_cost > remaining_budget:
                 break
-            window.insert(0, msg)
+            window_rev.append(msg)
+            current_cost += msg_cost
+        window = list(reversed(window_rev))
 
         # Ensure the window doesn't start with orphaned tool results
         while window and window[0].get("role") == "tool":

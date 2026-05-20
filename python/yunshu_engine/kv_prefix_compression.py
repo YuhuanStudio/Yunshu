@@ -650,7 +650,7 @@ class SlidingWindowKVManager:
 
         trimmed = 0
         try:
-            for layer_cache in kv_cache:
+            for i, layer_cache in enumerate(kv_cache):
                 if layer_cache is None:
                     continue
                 # MLX prompt cache: each entry is (key, value) or a cache object
@@ -659,25 +659,38 @@ class SlidingWindowKVManager:
                     seq_len = key.shape[0] if hasattr(key, 'shape') else 0
                     if seq_len > keep_tokens:
                         trim_from_start = seq_len - keep_tokens
-                        # Keep system prompt tokens + last window tokens
                         if trim_from_start > 0 and n_system > 0:
-                            # Keep system prefix + window suffix
-                            import mlx.core as mx
-                            new_key = mx.concatenate(
-                                [key[:system_tokens], key[seq_len - window_tokens:]],
-                                axis=0,
-                            )
-                            new_value = mx.concatenate(
-                                [value[:system_tokens], value[seq_len - window_tokens:]],
-                                axis=0,
-                            )
-                            layer_cache = (new_key, new_value)
+                            # Guard against negative window_tokens (can happen when
+                            # system prompt alone exceeds the current position).
+                            effective_window = max(0, window_tokens)
+                            if effective_window == 0:
+                                # Only keep system prefix — no window tokens yet
+                                import mlx.core as mx
+                                new_key = key[:system_tokens]
+                                new_value = value[:system_tokens]
+                            else:
+                                # Keep system prefix + window suffix
+                                import mlx.core as mx
+                                new_key = mx.concatenate(
+                                    [key[:system_tokens], key[seq_len - effective_window:]],
+                                    axis=0,
+                                )
+                                new_value = mx.concatenate(
+                                    [value[:system_tokens], value[seq_len - effective_window:]],
+                                    axis=0,
+                                )
+                            # CRITICAL: write back to the original kv_cache list.
+                            # Reassigning the loop variable (layer_cache = ...) does NOT
+                            # mutate the list — previous code silently discarded the
+                            # trimmed arrays, making trim_kv_cache a no-op.
+                            kv_cache[i] = (new_key, new_value)
                             trimmed += trim_from_start
                         elif trim_from_start > 0:
                             import mlx.core as mx
                             new_key = key[trim_from_start:]
                             new_value = value[trim_from_start:]
-                            layer_cache = (new_key, new_value)
+                            # CRITICAL: same write-back fix as above.
+                            kv_cache[i] = (new_key, new_value)
                             trimmed += trim_from_start
         except Exception:
             logger.debug(

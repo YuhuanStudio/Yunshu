@@ -225,16 +225,16 @@ class TestBatchResult:
     def test_per_request_results(self):
         result = BatchResult(
             request_ids=["r1", "r2"],
-            generated_token_ids=[42, 43],
+            generated_token_ids=[[42], [43]],
             finish_reasons=["stop", "length"],
             spec_accepted_count=[3, 0],
             spec_rejected_count=[1, 0],
         )
         per_req = result.get_per_request_results()
-        assert per_req["r1"]["token_id"] == 42
+        assert per_req["r1"]["token_ids"] == [42]
         assert per_req["r1"]["finish_reason"] == "stop"
         assert per_req["r1"]["spec_accepted"] == 3
-        assert per_req["r2"]["token_id"] == 43
+        assert per_req["r2"]["token_ids"] == [43]
 
     def test_empty_result(self):
         result = BatchResult()
@@ -244,7 +244,7 @@ class TestBatchResult:
     def test_out_of_bounds_access(self):
         result = BatchResult(
             request_ids=["r1"],
-            generated_token_ids=[42],
+            generated_token_ids=[[42]],
         )
         per_req = result.get_per_request_results()
         assert per_req["r1"]["finish_reason"] is None

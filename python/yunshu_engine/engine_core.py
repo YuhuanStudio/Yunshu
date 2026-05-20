@@ -1147,8 +1147,16 @@ class EngineCore:
 
         # ── Context window truncation (prevent garbage output from overlength prompts) ──
         max_seq_len = self._get_max_seq_len()
-        if max_seq_len > 0 and num_prompt_tokens + max_tokens > max_seq_len:
-            excess = num_prompt_tokens + max_tokens - max_seq_len
+        # Thinking tokens also consume context window positions.  When
+        # enable_thinking is True the model will produce thinking tokens
+        # *in addition to* the max_tokens completion tokens, so they must
+        # be subtracted from the available prompt budget to avoid generating
+        # garbage when prompt + thinking + completion > max_seq_len.
+        _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+        # Total tokens that the generation will consume beyond the prompt.
+        _generation_budget = max_tokens + _thinking_overhead
+        if max_seq_len > 0 and num_prompt_tokens + _generation_budget > max_seq_len:
+            excess = num_prompt_tokens + _generation_budget - max_seq_len
             if excess > 0 and num_prompt_tokens > excess:
                 # Prefer message-level truncation when we still have the
                 # original messages — it preserves system/developer messages
@@ -1158,7 +1166,7 @@ class EngineCore:
                     try:
                         trunc_result = self._context_window_mgr.compute_truncation(
                             messages=_original_prompt,
-                            max_tokens=max_seq_len - max_tokens,
+                            max_tokens=max_seq_len - _generation_budget,
                             strategy="importance_aware",
                         )
                         truncated_messages = trunc_result.messages
@@ -1224,7 +1232,8 @@ class EngineCore:
                     finish_reason="error",
                     error=(
                         f"Prompt exceeds context window "
-                        f"({num_prompt_tokens} prompt tokens > {max_seq_len} max_seq_len)"
+                        f"({num_prompt_tokens} prompt tokens + "
+                        f"{_generation_budget} generation budget > {max_seq_len} max_seq_len)"
                     ),
                     prompt_tokens=num_prompt_tokens,
                     completion_tokens=0,

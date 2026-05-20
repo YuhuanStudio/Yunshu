@@ -15,7 +15,7 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-ModelType = Literal["llm", "vlm", "audio_tts", "audio_stt", "image_gen"]
+ModelType = Literal["llm", "vlm", "audio_tts", "audio_stt", "image_gen", "ocr", "sts", "video"]
 EngineType = Literal["batched", "vlm", "audio", "image"]
 
 IMAGE_GEN_MODEL_TYPES = {"flux", "sd3", "sdxl", "z_image"}
@@ -132,7 +132,24 @@ def _register(models: dict[str, DiscoveredModel], model_dir: Path) -> None:
         except Exception:
             logger.debug("model config.json read failed", exc_info=True)
 
-        models[model_dir.name] = DiscoveredModel(
+        # Use model_dir.name as the key, but disambiguate if a different
+        # model with the same name was already registered (e.g. same model
+        # name under different org directories like mlx-community/Qwen2.5
+        # vs custom-org/Qwen2.5).  The existing entry wins (first-found).
+        key = model_dir.name
+        if key in models:
+            existing_path = models[key].model_path
+            if existing_path != str(model_dir):
+                # Collision: disambiguate with parent directory prefix
+                parent_name = model_dir.parent.name
+                key = f"{parent_name}/{model_dir.name}"
+                logger.warning(
+                    "Model name collision: '%s' from %s shadows %s, "
+                    "using disambiguated key '%s'",
+                    model_dir.name, existing_path, model_dir, key,
+                )
+
+        models[key] = DiscoveredModel(
             model_id=model_dir.name,
             model_path=str(model_dir),
             model_type=mt,
