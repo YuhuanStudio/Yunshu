@@ -1751,7 +1751,7 @@ class ImageGenEngine:
                     key=mx.random.key(seed or 42),
                 ).astype(mx.float16)
 
-                sigmas = _compute_sigmas(num_inference_steps, width, height)
+                sigmas = self._resolve_sigmas(num_inference_steps, width, height)
 
                 for t in range(num_inference_steps):
                     # Check cancel before each expensive diffusion step (thread-safe)
@@ -2272,8 +2272,8 @@ class ImageGenEngine:
         cap_feats = cap_feats[0, :num_valid, :]
         mx.eval(cap_feats)
 
-        # 4. Compute sigma schedule
-        sigmas = _compute_sigmas(num_steps, width, height)
+        # 4. Compute sigma schedule (respects YUNSHU_DIFFUSION_SCHEDULER opt-in)
+        sigmas = self._resolve_sigmas(num_steps, width, height)
 
         # 5. Add noise to source latents based on denoise_strength
         # Higher denoise_strength → start from later timestep (more noise)
@@ -2453,31 +2453,54 @@ class ImageGenEngine:
         cap_feats = cap_feats[0, :num_valid, :]
         mx.eval(cap_feats)
 
-        # 6. Compute sigma schedule
-        sigmas = _compute_sigmas(num_steps, width, height)
+        # 6. Compute sigma schedule (respects YUNSHU_DIFFUSION_SCHEDULER opt-in)
+        sigmas = self._resolve_sigmas(num_steps, width, height)
 
         # 7. Masked denoising loop
-        for t in range(num_steps):
-            sigma_t = sigmas[t].reshape((1,))
-            timestep = mx.ones_like(sigma_t) - sigma_t
+        # TeaCache: hold lock for the entire denoising loop to prevent
+        # concurrent requests from corrupting shared cache state.
+        tc_lock = self._teacache_lock if self._teacache is not None else None
+        if tc_lock is not None:
+            tc_lock.acquire()
+        try:
+            if self._teacache is not None:
+                self._teacache.reset()
 
-            noise_pred = self._transformer(
-                x=latents,
-                timestep=timestep,
-                sigmas=sigmas,
-                cap_feats=cap_feats,
-            )
+            for t in range(num_steps):
+                sigma_t = sigmas[t].reshape((1,))
+                timestep = mx.ones_like(sigma_t) - sigma_t
 
-            # Euler step
-            dt = sigmas[t + 1] - sigmas[t]
-            denoised = latents + noise_pred * dt
+                if self._teacache is not None:
+                    noise_pred = self._teacache.forward(
+                        self._transformer, latents, timestep, sigmas, cap_feats,
+                    )
+                else:
+                    noise_pred = self._transformer(
+                        x=latents,
+                        timestep=timestep,
+                        sigmas=sigmas,
+                        cap_feats=cap_feats,
+                    )
 
-            # Blend: keep known regions from the *previous step's latents*
-            # (not the original VAE encoding, which is at a different noise
-            # level and would cause visible seams).  Take denoised output for
-            # the masked (inpainted) regions.
-            latents = (1 - mask_4d) * latents + mask_4d * denoised
-            mx.eval(latents)
+                # Euler step
+                dt = sigmas[t + 1] - sigmas[t]
+                denoised = latents + noise_pred * dt
+
+                # Blend: keep known regions from the *previous step's latents*
+                # (not the original VAE encoding, which is at a different noise
+                # level and would cause visible seams).  Take denoised output for
+                # the masked (inpainted) regions.
+                latents = (1 - mask_4d) * latents + mask_4d * denoised
+                mx.eval(latents)
+
+            if self._teacache is not None:
+                tc_stats = self._teacache.get_stats()
+                logger.info(f"TeaCache (inpaint): {tc_stats['cache_hits']} hits, "
+                            f"{tc_stats['cache_misses']} misses, "
+                            f"hit_rate={tc_stats['hit_rate']:.1%}")
+        finally:
+            if tc_lock is not None:
+                tc_lock.release()
 
         # 8. VAE decode (auto-tile for large images)
         if width * height > 1024 * 1024:
@@ -2656,21 +2679,26 @@ class ImageGenEngine:
             key=mx.random.key(seed),
         ).astype(mx.float16)
 
-        # 6. Compute sigma schedule
-        sigmas = _compute_sigmas(num_steps, width, height)
+        # 6. Compute sigma schedule (respects YUNSHU_DIFFUSION_SCHEDULER opt-in)
+        sigmas = self._resolve_sigmas(num_steps, width, height)
 
         # 7. Conditioned denoising loop
         for t in range(num_steps):
-            # Inject conditioning at each step
-            latents = cn_block.inject_condition(
-                latents, condition_latents, t, num_steps,
-            )
-
             sigma_t = sigmas[t].reshape((1,))
             timestep = mx.ones_like(sigma_t) - sigma_t
 
+            # Compute the conditioning signal for this step without
+            # mutating the running latent state.  The conditioning bias
+            # is applied only to the transformer input so the Euler step
+            # operates on the original latents.  Previously inject_condition
+            # overwrote `latents` before the Euler step, causing the
+            # conditioning signal to be double-counted.
+            conditioned_input = cn_block.inject_condition(
+                latents, condition_latents, t, num_steps,
+            )
+
             noise_pred = self._transformer(
-                x=latents,
+                x=conditioned_input,
                 timestep=timestep,
                 sigmas=sigmas,
                 cap_feats=cap_feats,
@@ -2810,8 +2838,8 @@ class ImageGenEngine:
         else:
             depth_4d = depth_latents
 
-        # 7. Compute sigma schedule
-        sigmas = _compute_sigmas(num_steps, width, height)
+        # 7. Compute sigma schedule (respects YUNSHU_DIFFUSION_SCHEDULER opt-in)
+        sigmas = self._resolve_sigmas(num_steps, width, height)
 
         # 8. Depth-conditioned denoising loop
         for t in range(num_steps):

@@ -448,7 +448,11 @@ class DiffusionLoRAOffloader:
         for lora_id, adapter in list(self._adapters.items()):
             if not adapter.loaded:
                 continue
-            # Unload if not assigned to any future step
+            # Unload if not assigned to any future step.
+            # range.stop is exclusive, so the adapter covers steps in
+            # [start, stop).  After completing `step`, the remaining
+            # future steps start at step+1.  Unload when step+1 >= stop,
+            # i.e. step >= stop - 1.
             if adapter.assigned_steps is not None:
                 if step >= adapter.assigned_steps.stop - 1:
                     self._unload(lora_id)
