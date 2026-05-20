@@ -35,7 +35,27 @@
 
 ## 修復進度追蹤
 
-> 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+> 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 275 — Streaming Token Accuracy, Cancel Propagation, Prefill Progress)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 275: Streaming stop sequence token 計數不準 | stop 匹配後只減 1 但 stop 可能跨多 token。改為根據實際發送文字重新計算 | 計費準確 (HIGH) |
+| Wave 275: Anthropic stop sequence output_tokens 多算 | 只減 1 token 不論 stop 長度。加入 token boundary 追蹤精確計算 | 計費準確 (HIGH) |
+| Wave 275: SGLang-style 取消傳播 | 客戶端斷線時 cancel_event 未傳播到 scheduler，請求繼續佔用 GPU。stream_outputs 加入 cancel_event 競爭 | 資源泄漏 (HIGH) |
+| Wave 275: vLLM-style 分塊預填充進度報告 | 長 prompt 分塊預填充時客戶端無進度。加入 SSE progress comment + RequestOutput.prefill_progress | 用戶體驗 (FEATURE) |
+
+### 已完成修復 (2026-05-20 Wave 274 — PagedScheduler Double-Finalize, RadixTree Block Boundary, Dedup Shadow Prefix, Responses API Chat Template, Priority Aging, Inflight Prefix Sharing)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 274: PagedScheduler 雙重終結化 | _manage_kv_cache 和 _cleanup_finished 都調用 _finalize_request_blocks。加入 _finalized_requests set 防護 | KV block 泄漏 (HIGH) |
+| Wave 274: RadixTree split 塊邊界錯位 | split_pos 非塊對齊時邊界塊分配給子節點，父節點 KV 數據缺失。改用 ceiling 除法 | KV 數據損壞 (HIGH) |
+| Wave 274: Dedup shadow 不完整文字流 | shadow 只收到註冊後的 token，遺漏前面已生成的文字。轉發 primary 的累積輸出 | 輸出不完整 (HIGH) |
+| Wave 274: Responses API 非 batched 缺 chat template | 舊引擎路徑直接傳 raw messages，無 apply_chat_template。加入適配 | 模型輸出垃圾 (HIGH) |
+| Wave 274: Priority aging 字段正規化 | _submit_time 從動態屬性改為 dataclass 字段，移除脆弱的 getattr | 代碼品質 (MEDIUM) |
+| Wave 274: Inflight prefix sharing 完整接線 | engine_core 從未調用 find_prefix，scheduler 從未查詢 inflight tracker。加入完整接線 | 性能浪費 (FEATURE) |
 
 ### 已完成修復 (2026-05-20 Wave 273 — LoRA Timing, TeaCache Concurrency, Whisper Caching, WAV Validation, Active Requests, Metrics Safety)
 
