@@ -134,7 +134,13 @@ class ScheduleBatch:
         self.slots.sort(key=lambda s: -s.priority)
 
     def split_prefill_decode(self) -> tuple[ScheduleBatch, ScheduleBatch]:
-        """Split into prefill batch and decode batch (Sarathi pattern)."""
+        """Split into prefill batch and decode batch (Sarathi pattern).
+
+        Overflow slots (those that don't fit in either sub-batch) are placed
+        back into ``self`` so the caller can re-queue them.  Without this,
+        slots were silently dropped, orphaning requests from the scheduler
+        pipeline and causing them to never be processed.
+        """
         prefill = ScheduleBatch(
             max_batch_size=self.max_prefill_batch,
             created_at=self.created_at,
@@ -143,13 +149,21 @@ class ScheduleBatch:
             max_batch_size=self.max_decode_batch,
             created_at=self.created_at,
         )
+        overflow: list[RequestSlot] = []
         for slot in self.slots:
             if slot.is_prefill:
                 if prefill.num_slots < self.max_prefill_batch:
                     prefill.add_slot(slot)
+                else:
+                    overflow.append(slot)
             else:
                 if decode.num_slots < self.max_decode_batch:
                     decode.add_slot(slot)
+                else:
+                    overflow.append(slot)
+        # Retain overflow in self so the caller can re-schedule them.
+        # This prevents silent request loss.
+        self.slots = overflow
         return prefill, decode
 
     def remove_finished(self) -> list[RequestSlot]:
@@ -257,12 +271,19 @@ class ForwardBatch:
                         # Decode step: position of the last generated token.
                         # generated_tokens[-1:] (1 token) is at position
                         # num_prompt_tokens + (N-1) where N = len(generated_tokens).
-                        # When generated_tokens is empty this is a fallback decode
-                        # slot (shouldn't happen) — use num_prompt_tokens as position.
+                        # Fallback for edge case: if generated_tokens is empty and
+                        # num_prompt_tokens is 0, use total_tokens which accounts
+                        # for prompt_tokens list length as a reliable fallback.
                         if slot.generated_tokens:
                             start = slot.num_prompt_tokens + len(slot.generated_tokens) - 1
                         else:
-                            start = slot.num_prompt_tokens
+                            # Use the authoritative prompt count: prefer
+                            # num_prompt_tokens, but fall back to the actual
+                            # prompt_tokens list length if num_prompt_tokens
+                            # was never set (e.g. from BatchComposer active_slots
+                            # which only sets is_prefill and priority).
+                            prompt_count = slot.num_prompt_tokens or len(slot.prompt_tokens)
+                            start = prompt_count
                         pos.extend(range(start, start + length))
                 position_ids = mx.array(pos, dtype=mx.int32)
             except ImportError:
@@ -391,6 +412,15 @@ class BatchComposer:
         1. Active decode requests get priority (they hold KV cache)
         2. New prefill requests fill remaining slots
         3. Memory budget constrains total tokens
+
+        Bug fixes applied:
+        - Phase 1: sort active decode by priority (descending) so high-priority
+          decode requests are preferred when decode_slots is limited.
+        - Phase 2: token_budget deducted per-decode-slot is 1 (one new token
+          per step), not the full history (prompt_tokens + generated_tokens).
+          Without this, a few long-running decode requests exhaust the budget
+          and block all new prefill requests.
+        - Stats: only increment counters when the batch is non-empty.
         """
         batch = ScheduleBatch(
             max_batch_size=self._max_batch,
@@ -398,14 +428,25 @@ class BatchComposer:
             max_decode_batch=self._max_decode,
         )
 
-        # Phase 1: Carry forward active decode requests
+        # Phase 1: Carry forward active decode requests (priority-sorted)
         decode_count = 0
         if active_slots:
-            for slot in active_slots:
-                if not slot.is_prefill and not slot.is_finished:
-                    if batch.num_slots < self._max_batch and decode_count < self._max_decode:
-                        batch.add_slot(slot)
-                        decode_count += 1
+            # Sort active decode by priority descending so that when
+            # decode_slots is limited, higher-priority decode requests
+            # are kept.  Without this sort, iteration order (dict insertion
+            # order) determines which decode slots survive, which can evict
+            # high-priority requests while keeping low-priority ones.
+            decode_candidates = sorted(
+                [s for s in active_slots if not s.is_prefill and not s.is_finished],
+                key=lambda s: -s.priority,
+            )
+            for slot in decode_candidates:
+                if batch.num_slots >= self._max_batch:
+                    break
+                if decode_count >= self._max_decode:
+                    break
+                batch.add_slot(slot)
+                decode_count += 1
 
         # Phase 2: Add new prefill requests by priority
         new_requests = sorted(
@@ -417,7 +458,12 @@ class BatchComposer:
         prefill_count = len(batch.prefill_slots)
         token_budget = memory_budget_tokens
         if token_budget > 0:
-            token_budget -= batch.total_tokens
+            # Deduct decode overhead: each decode slot only generates 1 new
+            # token per step, not its full prompt + generated history.
+            # The original code used batch.total_tokens which includes all
+            # historical tokens for each decode slot — massively over-counting
+            # memory usage and blocking all new prefill requests.
+            token_budget -= decode_count  # 1 token per decode step
 
         for slot in new_requests:
             if batch.num_slots >= self._max_batch:
@@ -432,8 +478,9 @@ class BatchComposer:
             if token_budget > 0:
                 token_budget -= slot.num_prompt_tokens or len(slot.prompt_tokens)
 
-        self._total_batches_composed += 1
-        self._total_requests_scheduled += batch.num_slots
+        if batch.num_slots > 0:
+            self._total_batches_composed += 1
+            self._total_requests_scheduled += batch.num_slots
         return batch
 
     def _schedule_score(self, slot: RequestSlot) -> float:

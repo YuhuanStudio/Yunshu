@@ -239,22 +239,34 @@ class SpecAwareBatchScheduler:
             spec_overhead = self.spec_overhead_per_request
 
         total = self.max_num_seqs
-        decode_slots = num_running
+        # Clamp decode_slots to total — during preemption transitions,
+        # num_running can briefly exceed max_num_seqs (e.g., before the
+        # preempted request is removed from running). Without the clamp,
+        # decode_slots + spec_slots exceeds total, and available becomes
+        # negative (clamped to 0), but the inflated decode_slots prevents
+        # new requests from being scheduled even after preemption frees slots.
+        decode_slots = min(num_running, total)
 
         # Reserve slots proportional to spec verification overhead.
         # Each running request with spec decode active consumes extra slot
         # budget for draft verification. The overhead is the fraction of a
         # full slot each verification costs.
         spec_slots = 0
-        if spec_overhead > 0 and num_running > 0:
+        if spec_overhead > 0 and decode_slots > 0:
             # TBO overlap: draft generation overlaps with verification,
             # reducing effective overhead by ~50%.
             effective_overhead = spec_overhead
             if self.tbo_enabled:
                 effective_overhead *= 0.5
                 self._stats["tbo_overlap_steps"] += 1
-            spec_slots = max(0, round(num_running * effective_overhead))
+            # Use decode_slots (clamped) not raw num_running to avoid
+            # spec_slots being proportional to an inflated running count.
+            spec_slots = max(0, round(decode_slots * effective_overhead))
 
+        # Ensure spec_slots doesn't push total reservation beyond capacity.
+        # When decode_slots is near max_num_seqs, the proportional spec
+        # reservation can exceed remaining capacity — cap it.
+        spec_slots = min(spec_slots, total - decode_slots)
         available = max(0, total - decode_slots - spec_slots)
 
         self._stats["budget_computations"] += 1
@@ -1469,7 +1481,11 @@ class Scheduler:
                 self.waiting.push_front(req, priority=req.sampling_params.priority)
 
         # Generation memory guard: defer scheduling under memory pressure
-        if self.config.memory_guard_enabled and active_count > 0 and to_insert:
+        # Use len(self.running) instead of the stale active_count captured
+        # before preemption/retraction — preemption reduces the running count,
+        # but the memory guard should check against the current state.
+        current_running_count = len(self.running)
+        if self.config.memory_guard_enabled and current_running_count > 0 and to_insert:
             try:
                 import mlx.core as mx
                 active_mem = mx.get_active_memory()
@@ -1503,12 +1519,21 @@ class Scheduler:
                 )
                 for req in to_insert
             ]
+            # Populate num_prompt_tokens and generated_tokens for active decode
+            # slots so BatchComposer can compute accurate total_tokens and
+            # ForwardBatch.from_schedule_batch can compute correct position IDs.
+            # Without these fields, total_tokens returns 0 for all decode slots
+            # (num_prompt_tokens=0 and generated_tokens=[]), causing the memory
+            # budget check in compose() to underestimate batch token usage.
             active_slots = [
                 RequestSlot(
                     request_id=rid,
-                    prompt_tokens=[],
+                    prompt_tokens=r.prompt_token_ids or [],
+                    max_tokens=r.sampling_params.max_tokens if r.sampling_params else 512,
                     is_prefill=False,
                     priority=r.sampling_params.priority if r.sampling_params else 0,
+                    num_prompt_tokens=getattr(r, 'num_prompt_tokens', 0) or len(r.prompt_token_ids or []),
+                    generated_tokens=list(r.output_token_ids) if getattr(r, 'output_token_ids', None) else [],
                 )
                 for rid, r in self.running.items()
             ]
