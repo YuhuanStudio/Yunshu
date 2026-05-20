@@ -378,7 +378,7 @@ class MedusaProposer:
 
         for level in range(num_levels):
             logits = head_logits[level]  # (batch, vocab)
-            log_probs = mx.log(mx.softmax(logits, axis=-1) + 1e-10)
+            log_probs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
 
             # Take top-K from this head's logits
             # logits shape: (batch, vocab) — select batch 0

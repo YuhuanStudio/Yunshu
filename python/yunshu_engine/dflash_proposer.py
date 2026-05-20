@@ -381,7 +381,7 @@ class DFlashProposer:
         else:
             logits_2d = target_logits.reshape(1, -1)
 
-        target_logprobs_all = mx.log(mx.softmax(logits_2d, axis=-1))
+        target_logprobs_all = logits_2d - mx.logsumexp(logits_2d, axis=-1, keepdims=True)
 
         # Extract target logprob for each draft token
         accepted_ids = []
@@ -397,7 +397,7 @@ class DFlashProposer:
             # Speculative sampling acceptance check
             if draft_logprobs is not None and i < len(draft_logprobs):
                 draft_lp = draft_logprobs[i]
-                ratio = min(1.0, math.exp(target_lp - draft_lp))
+                ratio = min(1.0, math.exp(max(-50, min(50, target_lp - draft_lp))))
                 u = self._rng.random()
                 if u < ratio:
                     accepted_ids.append(draft_token)

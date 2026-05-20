@@ -445,6 +445,10 @@ class RequestLifecycleOrchestrator:
         state.transition(RequestPhase.ABORTED)
         if was_active:
             self._active_count = max(0, self._active_count - 1)
+            self._concurrency.report_failure("abort")
+            self._total_rejected += 1
+            if state.model in self._model_counts:
+                self._model_counts[state.model]["rejected"] += 1
         # Remove from pending queue if present (request was queued but never promoted)
         try:
             self._pending_queue.remove(request_id)

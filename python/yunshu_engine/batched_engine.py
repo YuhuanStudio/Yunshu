@@ -3305,7 +3305,8 @@ class BatchedEngine:
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
-                            _thinking_tokens.append(token)
+                            # Token was already appended at line ~3298 — don't
+                            # duplicate it.  Only force-emit the closing tag.
                             _in_thinking = False
                             # Emit current token's text first (still reasoning content)
                             if new_text:
@@ -4206,10 +4207,12 @@ class BatchedEngine:
                     ids = self._tokenizer.encode(s)
                     if len(ids) == 1:
                         eos_ids.add(ids[0])
+                    elif len(s) > 1:
+                        stop_suffixes.append(s)
                 except Exception:
                     logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
-                if len(s) > 1:
-                    stop_suffixes.append(s)
+                    if len(s) > 1:
+                        stop_suffixes.append(s)
 
         # Run speculative steps on executor thread, yielding after each step
         from mlx_lm.models.cache import make_prompt_cache
@@ -4981,10 +4984,12 @@ class BatchedEngine:
                     ids = tokenizer.encode(s)
                     if len(ids) == 1:
                         stop_ids.add(ids[0])
+                    elif len(s) > 1:
+                        stop_suffixes.append(s)
                 except Exception:
                     logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
-                if len(s) > 1:
-                    stop_suffixes.append(s)
+                    if len(s) > 1:
+                        stop_suffixes.append(s)
 
         sampler = make_sampler(
             temp=temperature, top_p=top_p,
@@ -5201,6 +5206,11 @@ class BatchedEngine:
                             if suffix_hit:
                                 detokenizer.finalize()
                                 _remaining = detokenizer.last_segment
+                                if stop_suffixes and _remaining:
+                                    for s in stop_suffixes:
+                                        if _remaining.endswith(s):
+                                            _remaining = _remaining[:-len(s)]
+                                            break
                                 if _remaining:
                                     _put((_remaining, n_tok, None, token_id))
                                 if prefix_cache is not None:

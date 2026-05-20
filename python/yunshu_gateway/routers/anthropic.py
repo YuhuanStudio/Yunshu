@@ -1417,7 +1417,7 @@ async def _stream_anthropic(
         if not _message_start_emitted:
             _message_start_emitted = True
             yield _emit_message_start(input_tokens, cached_tokens)
-        if text_block_started or thinking_block_started:
+        if text_block_started or thinking_block_started or tool_use_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n".encode("utf-8")
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
@@ -1427,7 +1427,7 @@ async def _stream_anthropic(
         if not _message_start_emitted:
             _message_start_emitted = True
             yield _emit_message_start(input_tokens, cached_tokens)
-        if text_block_started or thinking_block_started:
+        if text_block_started or thinking_block_started or tool_use_block_started:
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n".encode("utf-8")
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")

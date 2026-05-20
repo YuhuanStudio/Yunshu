@@ -2787,3 +2787,18 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 - **HIGH**: ngram streaming `_remaining` suffix leak — stop suffix not stripped from finalized text, partial suffix text leaks into output. Fixed: strip suffix from `_remaining` (matching MTP path pattern)
 - **HIGH**: `extract_tool_calls_v2` brace counter ignores braces inside JSON strings (`{"name": "test{"}` increments depth incorrectly). Fixed: string-aware brace tracking with escape handling
 - **HIGH**: Anthropic streaming `message_stop` emitted after `error` events in error handlers — protocol violation. Fixed: remove `message_stop` from error paths, stream ends with error event
+
+### Wave 304 — 8-Agent Deep Audit: 11 CRITICAL/HIGH Fixes (9 files)
+- **CRITICAL**: engine_core `generate()` threading.Event cancel detection completely broken — uses full timeout as sleep interval, never detects cancel, aborts without checking `is_set()`. Fixed: short 50ms polling + re-check pattern (matching `stream_outputs`)
+- **CRITICAL**: batched_engine `_thinking_tokens` double-append in budget enforcement — token appended at line 3298 AND again at 3308, inflating reasoning token count. Fixed: remove duplicate append
+- **CRITICAL**: dflash_proposer `math.exp()` overflow crash when target_logprob - draft_logprob > 709. Fixed: clamp to [-50, 50] range
+- **CRITICAL**: responses.py `_is_reasoning` used before assignment in batched streaming path — NameError on first output with truthy new_text. Fixed: move assignment before guard
+- **HIGH**: dflash_proposer `log(softmax())` numerically unstable — produces -inf for underflow tokens. Fixed: use `logits - logsumexp()` (log-sum-exp trick)
+- **HIGH**: medusa_proposer same `log(softmax())` instability with 1e-10 epsilon. Fixed: same log-sum-exp approach
+- **HIGH**: engine_core model reference leak — scheduler holds model/tokenizer refs after stop(), preventing GC on hot-reload. Fixed: clear scheduler refs in stop()
+- **HIGH**: ngram streaming single-step suffix not trimmed from `_remaining` — stop suffix text leaks into output. Fixed: add suffix trimming
+- **HIGH**: ngram + speculative streaming dual-addition to both `stop_ids` AND `stop_suffixes` for multi-char single-token strings. Fixed: use `elif` to prevent overlap
+- **HIGH**: request_lifecycle `on_request_aborted()` doesn't call `report_failure()` — concurrency controller never backs off on abort storms. Fixed: add report_failure + metrics
+- **HIGH**: Anthropic error handlers don't close `tool_use_block_started` blocks — protocol violation. Fixed: add `tool_use_block_started` to close conditions
+- **HIGH**: json_schema `$ref` cycle detection missing — circular refs cause exponential growth to depth 10. Fixed: add `_seen_refs` set for cycle detection
+- **MEDIUM**: Replace all `_value` private attribute reads with `is_set()` public API across engine_core + speculative_decoder

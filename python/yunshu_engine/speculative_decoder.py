@@ -653,7 +653,7 @@ class SpeculativeDecoder:
         while len(generated_tokens) < max_tokens:
             # Cooperative cancellation check (thread-safe for asyncio.Event)
             if cancel_event is not None and (
-                cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                cancel_event.is_set() if isinstance(cancel_event, asyncio.Event)
                 else cancel_event.is_set()
             ):
                 break
@@ -673,7 +673,7 @@ class SpeculativeDecoder:
             for _ in range(effective_K):
                 # Check cancellation inside draft loop too
                 if cancel_event is not None and (
-                    cancel_event._value if isinstance(cancel_event, asyncio.Event)
+                    cancel_event.is_set() if isinstance(cancel_event, asyncio.Event)
                     else cancel_event.is_set()
                 ):
                     break

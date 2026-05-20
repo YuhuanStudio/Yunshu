@@ -39,6 +39,7 @@ def _repair_json_schema(
     schema: dict,
     _depth: int = 0,
     _root_defs: dict | None = None,
+    _seen_refs: set[str] | None = None,
 ) -> dict:
     """Repair common JSON Schema issues before constrained decoding (vLLM pattern).
 
@@ -79,10 +80,17 @@ def _repair_json_schema(
         for key in ("definitions", "$defs"):
             if key in schema and isinstance(schema[key], dict):
                 _root_defs.update(schema[key])
+    if _seen_refs is None:
+        _seen_refs = set()
 
     # 1. Resolve $ref by inlining the referenced definition
     if "$ref" in schema:
         ref_path = schema["$ref"]
+        # Cycle detection: skip already-seen refs to prevent infinite recursion
+        if ref_path in _seen_refs:
+            del schema["$ref"]
+            return schema
+        _seen_refs.add(ref_path)
         if isinstance(ref_path, str) and ref_path.startswith("#/"):
             parts = ref_path[2:].split("/")
             target = None
@@ -111,7 +119,7 @@ def _repair_json_schema(
                 for k, v in target.items():
                     schema[k] = v
                 # Recurse to repair the merged schema
-                return _repair_json_schema(schema, _depth + 1, _root_defs)
+                return _repair_json_schema(schema, _depth + 1, _root_defs, _seen_refs)
 
     # 2. Add "type": "object" if properties is present but type is missing
     if "properties" in schema and "type" not in schema:
@@ -160,20 +168,20 @@ def _repair_json_schema(
     if "properties" in schema and isinstance(schema["properties"], dict):
         for key, value in schema["properties"].items():
             if isinstance(value, dict):
-                schema["properties"][key] = _repair_json_schema(value, _depth + 1, _root_defs)
+                schema["properties"][key] = _repair_json_schema(value, _depth + 1, _root_defs, _seen_refs)
 
     if "items" in schema and isinstance(schema["items"], dict):
-        schema["items"] = _repair_json_schema(schema["items"], _depth + 1, _root_defs)
+        schema["items"] = _repair_json_schema(schema["items"], _depth + 1, _root_defs, _seen_refs)
 
     if "additionalProperties" in schema and isinstance(schema["additionalProperties"], dict):
         schema["additionalProperties"] = _repair_json_schema(
-            schema["additionalProperties"], _depth + 1, _root_defs
+            schema["additionalProperties"], _depth + 1, _root_defs, _seen_refs
         )
 
     for key in ("anyOf", "oneOf", "allOf"):
         if key in schema and isinstance(schema[key], list):
             schema[key] = [
-                _repair_json_schema(o, _depth + 1, _root_defs) if isinstance(o, dict) else o
+                _repair_json_schema(o, _depth + 1, _root_defs, _seen_refs) if isinstance(o, dict) else o
                 for o in schema[key]
             ]
 
@@ -185,7 +193,7 @@ def _repair_json_schema(
             for def_name, def_schema in schema[defs_key].items():
                 if isinstance(def_schema, dict):
                     schema[defs_key][def_name] = _repair_json_schema(
-                        def_schema, _depth + 1, _root_defs
+                        def_schema, _depth + 1, _root_defs, _seen_refs
                     )
 
     return schema

@@ -974,6 +974,11 @@ class EngineCore:
         # Release model/tokenizer refs + GC + cache clear on executor
         self._model = None
         self._tokenizer = None
+        # Also clear scheduler's model refs to prevent GC leak on hot-reload
+        if hasattr(self.scheduler, 'model'):
+            self.scheduler.model = None
+        if hasattr(self.scheduler, 'tokenizer'):
+            self.scheduler.tokenizer = None
         gc.collect()
         loop = asyncio.get_running_loop()
         from .mlx_executor import sync_and_clear_cache
@@ -1838,7 +1843,7 @@ class EngineCore:
                 if cancel_event is not None:
                     cev = cancel_event
                     if isinstance(cev, asyncio.Event):
-                        _cancelled = cev._value
+                        _cancelled = cev.is_set()
                     else:
                         _cancelled = cev.is_set()
                     if _cancelled:
@@ -1954,7 +1959,10 @@ class EngineCore:
                         if isinstance(_cancel_event, asyncio.Event):
                             _cancel_waiter = asyncio.ensure_future(_cancel_event.wait())
                         else:
-                            _cancel_waiter = asyncio.ensure_future(asyncio.sleep(timeout_s))
+                            # Use short polling interval (matching stream_outputs)
+                            # instead of full timeout — otherwise cancel is never
+                            # detected and the request always runs to timeout.
+                            _cancel_waiter = asyncio.ensure_future(asyncio.sleep(0.05))
                         try:
                             done, pending = await asyncio.wait(
                                 {_wait_task, _cancel_waiter},
@@ -1968,15 +1976,22 @@ class EngineCore:
                                 except (asyncio.CancelledError, Exception):
                                     pass
                             if _cancel_waiter in done:
-                                # Cancelled by external event — abort request
-                                await self.abort_request(req_id)
-                                _cleaned_up = True
-                                return RequestOutput(
-                                    request_id=req_id,
-                                    finished=True,
-                                    finish_reason="stop",
-                                    error="Request cancelled",
-                                )
+                                # Polling sleep completed — re-check if cancel
+                                # is actually set before aborting (same pattern as
+                                # stream_outputs).
+                                if isinstance(_cancel_event, asyncio.Event):
+                                    _cancelled = _cancel_event.is_set()
+                                else:
+                                    _cancelled = _cancel_event.is_set()
+                                if _cancelled:
+                                    await self.abort_request(req_id)
+                                    _cleaned_up = True
+                                    return RequestOutput(
+                                        request_id=req_id,
+                                        finished=True,
+                                        finish_reason="stop",
+                                        error="Request cancelled",
+                                    )
                         except asyncio.CancelledError:
                             for t in (_wait_task, _cancel_waiter):
                                 if not t.done():
