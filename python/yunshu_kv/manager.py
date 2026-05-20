@@ -568,10 +568,10 @@ class KVCacheManager:
             # _evict_cached_block cleared its hash, so it's no longer in the
             # prefix cache, but it's also not in the free queue. Without
             # recycling it here, the block is orphaned forever.
+            # Use BlockPool.free() instead of direct manipulation to keep
+            # free_queue linked-list and num_free_blocks consistent.
             if block.ref_count == 1:
-                block.ref_count = 0
-                block.cache_only = False
-                self.block_pool.free_queue.append(block)
+                self.block_pool.free([block])
 
         freed_block_count = self.block_pool.get_free_block_count() - initial_free
 
@@ -658,11 +658,10 @@ class KVCacheManager:
             self.block_pool._evict_cached_block(block)
 
             # ref_count == 1: cache-only block orphaned after hash clear.
-            # Recycle it into the free queue.
+            # Recycle it via BlockPool.free() to keep free_queue linked-list
+            # and num_free_blocks consistent (not direct manipulation).
             if block.ref_count == 1:
-                block.ref_count = 0
-                block.cache_only = False
-                self.block_pool.free_queue.append(block)
+                self.block_pool.free([block])
 
         evicted = self.block_pool.get_free_block_count() - initial_free
 

@@ -191,6 +191,7 @@ class MeshManager:
         node_mems = [
             n.capabilities.total_memory_gb * 0.7  # Reserve 30% for activations
             for n in self._topology.nodes
+            if n.state == MeshNodeState.READY
         ]
 
         self._pipeline = auto_partition_model(

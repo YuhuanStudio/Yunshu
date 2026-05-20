@@ -1626,6 +1626,11 @@ class EngineCore:
         _cleaned_up = False
 
         try:
+            # Store local reference to collector BEFORE event.wait() to avoid
+            # TOCTOU race with abort_request()/_cleanup_request() which remove
+            # the collector from _output_collectors.
+            collector = self._output_collectors.get(req_id)
+
             # Wait for completion with timeout protection
             event = self._finished_events.get(req_id)
             if event:
@@ -1654,8 +1659,7 @@ class EngineCore:
             if _start_ts is not None and _start_ts > 0:
                 _ttft_ms = round((time.monotonic() - _start_ts) * 1000, 1)
 
-            # Drain collector
-            collector = self._output_collectors.get(req_id)
+            # Drain collector (use local reference captured before event.wait())
             result = None
             if collector:
                 while True:
