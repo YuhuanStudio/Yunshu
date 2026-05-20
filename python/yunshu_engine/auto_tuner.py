@@ -323,15 +323,18 @@ class PerformanceProfiler:
         """Return profiling statistics."""
         with self._lock:
             total = self._total_steps
-            dist = {
-                b.value: cnt for b, cnt in self._bottleneck_counts.items()
-            }
+            # Compute distribution from the sliding window (not cumulative
+            # _bottleneck_counts which are misleading — they span all time
+            # while get_bottleneck() only looks at the recent window).
+            window_dist: dict[str, int] = {b.value: 0 for b in BottleneckType}
+            for m in self._history:
+                window_dist[self._classify_step(m).value] += 1
             return {
                 "profiling": self._profiling,
                 "total_steps": total,
                 "window_size": self._window_size,
                 "window_filled": len(self._history),
-                "bottleneck_distribution": dist,
+                "bottleneck_distribution": window_dist,
                 "current_bottleneck": self.get_bottleneck().value,
                 "avg_metrics": self.get_avg_metrics(),
             }
@@ -344,6 +347,11 @@ class PerformanceProfiler:
 class SLOMonitor:
     """Monitors Service Level Objectives and triggers auto-tuning on violation."""
 
+    # Minimum seconds between successive auto-tuning callback triggers
+    # for the SAME metric.  Without this, once the violation rate exceeds
+    # 30 % every subsequent check_slo() re-fires the callback.
+    _CALLBACK_COOLDOWN_S: float = 30.0
+
     def __init__(self, config: Optional[SLOConfig] = None) -> None:
         self._config = config or SLOConfig()
         self._check_results: dict[str, deque[bool]] = {
@@ -352,6 +360,8 @@ class SLOMonitor:
         self._recent_violations: deque[dict[str, Any]] = deque(maxlen=100)
         self._auto_tuning_triggers: int = 0
         self._auto_tuning_callback: Optional[Any] = None
+        # Per-metric monotonic timestamp of last callback fire
+        self._last_callback_time: dict[str, float] = {}
         self._lock = threading.RLock()
 
     @property
@@ -410,10 +420,14 @@ class SLOMonitor:
                 results = self._check_results[metric]
                 checks = len(results)
                 violations = sum(1 for r in results if not r)
+                now = time.monotonic()
+                last_fire = self._last_callback_time.get(metric, 0.0)
                 if (checks >= 5
                         and violations / checks > 0.3
-                        and self._auto_tuning_callback is not None):
+                        and self._auto_tuning_callback is not None
+                        and (now - last_fire) >= self._CALLBACK_COOLDOWN_S):
                     self._auto_tuning_triggers += 1
+                    self._last_callback_time[metric] = now
                     callback_to_fire = self._auto_tuning_callback
                     callback_violations = list(self._recent_violations)
 
@@ -473,6 +487,7 @@ class SLOMonitor:
                 self._check_results[k].clear()
             self._recent_violations.clear()
             self._auto_tuning_triggers = 0
+            self._last_callback_time.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +519,9 @@ class AdaptiveBatchSizer:
         self._current_batch: int = min_batch
         self._history: deque[dict[str, Any]] = deque(maxlen=500)
         self._adjustment_count: int = 0
-        self._slo_met_count: int = 0
-        self._slo_total_count: int = 0
+        # Sliding-window SLO compliance — avoids stale cumulative counters
+        # that make the compliance rate meaningless on long-running servers.
+        self._slo_window: deque[bool] = deque(maxlen=200)
         self._lock = threading.RLock()
 
     @property
@@ -572,9 +588,7 @@ class AdaptiveBatchSizer:
 
             # Track SLO compliance (only when latency data is available)
             if current_latency_ms > 0:
-                self._slo_total_count += 1
-                if current_latency_ms <= slo_latency_ms:
-                    self._slo_met_count += 1
+                self._slo_window.append(current_latency_ms <= slo_latency_ms)
 
             if batch != old_batch:
                 self._adjustment_count += 1
@@ -595,15 +609,18 @@ class AdaptiveBatchSizer:
     def get_stats(self) -> dict[str, Any]:
         """Return batch sizer statistics."""
         with self._lock:
-            slo_rate = (
-                self._slo_met_count / self._slo_total_count * 100.0
-                if self._slo_total_count > 0 else 100.0
-            )
+            if self._slo_window:
+                slo_rate = (
+                    sum(1 for met in self._slo_window if met)
+                    / len(self._slo_window) * 100.0
+                )
+            else:
+                slo_rate = 100.0
             return {
                 "current_batch_size": self._current_batch,
                 "adjustment_count": self._adjustment_count,
                 "slo_compliance_rate": round(slo_rate, 2),
-                "slo_checks": self._slo_total_count,
+                "slo_checks": len(self._slo_window),
                 "history_size": len(self._history),
                 "config": {
                     "min_batch": self._min_batch,
@@ -800,10 +817,12 @@ class AutoTuner:
         else:
             improvement = (after_throughput - before_throughput) / before_throughput
 
-        decision.after_metrics = after_metrics
-        decision.improvement = improvement
-
         with self._lock:
+            # Mutate shared decision inside lock so get_tuning_history()
+            # readers never see a partially-updated TuningDecision.
+            decision.after_metrics = after_metrics
+            decision.improvement = improvement
+
             if improvement < self._regression_threshold:
                 decision.is_regression = True
                 self._regressions += 1

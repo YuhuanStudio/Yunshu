@@ -4643,6 +4643,7 @@ class BatchedEngine:
                                     break
                                 detokenizer.add_token(token_id)
                                 if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
                                     break
                             continue
@@ -4676,6 +4677,7 @@ class BatchedEngine:
                                 break
                             detokenizer.add_token(tid)
                             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                tokens.pop()  # Exclude suffix-triggering token from count
                                 _stopped = True
                                 _stopped_by_suffix = True
                                 break
@@ -4698,10 +4700,15 @@ class BatchedEngine:
                                 _stopped_by_stop_id = True
                             else:
                                 detokenizer.add_token(bonus)
-                            if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                tokens.pop()  # Exclude suffix-triggering token from count
-                                _stopped_by_suffix = True
-                                _stopped = True
+                                # Suffix check ONLY when bonus is not a stop_id.
+                                # Previously this ran unconditionally, so when bonus was
+                                # a stop_id the detokenizer text was stale and a coincidental
+                                # suffix match from prior tokens would cause a spurious
+                                # tokens.pop() (double-pop) and incorrect _stopped_by_suffix.
+                                if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                                    tokens.pop()  # Exclude suffix-triggering token from count
+                                    _stopped_by_suffix = True
+                                    _stopped = True
                             # Advance sampler's grammar constraint for bonus token
                             if _grammar_constraint is not None:
                                 try:
@@ -5490,6 +5497,42 @@ class BatchedEngine:
             raise
         _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
 
+        # Thinking budget enforcement (MTP decoder does not support it natively).
+        # Detect <think/</think token IDs and truncate thinking content when the
+        # budget is exceeded.  This is a post-processing approximation — the MTP
+        # decoder already generated all tokens, but we cap the output to respect
+        # the budget, matching the behavior of _generate_fast.
+        _mtp_thinking_tokens_used = 0
+        _mtp_think_end_token = None
+        _mtp_in_thinking = False
+        _mtp_think_budget_truncate_idx = None
+        if (thinking_budget is not None or enable_thinking) and token_ids:
+            try:
+                _te_ids = tokenizer.encode("</think")
+                if len(_te_ids) == 1:
+                    _mtp_think_end_token = _te_ids[0]
+                _ts_ids = tokenizer.encode("<think")
+                _mtp_think_start_token = _ts_ids[0] if len(_ts_ids) == 1 else None
+            except Exception:
+                logger.debug("MTP thinking token encode failed", exc_info=True)
+            if _mtp_think_end_token is not None:
+                for _i, _tid in enumerate(token_ids):
+                    if not _mtp_in_thinking and _tid == _mtp_think_start_token:
+                        _mtp_in_thinking = True
+                    elif _mtp_in_thinking:
+                        _mtp_thinking_tokens_used += 1
+                        if _tid == _mtp_think_end_token:
+                            _mtp_in_thinking = False
+                        elif thinking_budget is not None and _mtp_thinking_tokens_used >= thinking_budget:
+                            # Truncate at this point and append forced think_end
+                            _mtp_think_budget_truncate_idx = _i
+                            break
+
+        if _mtp_think_budget_truncate_idx is not None:
+            token_ids = token_ids[:_mtp_think_budget_truncate_idx]
+            if _mtp_think_end_token is not None:
+                token_ids.append(_mtp_think_end_token)
+
         # Truncate at stop tokens (exclude stop token from output)
         hit_stop = False
         hit_suffix = False
@@ -5550,6 +5593,21 @@ class BatchedEngine:
         if logprobs and token_ids:
             _mtp_logprobs = None  # Real logprobs unavailable from MTP path
 
+        # Reasoning parser: extract thinking tokens from MTP output text when
+        # the tokenizer supports <think/</think single-token encoding.
+        _mtp_reasoning_tok = _mtp_thinking_tokens_used
+        if _mtp_reasoning_tok == 0 and output_text:
+            try:
+                from .reasoning_parser import get_reasoning_parser
+                rp = get_reasoning_parser(self.model_name)
+                rp_out = rp.parse(output_text)
+                if rp_out.reasoning and rp_out.reasoning_tokens > 0:
+                    _mtp_reasoning_tok = rp_out.reasoning_tokens
+                    if rp_out.content != output_text:
+                        output_text = rp_out.content
+            except Exception:
+                logger.debug("reasoning_parser failed in MTP path", exc_info=True)
+
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -5557,7 +5615,7 @@ class BatchedEngine:
             completion_tokens=_mtp_completion_count,
             finished=True,
             finish_reason=finish_reason,
-            reasoning_tokens=0,
+            reasoning_tokens=_mtp_reasoning_tok,
             cached_tokens=0,
             logprobs=_mtp_logprobs,
             ttft_ms=round(_mtp_ttft_s * 1000, 1),

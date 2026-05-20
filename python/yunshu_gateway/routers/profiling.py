@@ -123,10 +123,13 @@ async def stop_profile(request: Request):
 async def profile_status(request: Request):
     """Get profiling status."""
     _check_permission(request)
-    elapsed = time.perf_counter() - _profile_start_time if _profiling_active else 0
+    with _profiling_lock:
+        active = _profiling_active
+        start = _profile_start_time
+    elapsed = time.perf_counter() - start if active else 0
     return JSONResponse({
-        "active": _profiling_active,
-        "elapsed_seconds": round(elapsed, 3) if _profiling_active else None,
+        "active": active,
+        "elapsed_seconds": round(elapsed, 3) if active else None,
     })
 
 

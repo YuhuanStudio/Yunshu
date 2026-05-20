@@ -140,11 +140,6 @@ class InferenceTracer:
         kind: SpanKind = SpanKind.INTERNAL,
     ) -> Optional[Span]:
         """Add a span to an active trace."""
-        with self._lock:
-            trace = self._traces.get(request_id)
-        if trace is None:
-            return None
-
         s = Span(
             span_id=uuid.uuid4().hex[:16],
             name=name,
@@ -152,38 +147,42 @@ class InferenceTracer:
             start_time=time.time(),
             attributes=attributes or {},
         )
-        trace.spans.append(s)
+        with self._lock:
+            trace = self._traces.get(request_id)
+            if trace is None:
+                return None
+            trace.spans.append(s)
         return s
 
     def end_span(self, request_id: str, span_name: str) -> None:
         """End a named span within a trace."""
         with self._lock:
             trace = self._traces.get(request_id)
-        if trace is None:
-            return
-        for s in reversed(trace.spans):
-            if s.name == span_name and s.end_time == 0.0:
-                s.end_time = time.time()
+            if trace is None:
                 return
+            for s in reversed(trace.spans):
+                if s.name == span_name and s.end_time == 0.0:
+                    s.end_time = time.time()
+                    return
 
     def end_trace(
         self, request_id: str, result: Optional[dict[str, Any]] = None
     ) -> Optional[Trace]:
         """Complete a trace and move it to the completed buffer."""
+        now = time.time()
         with self._lock:
             trace = self._traces.pop(request_id, None)
-        if trace is None:
-            return None
+            if trace is None:
+                return None
 
-        trace.end_time = time.time()
-        trace.result = result
+            trace.end_time = now
+            trace.result = result
 
-        # End any still-open spans
-        for s in trace.spans:
-            if s.end_time == 0.0:
-                s.end_time = trace.end_time
+            # End any still-open spans
+            for s in trace.spans:
+                if s.end_time == 0.0:
+                    s.end_time = now
 
-        with self._lock:
             self._completed.append(trace)
             # Evict oldest if over limit
             while len(self._completed) > self._max_traces:

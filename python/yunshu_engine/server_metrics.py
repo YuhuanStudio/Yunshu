@@ -59,7 +59,7 @@ class ServerMetrics:
 
         # Compute utilization tracking (GPU active / wall time)
         self._total_compute_time_ms: float = 0.0
-        self._total_wall_time_ms: float = 0.0
+        self._util_start_time: float = time.monotonic()
 
         self._start_time = time.monotonic()
         self._last_save_time = time.monotonic()
@@ -187,14 +187,15 @@ class ServerMetrics:
         """Compute ITL percentiles from collected samples. Caller must hold self._lock."""
         if not self._itl_samples:
             return
+        # Snapshot the most recent samples BEFORE sorting, so we preserve
+        # recency for the next cycle.  Sorting destroys chronological order.
+        recent = self._itl_samples[-100:]
         samples = sorted(self._itl_samples)
         n = len(samples)
         self._itl_p50 = samples[n // 2]
         self._itl_p99 = samples[min(int(n * 0.99), n - 1)]
-        # Keep the 100 most recent samples (not the largest).
-        # _itl_samples is appended chronologically, so the last 100 are
-        # the most recent — do NOT sort before slicing.
-        self._itl_samples = self._itl_samples[-100:]
+        # Keep the 100 most recent samples (chronological order).
+        self._itl_samples = recent
 
     def get_itl_stats(self) -> dict[str, Any]:
         """Return ITL statistics (read-only — does not mutate sample buffer)."""
@@ -232,12 +233,15 @@ class ServerMetrics:
         """Compute batch size percentiles from collected samples. Caller must hold self._lock."""
         if not self._batch_size_samples:
             return
+        # Snapshot the most recent samples BEFORE sorting, so we preserve
+        # recency for the next cycle.  Sorting destroys chronological order.
+        recent = self._batch_size_samples[-100:]
         samples = sorted(self._batch_size_samples)
         n = len(samples)
         self._batch_size_p50 = samples[n // 2]
         self._batch_size_p99 = samples[min(int(n * 0.99), n - 1)]
         # Keep the 100 most recent samples (chronological order, not sorted).
-        self._batch_size_samples = self._batch_size_samples[-100:]
+        self._batch_size_samples = recent
 
     def get_batch_size_stats(self) -> dict[str, Any]:
         """Return batch size distribution statistics (read-only — does not mutate sample buffer)."""
@@ -264,28 +268,36 @@ class ServerMetrics:
         Called from engine_core._engine_loop after each step.
         Step time = GPU active time; idle time = time spent waiting for requests.
 
+        Wall time is tracked via ``_util_start_time`` (set at init) and
+        ``time.monotonic()`` in ``get_compute_utilization``, so only the
+        compute (non-idle) time needs to be accumulated here.
+
         Args:
             step_duration_ms: Duration of this step in milliseconds.
             idle: If True, this was an idle poll (no active requests processed).
         """
         with self._lock:
-            if idle:
-                self._total_wall_time_ms += step_duration_ms
-            else:
+            if not idle:
                 self._total_compute_time_ms += step_duration_ms
-                self._total_wall_time_ms += step_duration_ms
 
     def get_compute_utilization(self) -> float:
         """Return compute utilization percentage (GPU active / total wall time).
+
+        Wall time is the actual elapsed monotonic time since the first
+        ``record_compute_step`` call, not the sum of individual step
+        durations.  This avoids the bias where short step durations make
+        utilisation appear artificially high while idle gaps between steps
+        go unaccounted for.
 
         Returns 0.0 when no steps have been recorded. Value is 0–100.
         Thread-safe.
         """
         with self._lock:
-            if self._total_wall_time_ms <= 0:
+            wall_ms = (time.monotonic() - self._util_start_time) * 1000.0
+            if wall_ms <= 0:
                 return 0.0
             return min(
-                self._total_compute_time_ms / self._total_wall_time_ms * 100.0,
+                self._total_compute_time_ms / wall_ms * 100.0,
                 100.0,
             )
 
@@ -304,9 +316,10 @@ class ServerMetrics:
         avg_gen_tps = completion / gen_dur if gen_dur > 0 else 0.0
         cache_eff = min(100.0, cached / prompt * 100) if prompt > 0 else 0.0
 
+        wall_ms = (time.monotonic() - self._util_start_time) * 1000.0
         compute_util = (
-            min(self._total_compute_time_ms / self._total_wall_time_ms * 100.0, 100.0)
-            if self._total_wall_time_ms > 0
+            min(self._total_compute_time_ms / wall_ms * 100.0, 100.0)
+            if wall_ms > 0
             else 0.0
         )
         return {

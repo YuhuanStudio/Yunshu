@@ -189,15 +189,23 @@ class ThinkingParser:
     - Content inside <think/> → thinking field (not shown to user by default)
     - Content outside → visible text field
 
-    Supports the common tag variants that models actually emit:
-      <think/>, <think >, <think\\>, </think/>, </think >, etc.
+    Supports ALL common tag variants that models actually emit:
+      <think/>, <think >, <think\\>, <think\\n>, </think/>, </think >, etc.
+    Plus the most common format: plain <think...> and </think...> (without
+    self-closing slash), consistent with extract_thinking()'s regex pattern
+    ``<think\\s*/?\\s*>``.
 
     Based on oMLX's ThinkingParser with full streaming support.
     """
 
-    # All known opening tag variants (models emit these interchangeably)
+    # All known literal opening tag variants (models emit these interchangeably).
+    # The regex-based finder also handles the generic <think...> and </think...>.
     THINK_STARTS = ("<think/>", "<think >", "<think\\>")
     THINK_ENDS = ("</think/>", "</think >", "</think\\>")
+
+    # Regex patterns for generic tag matching — same grammar as extract_thinking().
+    _OPEN_RE = re.compile(r"<think\s*/?\s*>")
+    _CLOSE_RE = re.compile(r"</think\s*/?\s*>")
 
     def __init__(self):
         self.buffer = ""
@@ -205,58 +213,62 @@ class ThinkingParser:
         self.thinking_text = ""
         self.visible_text = ""
 
-    def _find_tag_start(self, buf: str) -> int:
-        """Find the earliest occurrence of any THINK_START variant in buf."""
-        best = -1
-        for tag in self.THINK_STARTS:
-            idx = buf.find(tag)
-            if idx != -1 and (best == -1 or idx < best):
-                best = idx
-        return best
-
-    def _find_tag_end(self, buf: str) -> tuple[int, int]:
-        """Find the earliest occurrence of any THINK_END variant in buf.
+    def _find_tag_start(self, buf: str) -> tuple[int, int]:
+        """Find the earliest opening think tag in buf.
 
         Returns (position, tag_length) or (-1, 0) if not found.
+        Uses regex to support all variants including plain <think...>.
         """
-        best_pos = -1
-        best_len = 0
-        for tag in self.THINK_ENDS:
-            idx = buf.find(tag)
-            if idx != -1 and (best_pos == -1 or idx < best_pos):
-                best_pos = idx
-                best_len = len(tag)
-        return best_pos, best_len
+        m = self._OPEN_RE.search(buf)
+        if m:
+            return m.start(), m.end() - m.start()
+        return -1, 0
 
-    def _get_start_tag_length(self, buf: str, pos: int) -> int:
-        """Get the length of the THINK_START tag found at buf[pos:]."""
-        for tag in self.THINK_STARTS:
-            if buf[pos:].startswith(tag):
-                return len(tag)
-        return len(self.THINK_STARTS[0])
+    def _find_tag_end(self, buf: str) -> tuple[int, int]:
+        """Find the earliest closing think tag in buf.
+
+        Returns (position, tag_length) or (-1, 0) if not found.
+        Uses regex to support all variants including plain </think...>.
+        """
+        m = self._CLOSE_RE.search(buf)
+        if m:
+            return m.start(), m.end() - m.start()
+        return -1, 0
+
+    # Maximum tag length for _retain_tail buffer retention.
+    # "</think/>" = 9 chars; "</think >" = 9; "</think\\>" = 9;
+    # The regex can match "<think\\n>" = 8; use 10 for safety.
+    _MAX_TAG_LEN = 10
 
     def _retain_tail(self, buf: str) -> tuple[str, str]:
-        """Split buffer into safe-to-emit prefix and potential tag-tail suffix."""
+        """Split buffer into safe-to-emit prefix and potential tag-tail suffix.
+
+        Only considers tags relevant to the current mode:
+        - When not in thinking: only opening tag prefixes (THINK_STARTS + ``<think``)
+        - When in thinking: only closing tag prefixes (THINK_ENDS + ``</think``)
+
+        This prevents unnecessary retention of irrelevant tag prefixes
+        (e.g. retaining ``</thi`` when not in thinking mode).
+        """
         if not buf:
             return "", ""
-        max_tag_len = max(
-            max(len(t) for t in self.THINK_STARTS),
-            max(len(t) for t in self.THINK_ENDS),
-        )
-        for i in range(len(buf) - 1, max(-1, len(buf) - max_tag_len - 1), -1):
+        # Scan backwards from the end of the buffer to find the longest
+        # suffix that could be the start of a tag.  Everything before
+        # that suffix is safe to emit immediately.
+        tag_prefix = "</think" if self.in_thinking else "<think"
+        for i in range(len(buf) - 1, max(-1, len(buf) - self._MAX_TAG_LEN - 1), -1):
             tail = buf[i:]
-            # Check if tail could be a prefix of any tag variant
-            is_prefix = False
-            for tag in self.THINK_STARTS:
-                if tag.startswith(tail):
-                    is_prefix = True
-                    break
-            if not is_prefix:
-                for tag in self.THINK_ENDS:
+            # Check if tail could be a prefix of any relevant tag.
+            # The literal THINK_STARTS/THINK_ENDS cover specific variants,
+            # and tag_prefix covers the generic <think...> / </think...>.
+            is_tag_prefix = tag_prefix.startswith(tail) or tail.startswith(tag_prefix)
+            if not is_tag_prefix:
+                tags = self.THINK_ENDS if self.in_thinking else self.THINK_STARTS
+                for tag in tags:
                     if tag.startswith(tail):
-                        is_prefix = True
+                        is_tag_prefix = True
                         break
-            if is_prefix:
+            if is_tag_prefix:
                 return buf[:i], tail
         return buf, ""
 
@@ -282,13 +294,12 @@ class ThinkingParser:
                     self.buffer = retain
                     break
             else:
-                start_idx = self._find_tag_start(self.buffer)
+                start_idx, start_len = self._find_tag_start(self.buffer)
                 if start_idx != -1:
                     if start_idx > 0:
                         visible_parts.append(self.buffer[:start_idx])
                         self.visible_text += self.buffer[:start_idx]
-                    tag_len = self._get_start_tag_length(self.buffer, start_idx)
-                    self.buffer = self.buffer[start_idx + tag_len:]
+                    self.buffer = self.buffer[start_idx + start_len:]
                     self.in_thinking = True
                 else:
                     emit, retain = self._retain_tail(self.buffer)
@@ -416,17 +427,22 @@ def _sanitize_arguments(args: Any) -> str:
     original text rather than silently replacing with "{}". The caller
     can then decide how to handle the invalid arguments (retry, error,
     or best-effort parse).
+
+    Non-dict JSON values (lists, strings, numbers, booleans) are wrapped
+    in an object with a ``value`` key to satisfy the OpenAI API requirement
+    that arguments must be a JSON object string.
     """
     if isinstance(args, str):
         try:
             parsed = json.loads(args)
             if isinstance(parsed, dict):
                 return json.dumps(parsed, ensure_ascii=False)
+            # Valid JSON but not a dict — wrap in {"value": ...} to satisfy
+            # the OpenAI API requirement that arguments is a JSON object.
+            return json.dumps({"value": parsed}, ensure_ascii=False)
         except json.JSONDecodeError:
             # Keep as-is for the caller to handle — don't silently drop
             return args
-        # Valid JSON but not a dict (e.g. a list or primitive) — wrap
-        return args
     if isinstance(args, dict):
         return json.dumps(args, ensure_ascii=False)
     return "{}"
@@ -547,14 +563,20 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
         return calls
 
     # Pattern 5: Mistral-style {"function": {"name": ..., "arguments": ...}}
-    # Try to find and parse JSON objects containing "function" key
+    # Try to find and parse JSON objects containing "function" key.
+    # Uses a brace counter that resets on negative depth to handle
+    # unmatched closing braces in surrounding text (e.g. model output).
     _brace_depth = 0
     _json_start = -1
     for i, ch in enumerate(text):
         if ch == '{':
-            if _brace_depth == 0:
+            if _brace_depth <= 0:
+                # Start of a new top-level object (also resets after
+                # stray closing braces drove depth negative).
                 _json_start = i
-            _brace_depth += 1
+                _brace_depth = 1
+            else:
+                _brace_depth += 1
         elif ch == '}':
             _brace_depth -= 1
             if _brace_depth == 0 and _json_start >= 0:
@@ -575,6 +597,11 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                         calls.append({"name": name, "arguments": json.dumps(args, ensure_ascii=False)})
                 except (json.JSONDecodeError, KeyError):
                     pass
+                _json_start = -1
+            elif _brace_depth < 0:
+                # Unmatched closing brace — reset counter so the next
+                # opening brace starts a fresh JSON object.
+                _brace_depth = 0
                 _json_start = -1
     if calls:
         return calls
