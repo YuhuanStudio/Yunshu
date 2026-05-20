@@ -1708,6 +1708,7 @@ class BatchedEngine:
                 logits_processors=logits_processors,
                 priority=priority,
                 timeout_seconds=timeout_seconds or 300.0,
+                lora_adapter=lora_adapter,
             )
             if _rc_hash is not None and result.finish_reason != "error":
                 try:
@@ -1843,6 +1844,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
         priority: int = 0,
+        lora_adapter: str | None = None,
     ) -> GenerationOutput:
         """Fast path: run generate_step directly on executor thread.
 
@@ -2043,6 +2045,14 @@ class BatchedEngine:
         # this was defined inside _run() which caused a NameError when
         # an exception fired before the executor ran the closure.
         _inflight_req_id = f"fp-{id(generate_step)}-{int(time.monotonic()*1e6)}"
+
+        # LoRA adapter: acquire ref-counted handle and apply to model
+        _lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in fast path", exc_info=True)
 
         def _run():
             import mlx.core as mx
@@ -2702,6 +2712,11 @@ class BatchedEngine:
                 reasoning_tokens=_reasoning_tok,
             )
         finally:
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    logger.debug("LoRA release failed in fast path", exc_info=True)
             _fp_lock = getattr(self, '_fast_path_lock', None)
             if _fp_lock is not None:
                 with _fp_lock:
@@ -2914,6 +2929,7 @@ class BatchedEngine:
                     logits_processors=logits_processors,
                     priority=priority,
                     timeout_seconds=timeout_seconds or 300.0,
+                    lora_adapter=lora_adapter,
                 ):
                     yield output
             finally:
@@ -3044,6 +3060,7 @@ class BatchedEngine:
         logits_processors: list | None = None,
         priority: int = 0,
         timeout_seconds: float = 300.0,
+        lora_adapter: str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Fast streaming: runs generate_step on executor, yields via asyncio.Queue.
 
@@ -3268,6 +3285,14 @@ class BatchedEngine:
                 )
             except Exception:
                 pass
+
+        # LoRA adapter: acquire ref-counted handle
+        _stream_lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _stream_lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in streaming fast path", exc_info=True)
 
         # Inflight prefix sharing: defined at _run level so it's accessible
         # from exception handlers even if _run_inner crashes early
@@ -3774,6 +3799,11 @@ class BatchedEngine:
                 if done:
                     break
         finally:
+            if _stream_lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    logger.debug("LoRA release failed in streaming fast path", exc_info=True)
             # Record in ServerMetrics for streaming fast path (consistency)
             if n_tok > 0:
                 try:

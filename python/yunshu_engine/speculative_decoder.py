@@ -432,6 +432,12 @@ class SpeculativeDecoder:
             token_ids.append(token_id)
             logprobs.append(token_logprob)
 
+            if self.constraint is not None and hasattr(self.constraint, 'advance'):
+                try:
+                    self.constraint.advance(self.tokenizer.decode([token_id]))
+                except Exception:
+                    pass
+
             # Feed back for next step
             current_ids = next_token.reshape(1, 1)
 
@@ -738,6 +744,11 @@ class SpeculativeDecoder:
                 draft_tokens.append(tok_id)
                 draft_probs.append(float(d_logprobs[0, tok_id].item()))
                 d_input = next_tok.reshape(1, 1)
+                if self.constraint is not None and hasattr(self.constraint, 'advance'):
+                    try:
+                        self.constraint.advance(self.tokenizer.decode([tok_id]))
+                    except Exception:
+                        pass
                 if tok_id in eos_ids:
                     break
 

@@ -1965,39 +1965,38 @@ class EngineCore:
                         if isinstance(_cancel_event, asyncio.Event):
                             _cancel_waiter = asyncio.ensure_future(_cancel_event.wait())
                         else:
-                            # Use short polling interval (matching stream_outputs)
-                            # instead of full timeout — otherwise cancel is never
-                            # detected and the request always runs to timeout.
                             _cancel_waiter = asyncio.ensure_future(asyncio.sleep(0.05))
                         try:
-                            done, pending = await asyncio.wait(
-                                {_wait_task, _cancel_waiter},
-                                timeout=timeout_s,
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-                            for p in pending:
-                                p.cancel()
-                                try:
-                                    await p
-                                except (asyncio.CancelledError, Exception):
-                                    pass
-                            if _cancel_waiter in done:
-                                # Polling sleep completed — re-check if cancel
-                                # is actually set before aborting (same pattern as
-                                # stream_outputs).
-                                if isinstance(_cancel_event, asyncio.Event):
-                                    _cancelled = _cancel_event.is_set()
-                                else:
-                                    _cancelled = _cancel_event.is_set()
-                                if _cancelled:
-                                    await self.abort_request(req_id)
-                                    _cleaned_up = True
-                                    return RequestOutput(
-                                        request_id=req_id,
-                                        finished=True,
-                                        finish_reason="stop",
-                                        error="Request cancelled",
-                                    )
+                            while True:
+                                done, pending = await asyncio.wait(
+                                    {_wait_task, _cancel_waiter},
+                                    timeout=timeout_s,
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                                for p in pending:
+                                    p.cancel()
+                                    try:
+                                        await p
+                                    except (asyncio.CancelledError, Exception):
+                                        pass
+                                if _cancel_waiter in done:
+                                    if isinstance(_cancel_event, asyncio.Event):
+                                        _cancelled = _cancel_event.is_set()
+                                    else:
+                                        _cancelled = _cancel_event.is_set()
+                                    if _cancelled:
+                                        await self.abort_request(req_id)
+                                        _cleaned_up = True
+                                        return RequestOutput(
+                                            request_id=req_id,
+                                            finished=True,
+                                            finish_reason="stop",
+                                            error="Request cancelled",
+                                        )
+                                    _cancel_waiter = asyncio.ensure_future(asyncio.sleep(0.05))
+                                    continue
+                                if _wait_task in done:
+                                    break
                         except asyncio.CancelledError:
                             for t in (_wait_task, _cancel_waiter):
                                 if not t.done():

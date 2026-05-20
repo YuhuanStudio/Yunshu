@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–327: 42 waves, 815+ bugs fixed. Latest: Wave 327 — 8-agent deep audit, 18+ fixes (engine_core dedup shadow hang, batched_engine spec decode _prev_constraint + uninit vars, mesh recovery callback short-circuit, gateway LoRA passthrough 12 sites (completions+anthropic+chat streaming), radix tree split block_hashes desync, kv_offload TOCTOU, paged_scheduler abort mid-step, profiling mixin _waiting attr, mesh heartbeat remove_node, RTT reset on recovery, topology rank reuse), 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–327b: 42 waves, 825+ bugs fixed. Latest: Wave 327b — grammar constraint advance in draft loop, LoRA fast path (generate+stream), engine_core threading.Event polling loop, json_schema definitions _seen_refs copy, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,15 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 327b — remaining Wave 327 findings, 5 fixes: grammar advance in draft, LoRA fast path, threading.Event polling, json_schema _seen_refs)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| grammar constraint advance in draft | generate_draft 和 inline draft loop 不呼叫 advance() → tokens 2..K 使用 stale constraint mask | 結構化輸出無效 (CRITICAL) |
+| LoRA fast path silently dropped | _generate_fast 和 _stream_generate_fast 不接受/應用 lora_adapter → 快速路徑所有單一請求 LoRA 失效 | LoRA 完全失效 (HIGH) |
+| engine_core threading.Event premature return | cancel polling sleep 完成後直接返回部分結果而非重試 → 50ms 後返回不完整輸出 | 返回損壞 (HIGH) |
+| json_schema definitions _seen_refs mutable | definition 遞迴傳遞共享 _seen_refs → 兄弟定義的 $ref 被誤判為循環 | Schema 解析錯誤 (HIGH) |
 
 ### 已完成修復 (2026-05-21 Wave 327 — 8 parallel agents, 60+ found, 18+ fixes: engine_core shadow hang, batched_engine spec decode, mesh recovery, gateway LoRA 12 sites, radix split block_hashes, kv_offload TOCTOU, paged_scheduler abort, profiling _waiting, heartbeat remove_node, RTT reset, topology rank)
 

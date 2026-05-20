@@ -193,7 +193,7 @@ def _repair_json_schema(
             for def_name, def_schema in schema[defs_key].items():
                 if isinstance(def_schema, dict):
                     schema[defs_key][def_name] = _repair_json_schema(
-                        def_schema, _depth + 1, _root_defs, _seen_refs
+                        def_schema, _depth + 1, _root_defs, set(_seen_refs)
                     )
 
     return schema
