@@ -193,7 +193,8 @@ class PagedScheduler(Scheduler):
                                 if req.batch_uid is not None and req.batch_uid not in self._uids_to_remove:
                                     self._uids_to_remove.append(req.batch_uid)
                                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_oom")
-                                self.running.pop(req_id, None)
+                                # Do NOT pop from self.running here — let _cleanup_finished
+                                # produce the finished output and clean up naturally.
                                 self._uid_to_req.pop(getattr(req, 'batch_uid', None), None)
                                 self._finalize_request_blocks(req_id)
 
@@ -216,10 +217,14 @@ class PagedScheduler(Scheduler):
         if req is not None:
             prompt_ids = req.prompt_token_ids or []
             output_ids = list(req.output_token_ids) if hasattr(req, 'output_token_ids') else []
-            all_tokens = prompt_ids + output_ids
-            if all_tokens:
-                self._kv_manager.cache_completed_blocks(table, all_tokens)
-                # Insert completed blocks into RadixTree for O(k) prefix matching.
+            # Only cache prompt tokens to the radix tree — output tokens are
+            # specific to a single generation run and should not be served as
+            # prefix matches for future requests.
+            all_tokens = prompt_ids
+            cache_tokens = prompt_ids + output_ids
+            if cache_tokens:
+                self._kv_manager.cache_completed_blocks(table, cache_tokens)
+                # Insert prompt-only prefix into RadixTree for O(k) matching.
                 # Only pass blocks that have a hash -- uncached blocks would
                 # misalign with the hashes list since they are filtered.
                 blocks = table.get_blocks()
@@ -265,7 +270,7 @@ class PagedScheduler(Scheduler):
         # self.running or self.waiting).
         self._finalized_requests -= {
             rid for rid in self._finalized_requests
-            if rid not in self.running and rid not in self.waiting
+            if rid not in self.requests
         }
 
     def _process_aborts(self) -> None:

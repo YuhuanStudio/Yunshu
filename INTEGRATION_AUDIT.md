@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–330: 45 waves, 880+ bugs fixed. Latest: Wave 330 — VLM multi-token stop + cancel support, video temp file leak, mesh retry off-by-one + timeout race + thread-safe coroutines, SSD cache lock-free I/O, radix split guard, BlockTable partial block fix, grammar discard_checkpoint API, Medusa normalized logprob, LarkGrammar extended charset, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–331: 46 waves, 895+ bugs fixed. Latest: Wave 331 — KVPrefixCache hash collision guard, KVBlockCompactor numeric sort, preempt radix prompt-only cache, fast path reasoning strip, eviction loop fix, OOM running leak, Anthropic tool_use_block_started reset, streaming thinking token consistency, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,22 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 331 — 4-agent deep audit: KVPrefixCache collision guard, KVBlockCompactor numeric sort, preempt radix prompt-only, fast path reasoning strip, eviction loop fix, OOM running leak, Anthropic tool_use_block_started reset, streaming thinking consistency)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| KVPrefixCache hash collision returns wrong KV | hash-chain 匹配不驗證 token → 碰撞時返回錯誤 KV cache | 靜默數據損壞 (CRITICAL) |
+| KVBlockCompactor lexicographic block_id sort | "block_10" 排在 "block_2" 前 → token 順序錯亂 | 數據損壞 (HIGH) |
+| Preempt caches output tokens into radix tree | _finalize_request_blocks 用 prompt+output 插入 radix → 重新調度時匹配到錯誤前綴 | 前綴匹配錯誤 (HIGH) |
+| Fast path reasoning not stripped when tracked | _reasoning_tok > 0 時跳過 reasoning_parser → 快速路徑和引擎循環輸出格式不同 | 輸出不一致 (HIGH) |
+| _evict_if_full loop breaks on first skipped victim | 第一個不可驅逐的 victim 就 break → 可驅逐的條目被跳過 | 快取無法增長 (HIGH) |
+| OOM decode path prematurely removes from running | KV OOM 時立即 pop running → 請求永不產生 finished output | 請求洩漏 (HIGH) |
+| Anthropic tool_use_block_started never reset | tool_use block 關閉後 flag 不重置 → error handler 產生重複 content_block_stop | SSE 協議錯誤 (MEDIUM) |
+| Streaming forced </think not in _thinking_tokens | 思考預算強制關閉不計入 reasoning_tokens → streaming/non-streaming 不一致 | 計數不一致 (MEDIUM) |
+| Stop token in _thinking_tokens but not completion_tokens | stop/suffix token 計入 thinking 但 completion 減 1 → reasoning > completion | 計數反常 (MEDIUM) |
+| _finalized_requests pruning too aggressive | 清理時移除所有 entries → double-free 防護失效 | 防護缺口 (MEDIUM) |
+| KVEvictionPredictor O(n*m) EMA decay | 內部 set comprehension 每次迭代重建 → 效能瓶頸 | 效能問題 (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 330 — 4-agent MEDIUM bug sweep: VLM multi-token stop + cancel, video temp leak, mesh retry+timeout+thread-safety, SSD lock-free I/O, radix split guard, BlockTable partial block, grammar discard_checkpoint, Medusa logprob, LarkGrammar charset)
 

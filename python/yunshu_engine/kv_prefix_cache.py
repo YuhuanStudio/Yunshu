@@ -421,6 +421,13 @@ class KVPrefixCache:
                     prompt_tokens, self._prompts[best_index]
                 )
                 best_length = min(best_length, actual_prefix)
+                # Hash collision guard: if the "prefix" covers the entire
+                # cached prompt but the query diverges after that, this is a
+                # collision not a prefix match — skip it.
+                if best_length == len(self._prompts[best_index]) and best_length < len(prompt_tokens):
+                    # Verify the tokens actually match at the boundary
+                    if prompt_tokens[:best_length] != self._prompts[best_index][:best_length]:
+                        best_length = 0  # collision — invalidate
 
             if best_length >= self._min_prefix:
                 cached = self._caches[best_index]
@@ -701,9 +708,7 @@ class KVPrefixCache:
                 self._priorities,
             )
             if victim in _skipped_indices:
-                # Already tried this victim and it was skipped — try the
-                # next-best victim by temporarily marking it ineligible.
-                # Build a filtered view so select_victim picks a different one.
+                # All remaining victims have been tried — exit.
                 break
             if self._block_evict_checker is not None and self._block_hashes[victim]:
                 skip = False

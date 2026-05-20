@@ -564,10 +564,9 @@ class KVEvictionPredictor:
                     record.request_weights[request_id] = max(old_weight, weight)
 
         # Decay EMA frequency for all blocks (not just accessed ones)
+        accessed_set = {bid for bids in (accessed_blocks or {}).values() for bid in bids} if accessed_blocks else set()
         for block_id, record in list(self._records.items()):
-            if accessed_blocks is None or block_id not in {
-                bid for bids in accessed_blocks.values() for bid in bids
-            }:
+            if block_id not in accessed_set:
                 record.ema_frequency = self._ema_decay * record.ema_frequency
 
     def predict_next_access(
@@ -1120,8 +1119,8 @@ class KVBlockCompactor:
             if len(partial_blocks) < 2:
                 continue
 
-            # Sort by block_id to get deterministic ordering
-            partial_blocks.sort(key=lambda b: b.block_id)
+            # Sort by block_id (numeric) to get deterministic sequential ordering
+            partial_blocks.sort(key=lambda b: b.block_id if isinstance(b.block_id, int) else 0)
 
             # Merge strategy: move tokens from later blocks to fill earlier ones
             # Walk through pairs and merge

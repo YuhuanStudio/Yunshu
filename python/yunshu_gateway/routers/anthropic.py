@@ -1242,6 +1242,7 @@ async def _stream_anthropic(
                                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
+                                    tool_use_block_started = False
                                     break
                         else:
                             # No tools — emit text directly
@@ -1363,6 +1364,7 @@ async def _stream_anthropic(
                                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                 block_index += 1
+                                tool_use_block_started = False
                                 break
                     else:
                         # No tool streamer — emit text directly
@@ -1425,6 +1427,7 @@ async def _stream_anthropic(
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                         block_index += 1
+                        tool_use_block_started = False
 
         # If message_start was never emitted (engine produced zero outputs or
         # only outputs without prompt_tokens), emit it now with whatever we have.

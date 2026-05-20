@@ -2687,7 +2687,7 @@ class BatchedEngine:
             # Reasoning parser: supplement token-level tracking with model-specific
             # reasoning extraction when thinking tokens were not explicitly tracked
             _reasoning_tok = len(_thinking_tokens)
-            if _reasoning_tok == 0 and output_text:
+            if output_text:
                 try:
                     from .reasoning_parser import get_reasoning_parser
                     rp = get_reasoning_parser(self.model_name)
@@ -3516,7 +3516,9 @@ class BatchedEngine:
                     # Track thinking segment boundaries BEFORE budget check
                     # so that a natural </think token is detected first and
                     # the budget enforcement does not append a duplicate.
-                    if think_start_token is not None:
+                    # Skip stop/suffix tokens from thinking tracking since they
+                    # are excluded from completion_tokens (invariant must hold).
+                    if think_start_token is not None and not (stop_hit or suffix_hit):
                         if not _in_thinking and token == think_start_token:
                             _in_thinking = True
                             _thinking_tokens = []
@@ -3542,6 +3544,7 @@ class BatchedEngine:
                             if token != think_end_token:
                                 n_tok += 1  # Count the forced closing tag token
                                 detokenizer.add_token(think_end_token)
+                                _thinking_tokens.append(think_end_token)
                                 _end_text = detokenizer.last_segment
                                 if _end_text:
                                     _put((_end_text, n_tok, None, len(_thinking_tokens), None, "reasoning"))
