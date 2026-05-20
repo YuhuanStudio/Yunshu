@@ -79,29 +79,49 @@ class KVWarmTier:
             True if the block was stored successfully.
         """
         with self._lock:
-            if self.is_full:
-                self._evict_unlocked(1)
-
             try:
                 from .compression import quantize_kv_4bit
 
                 packed, scales = quantize_kv_4bit(kv_data)
                 # Recover original head_dim from the kv_data shape for correct dequantize
                 head_dim = kv_data.shape[-1] if hasattr(kv_data, 'shape') else 0
-                # Store num_tokens alongside packed data so SSD flush can
-                # propagate it accurately instead of always writing 0.
-                self._store[block_hash] = (packed, scales, head_dim, num_tokens)
-                # Move to end (most recently used)
-                self._store.move_to_end(block_hash)
 
-                # Approximate memory accounting
+                # Approximate memory accounting for the NEW entry
                 packed_nbytes = (
                     np.array(packed).nbytes if not isinstance(packed, np.ndarray) else packed.nbytes
                 )
                 scales_nbytes = (
                     np.array(scales).nbytes if not isinstance(scales, np.ndarray) else scales.nbytes
                 )
-                self._memory_used += packed_nbytes + scales_nbytes
+                new_entry_bytes = packed_nbytes + scales_nbytes
+
+                # Subtract old entry's memory if overwriting an existing key
+                if block_hash in self._store:
+                    old_entry = self._store[block_hash]
+                    old_packed_nbytes = (
+                        np.array(old_entry[0]).nbytes
+                        if not isinstance(old_entry[0], np.ndarray)
+                        else old_entry[0].nbytes
+                    )
+                    old_scales_nbytes = (
+                        np.array(old_entry[1]).nbytes
+                        if not isinstance(old_entry[1], np.ndarray)
+                        else old_entry[1].nbytes
+                    )
+                    self._memory_used -= old_packed_nbytes + old_scales_nbytes
+
+                # Evict AFTER compression succeeds — avoids losing a valid
+                # block if quantize_kv_4bit raises (Bug: premature eviction).
+                if len(self._store) >= self.config.max_blocks and block_hash not in self._store:
+                    self._evict_unlocked(1)
+
+                # Store num_tokens alongside packed data so SSD flush can
+                # propagate it accurately instead of always writing 0.
+                self._store[block_hash] = (packed, scales, head_dim, num_tokens)
+                # Move to end (most recently used)
+                self._store.move_to_end(block_hash)
+
+                self._memory_used += new_entry_bytes
 
                 return True
             except Exception:
@@ -255,7 +275,9 @@ class KVWarmTier:
         """
         self._last_flush = time.monotonic()
         if self.config.storage_path:
+            with self._lock:
+                num = len(self._store)
             logger.debug(
                 "Warm tier flush: %d blocks (SSD stub, not yet implemented)",
-                len(self._store),
+                num,
             )

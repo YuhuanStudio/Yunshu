@@ -1026,7 +1026,7 @@ async def get_system_info(_=Depends(require_permission("can_view_admin"))):
                 "model_id": entry.model_id,
                 "model_path": entry.model_path,
                 "is_loaded": entry.is_loaded,
-                "engine_type": entry.engine_type,
+                "model_type": entry.model_type.name if hasattr(entry.model_type, 'name') else str(entry.model_type),
             })
         info["memory"] = manager.memory_usage
     engine = get_engine()

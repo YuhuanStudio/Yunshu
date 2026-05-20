@@ -123,7 +123,7 @@ async def get_model(model_id: str) -> dict:
     if not engine or not engine.resolve_model_id(model_id):
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
     return {
-        "id": engine.model_name,
+        "id": model_id,
         "object": "model",
         "owned_by": "yunshu",
     }

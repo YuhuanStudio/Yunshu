@@ -530,12 +530,33 @@ class SSDKVCache:
             op = item[0]
             if op == "save":
                 _, block_hash_hex, tensors_raw, meta_dict, file_path = item
+                # Check if the entry is still in the index before writing.
+                # A concurrent delete_block() may have removed it, and writing
+                # the file would leave an orphan on disk that's never cleaned up.
+                with self._lock:
+                    if block_hash_hex not in self._index:
+                        logger.debug(
+                            "Skipping SSD write for %s — entry removed from index",
+                            block_hash_hex[:16],
+                        )
+                        return
                 file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
                 with self._lock:
                     if block_hash_hex in self._index:
                         self._index[block_hash_hex].file_size = file_size
                         self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
-                    self._writes_completed += 1
+                        self._writes_completed += 1
+                    else:
+                        # Entry was deleted between the check above and here.
+                        # Clean up the file we just wrote to avoid orphan.
+                        logger.debug(
+                            "SSD block %s deleted during write — cleaning up file",
+                            block_hash_hex[:16],
+                        )
+                        try:
+                            os.unlink(file_path)
+                        except OSError:
+                            pass
             elif op == "delete":
                 try:
                     os.unlink(item[1])
@@ -613,9 +634,14 @@ class SSDKVCache:
             # or file_size == 0 but old enough that the writer should have finished
             # (prevents phantom entries where has_block() returns True but
             # load_block() always returns None).
+            #
+            # CRITICAL: Only prune if the current index entry still points to
+            # the SAME file that failed to load.  A concurrent save_block()
+            # may have replaced the entry with a different file_path — pruning
+            # that would destroy the new valid entry (data loss).
             with self._lock:
                 meta_now = self._index.get(hex_hash)
-                if meta_now is not None:
+                if meta_now is not None and meta_now.file_path == meta.file_path:
                     if meta_now.file_size > 0:
                         # File was written but is corrupted — safe to prune
                         self._index.pop(hex_hash, None)

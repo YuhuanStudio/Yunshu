@@ -524,6 +524,12 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         system_text = _extract_text_from_content(req.system) if isinstance(req.system, list) else req.system
         messages.append({"role": "system", "content": system_text})
 
+    # Extract cache_control hints for future forwarding to the engine's
+    # KV prefix cache (once the engine supports cache breakpoints).
+    _cache_hints = _extract_cache_control_hints(req.system)
+    if _cache_hints:
+        logger.debug("Anthropic cache_control hints received: %s", _cache_hints)
+
     has_images = any(_has_image_blocks(m.content) for m in req.messages)
 
     # Convert Anthropic messages to OpenAI-compatible format
@@ -552,7 +558,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             if isinstance(req.tool_choice, dict):
                 tc_type = req.tool_choice.get("type", "")
                 if tc_type == "none":
-                    has_tools = False
+                    req._suppress_tools = True
                     tool_prompt = ""
                 elif tc_type == "any":
                     tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
@@ -564,7 +570,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             elif req.tool_choice == "any":
                 tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
             elif req.tool_choice == "none":
-                has_tools = False
+                req._suppress_tools = True
                 tool_prompt = ""
 
         if tool_prompt:
@@ -726,7 +732,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
         from ..streaming import extract_thinking
         thinking_text, visible_text = extract_thinking(result.text, req.model)
         if thinking_text:
-            content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
+            content.append({"type": "thinking", "thinking": thinking_text, "signature": ""})
 
     text_block: dict = {"type": "text", "text": visible_text}
 
@@ -755,8 +761,11 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
     content.append(text_block)
 
     # Extract tool calls from model output if tools were provided
+    # (but not when tool_choice is "none" — see create_message where tools are
+    # suppressed from the prompt; skip extraction to avoid false stop_reason)
+    _suppress_tool_extraction = getattr(req, '_suppress_tools', False)
     has_tool_calls = False
-    if req.tools:
+    if req.tools and not _suppress_tool_extraction:
         from ..streaming import extract_tool_calls_model_aware, clean_tool_call_markup
         tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
         if tool_calls:
@@ -782,13 +791,18 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
 
     stop_reason = _map_stop_reason(result.finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
-    cache_creation = getattr(result, 'prompt_tokens', 0) - getattr(result, 'cached_tokens', 0)
-    cache_read = getattr(result, 'cached_tokens', 0)
-    reasoning_tok = getattr(result, 'reasoning_tokens', 0)
+    cache_creation = getattr(result, 'prompt_tokens', 0) - (getattr(result, 'cached_tokens', 0) or 0)
+    cache_read = getattr(result, 'cached_tokens', 0) or 0
+    reasoning_tok = getattr(result, 'reasoning_tokens', 0) or 0
+
+    # Per Anthropic spec: output_tokens is the TOTAL (visible + reasoning).
+    # When the engine reports reasoning_tokens separately, add them to the
+    # completion_tokens count so the total is accurate.
+    total_output_tokens = result.completion_tokens + reasoning_tok
 
     usage: dict[str, Any] = {
         "input_tokens": result.prompt_tokens,
-        "output_tokens": result.completion_tokens,
+        "output_tokens": total_output_tokens,
         "cache_creation_input_tokens": max(0, cache_creation),
         "cache_read_input_tokens": max(0, cache_read),
     }
@@ -875,7 +889,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
         from ..streaming import extract_thinking
         thinking_text, visible_text = extract_thinking(text, req.model)
         if thinking_text:
-            content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
+            content.append({"type": "thinking", "thinking": thinking_text, "signature": ""})
     text_block: dict = {"type": "text", "text": visible_text}
 
     # Check for matched stop sequences — trim BEFORE tool call extraction
@@ -901,8 +915,9 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
     content.append(text_block)
 
     # Extract tool calls from model output if tools were provided
+    _suppress_tool_extraction = getattr(req, '_suppress_tools', False)
     has_tool_calls = False
-    if req.tools:
+    if req.tools and not _suppress_tool_extraction:
         from ..streaming import extract_tool_calls_model_aware, clean_tool_call_markup
         tool_calls = extract_tool_calls_model_aware(visible_text, req.model)
         if tool_calls:
@@ -928,10 +943,11 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
 
     stop_reason = _map_stop_reason(finish_reason, matched_stop, has_tool_calls=has_tool_calls)
 
-    _reasoning_tok = getattr(result, 'reasoning_tokens', 0)
+    _reasoning_tok = getattr(result, 'reasoning_tokens', 0) or 0
+    _legacy_total_output = completion_toks + _reasoning_tok
     _legacy_usage: dict[str, Any] = {
         "input_tokens": prompt_toks,
-        "output_tokens": completion_toks,
+        "output_tokens": _legacy_total_output,
         "cache_creation_input_tokens": max(0, prompt_toks - cached_toks),
         "cache_read_input_tokens": max(0, cached_toks),
     }
@@ -1088,7 +1104,7 @@ async def _stream_anthropic(
                 # Thinking content
                 if enable_thinking and _is_reasoning and _token_text:
                     if not thinking_block_started:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"
@@ -1234,7 +1250,7 @@ async def _stream_anthropic(
                 if enable_thinking and _is_reasoning and _token_text:
                     # Thinking content via token-level state
                     if not thinking_block_started:
-                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': 'yunshu-reasoning'}})}\n\n"
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}})}\n\n"
                         thinking_block_started = True
                     output_tokens += 1
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'thinking_delta', 'thinking': _token_text}})}\n\n"

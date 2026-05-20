@@ -162,9 +162,10 @@ async def create_embedding(req: EmbeddingRequest):
                 # Tokenizer doesn't support add_special_tokens — some MLX
                 # tokenizers only accept a single positional argument.
                 # The encode() result typically includes BOS (+1) and may
-                # include EOS (+1), so we subtract 2 as a heuristic.
-                # This is a rough adjustment; the count may still be slightly off.
-                total_tokens += len(tokenizer.encode(text)) - 2
+                # include EOS (+1), so we subtract up to 2 as a heuristic.
+                # Guard against negative count for very short texts.
+                raw_count = len(tokenizer.encode(text))
+                total_tokens += max(1, raw_count - 2)
         else:
             total_tokens += max(1, len(text) // 4)
 
@@ -206,8 +207,16 @@ async def _resolve_embedding_engine(model_id: str):
         try:
             engine = await manager.get_engine(model_id)
             return engine
-        except (KeyError, Exception):
-            logger.debug(f"failed to load engine for {model_id}", exc_info=True)
+        except KeyError:
+            logger.debug(f"Model not registered: {model_id}")
+            # Not registered — fall through to single-engine only if manager
+            # has no entries at all (single-engine mode with manager stub)
+        except Exception:
+            logger.warning(f"Failed to load engine for {model_id}", exc_info=True)
+            # Do NOT fall through to single-engine — the user asked for a
+            # specific model via the manager, and serving embeddings from a
+            # different model would be silently incorrect.
+            return None
 
     # Single engine
     engine = get_engine()

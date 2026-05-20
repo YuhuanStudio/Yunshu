@@ -1977,7 +1977,8 @@ class BatchedEngine:
                 except Exception:
                     logger.debug("prompt cache lookup failed", exc_info=True)
 
-            # Try KV prefix cache hit
+            # Try KV prefix cache hit (skip when prompt cache already hit —
+            # prompt cache provides full KV state which is always better)
             prefix_cache = self._kv_prefix_cache
             # Proactive memory pressure eviction (vllm-mlx pattern)
             if prefix_cache is not None and self._mem_pressure_threshold > 0:
@@ -1990,13 +1991,21 @@ class BatchedEngine:
                         )
                     except Exception:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
-            cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
-            if cached_kv is not None:
-                cached_tokens = matched
-                ids_to_prefill = ids[matched:]
+            if not _pc_hit:
+                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
+                if cached_kv is not None:
+                    cached_tokens = matched
+                    ids_to_prefill = ids[matched:]
+                else:
+                    ids_to_prefill = ids
             else:
-                ids_to_prefill = ids
+                # Prompt cache provided full KV — skip prefix cache lookup.
+                # ids_to_prefill = tokens beyond what's already cached (empty
+                # for full-match prompt cache, so generate_step starts decode
+                # from the last cached position).
+                cached_kv = None
+                ids_to_prefill = ids[cached_tokens:]
 
             # Inflight prefix sharing (SGLang pattern): check for in-flight
             # prefills with matching prefix to share partial KV blocks
@@ -2141,6 +2150,7 @@ class BatchedEngine:
                                     _in_thinking = False
                                     if token != think_end_token:
                                         tokens.append(think_end_token)
+                                        _thinking_tokens.append(think_end_token)
                                     break
                     cleanup_rope(model)
                     spec_prefill_done = True
@@ -2246,6 +2256,7 @@ class BatchedEngine:
                                 # tokenizer.decode(tokens) output (non-streaming path).
                                 if token != think_end_token:
                                     tokens.append(think_end_token)
+                                    _thinking_tokens.append(think_end_token)
                                 break
 
             # Cache the completed KV state for future prefix matching
@@ -5054,6 +5065,7 @@ class BatchedEngine:
                     n_tok += 1
                     if first_token in stop_ids:
                         # First token is stop — don't add to detokenizer, signal stop
+                        n_tok -= 1  # Exclude stop token from completion count
                         _put(("", n_tok, "stop", first_token))
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
@@ -5532,6 +5544,9 @@ class BatchedEngine:
             token_ids = token_ids[:_mtp_think_budget_truncate_idx]
             if _mtp_think_end_token is not None:
                 token_ids.append(_mtp_think_end_token)
+                # Count the forced think_end_token in reasoning tokens so
+                # reasoning_tokens + content_tokens == completion_tokens.
+                _mtp_thinking_tokens_used += 1
 
         # Truncate at stop tokens (exclude stop token from output)
         hit_stop = False
