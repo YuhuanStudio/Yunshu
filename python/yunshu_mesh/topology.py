@@ -18,7 +18,7 @@ import threading
 from enum import Enum
 from typing import Optional
 
-from .node import MeshNode
+from .node import MeshNode, MeshNodeState
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,18 @@ class MeshTopology:
         """Add a node and assign it a rank. Returns the assigned rank.
 
         If a node with the same node_id already exists, returns its
-        existing rank without adding a duplicate.
+        existing rank without adding a duplicate.  Updates the existing
+        node's state to READY if it was OFFLINE/RECOVERING/INITIALIZING.
         """
         with self._lock:
             for existing in self._nodes:
                 if existing.node_id == node.node_id:
+                    if existing.state in (
+                        MeshNodeState.OFFLINE,
+                        MeshNodeState.RECOVERING,
+                        MeshNodeState.INITIALIZING,
+                    ):
+                        existing.mark_healthy()
                     return existing.rank
             if node.rank >= 0 and node.rank not in self._rank_map:
                 rank = node.rank
@@ -142,7 +149,6 @@ class MeshTopology:
         - 2-4 nodes without JACCL: RING
         - >4 nodes: RING (scalability)
         """
-        from .node import MeshNodeState
         with self._lock:
             nodes = [n for n in self._nodes if n.state != MeshNodeState.OFFLINE]
             size = len(nodes)

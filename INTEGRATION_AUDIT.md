@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–324: 39 waves, 775+ bugs fixed. Latest: Wave 324 — 8-agent deep audit, 12+ HIGH fixes (kv_offload race condition, json_schema $ref cycle, paged_scheduler preempt leak, mesh node lifecycle, spec decode constraint race, VLM seed clobber, checkpoint stack leak, SSD token metadata), 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–325: 40 waves, 788+ bugs fixed. Latest: Wave 325 — 8-agent deep audit, 13+ fixes (scheduler memory guard deadlock, radix tree double-count, topology re-discovery, lora_adapter passthrough, anthropic output_tokens, spec decode thinking budget cap, json_schema allOf/patternProperties, disagg request_completed, topology import typo), 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -37,11 +37,22 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
 
-### 已完成修復 (2026-05-21 Wave 324 — 8 parallel agents, 60+ found, 12+ HIGH fixed: kv_offload race, json_schema $ref cycle, paged_scheduler preempt leak, mesh node lifecycle, spec decode constraint race, VLM seed, checkpoint leak)
+### 已完成修復 (2026-05-21 Wave 325 — 8 parallel agents, 60+ found, 13+ fixes: scheduler deadlock, radix stats, topology re-discovery, lora passthrough, anthropic output_tokens, spec decode budget cap, json_schema allOf, disagg request_completed)
 
 | 修復 | 描述 | 影響 |
 |------|------|------|
-| kv_offload _free_hot_block race | ref_count/free_queue 在 pool._lock 外修改 → 同一 block 分配給兩個請求 | 數據損壞 (HIGH) |
+| scheduler memory guard deadlock | 無 running requests 時延遲所有請求 → 強制 cache clear | 請求永久等待 (HIGH) |
+| radix tree get_stats double-count | split 後 boundary block 被 parent+child 重複計算 | 監控虛高 (MEDIUM) |
+| topology re-discovery stale state | re-join 的節點保留 OFFLINE 狀態 → mark_healthy() | 路由不一致 (HIGH) |
+| lora_adapter engine loop passthrough | generate/stream_generate 未傳 lora_adapter → engine_core | LoRA 靜默失效 (HIGH) |
+| anthropic output_tokens undercount | stop-sequence 修剪時強制 _tokens_to_trim=1 忽略 partial text | 計費不准確 (MEDIUM) |
+| spec decode thinking budget cap | generate_draft 加入 max_draft_tokens 防止超額生成 | GPU 浪費 (MEDIUM) |
+| json_schema allOf union→any | 衝突類型返回 "any" + warning 而非 union list | 結構化輸出修正 (MEDIUM) |
+| json_schema patternProperties warning | 偵測 patternProperties 並記錄 warning | 用戶感知 (LOW) |
+| disagg request_completed wiring | prefill endpoint 加入 try/finally 呼叫 request_completed | 負載計數器洩漏 (HIGH) |
+| topology import typo | MeshNodeStateState → 使用頂部已導入的 MeshNodeState | 導入錯誤修復 (HIGH) |
+
+### 已完成修復 (2026-05-21 Wave 324 — 8 parallel agents, 60+ found, 12+ HIGH fixed: kv_offload race, json_schema $ref cycle, paged_scheduler preempt leak, mesh node lifecycle, spec decode constraint race, VLM seed, checkpoint leak)
 | json_schema _seen_refs sharing | properties/items 傳遞共享 _seen_refs → 兄弟 $ref 被誤判為循環 | JSON 約束失效 (HIGH) |
 | paged_scheduler preempt leak | _finalized_requests 未清除 → 重調度請求 block table 永久洩漏 | GPU 記憶體耗盡 (HIGH) |
 | paged_scheduler abort leak | waiting queue abort 未清理 block table | KV block 洩漏 (MEDIUM-HIGH) |

@@ -593,10 +593,14 @@ class RadixTree:
         active_refs = 0
         max_depth = 0
         leaf_count = 0
+        seen_block_ids: set[int] = set()
 
         def _walk(node: RadixNode, depth: int = 0) -> None:
             nonlocal total_blocks, total_tokens, active_refs, max_depth, leaf_count
-            total_blocks += node.num_blocks
+            for b in node.blocks:
+                if b.block_id not in seen_block_ids:
+                    seen_block_ids.add(b.block_id)
+                    total_blocks += 1
             total_tokens += node.num_tokens
             if node.ref_count > 0:
                 active_refs += 1

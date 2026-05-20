@@ -380,6 +380,7 @@ class SpeculativeDecoder:
         input_ids: mx.array,
         cache: list,
         skip_prefill: bool = False,
+        max_draft_tokens: int | None = None,
     ) -> DraftResult:
         """Generate K draft tokens from the draft model.
 
@@ -390,11 +391,14 @@ class SpeculativeDecoder:
                           in cache; only use it for the first forward logits.
                           This avoids double-prefilling when the cache already
                           has the prompt.
+            max_draft_tokens: Cap draft length (e.g. for thinking budget).
 
         Returns:
             DraftResult with proposed token IDs and their logprobs
         """
         K = self.lookahead.adjust_draft_k() if self.lookahead else self.config.draft_length
+        if max_draft_tokens is not None:
+            K = min(K, max_draft_tokens)
         token_ids = []
         logprobs = []
 

@@ -1509,6 +1509,19 @@ class Scheduler:
                     for req in reversed(to_insert):
                         self.waiting.push_front(req, priority=req.sampling_params.priority)
                     to_insert = []
+                    # When no requests are running, nothing will trigger memory
+                    # release via request completion. Force an immediate cache
+                    # clear so the next step can make progress.
+                    if current_running_count == 0:
+                        try:
+                            mx.synchronize()
+                            mx.clear_cache()
+                            logger.debug(
+                                "Memory guard: forced immediate cache clear "
+                                "(no running requests to trigger deferred clear)"
+                            )
+                        except Exception:
+                            logger.debug("forced cache clear failed", exc_info=True)
             except Exception:
                 logger.debug("memory guard check failed in scheduling", exc_info=True)
 

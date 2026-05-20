@@ -290,6 +290,8 @@ async def prefill(req: PrefillRequest, request: Request):
     disagg_router = _get_disagg_router()
     is_remote_prefill = False
     prefill_node_id = ""
+    node_id = None
+    role = None
 
     if disagg_router is not None and disagg_router.config.enabled:
         _register_mesh_nodes(disagg_router)
@@ -308,91 +310,99 @@ async def prefill(req: PrefillRequest, request: Request):
     loop = asyncio.get_running_loop()
     t0 = time.monotonic()
     result = None  # Will be set by either remote or local prefill
+    _routed_node_id = node_id if disagg_router is not None and disagg_router.config.enabled else None
+    _routed_role = role if disagg_router is not None and disagg_router.config.enabled else None
 
-    if is_remote_prefill:
-        # ── Remote prefill via ExternalPrefillClient ──
-        try:
-            from yunshu_engine.external_prefill import (
-                ExternalPrefillClient, ExternalPrefillConfig,
-            )
-            # Parse host:port from node_id like "prefill-10.0.0.1:7891"
-            node_addr = prefill_node_id.split("-", 1)[-1]
-            parts = node_addr.rsplit(":", 1)
-            host = parts[0]
-            port = int(parts[1]) if len(parts) > 1 else 7891
-
-            client_config = ExternalPrefillConfig(
-                server_host=host,
-                server_port=port,
-            )
-            client = ExternalPrefillClient(client_config)
-            result = await client.prefill_remote(
-                token_ids=token_ids,
-                chunk_size=chunk_size,
-            )
-        except Exception as e:
-            logger.warning(
-                "Remote prefill failed, falling back to local: %s", e,
-                exc_info=True,
-            )
-            # Fall through to local prefill
-            is_remote_prefill = False
-
-    if not is_remote_prefill:
-        # ── Local prefill via ExternalPrefiller ──
-        from yunshu_engine.external_prefill import ExternalPrefiller
-
-        prefiller = ExternalPrefiller(engine._model, tokenizer)
-
-        def _prefill():
-            return prefiller.prefill_chunked(
-                token_ids=token_ids,
-                chunk_size=chunk_size,
-            )
-
-        from yunshu_engine.mlx_executor import get_mlx_executor
-        executor = get_mlx_executor()
-        result = await loop.run_in_executor(executor, _prefill)
-
-        # ── KV Transfer: send KV blocks to remote decode node ──
-        if disagg_router is not None and disagg_router.config.enabled:
+    try:
+        if is_remote_prefill:
+            # ── Remote prefill via ExternalPrefillClient ──
             try:
-                model_name = getattr(engine, '_model_name', '') or ''
-                # Count layers from model config
-                layer_count = 0
-                model_cfg = getattr(engine._model, 'config', None)
-                if model_cfg is not None:
-                    layer_count = getattr(model_cfg, 'num_hidden_layers', 0)
-                # Reuse the prefiller's transfer method
-                prefiller.transfer_prefill_result(
-                    result,
-                    request_id="",
-                    model_name=model_name,
-                    layer_count=layer_count,
+                from yunshu_engine.external_prefill import (
+                    ExternalPrefillClient, ExternalPrefillConfig,
                 )
-            except Exception:
-                logger.debug("KV transfer after prefill failed", exc_info=True)
+                # Parse host:port from node_id like "prefill-10.0.0.1:7891"
+                node_addr = prefill_node_id.split("-", 1)[-1]
+                parts = node_addr.rsplit(":", 1)
+                host = parts[0]
+                port = int(parts[1]) if len(parts) > 1 else 7891
 
-    duration_s = time.monotonic() - t0
+                client_config = ExternalPrefillConfig(
+                    server_host=host,
+                    server_port=port,
+                )
+                client = ExternalPrefillClient(client_config)
+                result = await client.prefill_remote(
+                    token_ids=token_ids,
+                    chunk_size=chunk_size,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Remote prefill failed, falling back to local: %s", e,
+                    exc_info=True,
+                )
+                # Fall through to local prefill
+                is_remote_prefill = False
 
-    # Store cache handle with TTL
-    handle_id = f"pf-{uuid.uuid4().hex[:12]}"
-    _add_cache_handle(handle_id, {
-        "cache": result.kv_cache,
-        "token_ids": token_ids,
-        "prompt_tokens": prompt_tokens,
-        "cached_tokens": result.cached_tokens,
-        "created_at": time.monotonic(),
-        "source": "remote" if is_remote_prefill else "local",
-    })
+            if not is_remote_prefill:
+                # ── Local prefill via ExternalPrefiller ──
+                from yunshu_engine.external_prefill import ExternalPrefiller
 
-    return PrefillResponse(
-        id=handle_id,
-        cache_handle=handle_id,
-        prompt_tokens=prompt_tokens,
-        cached_tokens=result.cached_tokens,
-        duration_s=duration_s,
-    )
+                prefiller = ExternalPrefiller(engine._model, tokenizer)
+
+                def _prefill():
+                    return prefiller.prefill_chunked(
+                        token_ids=token_ids,
+                        chunk_size=chunk_size,
+                    )
+
+                from yunshu_engine.mlx_executor import get_mlx_executor
+                executor = get_mlx_executor()
+                result = await loop.run_in_executor(executor, _prefill)
+
+                # ── KV Transfer: send KV blocks to remote decode node ──
+                if disagg_router is not None and disagg_router.config.enabled:
+                    try:
+                        model_name = getattr(engine, '_model_name', '') or ''
+                        # Count layers from model config
+                        layer_count = 0
+                        model_cfg = getattr(engine._model, 'config', None)
+                        if model_cfg is not None:
+                            layer_count = getattr(model_cfg, 'num_hidden_layers', 0)
+                        # Reuse the prefiller's transfer method
+                        prefiller.transfer_prefill_result(
+                            result,
+                            request_id="",
+                            model_name=model_name,
+                            layer_count=layer_count,
+                        )
+                    except Exception:
+                        logger.debug("KV transfer after prefill failed", exc_info=True)
+
+        duration_s = time.monotonic() - t0
+
+        # Store cache handle with TTL
+        handle_id = f"pf-{uuid.uuid4().hex[:12]}"
+        _add_cache_handle(handle_id, {
+            "cache": result.kv_cache,
+            "token_ids": token_ids,
+            "prompt_tokens": prompt_tokens,
+            "cached_tokens": result.cached_tokens,
+            "created_at": time.monotonic(),
+            "source": "remote" if is_remote_prefill else "local",
+        })
+
+        return PrefillResponse(
+            id=handle_id,
+            cache_handle=handle_id,
+            prompt_tokens=prompt_tokens,
+            cached_tokens=result.cached_tokens,
+            duration_s=duration_s,
+        )
+    finally:
+        # Decrement load counters so the router's least-loaded selection
+        # stays accurate.
+        if disagg_router is not None and _routed_node_id is not None:
+            disagg_router.request_completed(_routed_node_id, _routed_role)
 
 
 @router.post("/decode", response_model=DecodeResponse)

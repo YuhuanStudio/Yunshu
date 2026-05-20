@@ -1167,11 +1167,11 @@ async def _stream_anthropic(
                                 _tokens_to_trim += 1
                             else:
                                 break
-                        if _tokens_to_trim == 0:
-                            _tokens_to_trim = 1
-                        output_tokens = max(0, output_tokens - _tokens_to_trim)
                         # Emit only the safe portion of the current token
                         _safe_len = len(accumulated_text) - _prev_len
+                        if _tokens_to_trim == 0 and _safe_len == 0:
+                            _tokens_to_trim = 1
+                        output_tokens = max(0, output_tokens - _tokens_to_trim)
                         if _safe_len > 0:
                             _safe_delta = _token_text[:_safe_len]
                             if not text_block_started:
@@ -1384,10 +1384,10 @@ async def _stream_anthropic(
                                     _tokens_to_trim += 1
                                 else:
                                     break
-                            if _tokens_to_trim == 0:
+                            _safe_len = len(accumulated_text) - _prev_len
+                            if _tokens_to_trim == 0 and _safe_len == 0:
                                 _tokens_to_trim = 1
                             output_tokens = max(0, output_tokens - _tokens_to_trim)
-                            _safe_len = len(accumulated_text) - _prev_len
                             if _safe_len > 0:
                                 _safe_delta = _token_text[:_safe_len]
                                 yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _safe_delta}})}\n\n"

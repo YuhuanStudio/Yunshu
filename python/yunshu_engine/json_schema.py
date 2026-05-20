@@ -317,6 +317,13 @@ class JsonSchemaConstraint:
         # Infer type from other keywords
         if "properties" in schema:
             return "object"
+        if "patternProperties" in schema:
+            logger.warning(
+                "patternProperties is not supported by the constrained decoder; "
+                "these constraints will be ignored: %s",
+                list(schema["patternProperties"].keys()),
+            )
+            return "object"
         if "items" in schema:
             return "array"
         if "enum" in schema:
@@ -360,7 +367,18 @@ class JsonSchemaConstraint:
                     t = self._get_type_from_schema(sub)
                     if t != "any":
                         types.append(t) if isinstance(t, str) else types.extend(t)
-            return types[0] if len(set(types)) == 1 else list(set(types)) if types else "any"
+            unique_types = list(dict.fromkeys(types))
+            if not unique_types:
+                return "any"
+            if len(unique_types) == 1:
+                return unique_types[0]
+            # allOf means intersection — conflicting types is a schema error.
+            # Warn and fall back to "any" rather than silently widening to union.
+            logger.warning(
+                "allOf sub-schemas have conflicting types %s — treating as 'any'",
+                unique_types,
+            )
+            return "any"
         if "anyOf" in schema or "oneOf" in schema:
             # Collect ALL option types (not just first) for union semantics
             options = schema.get("anyOf") or schema.get("oneOf") or []

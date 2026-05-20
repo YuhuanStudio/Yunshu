@@ -1743,6 +1743,7 @@ class BatchedEngine:
             reasoning_effort=reasoning_effort,
             logits_processors=logits_processors,
             cancel_event=cancel_event,
+            lora_adapter=lora_adapter,
         )
 
         if result is None:
@@ -2943,6 +2944,7 @@ class BatchedEngine:
             reasoning_effort=reasoning_effort,
             logits_processors=logits_processors,
             images=images,
+            lora_adapter=lora_adapter,
         )
 
         finished_normally = False
@@ -4551,12 +4553,24 @@ class BatchedEngine:
             # Snapshot draft cache for rollback on rejection
             draft_snap = self._spec_decoder._snapshot_cache(draft_cache)
 
+            # Cap draft length to remaining thinking budget
+            _effective_spec_K = None
+            if thinking_budget is not None and _spec_in_thinking:
+                remaining = thinking_budget - _spec_thinking_tokens_used
+                if remaining <= 0:
+                    if _spec_think_end_token is not None:
+                        _spec_in_thinking = False
+                        generated_tokens.append(_spec_think_end_token)
+                        detokenizer.add_token(_spec_think_end_token)
+                    break
+                _effective_spec_K = max(1, remaining - 1)
+
             def _spec_step():
                 # generate_draft: current_ids is [1,1] single token.
                 # First iteration: last prompt token (already in cache from prefill,
                 # so forward pass advances the cache by 1 and returns logits).
                 # Subsequent iterations: last accepted/bonus token.
-                draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache)
+                draft_result = self._spec_decoder.generate_draft(current_ids, draft_cache, max_draft_tokens=_effective_spec_K)
                 # verify_draft: includes current_ids as alignment token so logits
                 # are correctly positioned. Returns accepted tokens + bonus.
                 # NOTE: verify_draft feeds [current_ids, draft_tokens] to target,
