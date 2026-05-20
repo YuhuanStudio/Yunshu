@@ -97,6 +97,10 @@ class CompletionRequest(BaseModel):
     logits_processors: Optional[list] = None  # SAMP-2: User-provided custom logits processors
     timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
 
+    def effective_max_tokens(self) -> int:
+        """Return max_completion_tokens if set, else max_tokens (OpenAI SDK compat)."""
+        return self.max_completion_tokens if self.max_completion_tokens is not None else self.max_tokens
+
     @model_validator(mode="after")
     def validate_request(self):
         if not self.model or not self.model.strip():
@@ -174,14 +178,14 @@ async def create_completion(req: CompletionRequest, request: Request):
     trace_id = f"cmpl-{uuid.uuid4().hex[:16]}"
     tracer.start_trace(trace_id, metadata={
         "model": req.model,
-        "max_tokens": req.max_tokens,
+        "max_tokens": req.effective_max_tokens(),
         "temperature": req.temperature,
         "stream": req.stream,
         "endpoint": "/completions",
     })
     tracer.span(trace_id, "prefill", {"model": req.model})
     slog.info("inference_request", model=req.model, trace_id=trace_id,
-              max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens), stream=req.stream)
+              max_tokens=req.effective_max_tokens(), stream=req.stream)
 
     if req.stream:
         return StreamingResponse(
@@ -213,7 +217,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             if is_batched:
                 result = await engine.generate(
                     prompt=prompt,
-                    max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
+                    max_tokens=req.effective_max_tokens(),
                     temperature=req.temperature,
                     top_p=req.top_p,
                     top_k=req.top_k,
@@ -255,7 +259,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             else:
                 state = await engine.generate(
                     prompt=prompt,
-                    max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
+                    max_tokens=req.effective_max_tokens(),
                     temperature=req.temperature,
                     top_p=req.top_p,
                     top_k=req.top_k,
@@ -446,7 +450,7 @@ async def _stream_completion(
         if is_batched:
             async for output in engine.stream_generate(
                 prompt=prompt,
-                max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
+                max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -530,7 +534,7 @@ async def _stream_completion(
         else:
             async for output in engine.generate_stream(
                 prompt=prompt,
-                max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
+                max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -659,22 +663,58 @@ async def _stream_completion(
     except Exception:
         _tracker = None
     _comp_cancel_evt = _tracker_gen.cancel_event if _tracker_gen is not None else None
+
+    # SSE line-buffer: accumulate partial data and only yield complete
+    # \n\n-terminated SSE events.  Prevents clients from receiving partial
+    # SSE lines when TCP chunk boundaries split an event mid-way.
+    _sse_buffer = ""
+
+    def _drain_sse_buffer():
+        """Return list of complete SSE events from the buffer, keeping any trailing partial line."""
+        nonlocal _sse_buffer
+        chunks = []
+        while "\n\n" in _sse_buffer:
+            event, _sse_buffer = _sse_buffer.split("\n\n", 1)
+            chunks.append((event + "\n\n").encode("utf-8"))
+        return chunks
+
     try:
         async for event in with_sse_keepalive(
             _token_source(),
             http_request=request,
             cancel_event=_comp_cancel_evt,
         ):
-            yield event.encode("utf-8")
+            _sse_buffer += event
+            for chunk in _drain_sse_buffer():
+                yield chunk
+        # Flush any remaining complete event in buffer
+        for chunk in _drain_sse_buffer():
+            yield chunk
+        # If buffer still has residual content without \n\n terminator,
+        # append terminator and flush
+        if _sse_buffer.strip():
+            _sse_buffer += "\n\n"
+            for chunk in _drain_sse_buffer():
+                yield chunk
     except MemoryError:
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
+        # Flush any buffered partial data before error
+        if _sse_buffer.strip():
+            _sse_buffer += "\n\n"
+            for chunk in _drain_sse_buffer():
+                yield chunk
         yield b'data: {"error": {"message": "Insufficient GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
+        # Flush any buffered partial data before error
+        if _sse_buffer.strip():
+            _sse_buffer += "\n\n"
+            for chunk in _drain_sse_buffer():
+                yield chunk
         logger.error(f"Completions streaming error: {e}", exc_info=True)
         err_payload = {"error": {"message": str(e)[:200], "type": "internal_error"}}
         yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode("utf-8")

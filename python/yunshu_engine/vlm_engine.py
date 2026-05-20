@@ -639,6 +639,10 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
+                    # Fallback: if grammar was passed directly (not via _parse_response_format),
+                    # convert it to json_schema for the text generator.
+                    if js is None:
+                        js = kwargs.get('grammar', None)
                     return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, stop_token_ids=stop_token_ids, repetition_penalty=repetition_penalty, frequency_penalty=freq_p, presence_penalty=pres_p, logit_bias=lb, json_schema=js, enable_thinking=_enable_thinking, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=thinking_budget)
 
                 from mlx_lm.generate import generate_step
@@ -919,6 +923,10 @@ class VLMEngine:
                     pres_p = kwargs.get('presence_penalty', 0.0)
                     lb = kwargs.get('logit_bias', None)
                     js = kwargs.get('json_schema', None)
+                    # Fallback: if grammar was passed directly (not via _parse_response_format),
+                    # convert it to json_schema for the text generator.
+                    if js is None:
+                        js = kwargs.get('grammar', None)
                     _tb = kwargs.get('thinking_budget')
                     # Resolve reasoning_effort → thinking_budget
                     if _tb is None:
