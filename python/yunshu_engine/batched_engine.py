@@ -4149,6 +4149,10 @@ class BatchedEngine:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 cancel_event=cancel_event,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
             )
             # Apply stop token truncation (exclude stop token from output)
             for i, tid in enumerate(token_ids):
@@ -6059,6 +6063,10 @@ class BatchedEngine:
                 input_ids, max_tokens=max_tokens,
                 cancel_event=cancel_event,
                 sampler=_mtp_sampler,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
             )
 
         _mtp_gen_t0 = time.perf_counter()

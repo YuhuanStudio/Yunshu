@@ -627,6 +627,10 @@ class SpeculativeDecoder:
         max_tokens: int = 512,
         temperature: float = 0.7,
         cancel_event: "asyncio.Event | None" = None,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
     ) -> list[int]:
         """Generate tokens using speculative decoding.
 
@@ -746,6 +750,35 @@ class SpeculativeDecoder:
                 logprobs=draft_probs,
             )
             verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache, temperature=temperature)
+
+            # SP-PEN: Apply penalty/bias to bonus token via extra target forward pass
+            _has_pen = (
+                repetition_penalty != 1.0
+                or frequency_penalty != 0.0
+                or presence_penalty != 0.0
+                or (logit_bias is not None and len(logit_bias) > 0)
+            )
+            if _has_pen and verify_result.bonus_token_id >= 0:
+                from .batched_engine import _apply_spec_bonus_penalties
+                _pen_input = mx.array([[generated_tokens[-1]]])
+                _pen_out = self.target(_pen_input, cache=target_cache)
+                _pen_logits = _pen_out.logits[0, -1, :] if hasattr(_pen_out, 'logits') else _pen_out[0, -1, :]
+                _token_hist = list(input_ids.flatten()) + generated_tokens
+                _pen_logits = _apply_spec_bonus_penalties(
+                    _pen_logits, _token_hist, int(input_ids.size),
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
+                )
+                _pen_bonus = int(mx.argmax(_pen_logits).item())
+                verify_result = VerifyResult(
+                    accepted_count=verify_result.accepted_count,
+                    accepted_ids=verify_result.accepted_ids,
+                    rejected_at=verify_result.rejected_at,
+                    bonus_token_id=_pen_bonus,
+                    target_logprobs=verify_result.target_logprobs,
+                )
 
             accepted = verify_result.accepted_count
             all_accepted = (accepted == len(draft_tokens))

@@ -122,6 +122,10 @@ class MTPDecoder:
         max_tokens: int | None = None,
         cancel_event: Optional["asyncio.Event"] = None,
         sampler=None,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
+        logit_bias: dict[int, float] | None = None,
     ) -> list[int]:
         """Generate tokens using MTP always-advance with n_confirmed.
 
@@ -213,6 +217,24 @@ class MTPDecoder:
             mx.synchronize()
             # v0 MUST be greedy for spec decode acceptance check
             v0_greedy = _greedy(verify_out[0, 0, :])
+            # MTP-PEN: Apply penalty/bias to bonus token logits (v1)
+            _has_mtp_pen = (
+                repetition_penalty != 1.0
+                or frequency_penalty != 0.0
+                or presence_penalty != 0.0
+                or (logit_bias is not None and len(logit_bias) > 0)
+            )
+            if _has_mtp_pen:
+                from .batched_engine import _apply_spec_bonus_penalties
+                _mtp_token_hist = list(ids) + generated
+                _bonus_logits = _apply_spec_bonus_penalties(
+                    verify_out[0, 1, :], _mtp_token_hist, len(ids),
+                    repetition_penalty=repetition_penalty,
+                    frequency_penalty=frequency_penalty,
+                    presence_penalty=presence_penalty,
+                    logit_bias=logit_bias,
+                )
+                verify_out = verify_out.at[0, 1, :].set(_bonus_logits)
             # v1 (bonus) can use sampler for non-greedy output
             if sampler is not None:
                 v1 = int(sampler(verify_out[0, 1:2, :]).item())
@@ -240,6 +262,17 @@ class MTPDecoder:
             else:
                 # Reject: sample correction token from v0's logits BEFORE
                 # cache commit so the emitted token respects the sampler.
+                # MTP-PEN: Apply penalty/bias to rejection correction logits
+                if _has_mtp_pen:
+                    from .batched_engine import _apply_spec_bonus_penalties
+                    _corr_logits = _apply_spec_bonus_penalties(
+                        verify_out[0, 0, :], list(ids) + generated, len(ids),
+                        repetition_penalty=repetition_penalty,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
+                        logit_bias=logit_bias,
+                    )
+                    verify_out = verify_out.at[0, 0, :].set(_corr_logits)
                 if sampler is not None:
                     correction = int(sampler(verify_out[0, 0:1, :]).item())
                 else:
