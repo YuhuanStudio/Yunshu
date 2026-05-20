@@ -1484,8 +1484,12 @@ class Scheduler:
         # Use len(self.running) instead of the stale active_count captured
         # before preemption/retraction — preemption reduces the running count,
         # but the memory guard should check against the current state.
+        # NOTE: The guard runs even when current_running_count == 0.  Under
+        # memory pressure with no active decode (e.g., model weights + stale
+        # KV cache from just-finished burst), inserting all waiting requests
+        # at once risks OOM before the deferred cache clear fires.
         current_running_count = len(self.running)
-        if self.config.memory_guard_enabled and current_running_count > 0 and to_insert:
+        if self.config.memory_guard_enabled and to_insert:
             try:
                 import mlx.core as mx
                 active_mem = mx.get_active_memory()
@@ -2041,14 +2045,15 @@ class Scheduler:
             #
             # Sliding window guard: for models with sliding window attention,
             # the KV cache may have evicted early prompt tokens.  If the
-            # request generated enough tokens to push prompt blocks outside
-            # the window, saving the full prompt KV would store stale data.
+            # total token count (prompt + output) exceeds the sliding window,
+            # early prompt KV blocks have been evicted and saving the full
+            # prompt KV would store stale/corrupted data.
             # Skip saving in that case.
             saved_prefix = 0
             _sw_window = getattr(self.model, '_yunshu_swa_window', None)
             _prompt_outside_window = (
                 isinstance(_sw_window, (int, float))
-                and request.num_output_tokens > _sw_window
+                and request.num_output_tokens + request.num_prompt_tokens > _sw_window
             )
             if (
                 self._prefix_cache is not None
@@ -2312,11 +2317,22 @@ class Scheduler:
                             self._batch_gen.remove([uid])
                         except Exception:
                             logger.debug("batch gen remove for timeout abort failed", exc_info=True)
+                    # Decrement _total_prompt_tokens — the counter was incremented
+                    # when the request was first inserted into the batch (line 1836)
+                    # and this abort means the prompt tokens are "wasted" (the request
+                    # will never produce output).  Without this, _total_prompt_tokens
+                    # grows monotonically even as requests fail, inflating metrics.
+                    self._total_prompt_tokens = max(
+                        0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                    )
                     # Clean up per-request state — pop _pending_prefill directly
-                    # (NOT _pop_pending_prefill) to avoid double-decrementing
-                    # _active_partial_prefills.  The cleanup loop at the bottom of
-                    # this method handles the single decrement for errored_ids.
-                    self._pending_prefill.pop(req_id, None)
+                    # and decrement _active_partial_prefills here.  The cleanup
+                    # loop for errored_ids at the bottom of this method uses
+                    # "if popped is not None" to guard against double-decrement,
+                    # so since we already popped, that guard correctly skips the
+                    # second decrement.  We must decrement HERE because the
+                    # bottom loop's pop will return None for this entry.
+                    self._pop_pending_prefill(req_id)
                     for cleanup_dict in (
                         self._detokenizers, self._thinking_processors,
                         self._thinking_state, self._chunked_prefill_fairness,
@@ -2365,6 +2381,29 @@ class Scheduler:
                                     samplers=[sampler],
                                     state_machines=[sm],
                                 )
+                            # Guard: BatchGenerator may return empty UIDs (e.g., batch full).
+                            # Without this guard, uids[0] raises IndexError, which is caught
+                            # by the outer except but leaves the old UID in BatchGenerator,
+                            # leaking GPU memory (the old chunk's KV cache stays allocated).
+                            if not uids:
+                                logger.error(
+                                    "BatchGenerator.insert returned empty UIDs for "
+                                    "force-feed of timed-out chunked prefill %s",
+                                    req_id,
+                                )
+                                req.set_finished(RequestStatus.FINISHED_ERROR, reason="insert_failed")
+                                errored_ids.add(req_id)
+                                # Remove old UID from BatchGenerator to prevent KV leak
+                                old_uid_ff = getattr(req, 'batch_uid', None)
+                                if old_uid_ff is not None and self._batch_gen is not None:
+                                    try:
+                                        self._batch_gen.remove([old_uid_ff])
+                                    except Exception:
+                                        logger.debug(
+                                            "Failed to remove old UID %s during force-feed failure",
+                                            old_uid_ff, exc_info=True,
+                                        )
+                                break
                             # Update UID tracking (force-feed creates a new UID)
                             old_uid = getattr(req, 'batch_uid', None)
                             if old_uid is not None and old_uid != uids[0]:
@@ -2598,6 +2637,12 @@ class Scheduler:
                 req.set_finished(RequestStatus.FINISHED_ERROR, reason="prefill_error")
                 failed_uid = getattr(req, 'batch_uid', None)
                 self._uid_to_req.pop(failed_uid, None)
+                # Decrement _total_prompt_tokens — the counter was incremented
+                # when the request was first inserted (line 1836).  This abort
+                # means the prompt tokens are wasted and should not be counted.
+                self._total_prompt_tokens = max(
+                    0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                )
                 # Remove the failed UID from BatchGenerator to prevent GPU
                 # memory leak (the old chunk's KV cache stays allocated
                 # until explicitly removed).

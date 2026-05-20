@@ -136,13 +136,43 @@ class LoRAAdapterManager:
         adapter_path: str,
         estimated_bytes: int = 0,
     ) -> None:
-        """Register a LoRA adapter without loading it."""
+        """Register a LoRA adapter without loading it.
+
+        Reads rank and scale from adapter_config.json (if present) so
+        that list_adapters()/get_stats() show accurate metadata before
+        the adapter is actually loaded.  Missing or unreadable config
+        falls back to defaults (rank=8, scale=20.0).
+        """
+        rank = 8
+        scale = 20.0
+        config_path = Path(adapter_path) / "adapter_config.json"
+        try:
+            if config_path.exists():
+                with open(config_path) as f:
+                    config = json.load(f)
+                lora_params = config.get("lora_parameters", {})
+                rank = lora_params.get("rank", config.get("r", rank))
+                explicit_scale = lora_params.get("scale", None)
+                if explicit_scale is not None:
+                    scale = explicit_scale
+                else:
+                    alpha = lora_params.get("alpha", config.get("lora_alpha", rank))
+                    if rank > 0:
+                        scale = alpha / rank
+        except Exception:
+            logger.debug(
+                "Could not read adapter config for %s, using defaults",
+                adapter_id, exc_info=True,
+            )
+
         with self._lock:
             if adapter_id in self._adapters:
                 return
             self._adapters[adapter_id] = LoRAAdapterEntry(
                 adapter_id=adapter_id,
                 adapter_path=adapter_path,
+                rank=rank,
+                scale=scale,
                 estimated_bytes=estimated_bytes,
             )
         logger.info(f"Registered LoRA adapter: {adapter_id} ({adapter_path})")
@@ -336,10 +366,12 @@ class LoRAAdapterManager:
         Base weights are saved only once (before the first merge) to
         prevent memory leaks from repeated save_base_weights calls.
 
-        Thread safety: _gpu_lock is held for the entire duration of the
-        merge to prevent unload_adapter() from corrupting model state
-        while GPU work is in progress.  After re-acquiring _lock, the
-        entry is re-fetched to guard against concurrent unload.
+        Thread safety: _lock (RLock) is held throughout the entire
+        operation, including the load_adapter() call which re-enters
+        via RLock.  _gpu_lock serializes GPU work (fuse/restore).
+        This eliminates the TOCTOU window where a concurrent
+        unload_adapter could have cleared the adapter between the
+        load and the merge.
         """
         with self._lock:
             if adapter_id not in self._adapters:
@@ -357,17 +389,14 @@ class LoRAAdapterManager:
             # Idempotent — only the first call actually saves.
             self.save_base_weights()
 
-        # Load outside lock to avoid holding _lock during GPU work;
-        # load_adapter takes its own _lock (RLock, reentrant-safe).
-        if needs_load:
-            if not self.load_adapter(adapter_id):
-                return False
+            # Load under the same RLock — load_adapter's nested
+            # with self._lock re-enters safely.  This prevents the
+            # TOCTOU race where _lock was previously dropped between
+            # save_base_weights() and the final merge block.
+            if needs_load:
+                if not self.load_adapter(adapter_id):
+                    return False
 
-        # Hold _lock throughout to prevent AB/BA deadlock with unload_adapter
-        # (_lock is RLock so reentrant for load_adapter's nested acquisition).
-        # _gpu_lock is acquired inside _lock, matching the lock order used
-        # everywhere else (_lock -> _gpu_lock).
-        with self._lock:
             with self._gpu_lock:
                 try:
                     # Re-verify adapter is still loaded
@@ -382,10 +411,14 @@ class LoRAAdapterManager:
                     from mlx.utils import tree_unflatten
                     from mlx_lm.tuner.lora import LoRALinear
 
+                    # Use fuse() to bake LoRA delta (scale * lora_b @ lora_a) into
+                    # the base weight.  Simply taking module.linear would silently
+                    # drop the LoRA contribution, making the merge a no-op.
                     merged_layers = []
                     for name, module in self._base_model.named_modules():
                         if isinstance(module, LoRALinear):
-                            merged_layers.append((name, module.linear))
+                            fused = module.fuse(dequantize=False)
+                            merged_layers.append((name, fused))
 
                     if merged_layers:
                         self._base_model.update_modules(tree_unflatten(merged_layers))
@@ -533,9 +566,26 @@ class LoRAAdapterManager:
         with open(config_path) as f:
             config = json.load(f)
 
+        # Config can be in two formats:
+        #  1. MLX-LM nested:  {"lora_parameters": {"rank": N, "scale": S}}
+        #  2. HuggingFace flat: {"r": N, "lora_alpha": A}  where scale = alpha / rank
+        # Priority: explicit "scale" > alpha/rank computation > default.
         lora_params = config.get("lora_parameters", {})
-        entry.rank = lora_params.get("rank", 8)
-        entry.scale = lora_params.get("scale", 20.0)
+        rank = lora_params.get("rank", config.get("r", 8))
+        scale = lora_params.get("scale", None)
+        if scale is None:
+            # HuggingFace convention: effective scale = lora_alpha / rank
+            alpha = lora_params.get("alpha", config.get("lora_alpha", rank))
+            if rank > 0:
+                scale = alpha / rank
+            else:
+                logger.warning(
+                    "LoRA adapter %s has rank=0, defaulting scale to 1.0",
+                    entry.adapter_id,
+                )
+                scale = 1.0
+        entry.rank = rank
+        entry.scale = scale
 
         # Parse adapter weight keys to determine target modules
         weights_path = adapter_path / "adapters.safetensors"
