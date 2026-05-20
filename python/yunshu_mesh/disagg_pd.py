@@ -404,14 +404,30 @@ class DisaggRouter:
         return node_id or None, role
 
     def request_completed(self, node_id: str, role: NodeRole) -> None:
-        """Decrement load counters after a request finishes."""
+        """Decrement load counters after a request finishes.
+
+        Handles the asymmetry where route_request() may have incremented
+        both active_prefills and active_decodes for a HYBRID fallback, but
+        the caller passes the original intended role (PREFILL or DECODE).
+        If the node has both counters > 0 and the caller did not pass HYBRID,
+        we treat the request as having been routed as HYBRID and decrement both.
+        """
         with self._lock:
             if node_id not in self._nodes:
                 return
             node = self._nodes[node_id]
-            if role == NodeRole.PREFILL or role == NodeRole.HYBRID:
+            if role == NodeRole.HYBRID:
                 node.active_prefills = max(0, node.active_prefills - 1)
-            if role == NodeRole.DECODE or role == NodeRole.HYBRID:
+                node.active_decodes = max(0, node.active_decodes - 1)
+            elif node.active_prefills > 0 and node.active_decodes > 0:
+                # Node was used as HYBRID (both counters inflated by
+                # route_request fallback), but caller passed the original
+                # intended role.  Decrement both to match the increment.
+                node.active_prefills = max(0, node.active_prefills - 1)
+                node.active_decodes = max(0, node.active_decodes - 1)
+            elif role == NodeRole.PREFILL:
+                node.active_prefills = max(0, node.active_prefills - 1)
+            elif role == NodeRole.DECODE:
                 node.active_decodes = max(0, node.active_decodes - 1)
 
     def request_kv_transfer(

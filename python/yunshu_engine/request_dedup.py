@@ -188,6 +188,14 @@ class RequestDeduplicator:
                 else:
                     content_hash = nonce + request_id[:8]
 
+                # Final uniqueness guarantee: if the nonce loop exhausted
+                # without finding a free key, keep appending a counter suffix
+                # until we get one that doesn't collide with any in-flight entry.
+                _suffix = 0
+                while content_hash in self._entries and not self._entries[content_hash].is_completed:
+                    content_hash = f"{nonce}{request_id[:8]}_{_suffix}"
+                    _suffix += 1
+
             # Check capacity
             if len(self._entries) >= self._max_entries:
                 self._evict_oldest()
