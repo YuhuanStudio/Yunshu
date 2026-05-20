@@ -186,7 +186,7 @@ class KVCacheManager:
         """Internal: allocate blocks for a new request (caller holds lock)."""
         # 0. Try RadixTree prefix match (C8: O(k) tree traversal)
         if self.config.enable_caching and len(token_ids) >= self.config.block_size:
-            matched_node, remaining = self._radix_tree.match(token_ids)
+            matched_node = self._radix_tree.match(token_ids)[0]
             matched_blocks = matched_node.path_blocks()
             num_matched_tokens = matched_node.total_tokens()
             # Validate matched blocks: evicted blocks may still be
@@ -429,21 +429,27 @@ class KVCacheManager:
         num_full = len(token_ids) // self.config.block_size
         cached = 0
 
-        # Find the first uncached full block
+        # Walk blocks from index 0 to compute the correct chain hash.
+        # If a block in the chain was evicted (block_hash cleared to None),
+        # we must re-derive the parent hash from the token sequence rather
+        # than reading a stale None from the block.
+        parent_hash: int | None = None
         for i in range(num_full):
             if i >= len(blocks):
                 break
             block = blocks[i]
-            if block.block_hash is not None:
-                continue  # already cached
-
             start = i * self.config.block_size
             end = start + self.config.block_size
             block_tokens = token_ids[start:end]
 
-            parent_hash = blocks[i - 1].block_hash if i > 0 else None
+            if block.block_hash is not None:
+                # Already cached — use its hash as the parent for the next block.
+                parent_hash = block.block_hash
+                continue
+
             h = compute_block_hash(parent_hash, block_tokens, (model_hash,))
             self.block_pool.cache_block(block, h)
+            parent_hash = h
             cached += 1
 
         return cached

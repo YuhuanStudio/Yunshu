@@ -24,6 +24,7 @@ where the sampler is invoked per-token.
 
 
 import copy
+import json
 import logging
 from enum import Enum, auto
 from typing import Any, Callable
@@ -215,6 +216,17 @@ _DIGIT_CHARS = set('0123456789')
 _HEX_CHARS = set('0123456789abcdefABCDEF')
 
 
+def json_encode_value(val: Any) -> str:
+    """Encode a Python value to its JSON text representation for char extraction.
+
+    Used by enum/const handling to determine which start characters are valid.
+    """
+    try:
+        return json.dumps(val, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return ""
+
+
 class JsonSchemaConstraint:
     """State machine that tracks JSON structure during generation.
 
@@ -251,6 +263,7 @@ class JsonSchemaConstraint:
         self._number_has_dot: bool = False     # True once '.' consumed
         self._number_exponent_digit: bool = False  # True once at least one exponent digit consumed
         self._is_first_value: bool = True  # track first value in object/array
+        self._is_integer: bool = False  # True when current number context requires integer (no .eE)
         # Snapshot stack for rollback (speculative draft validation)
         self._snapshots: list[tuple] = []
         # Track length of value literals for robust detection
@@ -285,13 +298,44 @@ class JsonSchemaConstraint:
             return "enum"
         if "const" in schema:
             return "const"
+        if "allOf" in schema:
+            # Merge types from all sub-schemas; prefer "object" if any
+            # sub-schema has properties.
+            merged_props: dict = {}
+            for sub in schema["allOf"]:
+                if isinstance(sub, dict):
+                    if "properties" in sub:
+                        merged_props.update(sub["properties"])
+            if merged_props:
+                return "object"
+            # Otherwise collect unique types from sub-schemas
+            types: list[str] = []
+            for sub in schema["allOf"]:
+                if isinstance(sub, dict):
+                    t = self._get_type_from_schema(sub)
+                    if t != "any":
+                        types.append(t) if isinstance(t, str) else types.extend(t)
+            return types[0] if len(set(types)) == 1 else list(set(types)) if types else "any"
         if "anyOf" in schema or "oneOf" in schema:
-            # Use the first option's type
+            # Collect ALL option types (not just first) for union semantics
             options = schema.get("anyOf") or schema.get("oneOf") or []
-            non_null = [o for o in options if o.get("type") != "null"]
-            if non_null:
-                return self._get_type_from_schema(non_null[0])
-            return "any"
+            non_null = [o for o in options if isinstance(o, dict) and o.get("type") != "null"]
+            if not non_null:
+                return "any"
+            # Collect unique types across all options
+            all_types: list[str] = []
+            for opt in non_null:
+                t = self._get_type_from_schema(opt)
+                if isinstance(t, list):
+                    all_types.extend(t)
+                elif t != "any":
+                    all_types.append(t)
+            unique = list(dict.fromkeys(all_types))  # preserve order, dedupe
+            if not unique:
+                return "any"
+            if len(unique) == 1:
+                return unique[0]
+            return unique
         return "any"
 
     def _resolve_schema_for_value(self, schema: dict, key: str | None = None) -> dict:
@@ -299,17 +343,21 @@ class JsonSchemaConstraint:
 
         For objects, look up the key in properties.
         For arrays, use items schema.
-        Handles anyOf/oneOf by resolving to first non-null option.
+        Handles anyOf/oneOf by computing union of start chars from all
+        non-null options rather than picking only the first one.
         """
         schema_type = self._get_type_from_schema(schema)
 
-        # Resolve anyOf/oneOf to concrete schema
+        # Resolve anyOf/oneOf to concrete schema — pick the first viable
+        # option for value resolution (type-specific constraint enforcement)
+        # but the caller (_get_value_start_chars / _type_to_start_chars)
+        # already uses _get_type_from_schema which unions all option types.
         if "anyOf" in schema:
-            non_null = [o for o in schema["anyOf"] if o.get("type") != "null"]
+            non_null = [o for o in schema["anyOf"] if isinstance(o, dict) and o.get("type") != "null"]
             if non_null:
                 return self._resolve_schema_for_value(non_null[0], key)
         if "oneOf" in schema:
-            non_null = [o for o in schema["oneOf"] if o.get("type") != "null"]
+            non_null = [o for o in schema["oneOf"] if isinstance(o, dict) and o.get("type") != "null"]
             if non_null:
                 return self._resolve_schema_for_value(non_null[0], key)
 
@@ -407,17 +455,22 @@ class JsonSchemaConstraint:
 
         if state == JsonState.NUMBER:
             chars = set(_DIGIT_CHARS)
-            if self._number_seen_digit and not self._number_has_dot:
-                chars.add('.')
+            if not self._is_integer:
+                if self._number_seen_digit and not self._number_has_dot:
+                    chars.add('.')
+                if self._number_seen_digit:
+                    chars.update('eE')
             if self._number_seen_digit:
-                chars.update('eE')
                 chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
             return chars
 
         if state == JsonState.NUMBER_ZERO:
             # After leading '0', only '.', 'eE', or terminators (no more digits).
-            chars = {'.'}
-            chars.update('eE')
+            # For integer type, exclude '.' and 'eE'.
+            chars: set[str] = set()
+            if not self._is_integer:
+                chars.add('.')
+                chars.update('eE')
             chars.update({',', '}', ']', ' ', '\t', '\n', '\r'})
             return chars
 
@@ -480,6 +533,23 @@ class JsonSchemaConstraint:
             # Any value type allowed
             return {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ', '\t', '\n', '\r'}
 
+        # Handle enum: restrict to first chars of each enum value
+        if "enum" in value_schema and isinstance(value_schema["enum"], list):
+            chars: set[str] = set()
+            for val in value_schema["enum"]:
+                s = json_encode_value(val)
+                if s:
+                    chars.add(s[0])
+            chars.update(_WHITESPACE_CHARS)
+            return chars if chars else {' ', '\t', '\n', '\r'}
+
+        # Handle const: restrict to first char of the constant value
+        if "const" in value_schema:
+            s = json_encode_value(value_schema["const"])
+            if s:
+                return {s[0]} | _WHITESPACE_CHARS
+            return _WHITESPACE_CHARS
+
         schema_type = self._get_type_from_schema(value_schema)
 
         if isinstance(schema_type, list):
@@ -501,6 +571,22 @@ class JsonSchemaConstraint:
             items_schema = parent_schema.get("items", {"type": "string"})
         else:
             items_schema = {"type": "string"}
+
+        # Handle enum in items schema
+        if isinstance(items_schema, dict) and "enum" in items_schema and isinstance(items_schema["enum"], list):
+            chars: set[str] = {']', ' ', '\t', '\n', '\r'}
+            for val in items_schema["enum"]:
+                s = json_encode_value(val)
+                if s:
+                    chars.add(s[0])
+            return chars if len(chars) > 5 else chars | {']', ' ', '\t', '\n', '\r'}
+
+        # Handle const in items schema
+        if isinstance(items_schema, dict) and "const" in items_schema:
+            s = json_encode_value(items_schema["const"])
+            if s:
+                return {s[0]} | {']', ' ', '\t', '\n', '\r'}
+            return {']', ' ', '\t', '\n', '\r'}
 
         schema_type = self._get_type_from_schema(items_schema)
 
@@ -528,6 +614,16 @@ class JsonSchemaConstraint:
             "any": {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'},
         }
         return mapping.get(schema_type, {'"', '{', '[', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'})
+
+    def _is_integer_schema(self, schema: dict | None) -> bool:
+        """Check if a schema requires an integer (no decimal/exponent allowed)."""
+        if schema is None:
+            return False
+        schema_type = self._get_type_from_schema(schema)
+        if isinstance(schema_type, list):
+            # Multiple types: integer only if all types are integer
+            return all(t == "integer" for t in schema_type)
+        return schema_type == "integer"
 
     def _get_current_value_schema(self) -> dict | None:
         """Get the schema for the current value position."""
@@ -580,6 +676,7 @@ class JsonSchemaConstraint:
             self._number_seen_digit,
             self._number_has_dot,
             self._number_exponent_digit,
+            self._is_integer,
         ))
 
     def rollback(self) -> None:
@@ -601,6 +698,7 @@ class JsonSchemaConstraint:
             self._number_seen_digit,
             self._number_has_dot,
             self._number_exponent_digit,
+            self._is_integer,
         ) = self._snapshots.pop()
 
     def _process_text(self, text: str) -> None:
@@ -643,6 +741,7 @@ class JsonSchemaConstraint:
                     self._number_seen_digit = ch != '-'
                     self._number_has_dot = False
                     self._number_exponent_digit = False
+                    self._is_integer = self._is_integer_schema(self._schema)
                     self._schema_stack.append((JsonState.DONE, self._schema))
                 i += 1
                 continue
@@ -867,12 +966,12 @@ class JsonSchemaConstraint:
                         self._state = JsonState.NUMBER_ZERO
                     i += 1
                     continue
-                if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and not self._number_has_dot:
+                if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and not self._number_has_dot and not self._is_integer:
                     self._state = JsonState.NUMBER_FRACTION
                     self._number_has_dot = True
                     i += 1
                     continue
-                if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and self._number_seen_digit:
+                if ch in 'eE' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and self._number_seen_digit and not self._is_integer:
                     self._state = JsonState.NUMBER_EXPONENT
                     self._number_exponent_digit = False
                     i += 1
@@ -944,6 +1043,9 @@ class JsonSchemaConstraint:
             self._number_seen_digit = ch != '-'
             self._number_has_dot = False
             self._number_exponent_digit = False
+            # Determine if schema expects integer (no .eE allowed)
+            value_schema = self._get_current_value_schema()
+            self._is_integer = self._is_integer_schema(value_schema)
 
     def _enter_array_value(self, ch: str, buf_pos: int | None = None) -> None:
         """Enter a value state in array context."""
@@ -989,6 +1091,12 @@ class JsonSchemaConstraint:
             self._number_seen_digit = ch != '-'
             self._number_has_dot = False
             self._number_exponent_digit = False
+            # Determine if items schema expects integer
+            items_schema = {"type": "string"}
+            if self._schema_stack:
+                _, parent_schema = self._schema_stack[-1]
+                items_schema = parent_schema.get("items", {"type": "string"})
+            self._is_integer = self._is_integer_schema(items_schema)
 
     def _value_completed(self) -> None:
         """Called when a primitive value has been fully generated."""
@@ -1170,6 +1278,7 @@ class JsonSchemaConstraint:
         self._number_has_dot = False
         self._number_exponent_digit = False
         self._is_first_value = True
+        self._is_integer = False
         self._literal_remaining = 0
         self._unicode_remaining = 0
         self._snapshots.clear()

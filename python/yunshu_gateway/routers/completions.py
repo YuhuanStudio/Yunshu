@@ -621,8 +621,8 @@ async def _stream_completion(
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
         logger.error(f"Completions streaming error: {e}", exc_info=True)
-        err_msg = str(e).replace('"', '\\"').replace("\n", " ")[:200]
-        yield f'data: {{"error": {{"message": "{err_msg}", "type": "internal_error"}}}}\n\n'.encode("utf-8")
+        err_payload = {"error": {"message": str(e)[:200], "type": "internal_error"}}
+        yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode("utf-8")
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
     finally:

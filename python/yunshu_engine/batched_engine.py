@@ -2084,12 +2084,6 @@ class BatchedEngine:
                             max_tokens=remaining, sampler=sampler,
                             prompt_cache=cache, logits_processors=_lprocs,
                         ):
-                            if cancel_event is not None and (
-                                cancel_event._value if isinstance(cancel_event, asyncio.Event)
-                                else cancel_event.is_set()
-                            ):
-                                mx.synchronize()
-                                break
                             tokens.append(token)
                             if logprobs:
                                 log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
@@ -2104,6 +2098,19 @@ class BatchedEngine:
                                 if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                     tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
+                                    break
+                            # Cancellation check — after append so the token
+                            # is not silently lost (consistent with main loop).
+                            if _is_cancelled(cancel_event):
+                                mx.synchronize()
+                                break
+                            # Thinking budget enforcement (same as main loop)
+                            if thinking_budget is not None and _in_thinking:
+                                thinking_tokens_used += 1
+                                if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                                    _thinking_tokens.append(token)
+                                    _in_thinking = False
+                                    tokens.append(think_end_token)
                                     break
                     cleanup_rope(model)
                     spec_prefill_done = True
@@ -2146,18 +2153,6 @@ class BatchedEngine:
                             if time.perf_counter() > _timeout_deadline:
                                 logger.warning(f"Generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
                                 break
-                        # Cancellation check
-                        if _is_cancelled(cancel_event):
-                            mx.synchronize()
-                            break
-                        # Thinking budget enforcement: cap thinking tokens
-                        if thinking_budget is not None and _in_thinking:
-                            thinking_tokens_used += 1
-                            if thinking_tokens_used >= thinking_budget and think_end_token is not None:
-                                _thinking_tokens.append(token)
-                                _in_thinking = False
-                                detokenizer.add_token(think_end_token)
-                                break
                         # Progressive KV quantization (C6: keep memory flat during generation)
                         if self._kv_quant_bits is not None:
                             _progressive_quantize_kv_cache(
@@ -2165,6 +2160,8 @@ class BatchedEngine:
                                 self._kv_quant_group_size, self._kv_quant_bits,
                                 len(tokens),
                             )
+                        # Compute logprobs BEFORE stop checks — logprobs for stop
+                        # tokens are trimmed later via lp_result[:len(tokens)].
                         if logprobs:
                             import mlx.core as mx
                             log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
@@ -2179,6 +2176,8 @@ class BatchedEngine:
                                     for j in range(k)
                                 ]
                             token_logprobs.append(entry)
+                        # Stop ID check — must happen before thinking budget so that
+                        # a stop token gets finish_reason="stop" even during thinking.
                         if token in stop_ids:
                             tokens.pop()  # Exclude stop token from output
                             _stopped_by_stop_id = True
@@ -2188,6 +2187,20 @@ class BatchedEngine:
                             if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                 tokens.pop()  # Exclude suffix-triggering token from count
                                 _stopped_by_suffix = True
+                                break
+                        # Cancellation check
+                        if _is_cancelled(cancel_event):
+                            mx.synchronize()
+                            break
+                        # Thinking budget enforcement: cap thinking tokens
+                        if thinking_budget is not None and _in_thinking:
+                            thinking_tokens_used += 1
+                            if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                                _thinking_tokens.append(token)
+                                _in_thinking = False
+                                # Add forced closing tag to tokens so it appears in
+                                # tokenizer.decode(tokens) output (non-streaming path).
+                                tokens.append(think_end_token)
                                 break
 
                         # Track thinking segment boundaries
@@ -2274,7 +2287,22 @@ class BatchedEngine:
             except Exception:
                 logger.debug("detokenizer finalize failed in fast path", exc_info=True)
 
-            output_text = tokenizer.decode(tokens, skip_special_tokens=True)
+            # When stop_suffix matching is active, use detokenizer text for
+            # output because tokenizer.decode(tokens) may contain a partial
+            # suffix that leaked across token boundaries.  The detokenizer
+            # has the complete incremental text including the suffix, which
+            # we trim below.  When no suffix matching, tokenizer.decode is
+            # authoritative and avoids detokenizer state issues.
+            if _stopped_by_suffix and stop_suffixes:
+                output_text = detokenizer.text
+                # Trim the matched suffix from detokenizer text
+                for s in stop_suffixes:
+                    if output_text.endswith(s):
+                        output_text = output_text[:-len(s)]
+                        break
+                output_text = _clean_special_tokens(output_text)
+            else:
+                output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
 
             # Unregister from inflight prefix tracker
@@ -4643,6 +4671,13 @@ class BatchedEngine:
                                     _grammar_constraint.advance(tok_text)
                                 except Exception:
                                     pass
+                            # CRITICAL: Feed the bonus token through the model cache so it
+                            # becomes the last KV entry.  Without this, the next iteration's
+                            # verify_with_last_token(last_token_id=bonus) would roll back the
+                            # last ACCEPTED draft (which IS in cache) instead of the bonus
+                            # token (which is NOT), corrupting the KV cache.
+                            if not _stopped_by_stop_id and not _stopped_by_suffix:
+                                model(mx.array([[bonus]]), cache=cache)
 
                         self._ngram_stats["accepted"] += result.accepted_count
 
@@ -5711,7 +5746,16 @@ class BatchedEngine:
                         chunk = _clean_special_tokens(detokenizer.last_segment)
                         _put((chunk, len(generated), None, v0))
                         primary = v0
-                        primary_h = verify_h[:, 0:1, :]
+                        # Re-feed correction token through rolled-back cache to
+                        # get a hidden state consistent with the new primary token.
+                        # Using verify_h[:, 0:1, :] here is WRONG because verify_h
+                        # was computed before rollback — the cache state has changed.
+                        _out_corr, _hid_corr = model(
+                            mx.array([[v0]]), cache=cache,
+                            return_hidden=True,
+                        )
+                        mx.synchronize()
+                        primary_h = _hid_corr[:, -1:, :]
 
                 # Emit "length" finish chunk when max_tokens exhausted
                 detokenizer.finalize()
@@ -5844,6 +5888,18 @@ class BatchedEngine:
             _unregister_inflight()
             if not future.done():
                 future.cancel()
+                try:
+                    await future
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Drain queue to unblock any pending call_soon_threadsafe from
+            # the executor thread, preventing GPU work from continuing after
+            # the consumer has stopped iterating.
+            while not _q.empty():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     def _apply_chat_template(
         self,

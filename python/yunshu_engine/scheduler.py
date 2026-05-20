@@ -1418,10 +1418,20 @@ class Scheduler:
             to_preempt = len(to_insert) - available_slots
             preempted = self._preempt_lowest_priority(to_preempt)
             if preempted > 0:
-                available_slots += preempted
+                # Recompute available_slots from scratch instead of naively
+                # adding the raw preempted count.  When spec decode is active,
+                # the spec overhead depends on the (now reduced) running count,
+                # so the naive addition overestimates slots and can cause batch
+                # overflow.
+                new_active_count = len(self.running)
+                if has_spec and self._spec_aware_scheduler is not None:
+                    budget = self._spec_aware_scheduler.compute_spec_budget(new_active_count)
+                    available_slots = budget.available_for_new
+                else:
+                    available_slots = max(0, self.config.max_num_seqs - new_active_count)
                 logger.info(
                     f"Preempted {preempted} running requests for {len(to_insert)} waiting "
-                    f"(priority policy)"
+                    f"(priority policy, available_slots={available_slots})"
                 )
 
         if len(to_insert) > available_slots:
@@ -1435,10 +1445,17 @@ class Scheduler:
                             min(self.config.retraction_max_count, len(to_insert) - available_slots)
                         )
                         if retracted > 0:
-                            available_slots += retracted
+                            # Recompute available_slots instead of naive addition
+                            # (same spec-overhead fix as preemption path above).
+                            new_active_count = len(self.running)
+                            if has_spec and self._spec_aware_scheduler is not None:
+                                budget = self._spec_aware_scheduler.compute_spec_budget(new_active_count)
+                                available_slots = budget.available_for_new
+                            else:
+                                available_slots = max(0, self.config.max_num_seqs - new_active_count)
                             logger.info(
                                 f"Retracted {retracted} decode requests under memory pressure "
-                                f"(util={info.utilization_pct:.1f}%)"
+                                f"(util={info.utilization_pct:.1f}%, available_slots={available_slots})"
                             )
                 except Exception:
                     logger.debug("retraction check failed", exc_info=True)
@@ -1716,6 +1733,21 @@ class Scheduler:
                         samplers=[sampler],
                         state_machines=[sm],
                     )
+                elif cached_kv is not None and len(remaining_tokens) == 0:
+                    # Full prefix cache hit — no tokens to prefill.  Use
+                    # insert_segments with the cached KV and an empty segment
+                    # so the BatchGenerator initializes the decode state from
+                    # the cached KV without re-prefilling.  Without this branch,
+                    # the else path calls insert() with the full prompt, wasting
+                    # the prefix cache hit entirely.
+                    uids = self._batch_gen.insert_segments(
+                        segments=[[]],  # no remaining tokens to prefill
+                        max_tokens=[sp.max_tokens],
+                        caches=[cached_kv],
+                        all_tokens=[tokens_to_insert],
+                        samplers=[sampler],
+                        state_machines=[sm],
+                    )
                 else:
                     uids = self._batch_gen.insert(
                         prompts=[tokens_to_insert],
@@ -1730,6 +1762,11 @@ class Scheduler:
                     if should_chunk:
                         self._pending_prefill.pop(req.request_id, None)
                         self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+                    # Must track as failed insert so step() generates a synthetic
+                    # error output and EngineCore calls _finalize_request.
+                    # Without this, per-request resources (output_queue, done_event)
+                    # leak because no output is ever produced for this request.
+                    self._failed_insert_ids.append(req.request_id)
                     continue
                 req.batch_uid = uids[0]
                 req.status = RequestStatus.RUNNING
@@ -2006,11 +2043,22 @@ class Scheduler:
                     logger.debug("Failed to save KV prefix during preemption", exc_info=True)
 
             self._uid_to_req.pop(uid, None)
+            # Unregister mRoPE delta for the old UID to prevent stale delta
+            # entries from leaking in the batch delta manager (the request will
+            # get a new UID on re-insertion).
+            if uid is not None:
+                self._rope_delta_mgr.unregister(uid)
             self._detokenizers.pop(request.request_id, None)
             self._thinking_processors.pop(request.request_id, None)
             self._thinking_state.pop(request.request_id, None)
             self._pop_pending_prefill(request.request_id)
             self._cleanup_spec_state(request.request_id)
+            # Clean up ITL tracking — stale _last_token_time causes a massive
+            # ITL spike on the first token after re-insertion (the delta spans
+            # the entire preemption + re-prefill period).  Without this cleanup,
+            # preemption corrupts ITL p99 histograms and ServerMetrics.
+            self._last_token_time.pop(request.request_id, None)
+            self._itl_samples.pop(request.request_id, None)
 
             # H2O: Log attention-based eviction order for debugging.
             if self._attention_score_tracker is not None:

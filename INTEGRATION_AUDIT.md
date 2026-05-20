@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 283: 8-agent deep audit — 45+ bugs fixed across engine core (position IDs, finalize, profiler, cancel_event), scheduler (retraction cap, deep_reset, RadixTree), KV (COW recovery, prefix cache locks, migration tier stats), gateway (Anthropic cancel/finish_reason/counting, completions stop, responses json_object), spec decode (verifier logits, MTP rejection), grammar (all-inf NaN, NUMBER_ZERO, ChoiceConstraint EOS, ThinkingParser variants), mesh (Prometheus histogram, monitoring /all, node locks), multimodal (VLM reasoning/budget, inpainting, video seed), LoRA (restore_base, merge))
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 284: 6-agent deep audit — 37 bugs fixed: SSD AB/BA + self-deadlock, Anthropic SSE async/NameError/double-count, SpeculativeDecoder KV corruption (3 CRITICAL), scheduler preemption ITL/slots/mRoPE/insert leak, grammar allOf/oneOf/integer/enum/const, batched engine streaming thinking/suffix/SpecPrefill)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,49 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 284 — 6-agent deep audit: 33+ bugs across batched engine streaming, KV block/SSD deadlocks, gateway SSE protocol, scheduler fairness, spec decode KV corruption, grammar JSON schema)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 284: _generate_fast thinking budget force-closing tag 丟失 | non-streaming 用 tokenizer.decode(tokens) 不含 detokenizer 狀態。改為 tokens.append(think_end_token) | 思考標記丟失 (HIGH) |
+| Wave 284: Multi-token stop suffix partial leak | tokenizer.decode 彈出觸發 token 後仍含部分 suffix。改用 detokenizer.text + suffix trim | 文字洩漏 (HIGH) |
+| Wave 284: Thinking budget 在 stop_ids 前檢查 | budget 檢查在 stop_ids 前，budget 超限在 stop token 上報錯誤 finish_reason。移動 stop 檢查在前 | finish_reason 錯誤 (MEDIUM) |
+| Wave 284: SpecPrefill 用 inline cancel check | 不處理 _CompositeCancelEvent。改為 _is_cancelled() | 取消失效 (MEDIUM) |
+| Wave 284: SpecPrefill cancel 在 append 前檢查 | cancel 時最後 token 丟失。移到 append 後 | Token 丟失 (MEDIUM) |
+| Wave 284: SpecPrefill 缺 thinking budget 強制 | 內循環無 budget 檢查。加入 | 思考超限 (MEDIUM) |
+| Wave 284: _stream_generate_mtp finally 不 await future | future.cancel() 後不 await，GPU 工作繼續。加入 await + queue drain | GPU 洩漏 (MEDIUM) |
+| Wave 284: SSD delete_block vs _process_pending_writes AB/BA 死鎖 | delete_block 持 _lock 再 _writer_lock，_process_pending_writes 反序。分階段釋放 | 永久死鎖 (CRITICAL) |
+| Wave 284: SSD save_block 持 _writer_lock 調 _process_pending_writes | 自死鎖（Lock 不可重入）。重構為 _write_one_item / _drain_pending_writes_locked | 自死鎖 (CRITICAL) |
+| Wave 284: cow_block_in_table 錯誤恢復未持鎖 | rollback 改 ref_count/free_queue 無鎖。包裹 with self._lock | 併發損壞 (HIGH) |
+| Wave 284: reset_prefix_cache 未持鎖 | 清除 _hash_to_block 和 reset_hash 無鎖。加入鎖 | 併發損壞 (HIGH) |
+| Wave 284: Hash chain 斷裂（前置 block 被驅逐） | 驅逐清除 block_hash，後續 block 用 None 作 parent。從 index 0 重建正確鏈 | 快取失效 (HIGH) |
+| Wave 284: SSD load_block 返回 hot cache 引用 | 返回原始 list 對象，調用者修改損壞快取。返回淺拷貝 | 數據損壞 (MEDIUM) |
+| Wave 284: Anthropic _emit_message_start 是 async 但未 await | async def 被 yield 直接用作字串，SSE 客戶端收到 coroutine repr。改為普通 def | SSE 協議崩潰 (CRITICAL) |
+| Wave 284: Anthropic _anth_tracker NameError in finally | 變量僅在 try 內賦值，finally 引用未定義變量。初始化為 None + guard | NameError (CRITICAL) |
+| Wave 284: Anthropic output_tokens 在 tool streamer 雙重計數 | 源頭 + streamer 內各遞增一次。移除 streamer 內重複 | 使用量虛高 (HIGH) |
+| Wave 284: Anthropic non-batched finish_reason 漏捕獲 | 需要 finished AND finish_reason。改為 finish_reason is not None | stop_reason null (HIGH) |
+| Wave 284: Anthropic 錯誤路徑缺 message_start | OOM 等 error 後直接發 message_stop，缺 message_start。補上 | 協議違規 (HIGH) |
+| Wave 284: Chat SSE 錯誤用 comment 格式 | SSE parser 忽略 comment。改為 data JSON 格式 | 錯誤不可見 (HIGH) |
+| Wave 284: Chat/completions 錯誤 JSON 注入 | f-string 只跳脫雙引號。改用 json.dumps() | JSON 損壞 (MEDIUM) |
+| Wave 284: Anthropic non-streaming extract_thinking 缺 model_name | 無法選擇模型特定解析器。加入 req.model | 解析不準確 (LOW) |
+| Wave 284: Preemption ITL tracking 腐蝕 | _last_token_time/_itl_samples 未清除，重入後巨大 ITL 峰值。清除兩個 dict | 監控腐蝕 (HIGH) |
+| Wave 284: Preemption overestimates available slots (spec) | available_slots += N 忽略 spec 預算。從 len(running) 重算 | 批次溢出 (HIGH) |
+| Wave 284: Retraction overestimates available slots | 同上。重算 | 批次溢出 (HIGH) |
+| Wave 284: mRoPE delta 洩漏 | preempt 未 unregister rope delta。加入 | delta 累積 (HIGH) |
+| Wave 284: Insert failure request leak | BatchGenerator 返回空 UID 未加入 _failed_insert_ids，request 永不 finalize。加入 | 請求洩漏 (HIGH) |
+| Wave 284: Full prefix cache hit 浪費 | 100% 命中仍重新 prefill 全部 prompt。專用分支用 insert_segments 空段 + 快取 KV | GPU 浪費 (HIGH) |
+| Wave 284: SpeculativeDecoder.verify_draft KV 重複 | 未 rollback 1 即前向傳播，造成 last_tok 重複 KV。加入 trim | KV 損壞 (CRITICAL) |
+| Wave 284: verify_draft 後 target cache 脫同步 | 驗證後 correction/bonus token 不在 cache。feed 入 cache | KV 脫同步 (CRITICAL) |
+| Wave 284: N-gram spec bonus token 不在 cache | verify_with_last_token 假設 last_token 是 cache 最後，但 bonus 未 feed。加入 model(cache) | KV 損壞 (CRITICAL) |
+| Wave 284: MTP streaming 用過時 hidden state | rollback 後用 pre-rollback 的 verify_h。重新 feed 獲取一致 hidden | Draft 錯誤 (HIGH) |
+| Wave 284: NgramHashPool clear 不重置 stats | _total_inserts 等保留。加入重置 | 監控不準 (MEDIUM) |
+| Wave 284: LCGHashPool clear O(capacity) | 逐 slot 清除。改為重新分配陣列 | 效率 (LOW) |
+| Wave 284: JSON schema allOf 返回 "any" | _get_type_from_schema 無 allOf 處理。合併子 schema 屬性 | 約束失效 (HIGH) |
+| Wave 284: JSON schema oneOf/anyOf 只考慮第一個 | 只取第一個非 null option 的類型。收集所有 option 類型 | 約束不完整 (HIGH) |
+| Wave 284: integer 類型允許小數點和指數 | integer schema 下仍允許 ./e/E。加入 _is_integer 標記 | 整數約束失效 (HIGH) |
+| Wave 284: GrammarBitmask rollback 空 stack 崩潰 | 無 checkpoint 時 rollback 需要 saved 參數。探測簽名 + 空時返回 | TypeError (MEDIUM) |
+| Wave 284: enum/const 類型在 object 屬性中未強制 | enum/const 值被當作 any。提取首字元約束 | 約束失效 (MEDIUM) |
 
 ### 已完成修復 (2026-05-20 Wave 283 — 8-agent deep audit: 45+ bugs across engine core, scheduler, KV, gateway, spec decode, grammar, mesh, multimodal, auto-tuner)
 

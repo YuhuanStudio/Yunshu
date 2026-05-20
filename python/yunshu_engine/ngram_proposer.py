@@ -172,6 +172,8 @@ class NgramHashPool:
         """Clear the pool."""
         self._pool.clear()
         self._indexed_len = 0
+        self._total_inserts = 0
+        self._total_evictions = 0
 
     def get_stats(self) -> dict:
         return {
@@ -312,12 +314,18 @@ class LCGHashPool:
         return None
 
     def clear(self) -> None:
-        """Clear the pool in O(capacity)."""
-        for i in range(self._capacity):
-            self._keys[i] = 0
-            self._ngrams[i] = None
-            self._values[i] = None
+        """Clear the pool in O(1) by reallocating arrays."""
+        cap = self._capacity
+        self._keys = [0] * cap
+        self._ngrams = [None] * cap
+        self._values = [None] * cap
         self._indexed_len = 0
+        # Reset accumulated stats so cross-request contamination doesn't
+        # mislead monitoring after a reset().
+        self._total_inserts = 0
+        self._total_lookups = 0
+        self._total_hits = 0
+        self._total_evictions = 0
 
     def get_stats(self) -> dict:
         occupied = sum(1 for k in self._keys if k != 0)

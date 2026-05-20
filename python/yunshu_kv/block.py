@@ -312,9 +312,10 @@ class BlockPool:
 
     def reset_prefix_cache(self) -> None:
         """Clear all prefix cache entries."""
-        self._hash_to_block.clear()
-        for block in self.blocks:
-            block.reset_hash()
+        with self._lock:
+            self._hash_to_block.clear()
+            for block in self.blocks:
+                block.reset_hash()
 
     # ── Copy-on-Write (COW) ─────────────────────────────────────────
 
@@ -412,16 +413,14 @@ class BlockPool:
                         value_cache[new_block.block_id] = value_cache[old_block.block_id]
                 except Exception:
                     logger.warning("KV data copy in cow_block_in_table failed — returning old block to avoid corruption", exc_info=True)
-                    # Put the new block back — it was allocated from the free
-                    # queue but we can't use it.  Without this, the block leaks
-                    # permanently (ref_count=1 but nobody holds a reference).
-                    new_block.ref_count = 0
-                    self.free_queue.append(new_block)
-                    # Undo the ref_count decrement that cow_block applied to
-                    # the original block.  Without this the original's ref_count
-                    # is too low and a subsequent free() can free it while other
-                    # requests still reference it (use-after-free).
-                    old_block.ref_count += 1
+                    # Rollback must be under the pool lock because cow_block
+                    # has already released it.  Mutating ref_count and the
+                    # free queue without the lock races with concurrent
+                    # allocate/touch/free operations.
+                    with self._lock:
+                        new_block.ref_count = 0
+                        self.free_queue.append(new_block)
+                        old_block.ref_count += 1
                     # Roll back cache tensors to their pre-modification state.
                     return old_block, orig_key_cache, orig_value_cache
             # Update the table entry

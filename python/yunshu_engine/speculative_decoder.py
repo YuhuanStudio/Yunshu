@@ -461,6 +461,19 @@ class SpeculativeDecoder:
                 target_logprobs=[],
             )
 
+        # Roll back cache by 1 to re-include last_token in the forward pass.
+        # Without this, last_token gets a duplicate KV entry and logits are
+        # misaligned.  After rollback, the cache is as if last_token was never
+        # processed, so feeding [last_tok, d0..dK-1] produces K+1 logits
+        # correctly: logits[0] verifies d0, logits[K] is the bonus.
+        try:
+            from mlx_lm.models.cache import trim_prompt_cache
+            trim_prompt_cache(cache, 1)
+        except Exception:
+            for c in cache:
+                if hasattr(c, "trim"):
+                    c.trim(1)
+
         # Build aligned input: [last_token(s), d0, d1, ..., dK-1]
         last_tok = input_ids[:, -1:]  # [1, 1] — last token from previous step
         draft_tokens = mx.array(draft_result.token_ids).reshape(1, K)
@@ -700,8 +713,10 @@ class SpeculativeDecoder:
             # On partial acceptance: trim target cache of rejected entries,
             # restore draft cache, re-feed accepted + correction tokens.
             if accepted < len(draft_tokens):
-                # verify_draft fed [last_tok, d0..dK-1] (K+1 entries).
-                # Only accepted+1 are valid. Trim the rejected ones.
+                # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
+                # After rollback, cache had N-1 entries. After forward K+1: N+K.
+                # Only accepted+1 are valid (last_tok + accepted drafts).
+                # Trim the rejected ones: (N+K) - (N-1+accepted+1) = K - accepted.
                 trim_count = len(draft_tokens) - accepted
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
@@ -716,6 +731,17 @@ class SpeculativeDecoder:
                 refeed = generated_tokens[-(accepted + 1):]
                 for tok in refeed:
                     self.draft(mx.array([[tok]]), cache=draft_cache)
+
+                # Feed correction token to target cache so it becomes the last
+                # entry.  This ensures the next verify_draft's rollback will
+                # correctly remove the correction (not the last accepted draft).
+                correction = generated_tokens[-1]
+                self.target(mx.array([[correction]]), cache=target_cache)
+            else:
+                # All accepted: feed bonus token to target cache for the same
+                # reason — the bonus must be in cache before next verify_draft.
+                if bonus_id >= 0 and len(generated_tokens) < max_tokens:
+                    self.target(mx.array([[bonus_id]]), cache=target_cache)
 
             if any(t in eos_ids for t in generated_tokens):
                 return generated_tokens

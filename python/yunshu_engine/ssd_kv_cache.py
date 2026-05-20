@@ -273,24 +273,7 @@ class SSDKVCache:
                 self._writer_stop.wait(timeout=0.5)
                 continue
 
-            try:
-                op = item[0]
-                if op == "save":
-                    _, block_hash_hex, tensors_raw, meta_dict, file_path = item
-                    file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
-                    with self._lock:
-                        if block_hash_hex in self._index:
-                            self._index[block_hash_hex].file_size = file_size
-                            self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
-                        self._writes_completed += 1
-                elif op == "delete":
-                    _, file_path = item
-                    try:
-                        os.unlink(file_path)
-                    except OSError:
-                        pass
-            except Exception as e:
-                logger.debug("SSD writer error", exc_info=True)
+            self._write_one_item(item)
 
     def _flush_writer(self) -> None:
         """Flush all pending writes.
@@ -308,25 +291,7 @@ class SSDKVCache:
         # Process remaining items under writer lock to prevent
         # concurrent save_block from appending while we drain.
         with self._writer_lock:
-            for item in list(self._write_queue):
-                try:
-                    op = item[0]
-                    if op == "save":
-                        _, block_hash_hex, tensors_raw, meta_dict, file_path = item
-                        file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
-                        with self._lock:
-                            if block_hash_hex in self._index:
-                                self._index[block_hash_hex].file_size = file_size
-                                self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
-                            self._writes_completed += 1
-                    elif op == "delete":
-                        try:
-                            os.unlink(item[1])
-                        except OSError:
-                            pass
-                except Exception:
-                    logger.debug("SSD writer flush failed", exc_info=True)
-            self._write_queue.clear()
+            self._drain_pending_writes_locked()
 
     def _recover_index(self) -> None:
         """Recover block index from SQLite store, or scan cache directory."""
@@ -523,7 +488,7 @@ class SSDKVCache:
         with self._writer_lock:
             # Drain queue synchronously if at capacity to prevent unbounded growth
             if self._writer_queue_size > 0 and len(self._write_queue) >= self._writer_queue_size:
-                self._process_pending_writes()
+                self._drain_pending_writes_locked()
             # Remove any existing save for this hash (replace, don't duplicate)
             self._write_queue = [
                 item for item in self._write_queue
@@ -539,29 +504,45 @@ class SSDKVCache:
             self._start_writer()
 
     def _process_pending_writes(self) -> None:
-        """Process pending writes synchronously."""
+        """Process pending writes synchronously (acquires _writer_lock)."""
         while True:
             with self._writer_lock:
                 if not self._write_queue:
                     break
                 item = self._write_queue.pop(0)
-            try:
-                op = item[0]
-                if op == "save":
-                    _, block_hash_hex, tensors_raw, meta_dict, file_path = item
-                    file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
-                    with self._lock:
-                        if block_hash_hex in self._index:
-                            self._index[block_hash_hex].file_size = file_size
-                            self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
-                        self._writes_completed += 1
-                elif op == "delete":
-                    try:
-                        os.unlink(item[1])
-                    except OSError:
-                        pass
-            except Exception:
-                logger.debug("SSD write error", exc_info=True)
+            self._write_one_item(item)
+
+    def _drain_pending_writes_locked(self) -> None:
+        """Process pending writes synchronously (caller holds _writer_lock).
+
+        Used by save_block and _flush_writer which already hold _writer_lock.
+        Calling _process_pending_writes() from those sites would deadlock
+        because _process_pending_writes acquires _writer_lock and
+        threading.Lock is not reentrant.
+        """
+        while self._write_queue:
+            item = self._write_queue.pop(0)
+            self._write_one_item(item)
+
+    def _write_one_item(self, item: tuple) -> None:
+        """Process a single write/delete item (no lock held by caller)."""
+        try:
+            op = item[0]
+            if op == "save":
+                _, block_hash_hex, tensors_raw, meta_dict, file_path = item
+                file_size = _write_safetensors(file_path, tensors_raw, meta_dict)
+                with self._lock:
+                    if block_hash_hex in self._index:
+                        self._index[block_hash_hex].file_size = file_size
+                        self._sqlite_upsert(block_hash_hex, self._index[block_hash_hex])
+                    self._writes_completed += 1
+            elif op == "delete":
+                try:
+                    os.unlink(item[1])
+                except OSError:
+                    pass
+        except Exception:
+            logger.debug("SSD write error", exc_info=True)
 
     def load_block(self, block_hash: bytes) -> list | None:
         """Load a KV block from hot cache or SSD.
@@ -576,7 +557,9 @@ class SSDKVCache:
             if hex_hash in self._hot_cache:
                 self._hot_cache.move_to_end(hex_hash)
                 self._reads_completed += 1
-                return self._hot_cache[hex_hash][0]
+                # Return a shallow copy so callers can't mutate the
+                # hot cache entry (e.g., modifying layer offset/trim).
+                return list(self._hot_cache[hex_hash][0])
 
             # Check disk index — capture meta while holding the lock
             # to prevent a concurrent delete_block from racing with us.
@@ -663,27 +646,38 @@ class SSDKVCache:
     def delete_block(self, block_hash: bytes) -> None:
         """Delete a block from both hot cache and disk.
 
-        Holds ``self._lock`` throughout the entire operation (including
-        write-queue mutation) to prevent a concurrent ``save_block()`` from
-        re-inserting the entry into ``self._index`` between the index removal
-        and the write-queue update.
+        Lock ordering: acquires ``_lock`` to remove from index/hot cache,
+        then acquires ``_writer_lock`` to cancel pending writes.  Never
+        holds both simultaneously to avoid AB/BA deadlock with
+        ``_process_pending_writes`` (which acquires ``_writer_lock`` then
+        ``_lock``).
+
+        A concurrent ``save_block()`` could re-insert the entry between
+        the two critical sections.  This is benign: the re-inserted entry
+        will either be overwritten on the next save cycle or cleaned up
+        by the next disk budget check.
         """
         hex_hash = block_hash.hex()
+        file_path_to_delete: str | None = None
         with self._lock:
             self._hot_cache.pop(hex_hash, None)
             meta = self._index.pop(hex_hash, None)
             self._sqlite_delete(hex_hash)
-
             if meta is not None and meta.file_path:
-                with self._writer_lock:
-                    # Cancel any pending save for this hash to prevent orphaned files
-                    self._write_queue = [
-                        item for item in self._write_queue
-                        if not (item[0] == "save" and item[1] == hex_hash)
-                    ]
-                    self._write_queue.append(("delete", meta.file_path))
+                file_path_to_delete = meta.file_path
 
-        if meta is not None and meta.file_path:
+        # Mutate write queue under writer_lock ONLY (no _lock held).
+        # This avoids the AB/BA deadlock with _process_pending_writes
+        # which acquires _writer_lock → _lock.
+        if file_path_to_delete is not None:
+            with self._writer_lock:
+                # Cancel any pending save for this hash to prevent orphaned files
+                self._write_queue = [
+                    item for item in self._write_queue
+                    if not (item[0] == "save" and item[1] == hex_hash)
+                ]
+                self._write_queue.append(("delete", file_path_to_delete))
+
             self._process_pending_writes()
 
     def clear(self) -> int:

@@ -705,7 +705,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
 
     if enable_thinking:
         from ..streaming import extract_thinking
-        thinking_text, visible_text = extract_thinking(result.text)
+        thinking_text, visible_text = extract_thinking(result.text, req.model)
         if thinking_text:
             content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
 
@@ -850,7 +850,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
     visible_text = text
     if enable_thinking:
         from ..streaming import extract_thinking
-        thinking_text, visible_text = extract_thinking(text)
+        thinking_text, visible_text = extract_thinking(text, req.model)
         if thinking_text:
             content.append({"type": "thinking", "thinking": thinking_text, "signature": "yunshu-reasoning"})
     text_block: dict = {"type": "text", "text": visible_text}
@@ -947,6 +947,7 @@ async def _stream_anthropic(
     _token_boundaries: list[int] = []  # cumulative text length after each output token
 
     # Register with request tracker for cancellation support
+    _anth_tracker = None
     try:
         from yunshu_engine.request_tracker import get_request_tracker
         _anth_tracker = get_request_tracker()
@@ -958,7 +959,7 @@ async def _stream_anthropic(
     # engine output so we can report accurate cache token counts).
     _message_start_emitted = False
 
-    async def _emit_message_start(inp_tokens: int, cached_toks: int) -> bytes:
+    def _emit_message_start(inp_tokens: int, cached_toks: int) -> bytes:
         """Build and return the message_start event bytes.
 
         Called once, when the first engine output arrives with prompt_tokens.
@@ -1120,8 +1121,9 @@ async def _stream_anthropic(
                         # The streamer buffers tokens and only emits confirmed
                         # text or complete tool calls, preventing partial tool
                         # call markup from being sent as visible text.
+                        # NOTE: output_tokens was already incremented above for
+                        # this token — do NOT increment again here.
                         if has_tools and _tool_streamer:
-                            output_tokens += 1
                             for _tc_out in _tool_streamer.process_token(_token_text):
                                 if _tc_out.text:
                                     if not text_block_started:
@@ -1183,8 +1185,10 @@ async def _stream_anthropic(
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 
-                # Capture finish_reason from the last streaming output
-                if hasattr(output, 'finished') and output.finished and hasattr(output, 'finish_reason') and output.finish_reason:
+                # Capture finish_reason from the last streaming output.
+                # Use finish_reason whenever it's set (not just when finished=True)
+                # because some engines set finish_reason without the finished flag.
+                if hasattr(output, 'finish_reason') and output.finish_reason is not None:
                     _streaming_finish_reason = output.finish_reason
 
                 # Emit message_start on first output with prompt_tokens
@@ -1362,20 +1366,29 @@ async def _stream_anthropic(
         # Only emit message_stop on normal completion, NOT after errors
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except MemoryError:
+        # Emit message_start if it was never sent (error before first engine output)
+        if not _message_start_emitted:
+            _message_start_emitted = True
+            yield _emit_message_start(input_tokens, cached_tokens)
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Anthropic streaming error", exc_info=True)
+        # Emit message_start if it was never sent (error before first engine output)
+        if not _message_start_emitted:
+            _message_start_emitted = True
+            yield _emit_message_start(input_tokens, cached_tokens)
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
         yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
-        try:
-            _anth_tracker.unregister(message_id)
-        except Exception:
-            logger.debug("tracker unregister failed", exc_info=True)
+        if _anth_tracker is not None:
+            try:
+                _anth_tracker.unregister(message_id)
+            except Exception:
+                logger.debug("tracker unregister failed", exc_info=True)
         # Clean up temp files created for image blocks during streaming
         if temp_files:
             import os as _os

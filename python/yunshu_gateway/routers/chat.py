@@ -1520,14 +1520,14 @@ async def _stream_vlm_response(
     except MemoryError:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
-        yield b": error: Out of GPU memory\n\n"
+        yield b'data: {"error": {"message": "Out of GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _vlm_cancel_evt is not None:
             _vlm_cancel_evt.set()
         logger.error("VLM streaming error", exc_info=True)
-        yield b": error: Internal server error\n\n"
+        yield b'data: {"error": {"message": "Internal server error", "type": "internal_error"}}\n\n'
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
@@ -1934,14 +1934,14 @@ async def _stream_response_multi(
     except MemoryError:
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
-        yield b": error: Out of GPU memory\n\n"
+        yield b'data: {"error": {"message": "Out of GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _multi_cancel_evt is not None:
             _multi_cancel_evt.set()
         logger.error("Chat multi-choice streaming error", exc_info=True)
-        yield b": error: Internal server error\n\n"
+        yield b'data: {"error": {"message": "Internal server error", "type": "internal_error"}}\n\n'
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
@@ -2423,8 +2423,8 @@ async def _stream_response(
         if _cancel_evt is not None:
             _cancel_evt.set()
         logger.error("Chat streaming error", exc_info=True)
-        err_msg = str(e).replace('"', '\\"').replace("\n", " ")[:200]
-        yield f'data: {{"error": {{"message": "{err_msg}", "type": "internal_error"}}}}\n\n'.encode("utf-8")
+        err_payload = {"error": {"message": str(e)[:200], "type": "internal_error"}}
+        yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n".encode("utf-8")
         if not done_emitted:
             yield b"data: [DONE]\n\n"
     finally:

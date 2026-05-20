@@ -294,18 +294,24 @@ class GrammarBitmaskEngine:
 
     def rollback(self) -> None:
         if hasattr(self._constraint, "rollback"):
+            # Probe rollback signature once if not yet determined
+            if self._constraint_rollback_needs_arg is None:
+                import inspect
+                sig = inspect.signature(self._constraint.rollback)
+                self._constraint_rollback_needs_arg = len(sig.parameters) > 0
+
             if self._constraint_rollback_needs_arg:
-                saved = self._checkpoint_stack.pop() if self._checkpoint_stack else None
-                if saved is not None:
-                    self._constraint.rollback(saved)
-                else:
-                    # No checkpoint data saved — call bare rollback as fallback
-                    self._constraint.rollback()
+                if not self._checkpoint_stack:
+                    # No checkpoint saved — nothing to roll back to.
+                    # Cannot call constraint.rollback(saved) without data.
+                    return
+                saved = self._checkpoint_stack.pop()
+                self._constraint.rollback(saved)
             else:
                 self._constraint.rollback()
-            # Pop the stack for no-arg rollback too (keeps stack depth correct)
-            if self._constraint_rollback_needs_arg is False and self._checkpoint_stack:
-                self._checkpoint_stack.pop()
+                # Pop the stack for no-arg rollback too (keeps stack depth correct)
+                if self._checkpoint_stack:
+                    self._checkpoint_stack.pop()
 
     def get_stats(self) -> dict[str, Any]:
         stats = getattr(self._constraint, "get_stats", lambda: {})()
