@@ -96,6 +96,9 @@ class RequestOutputCollector:
         _ttft = existing.ttft_ms if existing.ttft_ms > 0 else (new.ttft_ms if new.ttft_ms > 0 else 0.0)
         # Preserve existing.request_id so dedup shadow fan-out keeps the
         # original primary ID (new.request_id may be a shadow's ID).
+        # Prefill progress: prefer the newer (more recent) value
+        _prefill_progress = new.prefill_progress if new.prefill_progress is not None else existing.prefill_progress
+
         return RequestOutput(
             request_id=existing.request_id,
             new_token_ids=existing.new_token_ids + new.new_token_ids,
@@ -112,6 +115,7 @@ class RequestOutputCollector:
             cached_tokens=_cached,
             error=new.error if new.error is not None else existing.error,
             ttft_ms=_ttft,
+            prefill_progress=_prefill_progress,
         )
 
     def clear(self) -> None:

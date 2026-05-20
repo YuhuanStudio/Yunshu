@@ -114,6 +114,11 @@ class RequestOutput:
     cached_tokens: int = 0
     ttft_ms: float = 0.0
 
+    # Chunked prefill progress (vLLM pattern)
+    # Tuple of (processed_tokens, total_tokens) for chunked prefill progress reporting.
+    # Non-None during prefill phase, None once generation starts.
+    prefill_progress: tuple[int, int] | None = None
+
     # Backward compat aliases for legacy Engine path
     @property
     def token_text(self) -> str:

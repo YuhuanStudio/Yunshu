@@ -1640,19 +1640,43 @@ class EngineCore:
             self._signal_finished(req_id)
             self._cleanup_request(req_id)
 
-    async def stream_outputs(self, request_id: str) -> AsyncIterator[Any]:
+    async def stream_outputs(
+        self,
+        request_id: str,
+        cancel_event: asyncio.Event | None = None,
+    ) -> AsyncIterator[Any]:
         """Stream outputs for a request (oMLX/vLLM pattern).
 
         Fast path: collector.get_nowait() avoids task switch under load.
         Slow path: await collector.get() for efficient waiting when idle.
         Sentinel (None) signals stream end.
+
+        When cancel_event is provided (from gateway disconnect detection),
+        the stream monitors it while waiting for new output. If cancelled,
+        abort_request() is called to propagate cancellation down to the
+        scheduler (removing from running/waiting queues, freeing KV blocks).
+        This prevents GPU slots and KV blocks from being consumed by requests
+        whose clients have already disconnected (SGLang pattern).
         """
         collector = self._output_collectors.get(request_id)
         if collector is None:
             return
 
+        _cancelled = False
         try:
             while True:
+                # Check cancel_event at the top of each iteration.
+                # This catches cancellation during chunked prefill when
+                # no outputs have been produced yet.
+                if cancel_event is not None:
+                    cev = cancel_event
+                    if isinstance(cev, asyncio.Event):
+                        _cancelled = cev._value
+                    else:
+                        _cancelled = cev.is_set()
+                    if _cancelled:
+                        break
+
                 output = collector.get_nowait()
                 if output is not None:
                     yield output
@@ -1660,12 +1684,44 @@ class EngineCore:
                         break
                     continue
 
-                # Wait for new output from engine loop.
+                # Wait for new output from engine loop, but also watch
+                # cancel_event so we don't block indefinitely when the
+                # client disconnects during chunked prefill.
                 # Do NOT check collector._sentinel here — there is a race
                 # between get_nowait() returning None and the sentinel check
                 # where the engine could have put new output.  The await
                 # collector.get() handles both sentinel and new output correctly.
-                output = await collector.get()
+                if cancel_event is not None:
+                    # Race collector.get() against cancel_event
+                    _get_task = asyncio.ensure_future(collector.get())
+                    _cancel_waiter = asyncio.ensure_future(
+                        cancel_event.wait() if isinstance(cancel_event, asyncio.Event)
+                        else asyncio.sleep(0.05)  # polling for non-Event types
+                    )
+                    try:
+                        done, pending = await asyncio.wait(
+                            {_get_task, _cancel_waiter},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for p in pending:
+                            p.cancel()
+                            try:
+                                await p
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                        if _cancel_waiter in done:
+                            _cancelled = True
+                            break
+                        # _get_task completed
+                        output = _get_task.result()
+                    except asyncio.CancelledError:
+                        for t in (_get_task, _cancel_waiter):
+                            if not t.done():
+                                t.cancel()
+                        raise
+                else:
+                    output = await collector.get()
+
                 if output is None:
                     break
                 yield output
@@ -1674,6 +1730,14 @@ class EngineCore:
         except asyncio.CancelledError:
             raise
         finally:
+            if _cancelled:
+                # Propagate cancellation to scheduler (SGLang pattern).
+                # This removes the request from running/waiting queues and
+                # frees KV blocks. Safe to call even if already finalized.
+                try:
+                    await self.abort_request(request_id)
+                except Exception:
+                    logger.debug("cancel-driven abort failed", exc_info=True)
             self._cleanup_request(request_id)
 
     async def generate(
@@ -2011,6 +2075,7 @@ class EngineCore:
                                     current_state=req_output.current_state,
                                     reasoning_tokens=req_output.reasoning_tokens,
                                     cached_tokens=req_output.cached_tokens,
+                                    prefill_progress=req_output.prefill_progress,
                                 ))
 
                     if req_output.finished:
@@ -2060,6 +2125,7 @@ class EngineCore:
                                             current_state=req_output.current_state,
                                             reasoning_tokens=req_output.reasoning_tokens,
                                             cached_tokens=req_output.cached_tokens,
+                                            prefill_progress=req_output.prefill_progress,
                                         )
                                         shadow_collector.put(shadow_output)
                                         shadow_collector.put(None)  # sentinel

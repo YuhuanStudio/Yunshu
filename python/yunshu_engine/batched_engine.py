@@ -90,6 +90,7 @@ class GenerationOutput:
     reasoning_tokens: int = 0
     current_state: Optional[str] = None  # "reasoning" or "normal" — matches RequestOutput
     error: Optional[str] = None  # Error message if generation failed
+    prefill_progress: tuple[int, int] | None = None  # (processed, total) during chunked prefill
 
 
 _PROGRESSIVE_QUANT_INTERVAL = 256
@@ -2718,7 +2719,7 @@ class BatchedEngine:
         _first_token = True
         _stream_ttft_ms = 0.0
         try:
-            async for output in self._engine_core.stream_outputs(request_id):
+            async for output in self._engine_core.stream_outputs(request_id, cancel_event=_cancel_event):
                 # Check cancel event (gateway disconnect or internal cancel)
                 if _cancel_event is not None and _cancel_event.is_set():
                     logger.debug(f"Cancel event triggered during streaming: {request_id}")
@@ -2766,6 +2767,7 @@ class BatchedEngine:
                     ttft_ms=_ttft_ms,
                     current_state=getattr(output, 'current_state', None),
                     error=getattr(output, 'error', None),
+                    prefill_progress=getattr(output, 'prefill_progress', None),
                 )
                 if output.finished:
                     finished_normally = True

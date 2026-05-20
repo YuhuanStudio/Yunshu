@@ -1383,6 +1383,7 @@ async def _stream_vlm_response(
         vlm_reasoning_tok = 0
         vlm_cached_tok = 0
         vlm_last_finish_reason = None
+        _vlm_streamed_text = ""  # track emitted text for stop-sequence correction
         include_usage = (
             req.stream_options is not None and req.stream_options.include_usage
         )
@@ -1428,6 +1429,25 @@ async def _stream_vlm_response(
                 vlm_prompt_tok = output.prompt_tokens
             if output.finish_reason is not None:
                 vlm_last_finish_reason = output.finish_reason
+            # Track emitted text for stop-sequence correction
+            _vlm_token_text = output.token_text or ""
+            if _vlm_token_text and not getattr(output, 'current_state', None) == "reasoning":
+                _vlm_streamed_text += _vlm_token_text
+            # Detect stop-sequence overcount on final output
+            if req.stop and vlm_last_finish_reason == "stop" and getattr(output, 'finished', False):
+                for _seq in req.stop:
+                    if _seq and _seq in _vlm_streamed_text:
+                        _idx = _vlm_streamed_text.find(_seq)
+                        _vlm_streamed_text = _vlm_streamed_text[:_idx]
+                        _tok = getattr(vlm_engine, '_tokenizer', None)
+                        if _tok:
+                            try:
+                                _correct_count = len(_tok.encode(_vlm_streamed_text))
+                                if _correct_count < vlm_completion_tok:
+                                    vlm_completion_tok = _correct_count
+                            except Exception:
+                                pass
+                        break
             # Route thinking content based on engine's current_state
             _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
             _vlm_token_text = output.token_text or ""
@@ -1613,6 +1633,7 @@ async def _stream_response_multi(
             choice_tool_streamer = ToolCallStreamer() if use_tool_streamer else None
             choice_tool_call_index = 0
             choice_has_tool_call = False
+            _choice_streamed_text = ""  # track emitted text for stop-sequence correction
 
             if is_batched:
                 stream = engine.stream_chat(
@@ -1658,6 +1679,11 @@ async def _stream_response_multi(
                     if hasattr(output, 'cached_tokens') and output.cached_tokens:
                         total_cached_tok = max(total_cached_tok, output.cached_tokens)
                     token_text = output.new_text
+                    # vLLM pattern: emit prefill progress as SSE comment
+                    _pf_prog = getattr(output, 'prefill_progress', None)
+                    if _pf_prog is not None:
+                        yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
+                        continue
                     if hasattr(output, 'completion_tokens') and output.completion_tokens is not None and output.completion_tokens > 0:
                         choice_completion_tok = output.completion_tokens
                     elif token_text:
@@ -1667,6 +1693,24 @@ async def _stream_response_multi(
                     if fr is not None:
                         choice_finish_reason = fr
                     _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
+                    # Track emitted text for stop-sequence correction
+                    if token_text and not getattr(output, 'current_state', None) == "reasoning":
+                        _choice_streamed_text += token_text
+                    # Detect stop-sequence overcount on final output
+                    if req.stop and choice_finish_reason == "stop" and output.finished:
+                        for _seq in req.stop:
+                            if _seq and _seq in _choice_streamed_text:
+                                _idx = _choice_streamed_text.find(_seq)
+                                _choice_streamed_text = _choice_streamed_text[:_idx]
+                                _tok = getattr(engine, '_tokenizer', None)
+                                if _tok:
+                                    try:
+                                        _correct_count = len(_tok.encode(_choice_streamed_text))
+                                        if _correct_count < choice_completion_tok:
+                                            choice_completion_tok = _correct_count
+                                    except Exception:
+                                        pass
+                                break
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                     if _is_reasoning:
@@ -1765,6 +1809,24 @@ async def _stream_response_multi(
                     if fr is not None:
                         choice_finish_reason = fr
                     _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
+                    # Track emitted text for stop-sequence correction
+                    if token_text and not getattr(output, 'current_state', None) == "reasoning":
+                        _choice_streamed_text += token_text
+                    # Detect stop-sequence overcount on final output
+                    if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
+                        for _seq in req.stop:
+                            if _seq and _seq in _choice_streamed_text:
+                                _idx = _choice_streamed_text.find(_seq)
+                                _choice_streamed_text = _choice_streamed_text[:_idx]
+                                _tok = getattr(engine, '_tokenizer', None)
+                                if _tok:
+                                    try:
+                                        _correct_count = len(_tok.encode(_choice_streamed_text))
+                                        if _correct_count < choice_completion_tok:
+                                            choice_completion_tok = _correct_count
+                                    except Exception:
+                                        pass
+                                break
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
                     if _is_reasoning:
@@ -2052,6 +2114,8 @@ async def _stream_response(
         nonlocal tool_call_index, has_emitted_tool_call, prompt_tok, completion_tok, reasoning_tok, cached_tok, done_emitted
         first_chunk = True
         last_finish_reason = None  # track actual finish_reason from engine
+        _streamed_text = ""  # track text emitted to client for stop-sequence correction
+        _stop_overcount = 0  # tokens to subtract when stop sequence spans multiple tokens
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -2083,6 +2147,12 @@ async def _stream_response(
                 timeout_seconds=req.timeout,
             ):
                 token_text = output.new_text
+                # vLLM pattern: emit prefill progress as SSE comment for
+                # client-side progress bars during long chunked prefills.
+                _pf_prog = getattr(output, 'prefill_progress', None)
+                if _pf_prog is not None:
+                    yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
+                    continue  # progress outputs carry no text
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
                 if hasattr(output, 'prompt_tokens') and output.prompt_tokens:
@@ -2095,6 +2165,29 @@ async def _stream_response(
                     completion_tok = output.completion_tokens
                 elif token_text:
                     completion_tok += 1
+                # Track streamed text for stop-sequence overcount correction
+                if token_text and not getattr(output, 'current_state', None) == "reasoning":
+                    _streamed_text += token_text
+                # Detect stop-sequence overcount: if stop sequences are provided
+                # and the engine's finish_reason is "stop", the engine may have
+                # overcounted completion_tok when a multi-token stop suffix was
+                # matched (engine only decrements by 1 regardless of suffix length).
+                if req.stop and last_finish_reason == "stop" and output.finished:
+                    for _seq in req.stop:
+                        if _seq and _seq in _streamed_text:
+                            _idx = _streamed_text.find(_seq)
+                            _streamed_text = _streamed_text[:_idx]
+                            # Use tokenizer to get accurate count of emitted tokens
+                            _tok = getattr(engine, '_tokenizer', None)
+                            if _tok:
+                                try:
+                                    _correct_count = len(_tok.encode(_streamed_text))
+                                    if _correct_count < completion_tok:
+                                        _stop_overcount = completion_tok - _correct_count
+                                        completion_tok = _correct_count
+                                except Exception:
+                                    pass
+                            break
 
                 _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
 
@@ -2190,6 +2283,26 @@ async def _stream_response(
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
                 _chunk_lp = _format_chat_logprobs(output.logprobs, tokenizer=getattr(engine, "_tokenizer", None)) if req.logprobs and hasattr(output, "logprobs") else None
+                # Track streamed text for stop-sequence overcount correction
+                _legacy_token_text = output.token_text or ""
+                if _legacy_token_text and not getattr(output, 'current_state', None) == "reasoning":
+                    _streamed_text += _legacy_token_text
+                # Detect stop-sequence overcount on final output
+                if req.stop and last_finish_reason == "stop" and getattr(output, 'finished', False):
+                    for _seq in req.stop:
+                        if _seq and _seq in _streamed_text:
+                            _idx = _streamed_text.find(_seq)
+                            _streamed_text = _streamed_text[:_idx]
+                            _tok = getattr(engine, '_tokenizer', None)
+                            if _tok:
+                                try:
+                                    _correct_count = len(_tok.encode(_streamed_text))
+                                    if _correct_count < completion_tok:
+                                        _stop_overcount = completion_tok - _correct_count
+                                        completion_tok = _correct_count
+                                except Exception:
+                                    pass
+                            break
                 # Route based on SequenceStateMachine state (mlx-lm pattern)
                 _is_final_from_engine = output.finish_reason is not None
                 if getattr(output, 'current_state', None) == "reasoning":

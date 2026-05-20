@@ -446,6 +446,12 @@ async def _stream_completion(
                 # Track finish_reason from engine; only emit on final chunk
                 if output.finish_reason is not None:
                     choice_finish_reason = output.finish_reason
+                # vLLM pattern: emit prefill progress as SSE comment for
+                # client-side progress bars during long chunked prefills.
+                _pf_prog = getattr(output, 'prefill_progress', None)
+                if _pf_prog is not None:
+                    yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
+                    continue  # progress outputs carry no text
                 # Format logprobs for this token if present
                 _chunk_logprobs = None
                 if output.logprobs:

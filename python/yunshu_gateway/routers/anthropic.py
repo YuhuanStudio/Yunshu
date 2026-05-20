@@ -935,6 +935,7 @@ async def _stream_anthropic(
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
     _streaming_finish_reason: str | None = None
+    _token_boundaries: list[int] = []  # cumulative text length after each output token
 
     # Register with request tracker for cancellation support
     try:
@@ -1068,6 +1069,7 @@ async def _stream_anthropic(
                     output_tokens += 1
                     _prev_len = len(accumulated_text)
                     accumulated_text += _token_text
+                    _token_boundaries.append(len(accumulated_text))
 
                     # Check for stop sequences in the newly accumulated text
                     _stop_matched_this_token = False
@@ -1081,8 +1083,19 @@ async def _stream_anthropic(
                                 break
 
                     if _stop_matched_this_token:
-                        if output_tokens > 0:
-                            output_tokens -= 1  # Don't count stop-triggering token
+                        # Count how many tokens are entirely within the trimmed suffix.
+                        # A token's text is entirely trimmed if its cumulative boundary
+                        # exceeds the safe end (len of accumulated_text after trim).
+                        _safe_end = len(accumulated_text)
+                        _tokens_to_trim = 0
+                        for _bi in range(len(_token_boundaries) - 1, -1, -1):
+                            if _token_boundaries[_bi] > _safe_end:
+                                _tokens_to_trim += 1
+                            else:
+                                break
+                        if _tokens_to_trim == 0:
+                            _tokens_to_trim = 1
+                        output_tokens = max(0, output_tokens - _tokens_to_trim)
                         # Emit only the safe portion of the current token
                         _safe_len = len(accumulated_text) - _prev_len
                         if _safe_len > 0:
@@ -1199,6 +1212,7 @@ async def _stream_anthropic(
                     output_tokens += 1
                     _prev_len = len(accumulated_text)
                     accumulated_text += _token_text
+                    _token_boundaries.append(len(accumulated_text))
 
                     # Check for stop sequences in the newly accumulated text
                     _stop_matched_this_token = False
@@ -1212,8 +1226,17 @@ async def _stream_anthropic(
                                 break
 
                     if _stop_matched_this_token:
-                        if output_tokens > 0:
-                            output_tokens -= 1  # Don't count stop-triggering token
+                        # Count how many tokens are entirely within the trimmed suffix.
+                        _safe_end = len(accumulated_text)
+                        _tokens_to_trim = 0
+                        for _bi in range(len(_token_boundaries) - 1, -1, -1):
+                            if _token_boundaries[_bi] > _safe_end:
+                                _tokens_to_trim += 1
+                            else:
+                                break
+                        if _tokens_to_trim == 0:
+                            _tokens_to_trim = 1
+                        output_tokens = max(0, output_tokens - _tokens_to_trim)
                         # Emit only the safe portion of the current token
                         _safe_len = len(accumulated_text) - _prev_len
                         if _safe_len > 0:

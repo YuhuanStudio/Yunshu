@@ -801,6 +801,9 @@ class Scheduler:
         self._chunked_prefill_enqueued_at: dict[str, float] = {}  # req_id -> time.monotonic()
         self._chunked_prefill_budget_used: int = 0  # Chunks consumed this scheduling round
         self._chunked_prefill_failed_ids: list[str] = []  # Requests that failed during chunked prefill
+        # Chunked prefill progress outputs (vLLM pattern) — synthetic RequestOutputs
+        # carrying (processed, total) progress, emitted each step during chunked prefill.
+        self._prefill_progress_outputs: list = []
 
         # Concurrent partial prefill control (GAP 1.3)
         self._active_partial_prefills: int = 0  # Count of in-flight partial prefills
@@ -1082,6 +1085,7 @@ class Scheduler:
 
         # 0. Reset per-round budget counter
         self._chunked_prefill_budget_used = 0
+        self._prefill_progress_outputs = []
 
         # 1. Process deferred aborts
         self._process_aborts()
@@ -1259,6 +1263,12 @@ class Scheduler:
         # Evict expired encoder hidden-state entries to reclaim memory.
         if self._step_counter % 64 == 0:
             self._encoder_cache.evict_all_expired()
+
+        # 9. Append prefill progress outputs (vLLM pattern)
+        # These synthetic RequestOutputs carry (processed, total) progress
+        # during chunked prefill, enabling client-side progress bars.
+        if self._prefill_progress_outputs:
+            outputs.extend(self._prefill_progress_outputs)
 
         return SchedulerOutput(outputs=outputs)
 
@@ -2400,6 +2410,20 @@ class Scheduler:
                     self._prefill_tracker.update(
                         req_id, offset, total_prompt, self.model_id,
                     )
+
+                # ── vLLM pattern: emit prefill progress output ──
+                # Create a synthetic RequestOutput with prefill_progress so the
+                # client can show a progress bar during long chunked prefills.
+                # Only emitted when there are remaining tokens (not on the final chunk,
+                # since the final chunk will produce normal generation output).
+                if total_prompt > 0 and state['remaining_tokens']:
+                    self._prefill_progress_outputs.append(RequestOutput(
+                        request_id=req_id,
+                        finished=False,
+                        prompt_tokens=offset,
+                        completion_tokens=0,
+                        prefill_progress=(offset, total_prompt),
+                    ))
 
                 if not state['remaining_tokens']:
                     completed_ids.add(req_id)
