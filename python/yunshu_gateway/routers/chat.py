@@ -43,6 +43,9 @@ from yunshu_engine.gateway_optimizer import get_streaming_buffer, return_streami
 
 logger = logging.getLogger(__name__)
 
+_MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024  # 1MB safety limit
+_TRUNCATE_KEEP = 512 * 1024  # Keep last 512KB for stop-sequence detection
+
 
 def _generate_tool_call_id() -> str:
     """Generate a consistent tool call ID in OpenAI format.
@@ -1446,6 +1449,9 @@ async def _stream_vlm_response(
             _vlm_token_text = output.token_text or ""
             if _vlm_token_text and not getattr(output, 'current_state', None) == "reasoning":
                 _vlm_streamed_text += _vlm_token_text
+                if len(_vlm_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error("VLM streaming text buffer exceeded 1MB — truncating")
+                    _vlm_streamed_text = _vlm_streamed_text[-_TRUNCATE_KEEP:]
             # Detect stop-sequence overcount on final output
             if req.stop and vlm_last_finish_reason == "stop" and getattr(output, 'finished', False):
                 for _seq in req.stop:
@@ -1710,6 +1716,12 @@ async def _stream_response_multi(
                     # Track emitted text for stop-sequence correction
                     if token_text and not getattr(output, 'current_state', None) == "reasoning":
                         _choice_streamed_text += token_text
+                        if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                            logger.error("Choice streaming text buffer exceeded 1MB — truncating")
+                            _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
+                        if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                            logger.error("Choice streaming text buffer exceeded 1MB — truncating")
+                            _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                     # Detect stop-sequence overcount on final output
                     if req.stop and choice_finish_reason == "stop" and output.finished:
                         for _seq in req.stop:
@@ -2184,6 +2196,9 @@ async def _stream_response(
                 # Track streamed text for stop-sequence overcount correction
                 if token_text and not getattr(output, 'current_state', None) == "reasoning":
                     _streamed_text += token_text
+                    if len(_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                        logger.error("Streaming text buffer exceeded 1MB — truncating")
+                        _streamed_text = _streamed_text[-_TRUNCATE_KEEP:]
                 # Detect stop-sequence overcount: if stop sequences are provided
                 # and the engine's finish_reason is "stop", the engine may have
                 # overcounted completion_tok when a multi-token stop suffix was
@@ -2304,6 +2319,9 @@ async def _stream_response(
                 _legacy_token_text = output.token_text or ""
                 if _legacy_token_text and not getattr(output, 'current_state', None) == "reasoning":
                     _streamed_text += _legacy_token_text
+                    if len(_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                        logger.error("Streaming text buffer exceeded 1MB — truncating")
+                        _streamed_text = _streamed_text[-_TRUNCATE_KEEP:]
                 # Detect stop-sequence overcount on final output
                 if req.stop and last_finish_reason == "stop" and getattr(output, 'finished', False):
                     for _seq in req.stop:

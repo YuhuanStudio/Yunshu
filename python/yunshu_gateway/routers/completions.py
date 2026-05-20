@@ -24,6 +24,9 @@ from ..engine import get_engine, get_engine_for_model
 from .chat import _apply_lora_adapter, _release_lora_adapter, _normalize_finish_reason, _parse_response_format
 
 logger = logging.getLogger(__name__)
+
+_MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
+_TRUNCATE_KEEP = 512 * 1024
 from ..streaming import format_openai_completion_chunk, format_openai_done, format_openai_completion_usage_chunk
 from .models import _check_permission
 
@@ -499,6 +502,9 @@ async def _stream_completion(
                 # Track emitted text for stop-sequence overcount correction
                 if output.new_text:
                     _choice_streamed_text += output.new_text
+                if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error("Choice streaming text buffer exceeded 1MB — truncating")
+                    _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                 # Detect stop-sequence overcount on final output
                 if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
                     for _seq in req.stop:
@@ -580,6 +586,9 @@ async def _stream_completion(
                 # Track emitted text for stop-sequence overcount correction
                 if output.token_text:
                     _choice_streamed_text += output.token_text
+                if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error("Choice streaming text buffer exceeded 1MB — truncating")
+                    _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                 # Detect stop-sequence overcount on final output
                 if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
                     for _seq in req.stop:

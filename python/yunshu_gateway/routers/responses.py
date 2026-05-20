@@ -25,6 +25,9 @@ from pydantic import BaseModel, Field, model_validator
 from ..engine import get_engine, get_engine_for_model
 
 logger = logging.getLogger(__name__)
+
+_MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
+_TRUNCATE_KEEP = 512 * 1024
 from ..streaming import (
     format_responses_created,
     format_responses_in_progress,
@@ -683,6 +686,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 if output.new_text:
                     if not _is_reasoning:
                         accumulated_text += output.new_text
+                if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error("Responses streaming text exceeded 1MB — truncating")
+                    accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
 
@@ -740,6 +746,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 if token_text:
                     if not _is_reasoning:
                         accumulated_text += token_text
+                if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error("Responses streaming text exceeded 1MB — truncating")
+                    accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                 if getattr(output, 'finish_reason', None) is not None:
                     last_finish_reason = output.finish_reason
 

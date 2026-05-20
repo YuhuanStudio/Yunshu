@@ -23,6 +23,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
+
+_MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024
+_TRUNCATE_KEEP = 512 * 1024
 from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine
@@ -1135,6 +1138,9 @@ async def _stream_anthropic(
                     _prev_len = len(accumulated_text)
                     if not (has_tools and _tool_streamer):
                         accumulated_text += _token_text
+                        if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                            logger.error("Anthropic streaming text exceeded 1MB — truncating")
+                            accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                         _token_boundaries.append(len(accumulated_text))
 
                     # Check for stop sequences in the newly accumulated text
@@ -1182,6 +1188,9 @@ async def _stream_anthropic(
                                 if _tc_out.text:
                                     _prev_len = len(accumulated_text)
                                     accumulated_text += _tc_out.text
+                                    if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                                        logger.error("Anthropic streaming text exceeded 1MB — truncating")
+                                        accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                                     _token_boundaries.append(len(accumulated_text))
                                     # Check for stop sequences after streamer text
                                     # is accumulated (the pre-streamer check at
@@ -1311,6 +1320,9 @@ async def _stream_anthropic(
                                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
                                 _prev_len = len(accumulated_text)
                                 accumulated_text += _tc_out.text
+                                if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                                    logger.error("Anthropic streaming text exceeded 1MB — truncating")
+                                    accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                                 _stop_hit = False
                                 if stop:
                                     for seq in stop:
@@ -1348,6 +1360,9 @@ async def _stream_anthropic(
                         output_tokens += 1
                         _prev_len = len(accumulated_text)
                         accumulated_text += _token_text
+                        if len(accumulated_text) > _MAX_STREAMING_TEXT_BUFFER:
+                            logger.error("Anthropic streaming text exceeded 1MB — truncating")
+                            accumulated_text = accumulated_text[-_TRUNCATE_KEEP:]
                         _token_boundaries.append(len(accumulated_text))
 
                         _stop_matched_this_token = False

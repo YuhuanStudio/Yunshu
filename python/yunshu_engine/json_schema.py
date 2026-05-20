@@ -389,47 +389,6 @@ class JsonSchemaConstraint:
             return unique
         return "any"
 
-    def _resolve_schema_for_value(self, schema: dict, key: str | None = None) -> dict:
-        """Resolve which schema applies for a value position.
-
-        For objects, look up the key in properties.
-        For arrays, use items schema.
-        Handles anyOf/oneOf by computing union of start chars from all
-        non-null options rather than picking only the first one.
-        """
-        schema_type = self._get_type_from_schema(schema)
-
-        # Resolve anyOf/oneOf to concrete schema — pick the first viable
-        # option for value resolution (type-specific constraint enforcement)
-        # but the caller (_get_value_start_chars / _type_to_start_chars)
-        # already uses _get_type_from_schema which unions all option types.
-        if "anyOf" in schema:
-            non_null = [o for o in schema["anyOf"] if isinstance(o, dict) and o.get("type") != "null"]
-            if non_null:
-                return self._resolve_schema_for_value(non_null[0], key)
-        if "oneOf" in schema:
-            non_null = [o for o in schema["oneOf"] if isinstance(o, dict) and o.get("type") != "null"]
-            if non_null:
-                return self._resolve_schema_for_value(non_null[0], key)
-
-        if schema_type == "object" or "properties" in schema:
-            if key and "properties" in schema:
-                return schema["properties"].get(key, {"type": "string"})
-            # Check additionalProperties for unknown keys
-            if key and "additionalProperties" in schema:
-                add_props = schema["additionalProperties"]
-                if isinstance(add_props, dict):
-                    return add_props
-            return {"type": "string"}  # default for unknown keys
-
-        if schema_type == "array" or "items" in schema:
-            return schema.get("items", {"type": "string"})
-
-        if schema_type == "enum":
-            return {"type": "string"}  # enum values are strings
-
-        return schema
-
     def _get_expected_chars(self) -> set[str] | None:
         """Get the set of characters that are valid at the current state.
 

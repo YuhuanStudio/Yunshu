@@ -986,6 +986,7 @@ class EngineCore:
             await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
             logger.debug("cache clear on executor failed", exc_info=True)
+        self._executor = None
 
         # Mark fully stopped AFTER all cleanup is done.
         # This must come last so concurrent add_request() calls during the
