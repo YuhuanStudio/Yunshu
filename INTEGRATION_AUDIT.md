@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 279: 8-agent deep audit — 20+ critical/high fixes: COW TOCTOU race, KV prefix cache thread safety + stale index, scheduler prompt double-count + deep_reset leaks + abort double-remove, LoRA merge base weight corruption, RadixTree split_pos==0 guard, MTP rejection cache/token inconsistency, kv_migration AB-BA deadlock, model_discovery KeyError, Anthropic tool_choice string handling, SSE error JSON format, Responses API reasoning_tok double-count)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 282: Anthropic streaming ToolCallStreamer integration — both batched + legacy engine paths now use incremental tool call detection, flush() for truncated output, stop sequence + ToolCallStreamer interaction fix)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,14 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 282 — Anthropic streaming ToolCallStreamer integration for both batched + legacy engine paths)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 282: Anthropic legacy streaming ToolCallStreamer | 舊版引擎路徑用 _try_parse_tool_call_delta 全文掃描，tool call 標記在確認前洩漏為可見文字。改為 ToolCallStreamer 逐 token 增量檢測 | Streaming 文字洩漏 (HIGH) |
+| Wave 282: Anthropic streaming flush | 兩條引擎路徑結束後未 flush ToolCallStreamer 緩衝區，截斷輸出丟失。加入 flush() 並處理剩餘 text/tool_call | 內容丟失 (MEDIUM) |
+| Wave 282: Stop sequence + ToolCallStreamer 交互 | Legacy 路很的 accumulated_text 在 ToolCallStreamer 確認前已累積，stop sequence 可能錯誤匹配工具標記。改為僅在 streamer 確認文本後才累積並檢查 stop | Stop 過早觸發 (MEDIUM) |
 
 ### 已完成修復 (2026-05-20 Wave 281 — LoRA weight-key layer targeting, auto-tuner SLO rolling window, adaptive batch queue_depth clamp removal)
 
