@@ -497,7 +497,7 @@ class KVCacheManager:
             # The radix tree's split logic handles the partial overlap
             # correctly — it splits the boundary block's node at the
             # exact token boundary.
-            new_start_block = matched_len // bs
+            new_start_block = (matched_len + bs - 1) // bs
             if new_start_block > len(blocks):
                 return  # Defensive: matched more than we have blocks for
             new_blocks = blocks[new_start_block:]

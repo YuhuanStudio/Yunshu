@@ -607,7 +607,8 @@ def _sample_correction(
         total = adjusted.sum()
         if total > 0:
             adjusted = adjusted / total
-            return int(mx.random.categorical(adjusted.reshape(1, -1)).item())
+            # mx.random.categorical expects logits, not probabilities.
+            return int(mx.random.categorical(mx.log(adjusted + 1e-30).reshape(1, -1)).item())
 
     # Without full draft distribution, we cannot compute the true correction.
     # Sampling from target is still correct (guarantees target distribution
@@ -624,7 +625,7 @@ def _math_exp(x: float) -> float:
     """Safe exp that clamps to avoid overflow."""
     import math
     if x > 50.0:
-        return float("inf")
+        return math.exp(50.0)
     if x < -50.0:
         return 0.0
     return math.exp(x)

@@ -484,13 +484,13 @@ class BlockPool:
             evicted = self._evict_cached_block_unlocked(block)
 
             # After eviction, block_hash is None and cache_only is False.
-            # If ref_count == 1, the block was held only by the prefix cache
-            # (no active request). Free it to return it to the pool.
-            # If ref_count == 0, the block was cache_only (already in the
-            # free queue). Its hash was cleared above — no further action
-            # needed; it's already a recyclable free block.
-            if block.ref_count == 1 and not block.is_null:
-                block.ref_count -= 1  # 1 → 0
+            # If ref_count == 0, the block has no active request — it was
+            # cache_only. It may already be in the free queue (from free()
+            # setting cache_only=True). No further action needed.
+            # If ref_count == 1, an active request still holds the block —
+            # we just removed it from the cache index. The request will free
+            # it normally when done. Do NOT put it in the free queue.
+            if block.ref_count == 0 and not block.is_null:
                 self.free_queue.append(block)
 
             return evicted

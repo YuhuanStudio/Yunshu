@@ -1182,12 +1182,11 @@ class ModelWarmupManager:
                 result.prompts_failed += 1
                 logger.warning(f"Warm prompt prefill failed: {exc}")
 
-        # Clear Metal buffer pool once after all prompts are processed,
-        # releasing temporary GPU memory from the prefill forward passes.
-        # Doing this inside the loop would destroy the Metal compile cache
-        # and force full kernel recompilation for every prompt.
+        # Synchronize GPU to ensure all prefill work completes before returning.
+        # Do NOT call mx.clear_cache() — it destroys the Metal compile cache
+        # that was just populated by the warmup forward passes.
         try:
-            mx.clear_cache()
+            mx.synchronize()
         except Exception:
             pass
 

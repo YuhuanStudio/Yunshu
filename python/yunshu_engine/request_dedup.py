@@ -253,7 +253,6 @@ class RequestDeduplicator:
                     h[:12], entry.fan_out - 1,
                 )
             del self._entries[h]
-            del self._entries[h]
 
     def _evict_oldest(self) -> None:
         if not self._entries:

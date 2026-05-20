@@ -2130,7 +2130,9 @@ class Scheduler:
             request.status = RequestStatus.PREEMPTED
             # Undo prompt token count — re-insertion will re-add it.
             # Without this, each preemption cycle double-counts prompt tokens.
-            self._total_prompt_tokens -= request.num_prompt_tokens
+            self._total_prompt_tokens = max(
+                0, self._total_prompt_tokens - request.num_prompt_tokens
+            )
             # Reset submit time so timeout doesn't count time spent preempted
             request._submit_time = time.monotonic()
             # Preserve cached prefix tokens — only reset beyond cache boundary
@@ -2181,7 +2183,6 @@ class Scheduler:
             )
             request.status = RequestStatus.PREEMPTED
             request.batch_uid = None
-            request.num_preemptions += 1
             request.cached_tokens = 0
             request.finish_reason = None
             self.waiting.push_front(request, priority=request.sampling_params.priority)
@@ -2659,10 +2660,11 @@ class Scheduler:
         # ── Cleanup completed and errored requests ──
         # GAP 1.3: Decrement active partial prefill counter for each completed/errored request.
         for rid in completed_ids:
-            self._pending_prefill.pop(rid, None)
+            popped = self._pending_prefill.pop(rid, None)
             self._chunked_prefill_fairness.pop(rid, None)
             self._chunked_prefill_enqueued_at.pop(rid, None)
-            self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
+            if popped is not None:
+                self._active_partial_prefills = max(0, self._active_partial_prefills - 1)
 
         for rid in errored_ids:
             popped = self._pending_prefill.pop(rid, None)
@@ -3071,6 +3073,10 @@ class Scheduler:
                 self._uid_to_req.pop(uid, None)
                 if uid is not None:
                     self._rope_delta_mgr.unregister(uid)
+                if req_id in self.running:
+                    self._total_prompt_tokens = max(
+                        0, self._total_prompt_tokens - getattr(req, 'num_prompt_tokens', 0)
+                    )
             self.running.pop(req_id, None)
             self._detokenizers.pop(req_id, None)
             self._thinking_processors.pop(req_id, None)

@@ -496,8 +496,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "input_tokens": total_pt,
                 "output_tokens": total_ct,
                 "total_tokens": total_pt + total_ct,
-                "output_tokens_details": {"reasoning_tokens": total_reasoning_tokens},
-                "input_tokens_details": {"cached_tokens": max_cached_tokens},
+                **({"output_tokens_details": {"reasoning_tokens": total_reasoning_tokens}} if total_reasoning_tokens > 0 else {}),
+                **({"input_tokens_details": {"cached_tokens": max_cached_tokens}} if max_cached_tokens > 0 else {}),
             },
         })
     except MemoryError:

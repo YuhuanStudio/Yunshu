@@ -533,6 +533,7 @@ class EngineCore:
         # Stats
         self._num_requests_processed: int = 0
         self._request_timestamps: dict[str, float] = {}  # req_id → monotonic start time
+        self._ttft_timestamps: dict[str, float] = {}  # req_id → monotonic first-token time
         self._request_lora_adapters: dict[str, str] = {}  # req_id → lora_adapter_id
 
         # Cache-locality request reordering (SGLang/vLLM pattern)
@@ -774,6 +775,7 @@ class EngineCore:
         self._running = True
         self._was_started = True
         self._stopped = False
+        self._shutdown_requested = False
         self._start_time = time.monotonic()
         self._wake_event = asyncio.Event()
         # Start profiler (deferred from __init__ to avoid resource leak if init fails)
@@ -878,7 +880,6 @@ class EngineCore:
 
         # Phase 3: SHUTTING_DOWN — full cleanup
         self._running = False
-        self._shutdown_requested = False
         self._start_time = None  # Reset so get_stats() uptime is 0 after stop
         self._wake_event = None  # Clear stale event; recreated by start()
 
@@ -960,6 +961,8 @@ class EngineCore:
         self._stream_states.clear()
         self._finished_events.clear()
         self._request_timestamps.clear()
+        if hasattr(self, '_ttft_timestamps'):
+            self._ttft_timestamps.clear()
         self._request_lora_adapters.clear()
         self._kv_prefix_hashes.clear()
         if self._request_dedup is not None:
@@ -1987,11 +1990,13 @@ class EngineCore:
                         error=f"Generation timed out after {timeout_s}s",
                     )
 
-            # Compute TTFT before cleanup (timestamp is removed by _cleanup_request)
+            # Compute TTFT from tracked first-token timestamp (set by engine loop)
+            # not total wall time (which would include full generation).
             _start_ts = self._request_timestamps.get(req_id)
+            _ttft_ts = self._ttft_timestamps.get(req_id) if hasattr(self, '_ttft_timestamps') else None
             _ttft_ms = 0.0
-            if _start_ts is not None and _start_ts > 0:
-                _ttft_ms = round((time.monotonic() - _start_ts) * 1000, 1)
+            if _start_ts is not None and _ttft_ts is not None:
+                _ttft_ms = round((_ttft_ts - _start_ts) * 1000, 1)
 
             # Drain collector (use local reference captured before event.wait())
             result = None
@@ -2228,6 +2233,7 @@ class EngineCore:
                 except Exception:
                     pass
             except asyncio.CancelledError:
+                self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
                 logger.info("Engine loop cancelled, failing all in-flight requests")
                 self._fail_active_requests("Engine loop cancelled")
                 raise
@@ -2311,7 +2317,7 @@ class EngineCore:
                                         completion_tokens=req_output.completion_tokens,
                                         finished=False,
                                         prompt_tokens=req_output.prompt_tokens,
-                                        logprobs=req_output.logprobs,
+                                        logprobs=list(req_output.logprobs) if isinstance(req_output.logprobs, list) else req_output.logprobs,
                                         current_state=req_output.current_state,
                                         reasoning_tokens=req_output.reasoning_tokens,
                                         cached_tokens=req_output.cached_tokens,
@@ -2364,7 +2370,7 @@ class EngineCore:
                                                 finish_reason=req_output.finish_reason,
                                                 prompt_tokens=req_output.prompt_tokens,
                                                 completion_tokens=req_output.completion_tokens,
-                                                logprobs=req_output.logprobs,
+                                                logprobs=list(req_output.logprobs) if isinstance(req_output.logprobs, list) else req_output.logprobs,
                                                 current_state=req_output.current_state,
                                                 reasoning_tokens=req_output.reasoning_tokens,
                                                 cached_tokens=req_output.cached_tokens,
@@ -2580,6 +2586,7 @@ class EngineCore:
                                     _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
                                     _ttft_count += 1
                                     self._ttft_done.add(rid)
+                                    self._ttft_timestamps[rid] = time.monotonic()
                         if _ttft_count > 0:
                             _est_ttft_ms /= _ttft_count
 
@@ -3033,6 +3040,8 @@ class EngineCore:
         self._stream_states.pop(request_id, None)
         self._finished_events.pop(request_id, None)
         self._request_timestamps.pop(request_id, None)
+        if hasattr(self, '_ttft_timestamps'):
+            self._ttft_timestamps.pop(request_id, None)
         self._kv_prefix_hashes.pop(request_id, None)
         # Bug fix: do NOT discard from _finalized_ids here.  The idempotency
         # guard in _finalize_request relies on _finalized_ids persisting

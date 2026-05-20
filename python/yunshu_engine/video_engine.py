@@ -239,7 +239,9 @@ class VideoEngine:
     def stop(self) -> None:
         """Stop and release resources.
 
-        Idempotent: safe to call multiple times.
+        Idempotent: safe to call multiple times. Uses sync cleanup
+        to be callable from both sync and async contexts. For async
+        callers that need executor-routed GPU cleanup, use `await stop_async()`.
         """
         if not self._running and self._model is None:
             return
@@ -257,6 +259,28 @@ class VideoEngine:
             import mlx.core as mx
             mx.synchronize()
             mx.clear_cache()
+        except Exception:
+            logger.debug("MLX cache clear in video stop failed", exc_info=True)
+
+    async def stop_async(self) -> None:
+        """Async variant that routes cache clearing through the MLX executor."""
+        if not self._running and self._model is None:
+            return
+        self.unload_lora_adapter()
+        self._model = None
+        self._running = False
+        self._base_model_weights = None
+        self._native_pipeline = None
+        self._teacache = None
+        self._lora_loaded = False
+        self._lora_merged = False
+        self._lora_adapter_path = ""
+        gc.collect()
+        try:
+            import asyncio
+            from .mlx_executor import sync_and_clear_cache
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(self._executor, sync_and_clear_cache)
         except Exception:
             logger.debug("MLX cache clear in video stop failed", exc_info=True)
 

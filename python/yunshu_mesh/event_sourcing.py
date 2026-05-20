@@ -299,7 +299,8 @@ class EventLog:
         Returns:
             The snapshot event.
         """
-        self._stats.snapshots_taken += 1
+        with self._lock:
+            self._stats.snapshots_taken += 1
         return self.append(
             event_type=EventType.SNAPSHOT.value,
             node_id="",

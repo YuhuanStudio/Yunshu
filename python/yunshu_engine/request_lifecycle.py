@@ -368,6 +368,7 @@ class RequestLifecycleOrchestrator:
             # report failure so concurrency controller reacts.
             self._total_rejected += 1
             self._model_counts[state.model]["rejected"] += 1
+            self._concurrency.report_failure("abort")
 
         # Do NOT auto-promote pending requests here. Promotion via
         # on_prefill_start() increments _active_count, but the promoted
