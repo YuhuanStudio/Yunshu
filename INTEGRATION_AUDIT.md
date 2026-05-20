@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 268-272: 8-agent deep audit — 30+ fixes: auth bypass, tenant lockout, scheduler abort, preemption livelock, VLM temp files, KV thread safety, TieredKV TOCTOU, spec decode cache snapshot, Anthropic streaming, streaming backpressure, dedup shadow timeout, profiling sandbox)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 268-273: 8-agent deep audit — 40+ fixes: auth bypass, tenant lockout, scheduler abort, preemption livelock, VLM temp files, KV thread safety, TieredKV TOCTOU, spec decode cache snapshot, Anthropic streaming, streaming backpressure, dedup shadow timeout, LoRA timing, TeaCache concurrency, Whisper caching, WAV validation, metrics safety)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,17 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6724 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 273 — LoRA Timing, TeaCache Concurrency, Whisper Caching, WAV Validation, Active Requests, Metrics Safety)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 273: LoRA save_base_weights 時序錯誤 | load_adapter() 前未保存基礎權重，merge 後保存的是 LoRA 污染權重。在 load_adapter 中加入保存 | 模型品質退化 (HIGH) |
+| Wave 273: Image TeaCache 無並發保護 | 多請求共用 TeaCache 狀態無鎖，狀態損壞。加入 threading.Lock 保護 pipeline 方法 | 圖像品質退化 (HIGH) |
+| Wave 273: Whisper 模型每次重新載入 | fallback 路徑每次調用 _load_stt 重新載入模型。加入模組級快取 + 雙重檢查鎖 | 性能浪費 (MEDIUM) |
+| Wave 273: STS WAV 解析無邊界檢查 | 惡意 WAV 文件 chunk_size 可超出緩衝區。加入長度箝制 | 緩衝區越界 (MEDIUM) |
+| Wave 273: _active_requests 雙重計數 | request_logging + track_active 兩個中間件各自遞增，shutdown 提前觸發。移除 request_logging 中的計數 | 關閉提前觸發 (HIGH) |
+| Wave 273: Metrics 調用已銷毀引擎 get_stats | 引擎卸載期間 metrics 調用 get_stats 崩潰。加入 is_loaded 檢查 + try/except | 崩潰 (HIGH) |
 
 ### 已完成修復 (2026-05-20 Wave 272 — Streaming Backpressure, Dedup Shadow Timeout, Profiling Sandbox, VLM Thinking Cursor)
 
