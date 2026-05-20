@@ -277,20 +277,42 @@ class LLMProposer:
         Returns:
             List of draft token IDs.
         """
-        try:
-            from mlx_lm.models.cache import make_prompt_cache
-            # Create fresh cache for this proposal
-            self._cache = make_prompt_cache(self._model)
-        except Exception:
-            logger.debug("operation failed", exc_info=True)
-            # Model may not have standard layers (e.g., test mocks)
-            self._cache = None
+        prev_len = getattr(self, '_cache_context_len', 0)
 
-        # Prefill: process the context
-        input_ids = mx.array([context_ids])
+        # Reuse KV cache from previous call — only process new tokens.
+        # Reset if context shrank (new conversation) or cache missing.
+        if self._cache is None or len(context_ids) < prev_len:
+            try:
+                from mlx_lm.models.cache import make_prompt_cache
+                self._cache = make_prompt_cache(self._model)
+                prev_len = 0
+            except Exception:
+                logger.debug("operation failed", exc_info=True)
+                self._cache = None
+                prev_len = 0
+
         forward_fn = self._compiled_fn or self._model
-        output = forward_fn(input_ids, cache=self._cache)
-        logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
+
+        # Prefill only the new tokens since last call
+        new_tokens = context_ids[prev_len:]
+        if new_tokens:
+            input_ids = mx.array([new_tokens])
+            output = forward_fn(input_ids, cache=self._cache)
+            logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
+        elif prev_len > 0:
+            # No new tokens — reuse last logits (shouldn't happen normally)
+            logits = getattr(self, '_last_logits', None)
+            if logits is None:
+                input_ids = mx.array([context_ids])
+                output = forward_fn(input_ids, cache=self._cache)
+                logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
+        else:
+            input_ids = mx.array([context_ids])
+            output = forward_fn(input_ids, cache=self._cache)
+            logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
+
+        self._cache_context_len = len(context_ids)
+        self._last_logits = logits
 
         # Generate n tokens autoregressively
         draft_tokens: list[int] = []

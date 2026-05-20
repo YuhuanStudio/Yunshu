@@ -6475,6 +6475,7 @@ class BatchedEngine:
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
                 logits_processors=logits_processors,
+                lora_adapter=lora_adapter,
             ):
                 yield output
             return

@@ -1215,6 +1215,8 @@ def format_responses_incomplete(
     output_tokens: int = 0,
     total_tokens: int = 0,
     seq: int = 0,
+    reasoning_tokens: int = 0,
+    cached_tokens: int = 0,
 ) -> str:
     """response.incomplete — terminal event when generation is interrupted."""
     usage: dict[str, Any] = {
@@ -1222,6 +1224,10 @@ def format_responses_incomplete(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
+    if reasoning_tokens > 0:
+        usage["output_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+    if cached_tokens > 0:
+        usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
     incomplete_at = int(time.time())
     resp = _responses_base_response(
         response_id, model,

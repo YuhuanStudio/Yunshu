@@ -141,6 +141,9 @@ class CompletionRequest(BaseModel):
 @router.post("/completions", response_model=None)
 async def create_completion(req: CompletionRequest, request: Request):
     _check_permission(request, "can_infer")
+    _rbac_key = getattr(request.state, "rbac_key", None)
+    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
+        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
     """OpenAI-compatible text completion endpoint."""
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:

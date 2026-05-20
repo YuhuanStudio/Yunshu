@@ -817,6 +817,9 @@ async def _build_multi_choice(
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     _check_permission(request, "can_infer")
+    _rbac_key = getattr(request.state, "rbac_key", None)
+    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
+        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:
         req.stop = [s for s in req.stop if s]
@@ -2141,7 +2144,6 @@ async def _stream_response(
         first_chunk = True
         last_finish_reason = None  # track actual finish_reason from engine
         _streamed_text = ""  # track text emitted to client for stop-sequence correction
-        _stop_overcount = 0  # tokens to subtract when stop sequence spans multiple tokens
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -2213,7 +2215,6 @@ async def _stream_response(
                                 try:
                                     _correct_count = len(_tok.encode(_streamed_text))
                                     if _correct_count < completion_tok:
-                                        _stop_overcount = completion_tok - _correct_count
                                         completion_tok = _correct_count
                                 except Exception:
                                     pass
@@ -2332,7 +2333,6 @@ async def _stream_response(
                                 try:
                                     _correct_count = len(_tok.encode(_streamed_text))
                                     if _correct_count < completion_tok:
-                                        _stop_overcount = completion_tok - _correct_count
                                         completion_tok = _correct_count
                                 except Exception:
                                     pass

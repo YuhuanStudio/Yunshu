@@ -40,6 +40,8 @@ def _check_permission(request: Request) -> None:
     # RBAC key set by TenantAuthMiddleware (ys_-prefixed API keys).
     rbac_key = getattr(request.state, "rbac_key", None)
     if rbac_key is not None:
+        if not rbac_key.has_permission("can_view_system"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions for monitoring endpoints")
         return
     # Tenant set by TenantAuthMiddleware for static tokens.
     tenant = getattr(request.state, "tenant", None)

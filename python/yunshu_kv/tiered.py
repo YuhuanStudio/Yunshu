@@ -327,7 +327,10 @@ class SSDCacheStore:
 
     def contains(self, block_hash: int) -> bool:
         with self._lock:
-            return block_hash in self._index
+            entry = self._index.get(block_hash)
+            if entry is None:
+                return False
+            return self._block_path(entry.block_index).exists()
 
     def _evict_lru(self) -> None:
         """Evict least recently used blocks to free space. Acquires _lock."""

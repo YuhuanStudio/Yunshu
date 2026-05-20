@@ -122,6 +122,10 @@ class ResponsesRequest(BaseModel):
             gtype = self.grammar.get("type") if isinstance(self.grammar, dict) else None
             if gtype not in ("json", "regex", "choice", "cfg", None):
                 raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
+        if self.stop and len(self.stop) > 16:
+            raise ValueError("stop: maximum 16 stop sequences")
+        if self.stop and any(not s for s in self.stop):
+            raise ValueError("stop: individual stop sequences must be non-empty")
         return self
 
 
@@ -174,6 +178,9 @@ def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     _check_permission(request, "can_infer")
+    _rbac_key = getattr(request.state, "rbac_key", None)
+    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
+        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
     """OpenAI Responses API endpoint."""
     messages = _convert_to_messages(req)
     json_schema = _parse_response_format(req.response_format, req.grammar)

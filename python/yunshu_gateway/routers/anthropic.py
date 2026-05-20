@@ -531,6 +531,9 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     _check_permission(request, "can_infer")
+    _rbac_key = getattr(request.state, "rbac_key", None)
+    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
+        raise HTTPException(status_code=403, detail=f"Model '{req.model}' not accessible with this API key")
     """Anthropic Messages API endpoint."""
     # Build messages list (prepend system if present)
     messages = []
