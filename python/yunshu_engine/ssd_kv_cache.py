@@ -611,9 +611,12 @@ class SSDKVCache:
                     if states:
                         cache_data[i] = states
 
-            # Promote to hot cache
+            # Promote to hot cache — re-validate that the entry wasn't
+            # deleted by a concurrent delete_block() while we read from disk.
             token_count = int(header.get("token_count", "0"))
             with self._lock:
+                if hex_hash not in self._index:
+                    return None
                 self._hot_cache[hex_hash] = (cache_data, token_count)
                 self._hot_cache.move_to_end(hex_hash)
                 self._evict_hot_if_full()

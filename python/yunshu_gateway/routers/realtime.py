@@ -1036,13 +1036,15 @@ async def realtime_endpoint(ws: WebSocket):
     import os
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
 
+    # Accept the WebSocket first — Starlette requires accept() before close().
+    await ws.accept()
+
     # Origin validation: reject cross-origin WebSocket connections unless CORS is wildcard
     origin = ws.headers.get("origin", "")
     if origin:
         cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "*")
         if cors_origins_str != "*":
             allowed = {o.strip().rstrip("/") for o in cors_origins_str.split(",") if o.strip()}
-            # Normalize the origin for comparison
             origin_stripped = origin.rstrip("/")
             if origin_stripped not in allowed:
                 await ws.close(code=4003, reason="Origin not allowed")
@@ -1058,8 +1060,6 @@ async def realtime_endpoint(ws: WebSocket):
         pass
 
     if auth_required:
-        # WebSocket doesn't go through HTTP middleware, so check auth manually.
-        # Prefer header over query param to avoid token leaking into logs/history.
         import hmac
         token = ws.headers.get("authorization", "").removeprefix("Bearer ")
         if not token:
@@ -1083,6 +1083,5 @@ async def realtime_endpoint(ws: WebSocket):
         if not _auth_ok:
             await ws.close(code=4001, reason="Invalid token")
             return
-    await ws.accept()
     session = RealtimeSession(ws)
     await session.run()

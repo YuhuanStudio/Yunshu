@@ -4203,6 +4203,11 @@ class BatchedEngine:
                 detokenizer.add_token(token_id)
                 if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                     _hit_suffix = True
+                    # Remove the suffix-triggering token — it should not
+                    # appear in the output, matching the non-spec pattern.
+                    generated_tokens.pop()
+                    if detokenizer.tokens:
+                        detokenizer.tokens.pop()
                     break
 
             # Compute TTFT before first yield

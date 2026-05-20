@@ -37,6 +37,17 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-20 Wave 280 — TieredKV lock, SSD block resurrection, ngram pool reset, Realtime WebSocket auth, warmup tokenizer, spec decode suffix leak)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 280: TieredKV allocate_for_prefill 鎖 | warm/SSD promotion 寫入共享 cache tensor 未持鎖。提取 `_allocate_prefill_promote` 方法並用 `hot._lock` 包裹 | KV 併發損壞 (HIGH) |
+| Wave 280: SSD load_block 刪除復活 | 磁碟讀取期間 delete_block() 可並行刪除，讀取完成後無條件插回 hot_cache。加入 index 驗證 | 快取一致性 (MEDIUM) |
+| Wave 280: NgramProposer 跨請求污染 | reset() 僅重置 indexed_len 不清空 pool。改為呼叫 .clear() | 推測解碼品質 (MEDIUM) |
+| Wave 280: Realtime WebSocket 認證順序 | ws.close() 在 ws.accept() 之前觸發 RuntimeError。accept() 移到最前 | 連線拒絕崩潰 (MEDIUM) |
+| Wave 280: 模型預熱使用 dummy token | warmup_kv_cache 固定使用 token=1，加入 tokenizer.encode(prompt) 路徑 | 預熱有效性 (MEDIUM) |
+| Wave 280: Spec decode suffix token 洩漏 | suffix 匹配的 token 未從 generated_tokens/detokenizer 移除。加入 pop() | 輸出正確性 (MEDIUM) |
+
 ### 已完成修復 (2026-05-20 Wave 279 — 8-Agent Deep Audit: 24 fixes across COW TOCTOU, KV prefix cache, scheduler, LoRA, RadixTree, MTP, kv_migration, spec decode verifier, batched_engine streaming, gateway SSE, Anthropic, Responses API)
 
 | 修復 | 描述 | 影響 |

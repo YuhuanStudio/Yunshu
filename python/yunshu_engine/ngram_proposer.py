@@ -388,16 +388,16 @@ class NgramProposer:
         )
 
     def reset(self) -> None:
-        """Reset internal state (indexed length trackers) for a new request.
+        """Reset internal state for a new request.
 
-        Without this, _indexed_len carries over from the previous request,
-        causing the pool to skip indexing the new request's prefix tokens.
-        In hashpool/LCG modes this silently degrades to LPS fallback.
+        Clears all pool entries and resets indexed length trackers.
+        Without this, stale n-gram entries from a previous request
+        contaminate proposal for the new request.
         """
         if self._hashpool is not None:
-            self._hashpool._indexed_len = 0
+            self._hashpool.clear()
         if self._lcg_pool is not None:
-            self._lcg_pool._indexed_len = 0
+            self._lcg_pool.clear()
 
     def batch_propose(self, batch_token_ids: list[list[int]]) -> list[list[int]]:
         """Propose draft tokens for a batch of requests."""

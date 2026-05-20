@@ -949,6 +949,7 @@ class ModelWarmupManager:
         self,
         model: Any,
         prompts: Sequence[str],
+        tokenizer: Any = None,
     ) -> int:
         """Prewarm KV cache with common prompts.
 
@@ -980,7 +981,10 @@ class ModelWarmupManager:
 
         for prompt in prompts:
             try:
-                ids = mx.array([1], dtype=mx.int32)
+                if tokenizer is not None and hasattr(tokenizer, 'encode'):
+                    ids = mx.array(tokenizer.encode(prompt))
+                else:
+                    ids = mx.array([1], dtype=mx.int32)
                 cache = []
                 for _ in generate_step(ids, model, max_tokens=1, sampler=sampler, prompt_cache=cache):
                     break

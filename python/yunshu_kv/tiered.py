@@ -419,6 +419,14 @@ class TieredKVCacheManager:
         if not match.unmatched_token_ids:
             return table, match
 
+        # Hold hot manager lock for the entire warm/SSD promotion section
+        # to prevent concurrent evict_for_memory / free_request from
+        # mutating _key_cache / _value_cache / table._blocks.
+        with self.hot._lock:
+            return self._allocate_prefill_promote(table, match, model_hash)
+
+    def _allocate_prefill_promote(self, table, match, model_hash):
+        """Promote warm/SSD blocks into hot tier. Caller holds hot._lock."""
         block_size = self.hot.block_size
         remaining = match.unmatched_token_ids
 
