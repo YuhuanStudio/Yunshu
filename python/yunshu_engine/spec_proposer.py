@@ -71,7 +71,7 @@ class NgramSpecProposer(SpecProposer):
         self._stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
 
     def begin(self, all_token_ids: list[int]) -> None:
-        pass  # N-gram is stateless per-request
+        self._proposer.reset()
 
     def draft(self, all_token_ids: list[int], k: int = 5) -> SpecProposal:
         config = self._proposer.config

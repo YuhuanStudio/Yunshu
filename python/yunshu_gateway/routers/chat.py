@@ -37,6 +37,7 @@ from ..streaming import (
     with_sse_keepalive,
     run_with_disconnect_guard,
 )
+from .models import _check_permission
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.gateway_optimizer import get_streaming_buffer, return_streaming_buffer
 
@@ -806,6 +807,7 @@ async def _build_multi_choice(
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    _check_permission(request, "can_infer")
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:
         req.stop = [s for s in req.stop if s]

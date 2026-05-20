@@ -641,10 +641,12 @@ class SuffixStrategy(SpecStrategy):
             metadata={"mode": "suffix"},
         )
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
-        self._proposer.accept(draft_tokens, verified_up_to)
+        self._proposer.accept(draft_tokens, verified_up_to,
+                              bonus_token=bonus_token)
 
     def stats(self) -> dict:
         proposer_stats = self._proposer.get_stats()

@@ -25,6 +25,7 @@ from .chat import _apply_lora_adapter, _release_lora_adapter, _normalize_finish_
 
 logger = logging.getLogger(__name__)
 from ..streaming import format_openai_completion_chunk, format_openai_done, format_openai_completion_usage_chunk
+from .models import _check_permission
 
 router = APIRouter(tags=["completions"])
 
@@ -131,6 +132,7 @@ class CompletionRequest(BaseModel):
 
 @router.post("/completions", response_model=None)
 async def create_completion(req: CompletionRequest, request: Request):
+    _check_permission(request, "can_infer")
     """OpenAI-compatible text completion endpoint."""
     # Validate stop strings: reject empty strings (would match immediately)
     if req.stop:

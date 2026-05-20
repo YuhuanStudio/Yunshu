@@ -17,11 +17,12 @@ import math
 import os
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 
 from ..engine import get_engine, get_model_manager
+from .models import _check_permission
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,8 @@ class EmbeddingRequest(BaseModel):
 
 
 @router.post("/embeddings", response_model=None)
-async def create_embedding(req: EmbeddingRequest):
+async def create_embedding(req: EmbeddingRequest, request: Request):
+    _check_permission(request, "can_infer")
     """Generate embeddings for the given input text(s)."""
     texts = req.input if isinstance(req.input, list) else [req.input]
 

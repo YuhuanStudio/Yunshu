@@ -323,12 +323,16 @@ class SuffixProposer:
 
         return []
 
-    def accept(self, draft_tokens: list[int], verified_up_to: int) -> None:
+    def accept(self, draft_tokens: list[int], verified_up_to: int,
+               bonus_token: int | None = None) -> None:
         """Record accepted draft tokens for future matching.
 
         Args:
             draft_tokens: The draft tokens that were proposed.
             verified_up_to: Number of tokens verified as correct.
+            bonus_token: Optional correction/bonus token from the verifier.
+                Without this, the trie history diverges from the true
+                generated output, causing stale suffix matches.
         """
         self._total_tokens_accepted += verified_up_to
 
@@ -338,6 +342,8 @@ class SuffixProposer:
             return
 
         accepted = draft_tokens[:verified_up_to]
+        if bonus_token is not None:
+            accepted = accepted + [bonus_token]
         gen_list = self._generated.get(active_id)
         if gen_list is None:
             return

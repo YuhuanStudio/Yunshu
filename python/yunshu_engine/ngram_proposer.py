@@ -222,6 +222,7 @@ class LCGHashPool:
         self._total_lookups = 0
         self._total_hits = 0
         self._total_evictions = 0
+        self._indexed_len = 0
 
     @staticmethod
     def _hash_ngram(ngram: tuple[int, ...]) -> int:

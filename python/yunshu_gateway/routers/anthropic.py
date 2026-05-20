@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_engine
 from .chat import _apply_lora_adapter, _release_lora_adapter
+from .models import _check_permission
 from ..streaming import (
     with_sse_keepalive,
 )
@@ -139,6 +140,7 @@ class AnthropicMessagesRequest(BaseModel):
     # Client-forwarded field (not Anthropic spec, but commonly sent by SDKs)
     response_format: Optional[dict] = None
     timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
+    grammar: Optional[str] = None  # Grammar constraint (regex, choice, CFG)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -516,6 +518,7 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
 
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
+    _check_permission(request, "can_infer")
     """Anthropic Messages API endpoint."""
     # Build messages list (prepend system if present)
     messages = []
@@ -704,6 +707,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
             xtc_threshold=req.xtc_threshold,
             priority=req.priority,
             json_schema=_resolve_json_schema(req),
+            grammar=req.grammar,
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             logits_processors=req.logits_processors,
@@ -853,6 +857,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
             xtc_threshold=req.xtc_threshold,
             priority=req.priority,
             json_schema=_resolve_json_schema(req),
+            grammar=req.grammar,
             logprobs=req.logprobs,
             top_logprobs=req.top_logprobs,
             logits_processors=req.logits_processors,

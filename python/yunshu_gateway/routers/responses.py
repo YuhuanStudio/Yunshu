@@ -39,6 +39,7 @@ from ..streaming import (
     format_responses_incomplete,
 )
 from .chat import _format_chat_logprobs, _normalize_finish_reason, _record_metrics
+from .models import _check_permission
 
 router = APIRouter(tags=["responses"])
 
@@ -167,6 +168,7 @@ def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict
 
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
+    _check_permission(request, "can_infer")
     """OpenAI Responses API endpoint."""
     messages = _convert_to_messages(req)
     json_schema = _parse_response_format(req.response_format, req.grammar)

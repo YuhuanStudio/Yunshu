@@ -46,6 +46,7 @@ class RolePermissions:
     can_benchmark: bool = False
     can_manage_models: bool = False  # LoRA adapter management, model settings
     can_view_system: bool = False  # System internals: queue stats, hardware profile
+    can_infer: bool = True  # Inference endpoints (chat, completions, embeddings, etc.)
     max_models: int = 1
     allowed_model_patterns: list[str] = field(default_factory=lambda: ["*"])
 

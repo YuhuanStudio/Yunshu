@@ -324,6 +324,8 @@ class JsonSchemaConstraint:
         if "const" in schema:
             return "const"
         if "allOf" in schema:
+            # Work on a copy to avoid mutating the caller's schema dict.
+            schema = dict(schema)
             # Merge fields from all sub-schemas: properties, required,
             # items, etc.  Previously only properties were merged, causing
             # required constraints from sub-schemas to be silently dropped.
@@ -1497,13 +1499,23 @@ class ConstrainedSampler:
         token_id = int(token)
         self._generated_ids.append(token_id)
 
-        # Decode token text to advance state machine
-        try:
-            token_text = self._tokenizer.decode([token_id])
-        except Exception:
-            logger.debug("tokenizer decode failed for constrained sampler token %d", token_id, exc_info=True)
-            token_text = ""
-        self._constraint.advance(token_text)
+        # Decode token text to advance state machine.
+        # Skip advance() for EOS tokens — their decoded text (e.g. "</s>")
+        # would corrupt the constraint's text buffer and break
+        # checkpoint/rollback correctness.
+        eos_ids = set()
+        if hasattr(self._tokenizer, 'eos_token_ids'):
+            eos_ids = set(self._tokenizer.eos_token_ids)
+        elif hasattr(self._tokenizer, 'eos_token_id'):
+            eos_ids = {self._tokenizer.eos_token_id}
+
+        if token_id not in eos_ids:
+            try:
+                token_text = self._tokenizer.decode([token_id])
+            except Exception:
+                logger.debug("tokenizer decode failed for constrained sampler token %d", token_id, exc_info=True)
+                token_text = ""
+            self._constraint.advance(token_text)
 
         return token
 

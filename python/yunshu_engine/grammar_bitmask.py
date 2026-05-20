@@ -363,11 +363,13 @@ class BitmaskConstrainedSampler:
             bitmask = self._engine.compute_bitmask(self._tokenizer)
             if mx.any(bitmask).item():
                 masked_logits = self._applicator.apply(logits, bitmask)
+                should_advance = True
             else:
                 # Nothing is grammatically allowed — force EOS to avoid
-                # producing invalid output.
+                # producing invalid output.  Do NOT advance constraint after
+                # forced EOS — the EOS text would corrupt the state buffer.
                 masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
-            should_advance = True
+                should_advance = False
 
         token = self._base_sampler(masked_logits)
 
