@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 287: 8-agent parallel deep audit — 44 bugs fixed: engine_core abort/dedup/double-cleanup (3 CRITICAL), KV eviction TOCTOU block stealing (CRITICAL), mesh data races (2 CRITICAL), realtime protocol ordering (CRITICAL), VLM 7 bugs, Prometheus summary/histogram, grammar $defs/if-then-else/anyOf, multimodal 6 bugs, monitoring + auth 6 bugs)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 282–296: 15 waves, 400+ bugs fixed. Latest: Wave 296 engine_core memory-aware scheduling (CRITICAL rejection bypass, 64x size underestimate, 50% budget miss). All waves use parallel agents. Key CRITICAL fixes: SSD stale prune data loss, prompt cache overwrite, forward batch position IDs, trim_kv_cache no-op, memory rejection ignored, RadixTree insert crash)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,65 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Waves 288–296 — 9 waves, 160+ bugs: batched engine streaming, forward batch, context window, LoRA, KV migration, auto-tuner, monitoring, diffusion, scheduler batch composition, Anthropic, embeddings, engine_core memory)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 288: _stream_generate_mtp 多 token stop 忽略 | stop_suffixes 從未創建，多字元 stop 被靜默丟棄 | stop 失效 (HIGH) |
+| Wave 288: Stop token 含在 completion_tokens | generated.append 在 EOS 檢查前，len 多 1 | 使用量多計 (HIGH) |
+| Wave 288: Cancel handler 不發 finish_reason | _stream_generate_ngram_spec cancel 直接 return 不發 chunk | SSE 中斷 (HIGH) |
+| Wave 288: Double sentinel | _run_inner 和 _run.finally 各放一次 | 佇列浪費 (MEDIUM) |
+| Wave 288: Queue overflow 靜默丟 token | 無 error sentinel，結構化輸出損壞 | 輸出損壞 (HIGH) |
+| Wave 288: RequestSlot.total_tokens 忽略 prompt_tokens | num_prompt_tokens=0 時回傳 0，應 fallback len(list) | 容量計算 (HIGH) |
+| Wave 288: Position IDs decode off-by-one | start=num_prompt+len(generated) 多 1，RoPE 錯誤 (CRITICAL) | 注意力損壞 (CRITICAL) |
+| Wave 288: BatchResult type 錯誤 | list[int] 應為 list[list[int]] | 類型不匹配 (HIGH) |
+| Wave 288: BatchComposer 忽略 max_decode_batch | decode 填滿整個 batch，starve prefill | 調度不公 (MEDIUM) |
+| Wave 288: trim_kv_cache 不寫回 | for loop reassign 不影響原 list，全是 no-op (CRITICAL) | KV 不縮減 (CRITICAL) |
+| Wave 288: trim_kv_cache 負數 window_tokens | system>current_pos 時產生錯誤 slice | KV 截斷錯誤 (HIGH) |
+| Wave 288: Context window 忽略 thinking budget | max_seq_len-max_tokens 不含 thinking overhead | 上下文溢出 (HIGH) |
+| Wave 288: warm_prompt_prefill 每次清除 Metal cache | mx.clear_cache() 在迴圈內，強制每次重編譯 | 效能退化 (HIGH) |
+| Wave 288: Model discovery 同名覆蓋 | 兩個不同目錄同名模型，後者靜默覆蓋前者 | 模型丟失 (HIGH) |
+| Wave 289: engine_core sliding window on finalized | budget 耗盡後仍追蹤 sliding window | 狀態損壞 (HIGH) |
+| Wave 289: _fail_active_requests 不計數 | _num_requests_processed 不遞增 | 監控不準 (MEDIUM) |
+| Wave 289: Double budget consumption | stream_interval>1 時同一請求多次 consume | 雙重扣減 (HIGH) |
+| Wave 289: Queue depth gauge 用 post-step 值 | 已提升 running 後才讀 waiting | 低估佇列 (MEDIUM) |
+| Wave 289: TTFT 跳過首步完成請求 | finished=True 不計 TTFT，偏差向上 | 監控偏差 (MEDIUM) |
+| Wave 289: RadixTree insert 更長 tokens 崩潰 | split_pos 超過 child token 數 (CRITICAL) | IndexError (CRITICAL) |
+| Wave 289: Eviction skip counter 不嘗試其他 | 同一 victim 被反覆選中，_skip_count 徒增 | 驅逐卡住 (HIGH) |
+| Wave 289: grammar 參數靜默丟棄 | completions(4路)/chat(10路)/responses(4路) 不傳 grammar | 約束失效 (HIGH) |
+| Wave 289: Spec decode log(softmax) 不穩定 | mx.log(mx.softmax()) 精度損失，改為 log_softmax | 採樣不準 (HIGH) |
+| Wave 289: Bonus token 永遠 greedy | verify_draft 硬編碼 temp=0.0 | 輸出分佈錯誤 (HIGH) |
+| Wave 289: mx.exp overflow | probabilistic acceptance 未裁切指數參數 | NaN (HIGH) |
+| Wave 290: Dedup check 允許重複 request_id | 雙重投遞 on complete() | 重複輸出 (HIGH) |
+| Wave 290: active_count 對非 active 請求遞減 | QUEUED finish 時 drift 到 0 (CRITICAL) | 併發崩潰 (CRITICAL) |
+| Wave 290: Event sourcing stale models | NODE_LEAVE/JOIN 不清除舊模型 | 錯誤報告 (HIGH) |
+| Wave 291: N-gram bonus double-pop | coincidental suffix match 在 stop_id 路徑額外 pop | token 丟失 (HIGH) |
+| Wave 291: N-gram accepted suffix 不 pop | completion_tokens 多計 1 | 使用量多計 (HIGH) |
+| Wave 291: MTP 忽略 thinking_budget | 無限 thinking token | API 違規 (HIGH) |
+| Wave 291: ThinkingParser 缺少 plain think tag | 最常見的 `<think...>` 格式不被識別 | 思考洩漏 (HIGH) |
+| Wave 291: extract_tool_calls_v2 brace counter | unmatched } 導致 _brace_depth 負數，永不恢復 | 工具漏檢 (HIGH) |
+| Wave 291: SLO callback 無 cooldown | 違規後每次觸發 auto-tuning | 風暴 (HIGH) |
+| Wave 291: ITL percentile 取最大而非最近 | sorted[-100:] 是最大 100 不是最近 100 (CRITICAL) | 監控偏差 (CRITICAL) |
+| Wave 291: Compute utilization 基本錯誤 | 只算 step duration 不算 idle | 利用率虛高 (CRITICAL) |
+| Wave 292: DiffusionScheduler 被 bypass | img2img/inpaint/ControlNet/depth/streaming 用 _compute_sigmas | 排程器失效 (HIGH) |
+| Wave 292: ControlNet 雙重條件信號 | inject_condition 覆蓋 latents，Euler 再加一次 | 輸出損壞 (HIGH) |
+| Wave 293: Scheduler retraction double-count | _num_requests 計入 re-inserted retracted 請求 | 統計膨脹 (HIGH) |
+| Wave 293: Stale cached_tokens/finish_reason | preemption 不清除，re-insert 後報告錯誤值 | 報告不準 (HIGH) |
+| Wave 293: _drain_queue 持鎖全部排空 | 其他操作全部飢餓 | 併發瓶頸 (HIGH) |
+| Wave 293: RBAC rate-limit token waste | RBAC key 通過後仍檢查 IP limit | Token 浪費 (MEDIUM) |
+| Wave 294: Decode slots 不按優先級排序 | 低優先級佔據高優先級位置 | 不公平 (HIGH) |
+| Wave 294: Token budget 過計 decode overhead | 用完整歷史而非每步 1 token | 阻擋 prefill (HIGH) |
+| Wave 294: Active slots 缺少 prompt_tokens | total_tokens 回傳 0 | 容量低估 (HIGH) |
+| Wave 295: Ngram first-token stop overcount | completion_tokens=1 應為 0 | 使用量多計 (HIGH) |
+| Wave 295: Prompt cache hit 被覆蓋 | prefix cache check 覆蓋 prompt cache KV (CRITICAL) | 快取失效 (CRITICAL) |
+| Wave 295: SSD stale prune 毀損 re-inserted entry | load 失敗後 prune 可能刪除新寫入的 entry (CRITICAL) | 數據丟失 (CRITICAL) |
+| Wave 295: Anthropic thinking signature 無效 | "yunshu-reasoning" 不通過 SDK 驗證 | SDK 拒絕 (HIGH) |
+| Wave 295: Admin /info AttributeError | engine_type 欄位不存在，應為 model_type (CRITICAL) | 端點崩潰 (CRITICAL) |
+| Wave 295: Models API 返回錯誤 ID | 用 engine.model_name 而非請求的 model_id | API 不合規 (HIGH) |
+| Wave 296: Memory rejection 被靜默忽略 | reserve_memory=False 後請求仍進入 scheduler (CRITICAL) | OOM (CRITICAL) |
+| Wave 296: Memory estimate 不含 decode KV | 只預估 prompt KV，約低估 50% | OOM (HIGH) |
+| Wave 296: KV lifecycle 硬編碼 2048 bytes/token | 實際 ~131KB/token，低估 64 倍 | 容量嚴重低估 (HIGH) |
 
 ### 已完成修復 (2026-05-20 Wave 287 — 8-agent parallel deep audit: 44+ bugs across engine_core lifecycle, KV ref counting, VLM, mesh, multimodal, grammar, monitoring, realtime)
 
