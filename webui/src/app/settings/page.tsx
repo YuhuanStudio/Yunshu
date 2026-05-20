@@ -1,7 +1,7 @@
 "use client";
 
 import { fmtBytes } from "@/lib/utils";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Settings2,
   Wifi,
@@ -13,6 +13,7 @@ import {
   Save,
   Loader2,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -22,18 +23,33 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [connStatus, setConnStatus] = useState<"idle" | "checking" | "ok" | "fail">("idle");
   const [systemInfo, setSystemInfo] = useState<Record<string, string>>({});
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => { timers.forEach(clearTimeout); };
+  }, []);
 
   useEffect(() => {
     fetch("/api/v1/admin/config/engine")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         setConfig(data);
         setEditing(Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])));
       })
-      .catch(() => {});
+      .catch((err) => { setConfigError(String(err.message || err)); });
 
     fetch("/api/v1/monitoring/system")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((d) =>
         setSystemInfo({
           MLX: d.mlx_version ?? "—",
@@ -47,6 +63,7 @@ export default function SettingsPage() {
 
   const saveConfig = async () => {
     setSaving(true);
+    setSaveError(null);
     const updates: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(editing)) {
       const numVal = Number(value);
@@ -60,9 +77,14 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        const id = setTimeout(() => setSaved(false), 2000);
+        timersRef.current.push(id);
+      } else {
+        const text = await res.text();
+        setSaveError(`Save failed: ${res.status} ${text}`);
       }
-    } catch {
+    } catch (err) {
+      setSaveError(`Save error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -76,14 +98,16 @@ export default function SettingsPage() {
     } catch {
       setConnStatus("fail");
     }
-    setTimeout(() => setConnStatus("idle"), 3000);
+    const id = setTimeout(() => setConnStatus("idle"), 3000);
+    timersRef.current.push(id);
   }, []);
 
   const [copiedIdx, setCopiedIdx] = useState(-1);
   const copyCode = (idx: number, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(-1), 2000);
+    const id = setTimeout(() => setCopiedIdx(-1), 2000);
+    timersRef.current.push(id);
   };
 
   const baseUrl = typeof window !== "undefined" ? window.location.origin : "http://localhost:8000";
@@ -122,6 +146,13 @@ export default function SettingsPage() {
 
       {/* Engine Config */}
       <Section icon={Settings2} title="Engine Configuration">
+        {saveError && (
+          <div className="mb-3 flex items-center gap-2 text-xs text-[var(--color-danger)] bg-[var(--color-danger)]/10 px-3 py-2 rounded-lg">
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            {saveError}
+            <button onClick={() => setSaveError(null)} className="ml-auto opacity-60 hover:opacity-100">&times;</button>
+          </div>
+        )}
         {config ? (
           <div className="space-y-3">
             {Object.entries(editing).map(([key, value]) => (

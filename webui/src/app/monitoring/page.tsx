@@ -61,6 +61,70 @@ interface SLOConfig {
 
 const MAX_HISTORY = 60;
 
+const SLO_CONFIG: SLOConfig = {
+  ttft_p95_ms: 1200,
+  tps_min: 30,
+  gpu_memory_max_pct: 90,
+  error_rate_max_pct: 5,
+};
+
+function evaluateSLOs(sys: SystemStats | null, eng: Record<string, unknown> | null, sloConfig: SLOConfig): SLOAlert[] {
+  const alerts: SLOAlert[] = [];
+  if (sys?.gpu) {
+    const gpuPct = sys.gpu.total_bytes > 0 ? (sys.gpu.active_bytes / sys.gpu.total_bytes) * 100 : 0;
+    if (gpuPct > sloConfig.gpu_memory_max_pct) {
+      alerts.push({
+        id: "gpu-mem",
+        metric: "GPU Memory",
+        threshold: sloConfig.gpu_memory_max_pct,
+        current: gpuPct,
+        unit: "%",
+        severity: gpuPct > 95 ? "critical" : "warning",
+        message: `GPU memory at ${gpuPct.toFixed(1)}% (threshold: ${sloConfig.gpu_memory_max_pct}%)`,
+      });
+    }
+  }
+  if (eng) {
+    const ttft = typeof eng.ttft_p95_ms === "number" ? eng.ttft_p95_ms : null;
+    if (ttft !== null && ttft > sloConfig.ttft_p95_ms) {
+      alerts.push({
+        id: "ttft",
+        metric: "TTFT P95",
+        threshold: sloConfig.ttft_p95_ms,
+        current: ttft,
+        unit: "ms",
+        severity: ttft > sloConfig.ttft_p95_ms * 2 ? "critical" : "warning",
+        message: `P95 TTFT is ${ttft.toFixed(0)}ms (SLO: <${sloConfig.ttft_p95_ms}ms)`,
+      });
+    }
+    const tps = typeof eng.tok_per_sec === "number" ? eng.tok_per_sec : null;
+    if (tps !== null && tps < sloConfig.tps_min) {
+      alerts.push({
+        id: "tps",
+        metric: "Throughput",
+        threshold: sloConfig.tps_min,
+        current: tps,
+        unit: "tok/s",
+        severity: tps < sloConfig.tps_min / 2 ? "critical" : "warning",
+        message: `Throughput is ${tps.toFixed(1)} tok/s (SLO: ≥${sloConfig.tps_min})`,
+      });
+    }
+    const errRate = typeof eng.error_rate_pct === "number" ? eng.error_rate_pct : null;
+    if (errRate !== null && errRate > sloConfig.error_rate_max_pct) {
+      alerts.push({
+        id: "errors",
+        metric: "Error Rate",
+        threshold: sloConfig.error_rate_max_pct,
+        current: errRate,
+        unit: "%",
+        severity: errRate > 20 ? "critical" : "warning",
+        message: `Error rate is ${errRate.toFixed(1)}% (SLO: <${sloConfig.error_rate_max_pct}%)`,
+      });
+    }
+  }
+  return alerts;
+}
+
 export default function MonitoringPage() {
   const [system, setSystem] = useState<SystemStats | null>(null);
   const [engine, setEngine] = useState<Record<string, unknown> | null>(null);
@@ -97,13 +161,6 @@ export default function MonitoringPage() {
   const [gpuHistory, setGpuHistory] = useState<number[]>([]);
   const [sloAlerts, setSloAlerts] = useState<SLOAlert[]>([]);
   const mounted = useRef(true);
-
-  const sloConfig: SLOConfig = {
-    ttft_p95_ms: 1200,
-    tps_min: 30,
-    gpu_memory_max_pct: 90,
-    error_rate_max_pct: 5,
-  };
 
   useEffect(() => {
     mounted.current = true;
@@ -201,7 +258,7 @@ export default function MonitoringPage() {
         }
         if (mounted.current) {
           setLastUpdate(new Date());
-          evaluateSLOs(sysData, engData);
+          setSloAlerts(evaluateSLOs(sysData, engData, SLO_CONFIG));
         }
       } catch {
       } finally {
@@ -222,63 +279,6 @@ export default function MonitoringPage() {
         Loading monitoring data...
       </div>
     );
-  }
-
-  function evaluateSLOs(sys: SystemStats | null, eng: Record<string, unknown> | null) {
-    const alerts: SLOAlert[] = [];
-    if (sys?.gpu) {
-      const gpuPct = sys.gpu.total_bytes > 0 ? (sys.gpu.active_bytes / sys.gpu.total_bytes) * 100 : 0;
-      if (gpuPct > sloConfig.gpu_memory_max_pct) {
-        alerts.push({
-          id: "gpu-mem",
-          metric: "GPU Memory",
-          threshold: sloConfig.gpu_memory_max_pct,
-          current: gpuPct,
-          unit: "%",
-          severity: gpuPct > 95 ? "critical" : "warning",
-          message: `GPU memory at ${gpuPct.toFixed(1)}% (threshold: ${sloConfig.gpu_memory_max_pct}%)`,
-        });
-      }
-    }
-    if (eng) {
-      const ttft = typeof eng.ttft_p95_ms === "number" ? eng.ttft_p95_ms : null;
-      if (ttft !== null && ttft > sloConfig.ttft_p95_ms) {
-        alerts.push({
-          id: "ttft",
-          metric: "TTFT P95",
-          threshold: sloConfig.ttft_p95_ms,
-          current: ttft,
-          unit: "ms",
-          severity: ttft > sloConfig.ttft_p95_ms * 2 ? "critical" : "warning",
-          message: `P95 TTFT is ${ttft.toFixed(0)}ms (SLO: <${sloConfig.ttft_p95_ms}ms)`,
-        });
-      }
-      const tps = typeof eng.tok_per_sec === "number" ? eng.tok_per_sec : null;
-      if (tps !== null && tps < sloConfig.tps_min) {
-        alerts.push({
-          id: "tps",
-          metric: "Throughput",
-          threshold: sloConfig.tps_min,
-          current: tps,
-          unit: "tok/s",
-          severity: tps < sloConfig.tps_min / 2 ? "critical" : "warning",
-          message: `Throughput is ${tps.toFixed(1)} tok/s (SLO: ≥${sloConfig.tps_min})`,
-        });
-      }
-      const errRate = typeof eng.error_rate_pct === "number" ? eng.error_rate_pct : null;
-      if (errRate !== null && errRate > sloConfig.error_rate_max_pct) {
-        alerts.push({
-          id: "errors",
-          metric: "Error Rate",
-          threshold: sloConfig.error_rate_max_pct,
-          current: errRate,
-          unit: "%",
-          severity: errRate > 20 ? "critical" : "warning",
-          message: `Error rate is ${errRate.toFixed(1)}% (SLO: <${sloConfig.error_rate_max_pct}%)`,
-        });
-      }
-    }
-    setSloAlerts(alerts);
   }
 
   return (

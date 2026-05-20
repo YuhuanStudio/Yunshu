@@ -2216,12 +2216,20 @@ class Scheduler:
             Number of requests retracted.
         """
         retracted = 0
-        # Sort running requests by output tokens (longest = most memory, evict first)
-        candidates = sorted(
-            [r for r in self.running.values() if r.batch_uid is not None],
-            key=lambda r: r.num_output_tokens,
-            reverse=True,
-        )
+        # Sort running requests by output tokens (longest = most memory, evict first).
+        # Under PRIORITY policy, use priority as secondary criterion: among equal
+        # output tokens, evict lowest-priority requests first.
+        if getattr(self.config, 'policy', None) == SchedulingPolicy.PRIORITY:
+            candidates = sorted(
+                [r for r in self.running.values() if r.batch_uid is not None],
+                key=lambda r: (-r.num_output_tokens, r.sampling_params.priority if r.sampling_params else 0),
+            )
+        else:
+            candidates = sorted(
+                [r for r in self.running.values() if r.batch_uid is not None],
+                key=lambda r: r.num_output_tokens,
+                reverse=True,
+            )
 
         for victim in candidates:
             if retracted >= count:
@@ -2778,11 +2786,18 @@ class Scheduler:
         """Distribute GenerationBatch.Response to per-request outputs (oMLX pattern).
 
         Includes ITL tracking and progressive KV quantization.
+        Deduplicates responses by UID to prevent double-processing if
+        the BatchGenerator returns duplicate Response UIDs.
         """
         _now = time.perf_counter()
         outputs = []
+        processed_uids: set[str] = set()
         for resp in responses:
             uid = resp.uid
+            if uid in processed_uids:
+                logger.debug("Skipping duplicate response UID: %s", uid)
+                continue
+            processed_uids.add(uid)
             req_id = self._uid_to_req.get(uid)
             if req_id is None:
                 continue
@@ -3166,14 +3181,49 @@ class Scheduler:
             usage = active_mem / total_mem
             threshold = self.config.memory_guard_soft_limit
             if usage >= threshold and hasattr(self, '_prefix_cache') and self._prefix_cache is not None:
-                evicted = self._prefix_cache.evict_under_pressure(
-                    threshold_pct=threshold * 100
-                )
-                if evicted > 0:
-                    logger.info(
-                        f"Memory pressure eviction: {evicted} KV blocks freed "
-                        f"(usage {usage:.1%})"
+                # Protect prefix cache entries referenced by running requests.
+                # Evicting a prefix still in active use corrupts the KV state of
+                # decode-phase requests that share that prefix.
+                _active_prefix_tokens = set()
+                for _r in self.running.values():
+                    _pt = getattr(_r, 'prompt_token_ids', None)
+                    if _pt:
+                        _active_prefix_tokens.add(tuple(_pt))
+
+                # Set a temporary block_evict_checker that skips entries whose
+                # prompt tokens match an active request, preventing corruption.
+                _original_checker = getattr(self._prefix_cache, '_block_evict_checker', None)
+
+                def _active_request_checker(block_hash):
+                    # Return True if the block is safe to evict.
+                    _cached = getattr(self._prefix_cache, '_block_hashes', None)
+                    if not _cached:
+                        return True
+                    for _idx, _bhs in enumerate(_cached):
+                        if block_hash in _bhs:
+                            _prompts = getattr(self._prefix_cache, '_prompts', None)
+                            if _prompts and _idx < len(_prompts):
+                                import numpy as np
+                                try:
+                                    _cached_tuple = tuple(int(t) for t in np.array(_prompts[_idx]).flatten())
+                                    return _cached_tuple not in _active_prefix_tokens
+                                except Exception:
+                                    pass
+                            break
+                    return True
+
+                self._prefix_cache._block_evict_checker = _active_request_checker
+                try:
+                    evicted = self._prefix_cache.evict_under_pressure(
+                        threshold_pct=threshold * 100
                     )
+                    if evicted > 0:
+                        logger.info(
+                            f"Memory pressure eviction: {evicted} KV blocks freed "
+                            f"(usage {usage:.1%})"
+                        )
+                finally:
+                    self._prefix_cache._block_evict_checker = _original_checker
         except Exception:
             logger.debug("failed", exc_info=True)
 

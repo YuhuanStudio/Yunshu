@@ -35,6 +35,31 @@ export default function AudioPage() {
   const [streamChunks, setStreamChunks] = useState<number>(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // Revoke previous object URL when a new one is set or component unmounts
+  const revokeAudioUrl = useCallback(() => {
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+  }, []);
+
+  const setAudioUrlSafe = useCallback((url: string) => {
+    revokeAudioUrl();
+    audioUrlRef.current = url;
+    setAudioUrl(url);
+  }, [revokeAudioUrl]);
+
+  useEffect(() => {
+    return () => {
+      revokeAudioUrl();
+      timersRef.current.forEach(clearTimeout);
+      abortRef.current?.abort();
+    };
+  }, [revokeAudioUrl]);
 
   useEffect(() => {
     fetch("/v1/models")
@@ -54,7 +79,7 @@ export default function AudioPage() {
     if (!ttsText.trim() || !selectedModel) return;
     setLoading(true);
     setError(null);
-    setAudioUrl(null);
+    revokeAudioUrl();
     const start = performance.now();
     try {
       const resp = await fetch("/v1/audio/speech", {
@@ -70,7 +95,7 @@ export default function AudioPage() {
       });
       if (resp.ok) {
         const blob = await resp.blob();
-        setAudioUrl(URL.createObjectURL(blob));
+        setAudioUrlSafe(URL.createObjectURL(blob));
         setGenTime((performance.now() - start) / 1000);
       } else {
         setError(`TTS failed: ${resp.status} ${await resp.text()}`);
@@ -88,6 +113,7 @@ export default function AudioPage() {
     setError(null);
     setStreamProgress("Connecting...");
     setStreamChunks(0);
+    revokeAudioUrl();
     const start = performance.now();
     try {
       const resp = await fetch("/v1/audio/speech", {
@@ -119,7 +145,7 @@ export default function AudioPage() {
         setStreamProgress(`Streaming... ${chunkCount} chunks received`);
       }
       const blob = new Blob(chunks as BlobPart[], { type: "audio/wav" });
-      setAudioUrl(URL.createObjectURL(blob));
+      setAudioUrlSafe(URL.createObjectURL(blob));
       setGenTime((performance.now() - start) / 1000);
       setStreamProgress(`Completed — ${chunkCount} chunks in ${((performance.now() - start) / 1000).toFixed(1)}s`);
     } catch (err) {
@@ -129,15 +155,18 @@ export default function AudioPage() {
     }
   };
 
-  const handleAsr = async (file: File) => {
-    if (!selectedModel) return;
+  const selectedModelRef = useRef(selectedModel);
+  selectedModelRef.current = selectedModel;
+
+  const handleAsr = useCallback(async (file: File) => {
+    if (!selectedModelRef.current) return;
     setLoading(true);
     setError(null);
     setAsrResult("");
     try {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("model", selectedModel);
+      formData.append("model", selectedModelRef.current);
       const resp = await fetch("/v1/audio/transcriptions", {
         method: "POST",
         body: formData,
@@ -153,14 +182,14 @@ export default function AudioPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const file = e.dataTransfer.files?.[0];
     if (file && file.type.startsWith("audio/")) handleAsr(file);
-  }, [selectedModel, handleAsr]);
+  }, [handleAsr]);
 
   const filteredModels = models.filter((m) =>
     mode === "tts" ? /tts|voice/i.test(m.id) : /asr|whisper/i.test(m.id)
@@ -372,7 +401,8 @@ export default function AudioPage() {
                   onClick={() => {
                     navigator.clipboard.writeText(asrResult);
                     setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
+                    const id = setTimeout(() => setCopied(false), 2000);
+                    timersRef.current.push(id);
                   }}
                   className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                 >

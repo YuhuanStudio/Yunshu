@@ -824,6 +824,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
         "stop_sequence": matched_stop,
         "created_at": int(time.time()),
         "usage": usage,
+        **({"metadata": req.metadata} if req.metadata else {}),
     }
     return JSONResponse(resp)
 
@@ -970,6 +971,7 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
         "stop_sequence": matched_stop,
         "created_at": int(time.time()),
         "usage": _legacy_usage,
+        **({"metadata": req.metadata} if req.metadata else {}),
     })
 
 

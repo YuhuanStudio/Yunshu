@@ -845,19 +845,37 @@ class AutoTuner:
     def auto_tune_from_profiler(self) -> list[TuningDecision]:
         """Apply recommendations from the profiler.
 
+        Note: apply_tuning() enforces a cooldown period between changes to the
+        same parameter. When multiple recommendations target the same param (or
+        when a recent change is still in cooldown), only the first recommendation
+        is applied; subsequent ones are silently skipped. This is intentional —
+        rapid oscillation of tuning parameters degrades inference stability.
+
         Returns:
-            List of tuning decisions made.
+            List of tuning decisions made (may be fewer than recommendations).
         """
         recommendations = self._profiler.get_recommendations()
         decisions: list[TuningDecision] = []
 
-        for rec in recommendations:
+        for i, rec in enumerate(recommendations):
             d = self.apply_tuning(
                 param_name=rec["param"],
                 direction=rec["action"],
                 reason=rec["reason"],
             )
             decisions.append(d)
+            if d.reverted:
+                logger.debug(
+                    "AutoTuner: recommendation %d/%d skipped (cooldown/reverted) "
+                    "param=%s direction=%s",
+                    i + 1, len(recommendations), rec["param"], rec["action"],
+                )
+
+        if len(decisions) < len(recommendations):
+            logger.debug(
+                "AutoTuner: applied %d/%d profiler recommendations (remainder blocked by cooldown)",
+                len(decisions), len(recommendations),
+            )
 
         return decisions
 

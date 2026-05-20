@@ -1094,7 +1094,7 @@ class EngineCore:
         if lora_adapter:
             try:
                 from .lora_manager import get_lora_manager
-                lora_mgr = get_lora_manager()
+                lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                 if lora_mgr is not None:
                     loaded_lora = lora_mgr.acquire_adapter(lora_adapter)
                     if loaded_lora:
@@ -1293,7 +1293,7 @@ class EngineCore:
                 if loaded_lora and lora_adapter:
                     try:
                         from .lora_manager import get_lora_manager
-                        lora_mgr = get_lora_manager()
+                        lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                         if lora_mgr is not None:
                             lora_mgr.release_adapter(lora_adapter)
                     except Exception:
@@ -1315,7 +1315,7 @@ class EngineCore:
             if loaded_lora and lora_adapter:
                 try:
                     from .lora_manager import get_lora_manager
-                    lora_mgr = get_lora_manager()
+                    lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                     if lora_mgr is not None:
                         lora_mgr.release_adapter(lora_adapter)
                 except Exception:
@@ -1379,7 +1379,7 @@ class EngineCore:
                 if loaded_lora and lora_adapter:
                     try:
                         from .lora_manager import get_lora_manager
-                        lora_mgr = get_lora_manager()
+                        lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                         if lora_mgr is not None:
                             lora_mgr.release_adapter(lora_adapter)
                     except Exception:
@@ -1488,7 +1488,7 @@ class EngineCore:
                     if loaded_lora and lora_adapter:
                         try:
                             from .lora_manager import get_lora_manager
-                            lora_mgr = get_lora_manager()
+                            lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                             if lora_mgr is not None:
                                 lora_mgr.release_adapter(lora_adapter)
                         except Exception:
@@ -1557,7 +1557,7 @@ class EngineCore:
                 if loaded_lora and lora_adapter:
                     try:
                         from .lora_manager import get_lora_manager
-                        lora_mgr = get_lora_manager()
+                        lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                         if lora_mgr is not None:
                             lora_mgr.release_adapter(lora_adapter)
                     except Exception:
@@ -2932,7 +2932,7 @@ class EngineCore:
         if lora_id:
             try:
                 from .lora_manager import get_lora_manager
-                lora_mgr = get_lora_manager()
+                lora_mgr = get_lora_manager(engine_id=getattr(self.scheduler, 'model_id', 'default') or 'default')
                 if lora_mgr is not None:
                     lora_mgr.release_adapter(lora_id)
             except Exception:

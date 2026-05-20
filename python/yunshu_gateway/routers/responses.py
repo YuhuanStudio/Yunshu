@@ -499,6 +499,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             "model": req.model,
             "status": _response_status,
             "output": all_output_items,
+            "metadata": {"user_id": req.user} if req.user else None,
             "usage": {
                 "input_tokens": total_pt,
                 "output_tokens": total_ct,
@@ -612,9 +613,12 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         return _seq
 
     _metrics_recorded = False
+    _stream_last_finish_reason = None
+    _content_part_added = False
+    _output_item_added = False
     try:
       async def _token_source():
-        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok, accumulated_text, _metrics_recorded
+        nonlocal prompt_tok, completion_tok, reasoning_tok, cached_tok, accumulated_text, _metrics_recorded, _stream_last_finish_reason, _content_part_added, _output_item_added
         last_finish_reason = None
 
         # ── Lifecycle: response.created ──
@@ -627,11 +631,13 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         yield format_responses_output_item_added(
             response_id, req.model, item_id=msg_id, output_index=0, seq=_next_seq(),
         )
+        _output_item_added = True
 
         # ── Lifecycle: response.content_part.added ──
         yield format_responses_content_part_added(
             item_id=msg_id, output_index=0, content_index=0, seq=_next_seq(),
         )
+        _content_part_added = True
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -847,18 +853,31 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
                 final_output.append(fc_item)
 
-        # ── Lifecycle: response.completed (includes usage) ──
-        yield format_responses_completed(
-            response_id=response_id,
-            model=req.model,
-            output=final_output,
-            input_tokens=prompt_tok,
-            output_tokens=completion_tok,
-            total_tokens=prompt_tok + completion_tok,
-            reasoning_tokens=reasoning_tok,
-            cached_tokens=cached_tok,
-            seq=_next_seq(),
-        )
+        # ── Lifecycle: response.completed or response.incomplete ──
+        _stream_last_finish_reason = last_finish_reason
+        if last_finish_reason == "length":
+            yield format_responses_incomplete(
+                response_id=response_id,
+                model=req.model,
+                reason="max_output_tokens",
+                output=final_output,
+                input_tokens=prompt_tok,
+                output_tokens=completion_tok,
+                total_tokens=prompt_tok + completion_tok,
+                seq=_next_seq(),
+            )
+        else:
+            yield format_responses_completed(
+                response_id=response_id,
+                model=req.model,
+                output=final_output,
+                input_tokens=prompt_tok,
+                output_tokens=completion_tok,
+                total_tokens=prompt_tok + completion_tok,
+                reasoning_tokens=reasoning_tok,
+                cached_tokens=cached_tok,
+                seq=_next_seq(),
+            )
 
         _record_metrics(prompt_tok, completion_tok)
         _metrics_recorded = True
@@ -869,14 +888,16 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         if _cancel_evt is not None:
             _cancel_evt.set()
         # Close open lifecycle items before reporting failure
-        yield format_responses_content_part_done(
-            msg_id, text=accumulated_text,
-            output_index=0, content_index=0, seq=_next_seq(),
-        ).encode("utf-8")
-        yield format_responses_output_item_done(
-            msg_id, text=accumulated_text,
-            output_index=0, seq=_next_seq(),
-        ).encode("utf-8")
+        if _content_part_added:
+            yield format_responses_content_part_done(
+                msg_id, text=accumulated_text,
+                output_index=0, content_index=0, seq=_next_seq(),
+            ).encode("utf-8")
+        if _output_item_added:
+            yield format_responses_output_item_done(
+                msg_id, text=accumulated_text,
+                output_index=0, seq=_next_seq(),
+            ).encode("utf-8")
         yield format_responses_failed(
             response_id, req.model,
             error_code="server_error",
@@ -889,14 +910,16 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             _cancel_evt.set()
         logger.error(f"Responses API streaming error: {e}", exc_info=True)
         # Close open lifecycle items before reporting failure
-        yield format_responses_content_part_done(
-            msg_id, text=accumulated_text,
-            output_index=0, content_index=0, seq=_next_seq(),
-        ).encode("utf-8")
-        yield format_responses_output_item_done(
-            msg_id, text=accumulated_text,
-            output_index=0, seq=_next_seq(),
-        ).encode("utf-8")
+        if _content_part_added:
+            yield format_responses_content_part_done(
+                msg_id, text=accumulated_text,
+                output_index=0, content_index=0, seq=_next_seq(),
+            ).encode("utf-8")
+        if _output_item_added:
+            yield format_responses_output_item_done(
+                msg_id, text=accumulated_text,
+                output_index=0, seq=_next_seq(),
+            ).encode("utf-8")
         yield format_responses_failed(
             response_id, req.model,
             error_code="server_error",

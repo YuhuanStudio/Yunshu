@@ -852,7 +852,14 @@ class KVPrefixCache:
 
         with self._lock:
             snapshot_prompts = list(self._prompts)
-            snapshot_caches = list(self._caches)
+            # Deep-copy cache data under lock to prevent GPU-freed tensors
+            # from concurrent mx.clear_cache(). Without detached copies,
+            # the snapshot holds references to live GPU tensors that may be
+            # reclaimed between the lock release and the SSD write loop.
+            snapshot_caches = [
+                self._snapshot_cache(c) if c is not None else None
+                for c in self._caches
+            ]
             snapshot_hashes = list(self._block_hashes)
 
         count = 0

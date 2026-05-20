@@ -10,12 +10,15 @@ that supports:
 """
 
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .block import KVBlock
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -237,6 +240,20 @@ class RadixTree:
             new_node.children[child_first_tok] = child
         child.parent = new_node
 
+        # Boundary block safety: when split_pos is not block-aligned, the
+        # child's logical token range starts mid-way through the boundary
+        # block.  The boundary block was assigned to new_node via ceiling
+        # division, but child still needs it for correct path_blocks()
+        # coverage.  Insert a reference to the boundary block at the head
+        # of the child's block list so that evicting new_node alone does
+        # not free a block the child depends on.
+        is_aligned = (split_pos % self._block_size == 0)
+        if not is_aligned and new_node.blocks:
+            # The last block in new_node is the boundary block that straddles
+            # the split point.  Give the child a reference to it.
+            boundary_block = new_node.blocks[-1]
+            child.blocks.insert(0, boundary_block)
+
         # Ref-count bookkeeping after split.
         # Before the split, child had ref_count R meaning R requests'
         # paths passed through it. After the split:
@@ -332,6 +349,25 @@ class RadixTree:
                 if len(token_ids) == len(existing.token_ids):
                     # Exact match — update existing node
                     if blocks:
+                        # KNOWN LEAK: old blocks in existing.blocks are
+                        # silently discarded without returning to
+                        # BlockPool.free().  The caller should ideally free
+                        # the old blocks, but the current API does not
+                        # support returning them.  Log a debug warning so
+                        # the leak is trackable in production logs.
+                        old_blocks = existing.blocks
+                        if old_blocks:
+                            old_ids = [
+                                getattr(b, "block_id", id(b))
+                                for b in old_blocks
+                            ]
+                            logger.debug(
+                                "RadixTree exact-match block replacement: "
+                                "%d old blocks discarded without free (IDs: %s). "
+                                "This is a known leak point — caller should free.",
+                                len(old_blocks),
+                                old_ids[:8],
+                            )
                         existing.blocks = list(blocks)
                     if block_hashes:
                         existing.block_hashes = list(block_hashes)
@@ -512,13 +548,12 @@ class RadixTree:
         # Clear child's data to prevent double-free if the child node
         # object is later popped from an eviction heap (the heap may
         # still hold a stale reference to this child).
-        # Keep child.parent = node so that any stale dec_ref calls on
-        # the child object propagate up to node (instead of stopping
-        # at an orphan with parent=None, leaking the ref_count).
+        # Set child.parent = None to prevent stale dec_ref traversals
+        # from reaching the merged parent node via the orphaned child.
         child.token_ids = []
         child.blocks = []
         child.block_hashes = []
-        child.parent = node
+        child.parent = None
         child.children = {}
         child.ref_count = 0
 

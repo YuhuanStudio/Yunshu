@@ -989,7 +989,7 @@ class BatchedEngine:
         from .lora_manager import LoRAAdapterManager, set_lora_manager
         self._lora_manager = LoRAAdapterManager(max_loras=max_loras)
         self._lora_manager.set_base_model(self._model)
-        set_lora_manager(self._lora_manager)
+        set_lora_manager(self._lora_manager, engine_id=self.model_name or "default")
 
         # Auto-discover adapters in model directory
         model_path = ""
@@ -1226,7 +1226,7 @@ class BatchedEngine:
                 logger.debug("LoRA manager cleanup failed", exc_info=True)
             self._lora_manager = None
             from .lora_manager import set_lora_manager
-            set_lora_manager(None)
+            set_lora_manager(None, engine_id=self.model_name or "default")
 
         # 3. Release model + tokenizer refs, then GC + clear MLX cache
         self._model = None
@@ -4366,17 +4366,20 @@ class BatchedEngine:
 
             hit_eos = False
             _hit_suffix = False
+            _yielded_token_count = 0  # Track how many tokens were actually yielded before break
             for token_id in new_tokens:
                 if token_id in eos_ids:
                     hit_eos = True
                     break
                 generated_tokens.append(token_id)
                 detokenizer.add_token(token_id)
+                _yielded_token_count += 1
                 if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                     _hit_suffix = True
                     # Remove the suffix-triggering token — it should not
                     # appear in the output, matching the non-spec pattern.
                     generated_tokens.pop()
+                    _yielded_token_count -= 1
                     # Reset detokenizer to state before the suffix token was
                     # added.  Simply popping from detokenizer.tokens is not
                     # sufficient because NaiveStreamingDetokenizer computes
@@ -4419,10 +4422,15 @@ class BatchedEngine:
                         break
 
             # Build logprobs from target model verification
+            # Only include logprobs for tokens that were actually yielded
+            # (before hit_eos or _hit_suffix broke the loop).  Without this
+            # guard, logprobs included EOS and post-break tokens that were
+            # never added to generated_tokens / detokenizer.
             _chunk_logprobs = None
             if logprobs and new_tokens:
                 _chunk_logprobs = []
-                for i, tid in enumerate(new_tokens):
+                for i in range(_yielded_token_count):
+                    tid = new_tokens[i]
                     tok_text = _clean_special_tokens(self._tokenizer.decode([tid]))
                     lp = verify_result.target_logprobs[i] if i < len(verify_result.target_logprobs) else 0.0
                     _chunk_logprobs.append({
@@ -5538,10 +5546,18 @@ class BatchedEngine:
                         logger.debug("N-gram streaming TTFT prometheus recording failed", exc_info=True)
 
                 # Build logprobs for this token — n-gram spec decode does not
-                # expose per-token logits, so we cannot compute real logprobs.
-                # Return None instead of fake 0.0 to avoid misleading consumers.
+                # expose per-token logits in the queue-based streaming path.
+                # When logprobs=True, return an empty list with a warning so
+                # consumers get a valid (but empty) structure instead of None.
                 _chunk_logprobs = None
-                # Real logprobs unavailable from n-gram spec path
+                if logprobs:
+                    _chunk_logprobs = []
+                    if n_tok <= 1:
+                        logger.debug(
+                            "N-gram streaming path: real logprobs unavailable "
+                            "(per-token logits not exposed via queue). "
+                            "Returning empty logprobs list."
+                        )
 
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),
@@ -5903,6 +5919,34 @@ class BatchedEngine:
         Runs MTPDecoder on the executor thread and yields accepted tokens
         as they are verified by the backbone forward pass.
         """
+        # MTP path does not support grammar constraints — fall back to fast
+        # path streaming which has full ConstrainedSampler support.
+        if json_schema is not None:
+            logger.warning(
+                "json_schema provided with MTP streaming — grammar constraints "
+                "not supported in MTP path, falling back to _stream_generate_fast"
+            )
+            async for output in self._stream_generate_fast(
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                top_p=top_p, top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+                logprobs=logprobs, top_logprobs=top_logprobs,
+                stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                cancel_event=cancel_event,
+                enable_thinking=enable_thinking,
+                thinking_budget=thinking_budget,
+                timeout_seconds=timeout_seconds,
+                json_schema=json_schema,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                logits_processors=logits_processors,
+            ):
+                yield output
+            return
+
         from .mlx_executor import get_mlx_executor
         import mlx.core as mx
         from mlx_lm.models.cache import make_prompt_cache
@@ -6293,10 +6337,19 @@ class BatchedEngine:
                         logger.debug("MTP streaming TTFT prometheus recording failed", exc_info=True)
 
                 # Build logprobs for this token — MTP uses greedy decoding
-                # internally and does not expose per-token logits.
-                # Return None instead of fake 0.0 to avoid misleading.
+                # internally and does not expose per-token logits in the
+                # queue-based streaming path.
+                # When logprobs=True, return an empty list with a warning so
+                # consumers get a valid (but empty) structure instead of None.
                 _chunk_logprobs = None
-                # Real logprobs unavailable from MTP path
+                if logprobs:
+                    _chunk_logprobs = []
+                    if n_tok <= 1:
+                        logger.debug(
+                            "MTP streaming path: real logprobs unavailable "
+                            "(per-token logits not exposed via queue). "
+                            "Returning empty logprobs list."
+                        )
 
                 yield GenerationOutput(
                     text=_clean_special_tokens(accumulated),

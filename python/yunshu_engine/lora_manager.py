@@ -37,27 +37,32 @@ class LoRAAdapterEntry:
     ref_count: int = 0  # Number of active requests using this adapter
 
 
-# ── Module-level singleton ──
+# ── Module-level registry (keyed by engine ID) ──
 
-_global_lora_manager: LoRAAdapterManager | None = None
+_global_lora_managers: dict[str, LoRAAdapterManager] = {}
 _global_lora_lock = threading.Lock()
 
 
-def get_lora_manager() -> LoRAAdapterManager | None:
-    """Return the global LoRAAdapterManager singleton, or None if not initialized.
+def get_lora_manager(engine_id: str = "default") -> LoRAAdapterManager | None:
+    """Return the LoRAAdapterManager for the given engine_id, or None.
 
     Thread-safe: acquires _global_lora_lock for visibility guarantee matching
     set_lora_manager().
     """
     with _global_lora_lock:
-        return _global_lora_manager
+        return _global_lora_managers.get(engine_id)
 
 
-def set_lora_manager(mgr: LoRAAdapterManager | None) -> None:
-    """Set the global LoRAAdapterManager singleton."""
-    global _global_lora_manager
+def set_lora_manager(mgr: LoRAAdapterManager | None, engine_id: str = "default") -> None:
+    """Set (or clear) the LoRAAdapterManager for the given engine_id.
+
+    Passing mgr=None removes the entry for that engine_id.
+    """
     with _global_lora_lock:
-        _global_lora_manager = mgr
+        if mgr is None:
+            _global_lora_managers.pop(engine_id, None)
+        else:
+            _global_lora_managers[engine_id] = mgr
 
 
 class LoRAAdapterManager:
@@ -242,6 +247,17 @@ class LoRAAdapterManager:
                     if old_active.adapter_id in self._lru_order:
                         self._lru_order.remove(old_active.adapter_id)
                 self._active_adapter_id = None
+
+            # Guard: after merge_adapter() bakes adapter A into base weights,
+            # loading a new adapter B would apply LoRA to fused weights
+            # (base + A_delta) instead of original base — silently corrupting
+            # LoRA output.  Block this unless the new adapter is itself merged.
+            elif any(e.is_merged for e in self._adapters.values()) and not entry.is_merged:
+                logger.error(
+                    "Cannot load non-merged adapter %s when merged adapters exist — "
+                    "new adapter would target corrupted (fused) base weights", adapter_id
+                )
+                return False
 
             # Mark as loading to prevent concurrent load of same adapter
             entry.is_loaded = True  # tentative — will be reverted on failure

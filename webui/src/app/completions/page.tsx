@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   Send,
   Copy,
@@ -22,7 +22,7 @@ interface CompletionResult {
     text: string;
     index: number;
     finish_reason: string | null;
-    logprobs: any | null;
+    logprobs: Record<string, unknown> | null;
   }[];
   usage: {
     prompt_tokens: number;
@@ -60,13 +60,13 @@ export default function CompletionsPage() {
     try {
       const res = await fetch(`${API_BASE}/v1/models`);
       const data = await res.json();
-      const ids = (data.data || []).map((m: any) => m.id);
+      const ids = (data.data || []).map((m: { id: string }) => m.id);
       setModels(ids);
-      if (!model && ids.length > 0) setModel(ids[0]);
+      if (ids.length > 0) setModel((prev) => prev || ids[0]);
     } catch {}
   }, []);
 
-  useState(() => { loadModels(); });
+  useEffect(() => { loadModels(); }, [loadModels]);
 
   const handleGenerate = async () => {
     if (!prompt.trim() || isGenerating) return;
@@ -78,7 +78,7 @@ export default function CompletionsPage() {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const body: any = {
+    const body: Record<string, unknown> = {
       model: model || "default",
       prompt,
       max_tokens: maxTokens,
@@ -124,6 +124,20 @@ export default function CompletionsPage() {
         let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         let buffer = "";
 
+        const processSSELine = (line: string) => {
+          if (!line.startsWith("data: ")) return;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") return;
+          try {
+            const parsed = JSON.parse(data);
+            resultId = parsed.id || resultId;
+            if (parsed.usage) usage = parsed.usage;
+            const text = parsed.choices?.[0]?.text || "";
+            accumulated += text;
+            setStreamingText(accumulated);
+          } catch {}
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -133,18 +147,13 @@ export default function CompletionsPage() {
           buffer = lines.pop() || "";
 
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6).trim();
-            if (data === "[DONE]") continue;
-            try {
-              const parsed = JSON.parse(data);
-              resultId = parsed.id || resultId;
-              if (parsed.usage) usage = parsed.usage;
-              const text = parsed.choices?.[0]?.text || "";
-              accumulated += text;
-              setStreamingText(accumulated);
-            } catch {}
+            processSSELine(line);
           }
+        }
+
+        // Process any remaining data in the buffer after stream closes
+        if (buffer.trim()) {
+          processSSELine(buffer.trim());
         }
 
         setResults((prev) => [
