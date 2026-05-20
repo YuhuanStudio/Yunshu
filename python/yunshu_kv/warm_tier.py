@@ -67,12 +67,13 @@ class KVWarmTier:
 
     # ── Core API ──────────────────────────────────────────────────
 
-    def demote(self, block_hash: int, kv_data) -> bool:
+    def demote(self, block_hash: int, kv_data, num_tokens: int = 0) -> bool:
         """Accept a KV block from the hot tier, compress and store it.
 
         Args:
             block_hash: Hash identifying the block content.
             kv_data: FP16 KV data (MLX array or numpy array).
+            num_tokens: Number of tokens in this block (for SSD flush fidelity).
 
         Returns:
             True if the block was stored successfully.
@@ -87,7 +88,9 @@ class KVWarmTier:
                 packed, scales = quantize_kv_4bit(kv_data)
                 # Recover original head_dim from the kv_data shape for correct dequantize
                 head_dim = kv_data.shape[-1] if hasattr(kv_data, 'shape') else 0
-                self._store[block_hash] = (packed, scales, head_dim)
+                # Store num_tokens alongside packed data so SSD flush can
+                # propagate it accurately instead of always writing 0.
+                self._store[block_hash] = (packed, scales, head_dim, num_tokens)
                 # Move to end (most recently used)
                 self._store.move_to_end(block_hash)
 
@@ -127,7 +130,15 @@ class KVWarmTier:
 
             entry = self._store[block_hash]
             self._hits += 1
-            packed, scales, head_dim = entry if len(entry) == 3 else (*entry, 0)
+            # Handle both old 3-tuple (packed, scales, head_dim) and new
+            # 4-tuple (packed, scales, head_dim, num_tokens) formats.
+            if len(entry) >= 4:
+                packed, scales, head_dim, _num_tokens = entry[0], entry[1], entry[2], entry[3]
+            elif len(entry) == 3:
+                packed, scales, head_dim = entry[0], entry[1], entry[2]
+            else:
+                packed, scales = entry[0], entry[1]
+                head_dim = 0
 
             # Try dequantization first — only pop on success.
             try:

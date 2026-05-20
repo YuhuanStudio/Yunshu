@@ -2109,6 +2109,7 @@ class EngineCore:
                                     request_id=sid,
                                     new_token_ids=req_output.new_token_ids,
                                     new_text=req_output.new_text,
+                                    output_token_ids=req_output.output_token_ids,
                                     output_text=req_output.output_text,
                                     completion_tokens=req_output.completion_tokens,
                                     finished=False,
@@ -2224,9 +2225,12 @@ class EngineCore:
                         state = self._lifecycle_orchestrator.get_state(rid)
                         if state is not None and state.phase.name in ("PREFILLING",):
                             self._lifecycle_orchestrator.on_decode_start(rid)
-                        # Bug 4 fix: use actual completion_tokens (not hardcoded 1)
-                        # During chunked prefill, multiple tokens are produced per step.
-                        budget_result = self._budget_manager.consume(rid, tokens=req_output.completion_tokens)
+                        # Use incremental token count (new_token_ids length), not
+                        # cumulative completion_tokens.  completion_tokens is the
+                        # total generated so far; feeding it to consume() on every
+                        # step would over-count by 1+2+3+...+N instead of N.
+                        _incr_tokens = len(req_output.new_token_ids) if req_output.new_token_ids else 1
+                        budget_result = self._budget_manager.consume(rid, tokens=_incr_tokens)
                         if budget_result is not None:
                             # Budget exhausted — abort request so scheduler stops generating
                             logger.info(f"Budget exhausted for {rid}: {budget_result}")
@@ -2406,11 +2410,13 @@ class EngineCore:
                     if _est_itl_ms > 0:
                         self._slo_monitor.check_slo("itl", _est_itl_ms)
                     self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
-                    # Fairness tracker
+                    # Fairness tracker: use incremental tokens (new_token_ids length)
+                    # not cumulative completion_tokens, which grows every step.
                     for req_output in scheduler_output.outputs:
+                        _alloc = len(req_output.new_token_ids) if req_output.new_token_ids else 1
                         self._fairness_tracker.record_allocation(
                             req_output.request_id,
-                            tokens_allocated=req_output.completion_tokens or 1,
+                            tokens_allocated=_alloc,
                         )
                 except Exception:
                     logger.debug("profiler/auto-tuner failed", exc_info=True)
@@ -2713,7 +2719,12 @@ class EngineCore:
                 ))
                 collector.put(None)
             self._signal_finished(sid)
-            self._cleanup_request(sid)
+            # Finalize scheduler-side resources (lifecycle, budget, KV) but
+            # do NOT call _cleanup_request here — that removes consumer-side
+            # state (collector, event) which the shadow's consumer (generate/
+            # stream_outputs) still needs to read the error output we just put.
+            # The consumer's finally block will call _cleanup_request.
+            self._finalize_request(sid)
 
     def _cleanup_request(self, request_id: str) -> None:
         """Remove per-request state (consumer-side entry point).

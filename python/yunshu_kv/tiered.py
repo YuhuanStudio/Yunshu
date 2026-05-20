@@ -272,6 +272,10 @@ class SSDCacheStore:
                     self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
                     del self._index[block_hash]
                     return None
+                # Update last_access on successful read so LRU eviction
+                # correctly tracks recency.  Without this, frequently-loaded
+                # blocks appear "stale" and get prematurely evicted.
+                entry.last_access = time.time()
                 import numpy as np
                 numpy_data = np.frombuffer(raw_bytes, dtype=np.float16).copy().reshape(shape)
                 return mx.array(numpy_data)
@@ -311,6 +315,9 @@ class SSDCacheStore:
             [e for e in self._index.values() if e.ref_count == 0],
             key=lambda e: e.last_access,
         )
+        if not sorted_entries:
+            # All entries have active refs — nothing eligible for eviction.
+            return
         to_evict = max(1, len(sorted_entries) // 10)
 
         # Collect entries to evict and update the in-memory index first.
@@ -631,9 +638,13 @@ class TieredKVCacheManager:
 
     def get_stats(self) -> dict:
         """Return combined stats from all tiers."""
+        total_blocks = self.hot.block_pool.num_blocks - 1  # exclude null block
+        free_blocks = self.hot.num_free_blocks
         stats = {
             "hot_usage_pct": round(self.hot.usage * 100, 1),
-            "hot_free_blocks": self.hot.num_free_blocks,
+            "hot_total_blocks": total_blocks,
+            "hot_blocks_in_use": total_blocks - free_blocks,
+            "hot_free_blocks": free_blocks,
             "hot_block_size": self.hot.block_size,
         }
         if self.warm:
@@ -704,6 +715,9 @@ class BackgroundSSDFlush:
         for block_hash, entry in entries:
             packed, scales = entry[0], entry[1]
             head_dim = entry[2] if len(entry) > 2 else 0
+            # Recover num_tokens from the 4-tuple stored by demote().
+            # Falls back to 0 for entries written by older code (3-tuple).
+            num_tokens = entry[3] if len(entry) > 3 else 0
             if head_dim == 0:
                 continue
             if not self._ssd.contains(block_hash):
@@ -711,7 +725,7 @@ class BackgroundSSDFlush:
                     import numpy as np
                     from .compression import dequantize_kv_4bit
                     kv_data = dequantize_kv_4bit(packed, scales, head_dim=head_dim)
-                    self._ssd.store(block_hash, mx.array(kv_data), num_tokens=0)
+                    self._ssd.store(block_hash, mx.array(kv_data), num_tokens=num_tokens)
                     flushed += 1
                 except Exception as e:
                     logger.debug(

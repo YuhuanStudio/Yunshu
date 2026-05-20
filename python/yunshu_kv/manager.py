@@ -582,7 +582,7 @@ class KVCacheManager:
                         kv_packed = mx.stack([key_slice, val_slice], axis=0)
                     else:
                         kv_packed = key_slice
-                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed)
+                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed, num_tokens=self.config.block_size)
                 except Exception:
                     logger.debug("warm tier demote failed in evict_for_memory", exc_info=True)
 
@@ -682,7 +682,7 @@ class KVCacheManager:
                         kv_packed = mx.stack([key_slice, val_slice], axis=0)
                     else:
                         kv_packed = key_slice
-                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed)
+                    demoted_ok = self._warm_tier.demote(block.block_hash, kv_packed, num_tokens=self.config.block_size)
                 except Exception:
                     logger.debug("warm tier demote failed in memory_pressure_evict", exc_info=True)
 

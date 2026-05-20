@@ -2046,6 +2046,7 @@ class BatchedEngine:
                     logger.debug("Thinking segment lookup failed", exc_info=True)
 
             gen_t0 = time.perf_counter()
+            _timeout_deadline = gen_t0 + timeout_seconds
             first = True
             _itl_samples: list[float] = []
             _last_tok_time = 0.0
@@ -2077,8 +2078,17 @@ class BatchedEngine:
                         _stopped_by_stop_id = True
                     else:
                         detokenizer.add_token(first_token)
+                        # Check stop suffix on first_token (was missing)
+                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            tokens.pop()
+                            _stopped_by_suffix = True
+                        else:
+                            # Check if first_token starts a thinking segment
+                            if think_start_token is not None and first_token == think_start_token:
+                                _in_thinking = True
+                                _thinking_tokens = []
                     remaining = max_tokens - 1
-                    if remaining > 0 and first_token not in stop_ids:
+                    if remaining > 0 and first_token not in stop_ids and not _stopped_by_suffix:
                         for token, logits in generate_step(
                             mx.array([first_token]).reshape(1, -1), model,
                             max_tokens=remaining, sampler=sampler,
@@ -2093,8 +2103,8 @@ class BatchedEngine:
                                 tokens.pop()
                                 _stopped_by_stop_id = True
                                 break
+                            detokenizer.add_token(token)
                             if stop_suffixes:
-                                detokenizer.add_token(token)
                                 if any(detokenizer.text.endswith(s) for s in stop_suffixes):
                                     tokens.pop()  # Exclude suffix-triggering token from count
                                     _stopped_by_suffix = True
@@ -2104,13 +2114,29 @@ class BatchedEngine:
                             if _is_cancelled(cancel_event):
                                 mx.synchronize()
                                 break
-                            # Thinking budget enforcement (same as main loop)
+                            # Timeout check (was missing — SpecPrefill could run indefinitely)
+                            if len(tokens) % 32 == 0 and time.perf_counter() > _timeout_deadline:
+                                logger.warning(f"SpecPrefill generation timed out after {timeout_seconds}s ({len(tokens)} tokens)")
+                                break
+                            # Track thinking segment boundaries BEFORE budget check
+                            # (was missing — thinking mode was non-functional in SpecPrefill)
+                            if think_start_token is not None:
+                                if not _in_thinking and token == think_start_token:
+                                    _in_thinking = True
+                                    _thinking_tokens = []
+                                elif _in_thinking:
+                                    _thinking_tokens.append(token)
+                                    if token == think_end_token:
+                                        _in_thinking = False
+                            # Thinking budget enforcement (same as main loop).
+                            # Only force-append think_end_token if the current token
+                            # is NOT already the natural closing tag (avoids duplicate).
                             if thinking_budget is not None and _in_thinking:
                                 thinking_tokens_used += 1
                                 if thinking_tokens_used >= thinking_budget and think_end_token is not None:
-                                    _thinking_tokens.append(token)
                                     _in_thinking = False
-                                    tokens.append(think_end_token)
+                                    if token != think_end_token:
+                                        tokens.append(think_end_token)
                                     break
                     cleanup_rope(model)
                     spec_prefill_done = True
@@ -2123,7 +2149,6 @@ class BatchedEngine:
                     first = True
 
             if not spec_prefill_done:
-                _timeout_deadline = gen_t0 + timeout_seconds
                 _timeout_check_interval = 32
                 with _wired_limit_ctx(model):
                     for token, logits in generate_step(
@@ -2192,18 +2217,9 @@ class BatchedEngine:
                         if _is_cancelled(cancel_event):
                             mx.synchronize()
                             break
-                        # Thinking budget enforcement: cap thinking tokens
-                        if thinking_budget is not None and _in_thinking:
-                            thinking_tokens_used += 1
-                            if thinking_tokens_used >= thinking_budget and think_end_token is not None:
-                                _thinking_tokens.append(token)
-                                _in_thinking = False
-                                # Add forced closing tag to tokens so it appears in
-                                # tokenizer.decode(tokens) output (non-streaming path).
-                                tokens.append(think_end_token)
-                                break
-
-                        # Track thinking segment boundaries
+                        # Track thinking segment boundaries BEFORE budget check
+                        # so that a natural </think token is detected first and
+                        # the budget enforcement does not append a duplicate.
                         if think_start_token is not None:
                             if not _in_thinking and token == think_start_token:
                                 _in_thinking = True
@@ -2214,6 +2230,19 @@ class BatchedEngine:
                                 if token == think_end_token:
                                     _in_thinking = False
                                     self._lookahead_reasoning.check_thinking_state_text("</think")
+
+                        # Thinking budget enforcement: cap thinking tokens.
+                        # Only force-append think_end_token if the current token
+                        # is NOT already the natural closing tag (avoids duplicate).
+                        if thinking_budget is not None and _in_thinking:
+                            thinking_tokens_used += 1
+                            if thinking_tokens_used >= thinking_budget and think_end_token is not None:
+                                _in_thinking = False
+                                # Add forced closing tag to tokens so it appears in
+                                # tokenizer.decode(tokens) output (non-streaming path).
+                                if token != think_end_token:
+                                    tokens.append(think_end_token)
+                                break
 
             # Cache the completed KV state for future prefix matching
             # Quantize cache layers to save memory (mlx-lm pattern)
@@ -3227,7 +3256,22 @@ class BatchedEngine:
                     # Exclude stop/suffix-triggering token from completion count
                     if stop_hit or suffix_hit:
                         n_tok -= 1
-                    # Thinking budget enforcement in streaming
+                    # Track thinking segment boundaries BEFORE budget check
+                    # so that a natural </think token is detected first and
+                    # the budget enforcement does not append a duplicate.
+                    if think_start_token is not None:
+                        if not _in_thinking and token == think_start_token:
+                            _in_thinking = True
+                            _thinking_tokens = []
+                            self._lookahead_reasoning.check_thinking_state_text("<think")
+                        elif _in_thinking:
+                            _thinking_tokens.append(token)
+                            if token == think_end_token:
+                                _in_thinking = False
+                                self._lookahead_reasoning.check_thinking_state_text("</think")
+                    # Thinking budget enforcement in streaming.
+                    # Only force-append think_end_token + add to detokenizer
+                    # if the current token is NOT already the natural closing tag.
                     if thinking_budget is not None and _in_thinking:
                         thinking_tokens_used += 1
                         if thinking_tokens_used >= thinking_budget and think_end_token is not None:
@@ -3236,12 +3280,13 @@ class BatchedEngine:
                             # Emit current token's text first (still reasoning content)
                             if new_text:
                                 _put((new_text, n_tok, None, len(_thinking_tokens), _lp_entry, "reasoning"))
-                            # Then emit closing think tag
-                            n_tok += 1  # Count the forced closing tag token
-                            detokenizer.add_token(think_end_token)
-                            _end_text = detokenizer.last_segment
-                            if _end_text:
-                                _put((_end_text, n_tok, None, len(_thinking_tokens), None, "reasoning"))
+                            # Only force-emit closing tag if the token isn't already it
+                            if token != think_end_token:
+                                n_tok += 1  # Count the forced closing tag token
+                                detokenizer.add_token(think_end_token)
+                                _end_text = detokenizer.last_segment
+                                if _end_text:
+                                    _put((_end_text, n_tok, None, len(_thinking_tokens), None, "reasoning"))
                             # Store thinking segment before returning
                             if _thinking_tokens and self._thinking_store is not None:
                                 _store_thinking_segment(ids, _thinking_tokens, self._thinking_store, kv_cache=cache)
@@ -3259,17 +3304,6 @@ class BatchedEngine:
                                 _prefill_tracker.remove(_prefill_req_id)
                             _unregister_inflight()
                             return
-                    # Track thinking segment boundaries in streaming
-                    if think_start_token is not None:
-                        if not _in_thinking and token == think_start_token:
-                            _in_thinking = True
-                            _thinking_tokens = []
-                            self._lookahead_reasoning.check_thinking_state_text("<think")
-                        elif _in_thinking:
-                            _thinking_tokens.append(token)
-                            if token == think_end_token:
-                                _in_thinking = False
-                                self._lookahead_reasoning.check_thinking_state_text("</think")
                     _is_stopping = stop_hit or suffix_hit
                     _cur_state = "reasoning" if _in_thinking else "normal"
                     if _is_stopping:
