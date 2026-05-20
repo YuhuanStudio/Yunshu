@@ -761,6 +761,10 @@ def _find_tts_engine() -> "TTSEngine | None":
 _whisper_model_cache = None
 _whisper_model_lock = threading.Lock()
 
+# ── Kokoro model cache for synthesis fallback ────────────────────────────────
+_kokoro_model_cache = None
+_kokoro_model_lock = threading.Lock()
+
 
 async def transcribe(audio_path: str, language: str | None = None) -> dict[str, Any]:
     """Transcribe an audio file using the best available ASR engine.
@@ -883,8 +887,19 @@ async def synthesize(
     try:
         from mlx_audio.tts.utils import load_model as _load_tts  # type: ignore[import-untyped]
 
+        def _get_kokoro_model():
+            global _kokoro_model_cache
+            if _kokoro_model_cache is not None:
+                return _kokoro_model_cache
+            with _kokoro_model_lock:
+                if _kokoro_model_cache is None:
+                    _kokoro_model_cache = _load_tts(
+                        "mlx-community/kokoro-82m", strict=False
+                    )
+                return _kokoro_model_cache
+
         def _sync_synth() -> bytes:
-            model = _load_tts("mlx-community/kokoro-82m", strict=False)
+            model = _get_kokoro_model()
             gen_kwargs: dict[str, Any] = {"text": text, "verbose": False}
             sr = getattr(model, "sample_rate", DEFAULT_SAMPLE_RATE)
             results = model.generate(**gen_kwargs)

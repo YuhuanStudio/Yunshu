@@ -421,12 +421,6 @@ class DisaggRouter:
             if role == NodeRole.HYBRID:
                 node.active_prefills = max(0, node.active_prefills - 1)
                 node.active_decodes = max(0, node.active_decodes - 1)
-            elif node.active_prefills > 0 and node.active_decodes > 0:
-                # Node was used as HYBRID (both counters inflated by
-                # route_request fallback), but caller passed the original
-                # intended role.  Decrement both to match the increment.
-                node.active_prefills = max(0, node.active_prefills - 1)
-                node.active_decodes = max(0, node.active_decodes - 1)
             elif role == NodeRole.PREFILL:
                 node.active_prefills = max(0, node.active_prefills - 1)
             elif role == NodeRole.DECODE:

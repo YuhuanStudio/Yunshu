@@ -660,11 +660,19 @@ class ModelManager:
         Caller MUST hold ``self._lock``.
         """
         active = mx.get_active_memory()
-        max_ws = mx.metal.get_memory_info()
-        if hasattr(max_ws, "max_recommended_working_set_size"):
+        try:
+            max_ws = mx.metal.get_memory_info()
+        except AttributeError:
+            try:
+                max_ws = mx.metal.device_info()
+            except AttributeError:
+                max_ws = None
+        limit = 0
+        if isinstance(max_ws, dict):
+            limit = int(max_ws.get("max_recommended_working_set_size", 0))
+        elif hasattr(max_ws, "max_recommended_working_set_size"):
             limit = int(max_ws.max_recommended_working_set_size)
-        else:
-            # Fallback: use 75% of system memory as working-set estimate
+        if limit <= 0:
             from .utils.hardware import get_total_memory_bytes
             limit = int(get_total_memory_bytes() * 0.75)
 

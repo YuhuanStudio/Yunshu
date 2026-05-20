@@ -1878,6 +1878,44 @@ class BatchedEngine:
                 except Exception:
                     logger.debug("model preprocessor failed, using raw prompt", exc_info=True)
 
+        # ── Pre-encoding context window truncation (message-level) ──
+        # When prompt is a list of message dicts, use ContextWindowManager to
+        # truncate at the message level BEFORE applying the chat template.
+        # This preserves system prompts — the engine-loop path does the same.
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            try:
+                _max_ctx_pre = getattr(model, 'max_seq_len', None)
+                if _max_ctx_pre is None:
+                    _max_ctx_pre = getattr(
+                        getattr(model, 'config', None), 'max_seq_len', None
+                    ) or getattr(
+                        getattr(model, 'args', None), 'max_seq_len', None
+                    )
+                if _max_ctx_pre and _max_ctx_pre > 0:
+                    _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+                    _generation_budget = max_tokens + _thinking_overhead
+                    _est_tokens = sum(
+                        len(str(m.get("content", ""))) // 4 + 4
+                        for m in prompt
+                    )
+                    if _est_tokens + _generation_budget > _max_ctx_pre:
+                        from .context_window import ContextWindowManager
+                        ctx_mgr = ContextWindowManager(
+                            token_counter=lambda text: len(tokenizer.encode(text)),
+                        )
+                        result = ctx_mgr.compute_truncation(
+                            messages=prompt,
+                            max_tokens=_max_ctx_pre - _generation_budget,
+                            strategy="importance_aware",
+                        )
+                        prompt = result.messages
+                        logger.debug(
+                            "Fast path pre-encode truncation: estimated %d → %d tokens",
+                            _est_tokens, result.truncated_token_count,
+                        )
+            except Exception:
+                logger.debug("context window truncation skipped in fast path", exc_info=True)
+
         # Encode prompt
         if isinstance(prompt, str):
             text = prompt
@@ -1892,24 +1930,18 @@ class BatchedEngine:
         input_ids = tokenizer.encode(text)
         prompt_tokens = len(input_ids)
 
-        # Guard against empty prompt: tokenizer.encode("") may return []
-        # which causes generate_step to produce zero tokens. Inject BOS token
-        # as a minimal prompt so the model can still generate.
         if not input_ids:
             bos_id = getattr(tokenizer, 'bos_token_id', None)
             if bos_id is not None:
                 input_ids = [bos_id]
             else:
-                # Use EOS as fallback — the model will likely stop immediately
-                # but at least we won't crash with an empty tensor
                 eos_id = getattr(tokenizer, 'eos_token_id', 1)
                 input_ids = [eos_id]
             prompt_tokens = len(input_ids)
 
-        # ── Context window truncation (fast path) ──
-        # The engine-loop path does this at add_request(), but the fast
-        # path bypasses that. Truncate from the left to keep the most
-        # recent context and leave room for generation tokens.
+        # ── Context window truncation (token-level safety net) ──
+        # For string prompts, left-truncate tokens. Message-level prompts
+        # should already be truncated above, but this serves as a safety net.
         _max_ctx = getattr(model, 'max_seq_len', None)
         if _max_ctx is None:
             _max_ctx = getattr(
@@ -3050,6 +3082,41 @@ class BatchedEngine:
             except Exception:
                 logger.debug("model preprocessor failed in streaming", exc_info=True)
 
+        # ── Pre-encoding context window truncation (message-level) ──
+        if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
+            try:
+                _max_ctx_pre = getattr(model, 'max_seq_len', None)
+                if _max_ctx_pre is None:
+                    _max_ctx_pre = getattr(
+                        getattr(model, 'config', None), 'max_seq_len', None
+                    ) or getattr(
+                        getattr(model, 'args', None), 'max_seq_len', None
+                    )
+                if _max_ctx_pre and _max_ctx_pre > 0:
+                    _thinking_overhead = thinking_budget if (thinking_budget and enable_thinking) else 0
+                    _generation_budget = max_tokens + _thinking_overhead
+                    _est_tokens = sum(
+                        len(str(m.get("content", ""))) // 4 + 4
+                        for m in prompt
+                    )
+                    if _est_tokens + _generation_budget > _max_ctx_pre:
+                        from .context_window import ContextWindowManager
+                        ctx_mgr = ContextWindowManager(
+                            token_counter=lambda text: len(tokenizer.encode(text)),
+                        )
+                        result = ctx_mgr.compute_truncation(
+                            messages=prompt,
+                            max_tokens=_max_ctx_pre - _generation_budget,
+                            strategy="importance_aware",
+                        )
+                        prompt = result.messages
+                        logger.debug(
+                            "Streaming fast path pre-encode truncation: estimated %d → %d tokens",
+                            _est_tokens, result.truncated_token_count,
+                        )
+            except Exception:
+                logger.debug("context window truncation skipped in streaming fast path", exc_info=True)
+
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             tpl_kwargs = {"tokenize": False, "add_generation_prompt": True}
             if enable_thinking is not None:
@@ -3069,10 +3136,7 @@ class BatchedEngine:
                 input_ids = [eos_id]
             prompt_tokens = len(input_ids)
 
-        # ── Context window truncation (streaming fast path) ──
-        # The engine-loop path does this at add_request(), but the
-        # streaming fast path bypasses that. Truncate from the left to
-        # keep the most recent context and leave room for generation.
+        # ── Context window truncation (token-level safety net) ──
         _max_ctx = getattr(model, 'max_seq_len', None)
         if _max_ctx is None:
             _max_ctx = getattr(
@@ -7173,8 +7237,9 @@ class BatchedEngine:
 
 def _clean_special_tokens(text: str) -> str:
     """Remove special tokens from output (oMLX pattern)."""
+    if not text:
+        return ""
     import re
-    # Remove common special tokens that may leak from chat templates
     text = re.sub(r'<\|im_end\|>', '', text)
     text = re.sub(r'<\|endoftext\|>', '', text)
     text = re.sub(r'<\|end\|>', '', text)

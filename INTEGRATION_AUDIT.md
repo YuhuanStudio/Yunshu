@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–322: 37 waves, 745+ bugs fixed. Latest: Wave 322 — 4-agent audit, 12+ bugs (engine_core InvalidStateError, kv_transfer infinite retry, radix block_hashes desync, grammar checkpoint loss, thinking_budget segment reset, staged_pipeline thread safety), 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–323: 38 waves, 763+ bugs fixed. Latest: Wave 323 — context window truncation (dual-path), disagg counter heuristic, TTS caching, model_manager fallback, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,25 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 322–323 — 8 agents, 18+ bugs: engine_core InvalidStateError, kv_transfer infinite retry, radix block_hashes desync, grammar checkpoint loss, context window truncation, disagg counter heuristic, TTS model caching)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| engine_core poll→done guard | _get_task.result() 在 task 未完成時呼叫 — continue + if-in-done guard | InvalidStateError (HIGH) |
+| engine_core shadow dedup guard | _finalize_request 檢查 shadow 存在才 remove_finished_request | KeyError 崩潰 (HIGH) |
+| kv_transfer infinite retry | TimeoutError 連續計數器 (max 3) 替代無限 continue | 無限重試掛死 (HIGH) |
+| radix_attention block_hashes desync | _try_merge_unlocked 同時去重 blocks + block_hashes (zip) | KV 一致性損壞 (HIGH) |
+| grammar_bitmask checkpoint loss | rollback() peek checkpoint 而非 pop — pop 在成功 rollback 之後 | 狀態不可恢復 (HIGH) |
+| thinking_budget segment reset | 新 segment 開始重置 _budget_exceeded=False | 思考預算持久化錯誤 (HIGH) |
+| staged_pipeline thread safety | StageCache 加 threading.Lock | 併發損壞 (HIGH) |
+| scheduler_mixins p99 | 單次排序 + 正確索引 min(n-1, int(n*0.99)) | 統計錯誤 (MEDIUM) |
+| scheduler_mixins DataParallel | 跳過缺少 replica_id 的輸出而非預設 0 | 負載計算錯誤 (MEDIUM) |
+| batched_engine context window truncation | _generate_fast + _stream_generate_fast 雙路徑: pre-encoding importance_aware + post-encoding safety net | 超長 prompt 崩潰 (HIGH) |
+| model_manager memory info fallback | dict/AttributeError/get_total_memory_bytes 三層 fallback | 啟動崩潰 (HIGH) |
+| disagg_pd counter heuristic | 移除危險的 both-counters>0 啟發式 — 僅按 role 遞減 | 負載計數器漂移 (HIGH) |
+| audio_engine TTS model caching | _kokoro_model_cache + double-checked locking | 重複載入 (MEDIUM) |
+| batched_engine _clean_special_tokens | None/empty guard — if not text: return "" | TypeError (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 321 — 8 parallel agents, 30+ bugs: scheduler AttributeError CRITICAL, mesh deadlock, KV block leak, spec decode grammar, batch sampler NaN, hysteresis bypass)
 
