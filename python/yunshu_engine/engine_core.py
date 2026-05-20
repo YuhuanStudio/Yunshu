@@ -2462,7 +2462,19 @@ class EngineCore:
                     # ── Wave 42: Lifecycle decode tracking for active requests ──
                     for req_output in scheduler_output.outputs:
                         rid = req_output.request_id
-                        if not req_output.finished and req_output.completion_tokens > 0:
+                        if req_output.completion_tokens > 0:
+                            # Lifecycle: transition PREFILLING → DECODING on first
+                            # output token.  Must also fire for finished requests
+                            # (e.g. max_tokens=1 where the first token is the last)
+                            # so lifecycle state is accurate for metrics and TTFT.
+                            if rid not in self._finalized_ids:
+                                state = self._lifecycle_orchestrator.get_state(rid)
+                                if state is not None and state.phase.name in ("PREFILLING",):
+                                    self._lifecycle_orchestrator.on_decode_start(rid)
+                            # Skip budget/sliding-window work for finished requests —
+                            # their lifecycle ends at FINISHED, not DECODING.
+                            if req_output.finished:
+                                continue
                             # Guard: skip if this request was already finalized earlier
                             # in this step (e.g., budget exhaustion on a previous output
                             # for the same request when stream_interval > 1 produces
@@ -2470,9 +2482,6 @@ class EngineCore:
                             # "budget_not_found" and triggers duplicate error handling.
                             if rid in self._finalized_ids:
                                 continue
-                            state = self._lifecycle_orchestrator.get_state(rid)
-                            if state is not None and state.phase.name in ("PREFILLING",):
-                                self._lifecycle_orchestrator.on_decode_start(rid)
                             # Use incremental token count (new_token_ids length), not
                             # cumulative completion_tokens.  completion_tokens is the
                             # total generated so far; feeding it to consume() on every

@@ -411,6 +411,18 @@ class NgramProposer:
         if self._lcg_pool is not None:
             self._lcg_pool.clear()
 
+    def update(self, token_ids: list[int]) -> None:
+        """Incrementally index ngrams into the pool without proposing.
+
+        Useful for feeding accepted tokens back to the pool so the next
+        propose() benefits from fresh entries without re-scanning the
+        entire context from scratch.
+        """
+        if self._lcg_pool is not None:
+            self._lcg_pool.update(token_ids)
+        if self._hashpool is not None:
+            self._hashpool.update(token_ids)
+
     def batch_propose(self, batch_token_ids: list[list[int]]) -> list[list[int]]:
         """Propose draft tokens for a batch of requests."""
         return [self.propose(token_ids) for token_ids in batch_token_ids]

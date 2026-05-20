@@ -276,6 +276,20 @@ class SuffixProposer:
                 best_continuation = cont
                 break
 
+        # Fallback: search the full context_tokens (prompt + generated) to
+        # catch suffix matches that bridge the prompt/generated boundary.
+        # Without this, patterns that span the boundary are always missed
+        # because gen only contains generated tokens.
+        if not best_continuation:
+            for suffix_len in range(min(max_search, total), min_suffix - 1, -1):
+                suffix = context_tokens[-suffix_len:]
+                cont = self._find_suffix_in_history(
+                    suffix, context_tokens, max_draft,
+                )
+                if cont:
+                    best_continuation = cont
+                    break
+
         if best_continuation:
             self._total_hits += 1
             self._total_tokens_proposed += len(best_continuation)

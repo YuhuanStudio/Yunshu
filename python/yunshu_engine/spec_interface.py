@@ -171,6 +171,16 @@ class NgramStrategy(SpecStrategy):
                bonus_token: int | None = None) -> None:
         self._total_accepted += 1
         self._total_accepted_tokens += verified_up_to
+        # Feed accepted tokens back to the underlying proposer so it can
+        # incrementally index new ngram entries instead of waiting for the
+        # next propose() call to re-index the full context from scratch.
+        if verified_up_to > 0:
+            update_method = getattr(self._proposer, "update", None)
+            if update_method is not None:
+                accepted = draft_tokens[:verified_up_to]
+                if bonus_token is not None:
+                    accepted = accepted + [bonus_token]
+                update_method(accepted)
 
     def stats(self) -> dict:
         proposer_stats = self._proposer.get_stats()

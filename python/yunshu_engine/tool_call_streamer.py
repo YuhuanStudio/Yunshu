@@ -25,6 +25,12 @@ from enum import Enum, auto
 from typing import Optional
 
 
+class StreamFormat(Enum):
+    """Detected tool-call output format."""
+    XML = auto()            # <tool_call...>...</tool_call...>
+    DEEPSEEK_FUNCTION = auto()  # ✿FUNCTION✿ format
+
+
 class StreamState(Enum):
     """States for the tool call stream parser."""
     TEXT = auto()        # Normal text output
@@ -39,6 +45,9 @@ class StreamState(Enum):
 #   </tool_call/>   </tool_call\>   </tool_call >   </tool_call >
 TOOL_CALL_OPEN = "<tool_call"
 TOOL_CALL_CLOSE = "</tool_call"
+
+# DeepSeek alternative format marker
+DEEPSEEK_FUNCTION_MARKER = "✿FUNCTION✿"  # ✿FUNCTION✿
 
 
 @dataclass
@@ -96,6 +105,7 @@ class ToolCallStreamer:
         self._json_buffer_limit = json_buffer_limit
 
         self._state = StreamState.TEXT
+        self._format: StreamFormat = StreamFormat.XML
         self._buffer = ""
         self._json_buffer = ""  # Accumulated JSON inside tool call
         self._pending_json_text = ""  # Saved JSON when closing tag is split across tokens
@@ -119,10 +129,26 @@ class ToolCallStreamer:
         - If we were buffering and it turns out to be text, we flush
           the buffer as text and continue.
         - If a complete tool call is detected, we emit it.
+
+        Multi-format support: the streamer auto-detects the tool-call
+        format from the accumulated text.  Once a known marker is seen
+        the appropriate parsing mode is activated.
         """
+        # ── Multi-format detection (only while still in TEXT state) ──
+        if self._state == StreamState.TEXT:
+            # Check for DeepSeek ✿FUNCTION✿ marker in accumulated buffer
+            if self._format == StreamFormat.XML:
+                combined = self._buffer + token
+                if DEEPSEEK_FUNCTION_MARKER in combined:
+                    self._format = StreamFormat.DEEPSEEK_FUNCTION
+                    self._buffer = combined
+
         results: list[StreamOutput] = []
 
-        if self._state == StreamState.TEXT:
+        # ── Dispatch by detected format ──
+        if self._format == StreamFormat.DEEPSEEK_FUNCTION:
+            results.extend(self._handle_deepseek_function(token))
+        elif self._state == StreamState.TEXT:
             results.extend(self._handle_text_state(token))
         elif self._state == StreamState.TAG_START:
             results.extend(self._handle_tag_start_state(token))
@@ -348,6 +374,101 @@ class ToolCallStreamer:
 
         return results
 
+    # ── DeepSeek ✿FUNCTION✿ handler ──
+
+    def _handle_deepseek_function(self, token: str) -> list[StreamOutput]:
+        """Handle DeepSeek ✿FUNCTION✿ format tool calls.
+
+        Expected format:
+            ✿FUNCTION✿: function_name
+            ```json
+            {"arg": "value"}
+            ```
+            ✿RESULT✿
+
+        The buffer accumulates everything.  Once we see the closing
+        ``` after the JSON block we extract the function name and args.
+        """
+        results: list[StreamOutput] = []
+        self._buffer += token
+
+        # Look for completed JSON block: ```json\n{...}\n```
+        json_fence_start = self._buffer.find("```json")
+        if json_fence_start == -1:
+            json_fence_start = self._buffer.find("```")
+        if json_fence_start == -1:
+            # Still accumulating — check flush threshold on text before marker
+            marker_idx = self._buffer.find(DEEPSEEK_FUNCTION_MARKER)
+            if marker_idx > self._flush_threshold:
+                # Flush text before the marker
+                text = self._buffer[:marker_idx]
+                self._buffer = self._buffer[marker_idx:]
+                results.append(StreamOutput(text=text, state=self._state))
+            return results
+
+        # Extract function name from between marker and ```json
+        marker_end = self._buffer.find(DEEPSEEK_FUNCTION_MARKER) + len(DEEPSEEK_FUNCTION_MARKER)
+        header = self._buffer[marker_end:json_fence_start].strip()
+        # Header is like ": function_name" or just "function_name"
+        name = header.lstrip(": \n\r\t")
+
+        # Find the JSON body between ```json and closing ```
+        fence_after = json_fence_start
+        # skip past ```json or just ```
+        nl_after_fence = self._buffer.find("\n", fence_after)
+        if nl_after_fence == -1:
+            return results
+        json_start = nl_after_fence + 1
+
+        # Find closing ```
+        close_fence = self._buffer.find("```", json_start)
+        if close_fence == -1:
+            # JSON body still accumulating
+            return results
+
+        json_body = self._buffer[json_start:close_fence].strip()
+
+        # Parse the JSON
+        try:
+            args = json.loads(json_body)
+            args_str = json.dumps(args, ensure_ascii=False)
+        except json.JSONDecodeError:
+            # Attempt basic repair: add missing closing braces
+            repaired = json_body
+            open_curly = repaired.count("{") - repaired.count("}")
+            if open_curly > 0:
+                repaired += "}" * open_curly
+            try:
+                json.loads(repaired)
+                args_str = repaired
+            except (json.JSONDecodeError, ValueError):
+                args_str = "{}"
+
+        if name:
+            results.append(StreamOutput(
+                tool_call=ToolCallResult(
+                    id=self._next_call_id(),
+                    name=name,
+                    arguments=args_str,
+                ),
+                state=self._state,
+            ))
+
+        # Consume processed portion; keep any remaining text
+        remaining = self._buffer[close_fence + 3:]
+        self._buffer = ""
+
+        # Re-process remaining text in TEXT state for subsequent calls
+        if remaining:
+            # Stay in DeepSeek mode but process remaining through text handling
+            self._state = StreamState.TEXT
+            for out in self._handle_text_state(remaining):
+                results.append(out)
+            # If format was already detected, stay in DeepSeek mode
+            self._format = StreamFormat.DEEPSEEK_FUNCTION
+
+        return results
+
     def _parse_tool_json(self, json_text: str) -> Optional[ToolCallResult]:
         """Parse JSON from inside a <tool_call/>...</tool_call/> block.
 
@@ -472,6 +593,7 @@ class ToolCallStreamer:
     def reset(self) -> None:
         """Reset streamer state for reuse."""
         self._state = StreamState.TEXT
+        self._format = StreamFormat.XML
         self._buffer = ""
         self._json_buffer = ""
         self._pending_json_text = ""

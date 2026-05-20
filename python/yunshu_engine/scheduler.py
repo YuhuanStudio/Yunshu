@@ -493,7 +493,11 @@ class AttentionScoreTracker:
         decay = 0.95
         for i in range(num_blocks):
             score = decay ** (num_blocks - 1 - i)
-            scores[i] = scores.get(i, 0.0) + score
+            # Exponential moving average: decay old score, add new score.
+            # This gives recency-weighted scores instead of cumulative sums,
+            # which inverted eviction order for long-running requests (older
+            # blocks accumulated the highest scores over time).
+            scores[i] = scores.get(i, 0.0) * decay + score
             # Cap per-block score to prevent unbounded growth
             if scores[i] > 1000.0:
                 scores[i] = 1000.0
@@ -2098,6 +2102,14 @@ class Scheduler:
             self._detokenizers.pop(request.request_id, None)
             self._thinking_processors.pop(request.request_id, None)
             self._thinking_state.pop(request.request_id, None)
+            # Save chunked prefill progress before discarding, so the request
+            # can resume (not restart) when re-scheduled after preemption.
+            _pending_state = self._pending_prefill.get(request.request_id)
+            if _pending_state is not None:
+                request._prefill_progress = {
+                    "kv_cache": _pending_state.get("kv_cache"),
+                    "offset": _pending_state.get("offset", 0),
+                }
             self._pop_pending_prefill(request.request_id)
             self._cleanup_spec_state(request.request_id)
             # Clean up ITL tracking — stale _last_token_time causes a massive

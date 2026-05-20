@@ -69,6 +69,10 @@ class NgramSpecProposer(SpecProposer):
         from .ngram_proposer import NgramProposer
         self._proposer = NgramProposer(config)
         self._stats = {"proposals": 0, "accepted": 0, "total_draft": 0}
+        # Store last context from draft() so accept() can feed verified
+        # tokens back to the proposer incrementally instead of waiting
+        # for the next propose() call to re-index from scratch.
+        self._last_context: list[int] = []
 
     def begin(self, all_token_ids: list[int]) -> None:
         self._proposer.reset()
@@ -80,6 +84,7 @@ class NgramSpecProposer(SpecProposer):
         draft_ids = tokens[:effective_k]
         self._stats["proposals"] += 1
         self._stats["total_draft"] += len(draft_ids)
+        self._last_context = list(all_token_ids)
         return SpecProposal(
             token_ids=draft_ids,
             proposer_type="ngram",
@@ -88,6 +93,15 @@ class NgramSpecProposer(SpecProposer):
 
     def accept(self, n_accepted: int) -> None:
         self._stats["accepted"] += n_accepted
+        # Feed verified tokens back to the proposer's hash pool incrementally
+        # so it learns from accepted continuations without waiting for the
+        # next propose() call to re-index the entire context from scratch.
+        if n_accepted > 0 and self._last_context:
+            # Build the extended context with accepted tokens appended so
+            # the proposer can index new ngram entries at the boundary.
+            update_method = getattr(self._proposer, "update", None)
+            if update_method is not None:
+                update_method(self._last_context)
 
     @property
     def proposer_type(self) -> str:

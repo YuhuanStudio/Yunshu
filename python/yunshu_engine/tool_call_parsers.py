@@ -50,6 +50,50 @@ class ToolCallResult:
 
 # ── Format-specific parsers ──
 
+def _fix_json_arguments(raw: str) -> str:
+    """Try to fix common JSON issues in tool-call arguments.
+
+    If the text can be repaired, returns the repaired JSON string.
+    Otherwise returns ``"{}"`` (empty JSON object) so that ``arguments``
+    is always valid JSON per the OpenAI spec.
+    """
+    # 1. Quick attempt — maybe it is already valid
+    try:
+        json.loads(raw)
+        return raw
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    text = raw.strip()
+
+    # 2. Common fix: missing closing braces/brackets
+    open_curly = text.count("{") - text.count("}")
+    open_square = text.count("[") - text.count("]")
+    if open_curly > 0:
+        text += "}" * open_curly
+    if open_square > 0:
+        text += "]" * open_square
+
+    try:
+        json.loads(text)
+        return text
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 3. Common fix: unescaped inner double quotes (heuristic — only
+    #    attempt when the string is clearly a JSON object)
+    if text.startswith("{") and text.endswith("}"):
+        escaped = text.replace('\\"', '"')
+        try:
+            json.loads(escaped)
+            return escaped
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # 4. Give up — return empty JSON object
+    return "{}"
+
+
 def _extract_brace_block(text: str, start: int) -> str | None:
     """Extract a brace-balanced block from *text* starting at *start*.
 
@@ -139,7 +183,7 @@ def parse_deepseek_tool_calls(text: str) -> list[ToolCallResult]:
             args = json.loads(block)
             args_str = json.dumps(args, ensure_ascii=False)
         except json.JSONDecodeError:
-            args_str = block
+            args_str = _fix_json_arguments(block)
         results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
     return results
 
@@ -160,7 +204,7 @@ def parse_glm_tool_calls(text: str) -> list[ToolCallResult]:
             args = json.loads(block)
             args_str = json.dumps(args, ensure_ascii=False)
         except json.JSONDecodeError:
-            args_str = block
+            args_str = _fix_json_arguments(block)
         results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
     return results
 
@@ -181,7 +225,7 @@ def parse_llama_tool_calls(text: str) -> list[ToolCallResult]:
             args = json.loads(block)
             args_str = json.dumps(args, ensure_ascii=False)
         except json.JSONDecodeError:
-            args_str = block
+            args_str = _fix_json_arguments(block)
         results.append(ToolCallResult(id=f"call_{i}", name=name, arguments=args_str))
     return results
 
