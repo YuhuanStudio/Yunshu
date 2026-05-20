@@ -46,6 +46,11 @@ class BlockTable:
         """Append multiple blocks. All but the last appended block are full."""
         if not blocks:
             return
+        # Finalize the previous last block: if the table already had blocks,
+        # the old last block's partial occupancy must be promoted to a full
+        # block_size (same logic as append_block line 40-41).
+        if self._blocks:
+            self.total_tokens += self.block_size - self._last_block_occupancy
         # All appended blocks except the very last one are full.
         # The last appended block starts empty (occupancy 0).
         full_new = len(blocks) - 1

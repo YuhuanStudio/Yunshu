@@ -293,7 +293,15 @@ class _RegexDFA:
         return frozenset(closure)
 
     def _subset_construction(self) -> None:
-        """Convert NFA to DFA using subset construction algorithm."""
+        """Convert NFA to DFA using subset construction algorithm.
+
+        Uses a two-phase approach to handle large character sets
+        (NOT_LITERAL, negated IN, CATEGORY_NOT_*) efficiently:
+        1. Find all "small" char_sets and iterate those directly.
+        2. For large char_sets, intersect with a limited query range
+           (printable ASCII + common scripts) since valid_next_chars()
+           only ever queries characters within that range.
+        """
         start_closure = self._epsilon_closure(frozenset({self._nfa_start}))
         self._dfa_start = start_closure
 
@@ -301,14 +309,24 @@ class _RegexDFA:
         if start_closure & self._nfa_accept:
             self._dfa_accept_states.add(start_closure)
 
+        # Precompute the query range — characters that valid_next_chars()
+        # will ever ask about.  Expanding the full 1.1M-char Unicode range
+        # for NOT_LITERAL is pointless if we only ever query ~2k chars.
+        _QUERY_RANGE = set(range(1, 128))  # ASCII
+        _QUERY_RANGE.update(range(0x4E00, 0x4E00 + 500))  # CJK
+        _QUERY_RANGE.update(range(0xAC00, 0xAC00 + 100))  # Hangul
+        _QUERY_RANGE.update(range(0x3040, 0x30FF))  # Hiragana + Katakana
+        _QUERY_RANGE.update(range(0x0600, 0x0660))  # Arabic
+        _QUERY_RANGE.update(range(0x0E00, 0x0E50))  # Thai
+        _QUERY_RANGE.update(range(0x0900, 0x0970))  # Devanagari
+        _QUERY_RANGE.update(range(0x00C0, 0x0250))  # Latin Extended
+        _QUERY_RANGE.update(range(0x1F600, 0x1F6C8))  # Emoji
+        _QUERY_RANGE.add(ord('\n'))
+        _QUERY_RANGE.add(ord('\t'))
+        _QUERY_RANGE.add(ord('\r'))
+
         worklist = [start_closure]
         visited: set[frozenset[int]] = set()
-        # Collect all characters used in transitions
-        all_chars: set[int] = set()
-        for trans_list in self._nfa_transitions.values():
-            for char_set, _ in trans_list:
-                if char_set is not None:
-                    all_chars.update(char_set)
 
         while worklist:
             current = worklist.pop()
@@ -316,16 +334,30 @@ class _RegexDFA:
                 continue
             visited.add(current)
 
-            # For each character, compute the next DFA state
-            char_to_next: dict[int, set[int]] = {}
-
+            # Collect all transitions from NFA states in current DFA state
+            nfa_transitions: list[tuple[set[int] | None, int]] = []
             for nfa_state in current:
-                for char_set, target in self._nfa_transitions.get(nfa_state, []):
-                    if char_set is None:
-                        continue
-                    for ch in char_set:
-                        if ch in all_chars or True:  # Process all
-                            char_to_next.setdefault(ch, set()).add(target)
+                nfa_transitions.extend(self._nfa_transitions.get(nfa_state, []))
+
+            if not nfa_transitions:
+                continue
+
+            # Build char_to_next by iterating each char_set.
+            # For large char_sets (> 256 elements, typically from NOT_LITERAL
+            # or negated IN), intersect with _QUERY_RANGE first to avoid
+            # iterating 1.1M elements.
+            char_to_next: dict[int, set[int]] = {}
+            for char_set, target in nfa_transitions:
+                if char_set is None:
+                    continue
+                if len(char_set) > 256:
+                    # Intersect with query range — characters outside this
+                    # range are never queried, so omitting them is safe.
+                    effective = char_set & _QUERY_RANGE
+                else:
+                    effective = char_set
+                for ch in effective:
+                    char_to_next.setdefault(ch, set()).add(target)
 
             for ch, target_states in char_to_next.items():
                 next_dfa = self._epsilon_closure(frozenset(target_states))
@@ -532,10 +564,14 @@ class RegexConstraint:
         if self._done:
             return set()
 
-        # Cache hit: same accumulated text always produces the same valid set
+        # Cache hit: same accumulated text always produces the same valid set.
+        # Cap cache size to prevent unbounded growth during long generations.
+        _MAX_CACHE_SIZE = 256
         cache_key = self._text_buffer
         if cache_key in self._valid_chars_cache:
             return self._valid_chars_cache[cache_key]
+        if len(self._valid_chars_cache) >= _MAX_CACHE_SIZE:
+            self._valid_chars_cache.clear()
 
         # Build the set of character codepoints to test
         char_range = list(range(32, 127))  # printable ASCII

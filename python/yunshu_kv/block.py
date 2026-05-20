@@ -199,6 +199,7 @@ class BlockPool:
                     self._evict_cached_block_unlocked(block)
                 block.ref_count = 1
                 block.cache_only = False
+                block.last_access_time = 0.0  # clear stale LRU timestamp
             return blocks
 
     def touch(self, block: KVBlock) -> None:
@@ -263,10 +264,23 @@ class BlockPool:
                 ))
 
     def lookup_hash(self, block_hash: int) -> Optional[KVBlock]:
-        """Find a cached block by hash."""
+        """Find a cached block by hash.
+
+        Only returns blocks that are actively cached (ref_count > 0 or
+        cache_only).  A block with ref_count == 0 and cache_only == False
+        has been evicted or is in the free queue and must not be returned
+        — another thread may reallocate it at any moment.
+        """
         with self._lock:
             block = self._hash_to_block.get(block_hash)
             if block is not None:
+                # Stale entry: the block was evicted (hash cleared on the
+                # block object but the dict entry survived a race) or is in
+                # the free queue with no active references.  Returning it
+                # would give the caller a dangling reference that allocate()
+                # could hand to a different request.
+                if block.ref_count == 0 and not block.cache_only:
+                    return None
                 return block
             return None
 
@@ -341,7 +355,16 @@ class BlockPool:
             ValueError: If no free blocks are available for cloning.
         """
         with self._lock:
-            if block.ref_count <= 1:
+            if block.ref_count <= 0:
+                # Block is in the free queue (or fully unowned).  Returning it
+                # as "exclusive" would be wrong — another thread could allocate
+                # it at any moment, and the caller would corrupt the new owner's
+                # KV data.  Raise instead of silently returning a dangling ref.
+                raise ValueError(
+                    f"cow_block called on block {block.block_id} with "
+                    f"ref_count={block.ref_count} (block is not held by any request)"
+                )
+            if block.ref_count == 1:
                 return block
             if self.free_queue.num_free_blocks == 0:
                 raise ValueError(
@@ -404,7 +427,17 @@ class BlockPool:
                 orig_value_cache = value_cache
                 try:
                     import mlx.core as mx
-                    mx.eval(key_cache[new_block.block_id])
+                    # Materialize both source slices *before* copying so that
+                    # lazy MLX computations are resolved while the block pool
+                    # lock is NOT held (cow_block already released it).  If we
+                    # skip this, .at[].set() would capture lazy source views
+                    # that could reference freed/overwritten memory after the
+                    # source block is returned to the free queue.
+                    mx.eval(
+                        key_cache[old_block.block_id],
+                        value_cache[old_block.block_id],
+                        key_cache[new_block.block_id],
+                    )
                     if isinstance(key_cache, mx.array):
                         key_cache = key_cache.at[new_block.block_id].set(key_cache[old_block.block_id])
                         value_cache = value_cache.at[new_block.block_id].set(value_cache[old_block.block_id])

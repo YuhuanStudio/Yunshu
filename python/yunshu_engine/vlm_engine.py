@@ -315,7 +315,9 @@ class VLMEngine:
         # Per-image KV prefix cache state — maps image_hash to PromptCacheState.
         # When the same image appears with different text contexts, the KV cache
         # from the previous conversation is reused for the common image prefix.
+        # Thread-safe: accessed from MLX executor thread and async stop() path.
         self._kv_prefix_states: dict[str, Any] = {}
+        self._kv_prefix_lock = threading.Lock()
         self._kv_prefix_max_entries = 32
 
         # VLM cache stats (vision feature cache + KV prefix reuse)
@@ -527,7 +529,8 @@ class VLMEngine:
             except Exception:
                 logger.debug("vision cache cleanup during stop failed", exc_info=True)
         self._vlm_vision_cache_adapter = None
-        self._kv_prefix_states.clear()
+        with self._kv_prefix_lock:
+            self._kv_prefix_states.clear()
         self._multimodal_prefix_cache.clear()
         self._encoder_cache.clear()
         self._text_prompt_cache.clear()
@@ -845,6 +848,11 @@ class VLMEngine:
         has_images = bool(image_paths) and self._has_vision and self._is_vlm
         has_audio = bool(audio_paths) and self._is_vlm
 
+        # Capture event loop for thread-safe queue writes from executor thread.
+        # asyncio.Queue.put_nowait() is NOT thread-safe — must schedule puts
+        # via call_soon_threadsafe (same pattern as batched_engine.py).
+        _loop_for_queue = asyncio.get_running_loop()
+
         # Eagerly resolve detokenizer availability so the error handler can
         # safely reference it even if the try-block fails before the point
         # where it was previously assigned inside _stream_sync.
@@ -859,6 +867,25 @@ class VLMEngine:
             if isinstance(cancel_event, asyncio.Event):
                 return cancel_event._value
             return cancel_event.is_set()
+
+        # Thread-safe queue put for executor thread — asyncio.Queue is NOT
+        # safe to call from non-event-loop threads.  Wrap it so all
+        # put_nowait calls from the executor are routed through
+        # call_soon_threadsafe (same pattern as batched_engine.py).
+        import queue as _queue_mod
+
+        class _ThreadSafeQueue:
+            """Wraps asyncio.Queue with thread-safe put_nowait."""
+            def __init__(self, async_q, ev_loop):
+                self._q = async_q
+                self._loop = ev_loop
+            def put_nowait(self, item):
+                try:
+                    self._loop.call_soon_threadsafe(self._q.put_nowait, item)
+                except RuntimeError:
+                    pass  # event loop closed during shutdown
+
+        _safe_queue = _ThreadSafeQueue(queue, _loop_for_queue)
 
         def _stream_sync():
             nonlocal _has_detokenizer
@@ -878,7 +905,7 @@ class VLMEngine:
                         _re = kwargs.get('reasoning_effort')
                         if _re is not None:
                             _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(_re, 8192)
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, _safe_queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
                     return
 
                 input_ids = self._tokenize_with_cache(messages, enable_thinking=enable_thinking)
@@ -894,7 +921,7 @@ class VLMEngine:
                         _re = kwargs.get('reasoning_effort')
                         if _re is not None:
                             _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(_re, 8192)
-                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
+                    self._stream_vlm_text(input_ids, max_tokens, temperature, top_p, req_id, _safe_queue, top_k, min_p, stop, repetition_penalty, freq_p, pres_p, lb, json_schema=js, enable_thinking=enable_thinking, cancel_event=cancel_event, stop_token_ids=stop_token_ids, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
                     return
 
                 from mlx_lm.generate import generate_step
@@ -964,7 +991,7 @@ class VLMEngine:
                                 remaining = detokenizer.finalize()
                                 if remaining:
                                     _cancel_state = "reasoning" if _in_thinking else "normal"
-                                    queue.put_nowait(RequestOutput(
+                                    _safe_queue.put_nowait(RequestOutput(
                                         request_id=req_id,
                                         new_text=remaining,
                                         finish_reason=None,
@@ -973,7 +1000,7 @@ class VLMEngine:
                                     ))
                             except Exception:
                                 logger.debug("detokenizer finalize in cancel handler failed", exc_info=True)
-                        queue.put_nowait(RequestOutput(
+                        _safe_queue.put_nowait(RequestOutput(
                             request_id=req_id,
                             new_text="",
                             finish_reason="cancel",
@@ -1012,14 +1039,14 @@ class VLMEngine:
                         if has_detokenizer:
                             remaining = detokenizer.finalize()
                             if remaining:
-                                queue.put_nowait(RequestOutput(
+                                _safe_queue.put_nowait(RequestOutput(
                                     request_id=req_id,
                                     new_text=remaining,
                                     finish_reason=None,
                                     finished=False,
                                     current_state="reasoning" if _in_thinking else "normal",
                                 ))
-                        queue.put_nowait(RequestOutput(
+                        _safe_queue.put_nowait(RequestOutput(
                             request_id=req_id,
                             new_text="",
                             finish_reason="stop",
@@ -1068,14 +1095,14 @@ class VLMEngine:
                         prompt_tokens=_num_prompt_tokens,
                         current_state=_cur_state,
                     )
-                    queue.put_nowait(output)
+                    _safe_queue.put_nowait(output)
 
                     if finish_reason:
                         # Flush remaining bytes from detokenizer
                         if has_detokenizer:
                             remaining = detokenizer.finalize()
                             if remaining:
-                                queue.put_nowait(RequestOutput(
+                                _safe_queue.put_nowait(RequestOutput(
                                     request_id=req_id,
                                     new_text=remaining,
                                     finish_reason=None,
@@ -1088,7 +1115,7 @@ class VLMEngine:
                 if has_detokenizer:
                     remaining = detokenizer.finalize()
                     if remaining:
-                        queue.put_nowait(RequestOutput(
+                        _safe_queue.put_nowait(RequestOutput(
                             request_id=req_id,
                             new_text=remaining,
                             finish_reason=None,
@@ -1105,7 +1132,7 @@ class VLMEngine:
                     prompt_tokens=_num_prompt_tokens,
                     current_state=_final_state,
                 )
-                queue.put_nowait(output)
+                _safe_queue.put_nowait(output)
 
             except Exception as e:
                 logger.error(f"VLM stream error: {e}", exc_info=True)
@@ -1114,7 +1141,7 @@ class VLMEngine:
                     try:
                         remaining = detokenizer.finalize()
                         if remaining:
-                            queue.put_nowait(RequestOutput(
+                            _safe_queue.put_nowait(RequestOutput(
                                 request_id=req_id,
                                 new_text=remaining,
                                 finish_reason=None,
@@ -1123,7 +1150,7 @@ class VLMEngine:
                     except Exception:
                         logger.debug("detokenizer finalize in error handler failed", exc_info=True)
                 # Emit error output so the consumer can distinguish error from normal end
-                queue.put_nowait(RequestOutput(
+                _safe_queue.put_nowait(RequestOutput(
                     request_id=req_id,
                     new_text="",
                     finish_reason="error",
@@ -1132,12 +1159,13 @@ class VLMEngine:
                 ))
             finally:
                 try:
-                    queue.put_nowait(None)
+                    _safe_queue.put_nowait(None)
                 except Exception:
                     pass
 
         self._active_count += 1
         loop = asyncio.get_running_loop()
+
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
 
         try:
@@ -1212,18 +1240,14 @@ class VLMEngine:
         # Track vision feature cache hits/misses via adapter stats
         vc_stats_before = self._vision_cache.stats if self._vision_cache else {}
 
-        # Encoder cache lookup: check if we have cached encoder hidden states
-        # for this request. The encoder cache stores vision/audio encoder outputs
-        # keyed by a combination of image hash and request context.
+        # Encoder cache key for post-generation storage. We don't look up
+        # here because the actual encoder output reuse happens through the
+        # vision_cache adapter (passed via gen_kwargs["vision_cache"]).
+        # The encoder cache stores the raw encoder_outputs from vlm_generate's
+        # result object when available.
         _encoder_cache_key = None
         if image_hash is not None:
             _encoder_cache_key = f"vlm-{image_hash}"
-            cached_encoder = self._encoder_cache.get(_encoder_cache_key)
-            if cached_encoder is not None:
-                logger.debug(
-                    "VLM encoder cache hit for image %s — reusing encoder output",
-                    image_hash[:8],
-                )
 
         gen_kwargs: dict = {
             "max_tokens": max_tokens,
@@ -1261,15 +1285,12 @@ class VLMEngine:
                 self._vlm_vision_misses += 1
 
         # Store encoder output in encoder cache for future reuse.
-        # If vlm_generate produced a result with encoder_outputs, cache them
-        # so subsequent requests with the same image can skip re-encoding.
+        # Only store actual encoder_outputs from the result object.
+        # Do NOT store placeholder markers (True) — the vision_cache adapter
+        # already handles image feature caching, and storing fake markers
+        # wastes memory and creates misleading cache hit stats.
         if _encoder_cache_key is not None:
             encoder_output = getattr(result, 'encoder_outputs', None)
-            if encoder_output is None and hasattr(self._model, 'vision_tower'):
-                # For models with explicit vision_tower, store a marker that
-                # this image has been encoded successfully (actual features are
-                # in the vision_cache adapter). The encoder cache tracks TTL.
-                encoder_output = True
             if encoder_output is not None:
                 self._encoder_cache.put(_encoder_cache_key, encoder_output)
 
@@ -1595,12 +1616,6 @@ class VLMEngine:
         _encoder_cache_key = None
         if image_hash is not None:
             _encoder_cache_key = f"vlm-{image_hash}"
-            cached_encoder = self._encoder_cache.get(_encoder_cache_key)
-            if cached_encoder is not None:
-                logger.debug(
-                    "VLM stream encoder cache hit for image %s",
-                    image_hash[:8],
-                )
 
         sampler = make_sampler(temp=temperature, top_p=top_p, top_k=top_k if top_k > 0 else 0, min_p=min_p, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
         stop_suffixes = stop or []
@@ -1849,9 +1864,11 @@ class VLMEngine:
                     elif image_paths:
                         self._vlm_vision_misses += 1
 
-                # Store encoder output in encoder cache for streaming vision path
-                if _encoder_cache_key is not None and hasattr(self._model, 'vision_tower'):
-                    self._encoder_cache.put(_encoder_cache_key, True)
+                # Encoder cache: only store real encoder outputs, not markers.
+                # The vision_cache adapter already handles image feature caching.
+                # Do NOT store True markers — they waste memory and mislead stats.
+                # (Actual encoder_outputs would be captured from stream results
+                # if vlm_stream_generate exposed them.)
 
                 # After streaming, save KV prefix state for this image
                 if image_hash is not None:
@@ -2449,11 +2466,13 @@ class VLMEngine:
         Returns the PromptCacheState if one exists for this image, or None
         if this is the first time the image is seen. The caller should pass
         the state to mlx_vlm's stream_generate which will populate it.
+        Thread-safe: acquires _kv_prefix_lock.
         """
         if image_hash is None:
             return None
 
-        state = self._kv_prefix_states.get(image_hash)
+        with self._kv_prefix_lock:
+            state = self._kv_prefix_states.get(image_hash)
         if state is not None:
             self._vlm_kv_prefix_hits += 1
             return state
@@ -2462,16 +2481,21 @@ class VLMEngine:
         return None
 
     def _ensure_kv_prefix_state(self, image_hash: str) -> Any:
-        """Create a new PromptCacheState entry for this image hash."""
+        """Create a new PromptCacheState entry for this image hash.
+
+        Thread-safe: acquires _kv_prefix_lock to protect concurrent
+        reads/writes/evictions from the MLX executor thread.
+        """
         from mlx_vlm.generate import PromptCacheState
 
         state = PromptCacheState()
-        # Evict old entries if over limit
-        if len(self._kv_prefix_states) >= self._kv_prefix_max_entries:
-            keys = list(self._kv_prefix_states.keys())
-            for k in keys[:8]:
-                del self._kv_prefix_states[k]
-        self._kv_prefix_states[image_hash] = state
+        with self._kv_prefix_lock:
+            # Evict old entries if over limit
+            if len(self._kv_prefix_states) >= self._kv_prefix_max_entries:
+                keys = list(self._kv_prefix_states.keys())
+                for k in keys[:8]:
+                    del self._kv_prefix_states[k]
+            self._kv_prefix_states[image_hash] = state
         return state
 
     # ── Audio Extraction ──

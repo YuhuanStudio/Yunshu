@@ -2022,7 +2022,10 @@ class EngineCore:
             # Capture queue depth BEFORE scheduler step — the step may promote
             # waiting requests to running, so reading after underestimates
             # queue pressure reported to Prometheus.
-            _pre_step_queue_depth = len(self.scheduler.waiting)
+            try:
+                _pre_step_queue_depth = len(self.scheduler.waiting)
+            except Exception:
+                _pre_step_queue_depth = 0
 
             try:
                 # Cache hardware info once per step (avoid 3+ repeated syscalls per step)
@@ -2122,6 +2125,10 @@ class EngineCore:
 
                 # Run scheduler step on MLX executor thread
                 # §14.1: TBO takes priority when enabled; else C18 overlap; else plain
+                # _gpu_step_start isolates GPU kernel time from pre-step hooks
+                # (composition scheduler, priority inversion guard, token scheduling)
+                # so _last_step_wall_ms and ITL/TTFT estimates are accurate.
+                _gpu_step_start = time.monotonic()
                 if self._tbo_scheduler.config.enabled:
                     scheduler_output = await loop.run_in_executor(
                         self._executor, self._tbo_step,
@@ -2134,18 +2141,24 @@ class EngineCore:
                     scheduler_output = await loop.run_in_executor(
                         self._executor, self.scheduler.step
                     )
+                _gpu_step_ms = (time.monotonic() - _gpu_step_start) * 1000
 
                 # Wave 43: CompositionScheduler post_step hooks
-                if self._composition_scheduler is not None and scheduler_output.outputs:
+                if self._composition_scheduler is not None and hasattr(scheduler_output, 'outputs') and scheduler_output.outputs:
                     try:
                         self._composition_scheduler.post_step(self.scheduler, scheduler_output)
                     except Exception:
                         logger.debug("composition post_step failed", exc_info=True)
 
-                # AdaptiveBatchSizer: adjust batch size using ACTUAL step wall time
-                _step_wall_ms = (time.monotonic() - _step_start) * 1000
+                # AdaptiveBatchSizer: adjust batch size using ACTUAL GPU step wall time
+                # (not total step time including pre-step hooks)
+                _step_wall_ms = _gpu_step_ms
                 try:
-                    queue_depth = len(self.scheduler.waiting)
+                    # Use pre-step queue depth (captured before scheduler.step()
+                    # promoted waiting requests to running). Post-step queue depth
+                    # underestimates pressure and causes unnecessary batch size
+                    # reductions.
+                    queue_depth = _pre_step_queue_depth
                     if _hw_info is None:
                         from .utils.hardware import get_hardware_info as _ghw
                         _hw_info = _ghw()
@@ -2165,11 +2178,10 @@ class EngineCore:
 
                 # MON-2/4/5: Track monitoring gauges for Prometheus export
                 try:
-                    # _step_wall_ms measures GPU-bound scheduler.step() time only.
-                    # Use this for per-step wall time (TTFT/ITL estimation) but
-                    # accumulate total active time from _step_start to capture
-                    # output distribution + profiler overhead as well, otherwise
-                    # compute_utilization overestimates GPU fraction.
+                    # _step_wall_ms measures GPU-bound scheduler.step() time only
+                    # (set from _gpu_step_ms above). Total active time including
+                    # output distribution + profiler overhead is accumulated
+                    # separately from _step_start at the end of the loop.
                     self._last_step_wall_ms = _step_wall_ms
                     self._last_batch_size = len(scheduler_output.outputs) if hasattr(scheduler_output, 'outputs') else 0
                     self._last_queue_depth = _pre_step_queue_depth
@@ -2195,428 +2207,470 @@ class EngineCore:
                 await asyncio.sleep(0.1)
                 continue
 
-            # Bug 1 fix: guard against stale/uninitialized scheduler_output
-            if scheduler_output is None:
-                self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
-                continue
+            try:
+                # Bug 1 fix: guard against stale/uninitialized scheduler_output
+                if scheduler_output is None:
+                    self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
+                    continue
 
-            # Distribute outputs to per-request collectors
-            for req_output in scheduler_output.outputs:
-                try:
-                    rid = req_output.request_id
-                    collector = self._output_collectors.get(rid)
-                    if collector is None:
-                        continue
+                # Guard: scheduler_output must have 'outputs' attribute (defensive
+                # against TBO/overlap step returning non-standard types)
+                if not hasattr(scheduler_output, 'outputs'):
+                    logger.warning("scheduler_output missing 'outputs' attribute (type=%s), skipping post-step",
+                                   type(scheduler_output).__name__)
+                    self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
+                    continue
 
-                    # Output parser: extract reasoning/tool_calls from raw text
-                    # (output_parser.py parse_output — model-specific extraction)
-                    if req_output.finished and req_output.output_text:
-                        try:
-                            model_name = getattr(self.scheduler, 'model_id', None)
-                            parsed = self._parse_output(req_output.output_text, model_name)
-                            if parsed.reasoning and parsed.content != req_output.output_text:
-                                req_output.output_text = parsed.content
-                            if parsed.finish_reason:
-                                req_output.finish_reason = parsed.finish_reason
-                        except Exception:
-                            logger.debug("output parser failed", exc_info=True)
-
-                    if use_simple_streaming:
-                        collector.put(req_output)
-                    else:
-                        # Always put output to collector to prevent token loss
-                        # when stream_interval > 1.  The SSE emission layer
-                        # handles throttling — skipping here would discard
-                        # intermediate tokens permanently.
-                        collector.put(req_output)
-                        stream_state = self._stream_states.get(rid)
-                        if stream_state is not None:
-                            stream_state.mark_sent(req_output.completion_tokens)
-
-                    # Forward intermediate output to dedup shadow requests
-                    if not req_output.finished and self._request_dedup is not None:
-                        shadow_ids = [
-                            sid for sid, pid in self._dedup_shadows.items()
-                            if pid == rid
-                        ]
-                        for sid in shadow_ids:
-                            s_collector = self._output_collectors.get(sid)
-                            if s_collector is not None:
-                                from .request import RequestOutput as _RO
-                                s_collector.put(_RO(
-                                    request_id=sid,
-                                    # Bug fix: deep-copy mutable list fields so shadow
-                                    # collector doesn't share state with primary. Without
-                                    # this, _merge or downstream mutation would corrupt
-                                    # the primary's accumulated output.
-                                    new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
-                                    new_text=req_output.new_text,
-                                    output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
-                                    output_text=req_output.output_text,
-                                    completion_tokens=req_output.completion_tokens,
-                                    finished=False,
-                                    prompt_tokens=req_output.prompt_tokens,
-                                    logprobs=req_output.logprobs,
-                                    current_state=req_output.current_state,
-                                    reasoning_tokens=req_output.reasoning_tokens,
-                                    cached_tokens=req_output.cached_tokens,
-                                    prefill_progress=req_output.prefill_progress,
-                                ))
-
-                    if req_output.finished:
-                        self._num_requests_processed += 1
-                        # FairnessTracker: record completion before finalize pops timestamp
-                        _start_ts = self._request_timestamps.get(rid)
-                        if _start_ts is not None:
-                            try:
-                                self._fairness_tracker.record_completion(
-                                    rid, 0.0, time.monotonic() - _start_ts,
-                                )
-                            except Exception:
-                                logger.debug("fairness record_completion failed", exc_info=True)
-                        # Checkpoint: save final state for crash recovery
-                        if self._checkpoint_mgr is not None:
-                            try:
-                                from .checkpoint import InferenceState
-                                self._checkpoint_mgr.save(rid, InferenceState(
-                                    request_id=rid,
-                                    output_text=req_output.output_text or "",
-                                    position=req_output.prompt_tokens + req_output.completion_tokens,
-                                ))
-                            except Exception:
-                                logger.debug("checkpoint save failed", exc_info=True)
-                        # Dedup fan-out: deliver output to shadow requests before finalize
-                        if self._request_dedup is not None:
-                            content_hash = self._dedup_hashes.get(rid)
-                            if content_hash:
-                                all_ids = self._request_dedup.complete(content_hash)
-                                from .request import RequestOutput as _RO
-                                for shadow_id in all_ids:
-                                    if shadow_id == rid:
-                                        continue
-                                    shadow_collector = self._output_collectors.get(shadow_id)
-                                    if shadow_collector is not None:
-                                        shadow_output = _RO(
-                                            request_id=shadow_id,
-                                            # Bug fix: deep-copy mutable list fields to
-                                            # prevent shared-state corruption between
-                                            # primary and shadow collectors.
-                                            new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
-                                            new_text=req_output.new_text,
-                                            output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
-                                            output_text=req_output.output_text,
-                                            finished=True,
-                                            finish_reason=req_output.finish_reason,
-                                            prompt_tokens=req_output.prompt_tokens,
-                                            completion_tokens=req_output.completion_tokens,
-                                            logprobs=req_output.logprobs,
-                                            current_state=req_output.current_state,
-                                            reasoning_tokens=req_output.reasoning_tokens,
-                                            cached_tokens=req_output.cached_tokens,
-                                            prefill_progress=req_output.prefill_progress,
-                                        )
-                                        shadow_collector.put(shadow_output)
-                                        shadow_collector.put(None)  # sentinel
-                                        # Signal shadow finished — don't cleanup here,
-                                        # let the consumer's finally block handle it to
-                                        # avoid racing with the consumer reading the collector.
-                                        self._signal_finished(shadow_id)
-                        # Signal request completion before finalize so generate()
-                        # consumers waiting on the event can wake up.
-                        self._signal_finished(rid)
-                        # Finalize: release scheduler-side resources for this request
-                        self._finalize_request(
-                            rid,
-                            completion_tokens=req_output.completion_tokens,
-                            finish_reason=req_output.finish_reason or "stop",
-                        )
-                except Exception as _output_err:
-                    logger.error(
-                        "Output distribution error for %s: %s",
-                        getattr(req_output, 'request_id', '?'), _output_err,
-                        exc_info=True,
-                    )
-                    # Ensure the request is finalized even if distribution failed
-                    _rid = getattr(req_output, 'request_id', None)
-                    if _rid:
-                        # Put error output + sentinel into collector so
-                        # generate()/stream_outputs() consumers don't hang
-                        # forever waiting for output that will never arrive.
-                        _err_collector = self._output_collectors.get(_rid)
-                        if _err_collector is not None:
-                            try:
-                                from .request import RequestOutput
-                                _err_collector.put(RequestOutput(
-                                    request_id=_rid,
-                                    finished=True,
-                                    finish_reason="error",
-                                    error=f"Output distribution failed: {_output_err}",
-                                ))
-                                _err_collector.put(None)  # sentinel
-                            except Exception:
-                                logger.debug(
-                                    "error collector put failed for %s",
-                                    _rid, exc_info=True,
-                                )
-                        self._signal_finished(_rid)
-                        self._finalize_request(_rid)
-
-            # Update adaptive batch scheduler metrics
-            if scheduler_output.outputs:
-                # ── Wave 42: Lifecycle decode tracking for active requests ──
+                # Distribute outputs to per-request collectors
                 for req_output in scheduler_output.outputs:
-                    rid = req_output.request_id
-                    if not req_output.finished and req_output.completion_tokens > 0:
-                        # Guard: skip if this request was already finalized earlier
-                        # in this step (e.g., budget exhaustion on a previous output
-                        # for the same request when stream_interval > 1 produces
-                        # multiple outputs per step).  Without this, consume() returns
-                        # "budget_not_found" and triggers duplicate error handling.
-                        if rid in self._finalized_ids:
-                            continue
-                        state = self._lifecycle_orchestrator.get_state(rid)
-                        if state is not None and state.phase.name in ("PREFILLING",):
-                            self._lifecycle_orchestrator.on_decode_start(rid)
-                        # Use incremental token count (new_token_ids length), not
-                        # cumulative completion_tokens.  completion_tokens is the
-                        # total generated so far; feeding it to consume() on every
-                        # step would over-count by 1+2+3+...+N instead of N.
-                        _incr_tokens = len(req_output.new_token_ids) if req_output.new_token_ids else 1
-                        budget_result = self._budget_manager.consume(rid, tokens=_incr_tokens)
-                        if budget_result is not None:
-                            # Budget exhausted — abort request so scheduler stops generating
-                            logger.info(f"Budget exhausted for {rid}: {budget_result}")
-                            self.scheduler.abort_request(rid)
-                            from .request import RequestOutput as _RO
-                            _bc = self._output_collectors.get(rid)
-                            if _bc is not None:
-                                _bc.put(_RO(
-                                    request_id=rid,
-                                    finished=True,
-                                    finish_reason=budget_result,
-                                    error=f"Budget exhausted: {budget_result}",
-                                    prompt_tokens=req_output.prompt_tokens,
-                                    completion_tokens=req_output.completion_tokens,
-                                ))
-                                _bc.put(None)
-                            # Fail dedup shadows so their consumers don't hang
-                            if self._request_dedup is not None:
-                                _shadow_ids = [
-                                    sid for sid, pid in self._dedup_shadows.items()
-                                    if pid == rid
-                                ]
-                                for _sid in _shadow_ids:
-                                    _sc = self._output_collectors.get(_sid)
-                                    if _sc is not None:
-                                        _sc.put(_RO(
-                                            request_id=_sid,
-                                            finished=True,
-                                            finish_reason=budget_result,
-                                            error=f"Primary request {rid} budget exhausted",
-                                            prompt_tokens=req_output.prompt_tokens,
-                                            completion_tokens=req_output.completion_tokens,
-                                        ))
-                                        _sc.put(None)
-                                    self._signal_finished(_sid)
-                            self._signal_finished(rid)
-                            self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
-                            # Request is fully finalized — skip remaining per-output
-                            # processing (sliding window, lifecycle) to avoid operating
-                            # on a request whose scheduler state has already been
-                            # removed by abort_request + _finalize_request.
-                            continue
-                        # Sliding window tracking
-                        if self._sliding_window_mgr is not None:
-                            try:
-                                total_pos = req_output.prompt_tokens + req_output.completion_tokens
-                                evicted = self._sliding_window_mgr.on_new_token(
-                                    token_position=total_pos,
-                                    request_id=rid,
-                                )
-                                # Trim real KV cache for sliding window models.
-                                # When blocks slide out of the window, the KV cache
-                                # arrays must be trimmed to free memory and keep
-                                # attention computation correct.
-                                if evicted:
-                                    req = self.scheduler.running.get(rid)
-                                    if req is not None:
-                                        # Trim the per-request prompt cache (MLX KV arrays)
-                                        if req.prompt_cache is not None:
-                                            self._sliding_window_mgr.trim_kv_cache(
-                                                req.prompt_cache, request_id=rid,
-                                            )
-                                        # Invalidate prefix cache entries whose blocks
-                                        # have slid out of the window. Without this,
-                                        # new requests may get prefix cache hits with
-                                        # stale KV blocks that the model will never
-                                        # attend to.
-                                        prefix_cache = getattr(
-                                            self.scheduler, '_prefix_cache', None,
-                                        )
-                                        if prefix_cache is not None:
-                                            self._sliding_window_mgr.invalidate_prefix_cache(
-                                                prefix_cache, request_id=rid,
-                                            )
-                            except Exception:
-                                logger.debug("sliding window tracking failed", exc_info=True)
-
-                # Auto-checkpoint: save inference state periodically for crash recovery
-                if self._checkpoint_mgr is not None:
                     try:
-                        for req_output in scheduler_output.outputs:
-                            if not req_output.finished and req_output.completion_tokens > 0:
-                                if self._checkpoint_mgr.should_auto_checkpoint(
-                                    req_output.request_id,
-                                    req_output.completion_tokens,
-                                ):
-                                    from .checkpoint import InferenceState
-                                    self._checkpoint_mgr.save(
-                                        req_output.request_id,
-                                        InferenceState(
-                                            request_id=req_output.request_id,
-                                            position=req_output.prompt_tokens + req_output.completion_tokens,
-                                            generated_tokens=[],
-                                            output_text=getattr(req_output, 'output_text', ''),
-                                            model_name=getattr(self.scheduler, 'model_id', ''),
-                                        ),
-                                    )
-                    except Exception:
-                        logger.debug("auto-checkpoint failed", exc_info=True)
-
-                # ── Wave 42: Profiler + auto-tuner + fairness ──
-                try:
-                    batch_size = len(scheduler_output.outputs)
-                    _step_wall_ms = self._last_step_wall_ms
-                    # Per-step token count: each scheduler step produces 1 new token
-                    # per decode request (and possibly multiple for prefill).  Use
-                    # new_token_ids length (incremental) rather than cumulative
-                    # completion_tokens to avoid over-counting.
-                    _tokens_gen = sum(
-                        len(o.new_token_ids) for o in scheduler_output.outputs if o.new_token_ids
-                    )
-                    # Fallback: if new_token_ids is empty (some scheduler paths
-                    # don't populate it), use batch_size as a reasonable estimate.
-                    if _tokens_gen == 0 and batch_size > 0:
-                        _tokens_gen = batch_size
-                    _throughput = _tokens_gen / (_step_wall_ms / 1000) if _step_wall_ms > 0 else 0.0
-
-                    # Estimate per-step ITL from step wall time and tokens generated
-                    _est_itl_ms = 0.0
-                    if _tokens_gen > 0 and batch_size > 0:
-                        _est_itl_ms = _step_wall_ms / _tokens_gen
-
-                    # Estimate TTFT from requests that just transitioned from
-                    # PREFILLING to DECODING (completion_tokens > 0 and not yet
-                    # recorded in _ttft_done). This measures actual first-token
-                    # latency, not end-to-end request latency.
-                    _est_ttft_ms = 0.0
-                    _ttft_count = 0
-                    for o in scheduler_output.outputs:
-                        rid = getattr(o, 'request_id', None)
-                        if not rid or rid in self._ttft_done:
+                        rid = req_output.request_id
+                        collector = self._output_collectors.get(rid)
+                        if collector is None:
                             continue
-                        # Do NOT skip finished requests — a request that
-                        # finishes on its first decode step (e.g. max_tokens=1)
-                        # still has a valid TTFT that should be recorded.
-                        # Skipping it biases TTFT estimates upward.
-                        if getattr(o, 'completion_tokens', 0) > 0:
+
+                        # Output parser: extract reasoning/tool_calls from raw text
+                        # (output_parser.py parse_output — model-specific extraction)
+                        if req_output.finished and req_output.output_text:
+                            try:
+                                model_name = getattr(self.scheduler, 'model_id', None)
+                                parsed = self._parse_output(req_output.output_text, model_name)
+                                if parsed.reasoning and parsed.content != req_output.output_text:
+                                    req_output.output_text = parsed.content
+                                if parsed.finish_reason:
+                                    req_output.finish_reason = parsed.finish_reason
+                            except Exception:
+                                logger.debug("output parser failed", exc_info=True)
+
+                        if use_simple_streaming:
+                            collector.put(req_output)
+                        else:
+                            # Always put output to collector to prevent token loss
+                            # when stream_interval > 1.  The SSE emission layer
+                            # handles throttling — skipping here would discard
+                            # intermediate tokens permanently.
+                            collector.put(req_output)
+                            stream_state = self._stream_states.get(rid)
+                            if stream_state is not None:
+                                stream_state.mark_sent(req_output.completion_tokens)
+
+                        # Forward intermediate output to dedup shadow requests
+                        if not req_output.finished and self._request_dedup is not None:
+                            shadow_ids = [
+                                sid for sid, pid in self._dedup_shadows.items()
+                                if pid == rid
+                            ]
+                            for sid in shadow_ids:
+                                s_collector = self._output_collectors.get(sid)
+                                if s_collector is not None:
+                                    from .request import RequestOutput as _RO
+                                    s_collector.put(_RO(
+                                        request_id=sid,
+                                        # Bug fix: deep-copy mutable list fields so shadow
+                                        # collector doesn't share state with primary. Without
+                                        # this, _merge or downstream mutation would corrupt
+                                        # the primary's accumulated output.
+                                        new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
+                                        new_text=req_output.new_text,
+                                        output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
+                                        output_text=req_output.output_text,
+                                        completion_tokens=req_output.completion_tokens,
+                                        finished=False,
+                                        prompt_tokens=req_output.prompt_tokens,
+                                        logprobs=req_output.logprobs,
+                                        current_state=req_output.current_state,
+                                        reasoning_tokens=req_output.reasoning_tokens,
+                                        cached_tokens=req_output.cached_tokens,
+                                        prefill_progress=req_output.prefill_progress,
+                                    ))
+
+                        if req_output.finished:
+                            self._num_requests_processed += 1
+                            # FairnessTracker: record completion before finalize pops timestamp
                             _start_ts = self._request_timestamps.get(rid)
                             if _start_ts is not None:
-                                _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
-                                _ttft_count += 1
-                                self._ttft_done.add(rid)
-                    if _ttft_count > 0:
-                        _est_ttft_ms /= _ttft_count
-
-                    # GPU memory utilisation for bottleneck classification
-                    _gpu_mem_util = 0.0
-                    try:
-                        import mlx.core as mx
-                        active_mem = mx.get_active_memory()
-                        if _hw_info is None:
-                            from .utils.hardware import get_hardware_info as _ghw
-                            _hw_info = _ghw()
-                            _total_mem_bytes = _hw_info.total_memory_bytes
-                        _gpu_mem_util = active_mem / max(_total_mem_bytes, 1)
-                    except Exception:
-                        pass
-
-                    from .auto_tuner import StepMetrics
-                    step_metrics = StepMetrics(
-                        batch_size=batch_size,
-                        tokens_generated=_tokens_gen,
-                        wall_time_ms=_step_wall_ms,
-                        throughput_tok_s=_throughput,
-                        ttft_ms=_est_ttft_ms,
-                        itl_ms=_est_itl_ms,
-                        gpu_memory_util=_gpu_mem_util,
-                    )
-                    self._profiler.record_step(step_metrics)
-                    # Auto-tune every 100 steps
-                    if self._profiler._total_steps % 100 == 0:
-                        # Evaluate previous tuning decisions for regression
-                        for prev in self._auto_tuner._history[-1:]:
-                            if getattr(prev, 'after_metrics', None) is None and prev.before_metrics is not None:
-                                self._auto_tuner.evaluate_tuning(prev, step_metrics)
-                                break
-                        tuning_decisions = self._auto_tuner.auto_tune()
-                        if tuning_decisions:
-                            self._apply_tuning_to_config(tuning_decisions)
-                            logger.debug(f"AutoTuner applied: {[d.param_name for d in tuning_decisions]}")
-                    # SLO checks
-                    if _est_ttft_ms > 0:
-                        self._slo_monitor.check_slo("ttft", _est_ttft_ms)
-                    if _est_itl_ms > 0:
-                        self._slo_monitor.check_slo("itl", _est_itl_ms)
-                    # Only check throughput SLO when the system is active.
-                    # When idle (throughput=0 and no running requests), recording
-                    # a violation inflates the violation rate and triggers
-                    # spurious auto-tuning decisions.
-                    if step_metrics.throughput_tok_s > 0 or len(self.scheduler.running) > 0:
-                        self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
-                    # Fairness tracker: use incremental tokens (new_token_ids length)
-                    # not cumulative completion_tokens, which grows every step.
-                    for req_output in scheduler_output.outputs:
-                        _alloc = len(req_output.new_token_ids) if req_output.new_token_ids else 1
-                        self._fairness_tracker.record_allocation(
-                            req_output.request_id,
-                            tokens_allocated=_alloc,
+                                try:
+                                    self._fairness_tracker.record_completion(
+                                        rid, 0.0, time.monotonic() - _start_ts,
+                                    )
+                                except Exception:
+                                    logger.debug("fairness record_completion failed", exc_info=True)
+                            # Checkpoint: save final state for crash recovery
+                            if self._checkpoint_mgr is not None:
+                                try:
+                                    from .checkpoint import InferenceState
+                                    self._checkpoint_mgr.save(rid, InferenceState(
+                                        request_id=rid,
+                                        output_text=req_output.output_text or "",
+                                        position=req_output.prompt_tokens + req_output.completion_tokens,
+                                    ))
+                                except Exception:
+                                    logger.debug("checkpoint save failed", exc_info=True)
+                            # Dedup fan-out: deliver output to shadow requests before finalize
+                            if self._request_dedup is not None:
+                                content_hash = self._dedup_hashes.get(rid)
+                                if content_hash:
+                                    all_ids = self._request_dedup.complete(content_hash)
+                                    from .request import RequestOutput as _RO
+                                    for shadow_id in all_ids:
+                                        if shadow_id == rid:
+                                            continue
+                                        shadow_collector = self._output_collectors.get(shadow_id)
+                                        if shadow_collector is not None:
+                                            shadow_output = _RO(
+                                                request_id=shadow_id,
+                                                # Bug fix: deep-copy mutable list fields to
+                                                # prevent shared-state corruption between
+                                                # primary and shadow collectors.
+                                                new_token_ids=list(req_output.new_token_ids) if req_output.new_token_ids else req_output.new_token_ids,
+                                                new_text=req_output.new_text,
+                                                output_token_ids=list(req_output.output_token_ids) if req_output.output_token_ids else req_output.output_token_ids,
+                                                output_text=req_output.output_text,
+                                                finished=True,
+                                                finish_reason=req_output.finish_reason,
+                                                prompt_tokens=req_output.prompt_tokens,
+                                                completion_tokens=req_output.completion_tokens,
+                                                logprobs=req_output.logprobs,
+                                                current_state=req_output.current_state,
+                                                reasoning_tokens=req_output.reasoning_tokens,
+                                                cached_tokens=req_output.cached_tokens,
+                                                prefill_progress=req_output.prefill_progress,
+                                            )
+                                            shadow_collector.put(shadow_output)
+                                            shadow_collector.put(None)  # sentinel
+                                            # Signal shadow finished — don't cleanup here,
+                                            # let the consumer's finally block handle it to
+                                            # avoid racing with the consumer reading the collector.
+                                            self._signal_finished(shadow_id)
+                            # Signal request completion before finalize so generate()
+                            # consumers waiting on the event can wake up.
+                            self._signal_finished(rid)
+                            # Finalize: release scheduler-side resources for this request
+                            self._finalize_request(
+                                rid,
+                                completion_tokens=req_output.completion_tokens,
+                                finish_reason=req_output.finish_reason or "stop",
+                            )
+                    except Exception as _output_err:
+                        logger.error(
+                            "Output distribution error for %s: %s",
+                            getattr(req_output, 'request_id', '?'), _output_err,
+                            exc_info=True,
                         )
-                except Exception:
-                    logger.debug("profiler/auto-tuner failed", exc_info=True)
-
-                # ── Per-request generation timeout enforcement ──
-                try:
-                    timeout_s = self.config.request_timeout_seconds
-                    if timeout_s > 0:
-                        now = time.monotonic()
-                        for rid in list(self._request_timestamps.keys()):
-                            # Skip requests already finalized in this step
-                            # (normal completion or earlier timeout processing)
-                            if rid not in self.scheduler.running:
-                                continue
-                            start = self._request_timestamps[rid]
-                            if (now - start) > timeout_s:
-                                logger.warning(f"Request {rid} timed out ({now - start:.0f}s > {timeout_s}s)")
-                                self.scheduler.abort_request(rid)
-                                collector = self._output_collectors.get(rid)
-                                if collector is not None:
+                        # Ensure the request is finalized even if distribution failed
+                        _rid = getattr(req_output, 'request_id', None)
+                        if _rid:
+                            # Put error output + sentinel into collector so
+                            # generate()/stream_outputs() consumers don't hang
+                            # forever waiting for output that will never arrive.
+                            _err_collector = self._output_collectors.get(_rid)
+                            if _err_collector is not None:
+                                try:
                                     from .request import RequestOutput
-                                    timeout_output = RequestOutput(
+                                    _err_collector.put(RequestOutput(
+                                        request_id=_rid,
+                                        finished=True,
+                                        finish_reason="error",
+                                        error=f"Output distribution failed: {_output_err}",
+                                    ))
+                                    _err_collector.put(None)  # sentinel
+                                except Exception:
+                                    logger.debug(
+                                        "error collector put failed for %s",
+                                        _rid, exc_info=True,
+                                    )
+                            self._signal_finished(_rid)
+                            self._finalize_request(_rid)
+
+                # Update adaptive batch scheduler metrics
+                if scheduler_output.outputs:
+                    # ── Wave 42: Lifecycle decode tracking for active requests ──
+                    for req_output in scheduler_output.outputs:
+                        rid = req_output.request_id
+                        if not req_output.finished and req_output.completion_tokens > 0:
+                            # Guard: skip if this request was already finalized earlier
+                            # in this step (e.g., budget exhaustion on a previous output
+                            # for the same request when stream_interval > 1 produces
+                            # multiple outputs per step).  Without this, consume() returns
+                            # "budget_not_found" and triggers duplicate error handling.
+                            if rid in self._finalized_ids:
+                                continue
+                            state = self._lifecycle_orchestrator.get_state(rid)
+                            if state is not None and state.phase.name in ("PREFILLING",):
+                                self._lifecycle_orchestrator.on_decode_start(rid)
+                            # Use incremental token count (new_token_ids length), not
+                            # cumulative completion_tokens.  completion_tokens is the
+                            # total generated so far; feeding it to consume() on every
+                            # step would over-count by 1+2+3+...+N instead of N.
+                            _incr_tokens = len(req_output.new_token_ids) if req_output.new_token_ids else 1
+                            budget_result = self._budget_manager.consume(rid, tokens=_incr_tokens)
+                            if budget_result is not None:
+                                # Budget exhausted — abort request so scheduler stops generating
+                                logger.info(f"Budget exhausted for {rid}: {budget_result}")
+                                self.scheduler.abort_request(rid)
+                                from .request import RequestOutput as _RO
+                                _bc = self._output_collectors.get(rid)
+                                if _bc is not None:
+                                    _bc.put(_RO(
                                         request_id=rid,
                                         finished=True,
-                                        finish_reason="timeout",
-                                        error=f"Request exceeded timeout ({timeout_s}s)",
-                                    )
-                                    collector.put(timeout_output)
-                                    collector.put(None)
-                                # Dedup fan-out: deliver timeout to shadow requests
+                                        finish_reason=budget_result,
+                                        error=f"Budget exhausted: {budget_result}",
+                                        prompt_tokens=req_output.prompt_tokens,
+                                        completion_tokens=req_output.completion_tokens,
+                                    ))
+                                    _bc.put(None)
+                                # Fail dedup shadows so their consumers don't hang
                                 if self._request_dedup is not None:
-                                    shadow_ids = [
+                                    _shadow_ids = [
                                         sid for sid, pid in self._dedup_shadows.items()
                                         if pid == rid
                                     ]
-                                    for sid in shadow_ids:
+                                    for _sid in _shadow_ids:
+                                        _sc = self._output_collectors.get(_sid)
+                                        if _sc is not None:
+                                            _sc.put(_RO(
+                                                request_id=_sid,
+                                                finished=True,
+                                                finish_reason=budget_result,
+                                                error=f"Primary request {rid} budget exhausted",
+                                                prompt_tokens=req_output.prompt_tokens,
+                                                completion_tokens=req_output.completion_tokens,
+                                            ))
+                                            _sc.put(None)
+                                        self._signal_finished(_sid)
+                                self._signal_finished(rid)
+                                self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
+                                # Request is fully finalized — skip remaining per-output
+                                # processing (sliding window, lifecycle) to avoid operating
+                                # on a request whose scheduler state has already been
+                                # removed by abort_request + _finalize_request.
+                                continue
+                            # Sliding window tracking
+                            if self._sliding_window_mgr is not None:
+                                try:
+                                    total_pos = req_output.prompt_tokens + req_output.completion_tokens
+                                    evicted = self._sliding_window_mgr.on_new_token(
+                                        token_position=total_pos,
+                                        request_id=rid,
+                                    )
+                                    # Trim real KV cache for sliding window models.
+                                    # When blocks slide out of the window, the KV cache
+                                    # arrays must be trimmed to free memory and keep
+                                    # attention computation correct.
+                                    if evicted:
+                                        req = self.scheduler.running.get(rid)
+                                        if req is not None:
+                                            # Trim the per-request prompt cache (MLX KV arrays)
+                                            if req.prompt_cache is not None:
+                                                self._sliding_window_mgr.trim_kv_cache(
+                                                    req.prompt_cache, request_id=rid,
+                                                )
+                                            # Invalidate prefix cache entries whose blocks
+                                            # have slid out of the window. Without this,
+                                            # new requests may get prefix cache hits with
+                                            # stale KV blocks that the model will never
+                                            # attend to.
+                                            prefix_cache = getattr(
+                                                self.scheduler, '_prefix_cache', None,
+                                            )
+                                            if prefix_cache is not None:
+                                                self._sliding_window_mgr.invalidate_prefix_cache(
+                                                    prefix_cache, request_id=rid,
+                                                )
+                                except Exception:
+                                    logger.debug("sliding window tracking failed", exc_info=True)
+
+                    # Auto-checkpoint: save inference state periodically for crash recovery
+                    if self._checkpoint_mgr is not None:
+                        try:
+                            for req_output in scheduler_output.outputs:
+                                if not req_output.finished and req_output.completion_tokens > 0:
+                                    if self._checkpoint_mgr.should_auto_checkpoint(
+                                        req_output.request_id,
+                                        req_output.completion_tokens,
+                                    ):
+                                        from .checkpoint import InferenceState
+                                        self._checkpoint_mgr.save(
+                                            req_output.request_id,
+                                            InferenceState(
+                                                request_id=req_output.request_id,
+                                                position=req_output.prompt_tokens + req_output.completion_tokens,
+                                                generated_tokens=[],
+                                                output_text=getattr(req_output, 'output_text', ''),
+                                                model_name=getattr(self.scheduler, 'model_id', ''),
+                                            ),
+                                        )
+                        except Exception:
+                            logger.debug("auto-checkpoint failed", exc_info=True)
+
+                    # ── Wave 42: Profiler + auto-tuner + fairness ──
+                    try:
+                        batch_size = len(scheduler_output.outputs)
+                        _step_wall_ms = self._last_step_wall_ms
+                        # Per-step token count: each scheduler step produces 1 new token
+                        # per decode request (and possibly multiple for prefill).  Use
+                        # new_token_ids length (incremental) rather than cumulative
+                        # completion_tokens to avoid over-counting.
+                        _tokens_gen = sum(
+                            len(o.new_token_ids) for o in scheduler_output.outputs if o.new_token_ids
+                        )
+                        # Fallback: if new_token_ids is empty (some scheduler paths
+                        # don't populate it), use batch_size as a reasonable estimate.
+                        if _tokens_gen == 0 and batch_size > 0:
+                            _tokens_gen = batch_size
+                        _throughput = _tokens_gen / (_step_wall_ms / 1000) if _step_wall_ms > 0 else 0.0
+
+                        # Estimate per-step ITL from step wall time and tokens generated
+                        _est_itl_ms = 0.0
+                        if _tokens_gen > 0 and batch_size > 0:
+                            _est_itl_ms = _step_wall_ms / _tokens_gen
+
+                        # Estimate TTFT from requests that just transitioned from
+                        # PREFILLING to DECODING (completion_tokens > 0 and not yet
+                        # recorded in _ttft_done). This measures actual first-token
+                        # latency, not end-to-end request latency.
+                        _est_ttft_ms = 0.0
+                        _ttft_count = 0
+                        for o in scheduler_output.outputs:
+                            rid = getattr(o, 'request_id', None)
+                            if not rid or rid in self._ttft_done:
+                                continue
+                            # Do NOT skip finished requests — a request that
+                            # finishes on its first decode step (e.g. max_tokens=1)
+                            # still has a valid TTFT that should be recorded.
+                            # Skipping it biases TTFT estimates upward.
+                            if getattr(o, 'completion_tokens', 0) > 0:
+                                _start_ts = self._request_timestamps.get(rid)
+                                if _start_ts is not None:
+                                    _est_ttft_ms += (time.monotonic() - _start_ts) * 1000
+                                    _ttft_count += 1
+                                    self._ttft_done.add(rid)
+                        if _ttft_count > 0:
+                            _est_ttft_ms /= _ttft_count
+
+                        # GPU memory utilisation for bottleneck classification
+                        _gpu_mem_util = 0.0
+                        try:
+                            import mlx.core as mx
+                            active_mem = mx.get_active_memory()
+                            if _hw_info is None:
+                                from .utils.hardware import get_hardware_info as _ghw
+                                _hw_info = _ghw()
+                                _total_mem_bytes = _hw_info.total_memory_bytes
+                            _gpu_mem_util = active_mem / max(_total_mem_bytes, 1)
+                        except Exception:
+                            pass
+
+                        from .auto_tuner import StepMetrics
+                        step_metrics = StepMetrics(
+                            batch_size=batch_size,
+                            tokens_generated=_tokens_gen,
+                            wall_time_ms=_step_wall_ms,
+                            throughput_tok_s=_throughput,
+                            ttft_ms=_est_ttft_ms,
+                            itl_ms=_est_itl_ms,
+                            gpu_memory_util=_gpu_mem_util,
+                        )
+                        self._profiler.record_step(step_metrics)
+                        # Auto-tune every 100 steps
+                        if self._profiler._total_steps % 100 == 0:
+                            # Evaluate previous tuning decisions for regression
+                            for prev in self._auto_tuner._history[-1:]:
+                                if getattr(prev, 'after_metrics', None) is None and prev.before_metrics is not None:
+                                    self._auto_tuner.evaluate_tuning(prev, step_metrics)
+                                    break
+                            tuning_decisions = self._auto_tuner.auto_tune()
+                            if tuning_decisions:
+                                self._apply_tuning_to_config(tuning_decisions)
+                                logger.debug(f"AutoTuner applied: {[d.param_name for d in tuning_decisions]}")
+                        # SLO checks
+                        if _est_ttft_ms > 0:
+                            self._slo_monitor.check_slo("ttft", _est_ttft_ms)
+                        if _est_itl_ms > 0:
+                            self._slo_monitor.check_slo("itl", _est_itl_ms)
+                        # Only check throughput SLO when the system is active.
+                        # When idle (throughput=0 and no running requests), recording
+                        # a violation inflates the violation rate and triggers
+                        # spurious auto-tuning decisions.
+                        if step_metrics.throughput_tok_s > 0 or len(self.scheduler.running) > 0:
+                            self._slo_monitor.check_slo("throughput", step_metrics.throughput_tok_s)
+                        # Fairness tracker: use incremental tokens (new_token_ids length)
+                        # not cumulative completion_tokens, which grows every step.
+                        for req_output in scheduler_output.outputs:
+                            _alloc = len(req_output.new_token_ids) if req_output.new_token_ids else 1
+                            self._fairness_tracker.record_allocation(
+                                req_output.request_id,
+                                tokens_allocated=_alloc,
+                            )
+                    except Exception:
+                        logger.debug("profiler/auto-tuner failed", exc_info=True)
+
+                    # ── Per-request generation timeout enforcement ──
+                    try:
+                        timeout_s = self.config.request_timeout_seconds
+                        if timeout_s > 0:
+                            now = time.monotonic()
+                            for rid in list(self._request_timestamps.keys()):
+                                # Skip requests already finalized in this step
+                                # (normal completion or earlier timeout processing)
+                                if rid not in self.scheduler.running:
+                                    continue
+                                start = self._request_timestamps[rid]
+                                if (now - start) > timeout_s:
+                                    logger.warning(f"Request {rid} timed out ({now - start:.0f}s > {timeout_s}s)")
+                                    self.scheduler.abort_request(rid)
+                                    collector = self._output_collectors.get(rid)
+                                    if collector is not None:
+                                        from .request import RequestOutput
+                                        timeout_output = RequestOutput(
+                                            request_id=rid,
+                                            finished=True,
+                                            finish_reason="timeout",
+                                            error=f"Request exceeded timeout ({timeout_s}s)",
+                                        )
+                                        collector.put(timeout_output)
+                                        collector.put(None)
+                                    # Dedup fan-out: deliver timeout to shadow requests
+                                    if self._request_dedup is not None:
+                                        shadow_ids = [
+                                            sid for sid, pid in self._dedup_shadows.items()
+                                            if pid == rid
+                                        ]
+                                        for sid in shadow_ids:
+                                            s_collector = self._output_collectors.get(sid)
+                                            if s_collector is not None:
+                                                from .request import RequestOutput
+                                                s_collector.put(RequestOutput(
+                                                    request_id=sid,
+                                                    finished=True,
+                                                    finish_reason="timeout",
+                                                    error=f"Primary request {rid} timed out",
+                                                ))
+                                                s_collector.put(None)
+                                            self._signal_finished(sid)
+                                            self._cleanup_request(sid)
+                                    self._signal_finished(rid)
+                                    self._finalize_request(rid)
+
+                            # ── Shadow request timeout enforcement ──
+                            # Shadow requests are never in scheduler.running, so the loop
+                            # above skips them.  If the primary request's output distribution
+                            # never fires (e.g. engine loop crashed between scheduler step
+                            # and output distribution, or primary was aborted externally
+                            # without fan-out), the shadow's event is never set and its
+                            # generate()/stream_outputs() hangs forever.  Check shadows
+                            # directly against their timestamps.
+                            if self._request_dedup is not None:
+                                for sid in list(self._dedup_shadows.keys()):
+                                    start = self._request_timestamps.get(sid)
+                                    if start is None:
+                                        continue
+                                    if (now - start) > timeout_s:
+                                        logger.warning(
+                                            f"Dedup shadow {sid} timed out "
+                                            f"({now - start:.0f}s > {timeout_s}s)"
+                                        )
                                         s_collector = self._output_collectors.get(sid)
                                         if s_collector is not None:
                                             from .request import RequestOutput
@@ -2624,122 +2678,129 @@ class EngineCore:
                                                 request_id=sid,
                                                 finished=True,
                                                 finish_reason="timeout",
-                                                error=f"Primary request {rid} timed out",
+                                                error=f"Dedup shadow timed out after {timeout_s}s (primary never completed)",
                                             ))
                                             s_collector.put(None)
                                         self._signal_finished(sid)
                                         self._cleanup_request(sid)
-                                self._signal_finished(rid)
-                                self._finalize_request(rid)
+                    except Exception:
+                        logger.debug("timeout enforcement failed", exc_info=True)
 
-                        # ── Shadow request timeout enforcement ──
-                        # Shadow requests are never in scheduler.running, so the loop
-                        # above skips them.  If the primary request's output distribution
-                        # never fires (e.g. engine loop crashed between scheduler step
-                        # and output distribution, or primary was aborted externally
-                        # without fan-out), the shadow's event is never set and its
-                        # generate()/stream_outputs() hangs forever.  Check shadows
-                        # directly against their timestamps.
-                        if self._request_dedup is not None:
-                            for sid in list(self._dedup_shadows.keys()):
-                                start = self._request_timestamps.get(sid)
-                                if start is None:
-                                    continue
-                                if (now - start) > timeout_s:
-                                    logger.warning(
-                                        f"Dedup shadow {sid} timed out "
-                                        f"({now - start:.0f}s > {timeout_s}s)"
-                                    )
-                                    s_collector = self._output_collectors.get(sid)
-                                    if s_collector is not None:
-                                        from .request import RequestOutput
-                                        s_collector.put(RequestOutput(
-                                            request_id=sid,
-                                            finished=True,
-                                            finish_reason="timeout",
-                                            error=f"Dedup shadow timed out after {timeout_s}s (primary never completed)",
-                                        ))
-                                        s_collector.put(None)
-                                    self._signal_finished(sid)
-                                    self._cleanup_request(sid)
-                except Exception:
-                    logger.debug("timeout enforcement failed", exc_info=True)
-
-                try:
-                    import mlx.core as mx
-                    active_mem = mx.get_active_memory()
-                    if _hw_info is None:
-                        from .utils.hardware import get_hardware_info
-                        _hw_info = get_hardware_info()
-                        _total_mem_bytes = _hw_info.total_memory_bytes
-                    mem_usage = active_mem / max(_total_mem_bytes, 1)
-                    self._adaptive_batch.update_metrics(
-                        latency_ms=self._last_step_wall_ms,
-                        memory_usage=mem_usage,
-                        batch_size=len(scheduler_output.outputs),
-                    )
-                    # KV compression under memory pressure: compress old blocks
-                    # instead of outright eviction when usage > 85%
-                    if mem_usage > 0.85:
-                        # Reduce prefill batch size to prevent new prefill
-                        # requests from consuming freed blocks faster than
-                        # eviction can release them.  Without this, the
-                        # scheduler admits large prefills that immediately
-                        # re-fill the KV pool and perpetuate OOM.
-                        if self.config.prefill_batch_size > 1:
-                            old_pbs = self.config.prefill_batch_size
-                            self.config.prefill_batch_size = max(1, old_pbs // 2)
-                            logger.info(
-                                "Memory pressure: reducing prefill_batch_size %d -> %d (mem_usage=%.1f%%)",
-                                old_pbs, self.config.prefill_batch_size, mem_usage * 100,
-                            )
-                        if self._kv_compressor is not None:
+                    try:
+                        import mlx.core as mx
+                        active_mem = mx.get_active_memory()
+                        if _hw_info is None:
+                            from .utils.hardware import get_hardware_info
+                            _hw_info = get_hardware_info()
+                            _total_mem_bytes = _hw_info.total_memory_bytes
+                        mem_usage = active_mem / max(_total_mem_bytes, 1)
+                        # Use total step wall time (including output distribution
+                        # and profiler overhead) for adaptive batch scheduling,
+                        # NOT GPU-only time. GPU-only time understates latency
+                        # and causes the batch sizer to over-recommend batch sizes.
+                        _total_step_wall_ms = (time.monotonic() - _step_start) * 1000
+                        self._adaptive_batch.update_metrics(
+                            latency_ms=_total_step_wall_ms,
+                            memory_usage=mem_usage,
+                            batch_size=len(scheduler_output.outputs),
+                        )
+                        # KV compression under memory pressure: compress old blocks
+                        # instead of outright eviction when usage > 85%
+                        if mem_usage > 0.85:
+                            # Reduce prefill batch size to prevent new prefill
+                            # requests from consuming freed blocks faster than
+                            # eviction can release them.  Without this, the
+                            # scheduler admits large prefills that immediately
+                            # re-fill the KV pool and perpetuate OOM.
+                            if self.config.prefill_batch_size > 1:
+                                old_pbs = self.config.prefill_batch_size
+                                self.config.prefill_batch_size = max(1, old_pbs // 2)
+                                logger.info(
+                                    "Memory pressure: reducing prefill_batch_size %d -> %d (mem_usage=%.1f%%)",
+                                    old_pbs, self.config.prefill_batch_size, mem_usage * 100,
+                                )
+                            if self._kv_compressor is not None:
+                                try:
+                                    kv_mgr = getattr(self.scheduler, '_kv_manager', None)
+                                    if kv_mgr is not None:
+                                        evicted = kv_mgr.memory_pressure_evict(0.90)
+                                        if evicted > 0:
+                                            logger.debug(
+                                                f"KV memory pressure eviction: {evicted} blocks"
+                                            )
+                                except Exception:
+                                    logger.debug("KV pressure eviction failed", exc_info=True)
+                        # Recovery: when memory usage drops below 70%, the auto-tuner
+                        # and AdaptiveBatchSizer will naturally restore batch sizes.
+                        # No explicit recovery needed here — prefill_batch_size stays
+                        # reduced until the auto-tuner evaluates the next tuning cycle.
+                        # Telemetry: record step-level metrics
+                        self._telemetry.collect(
+                            "engine_step_batch_size",
+                            float(len(scheduler_output.outputs)),
+                            tags={"model": getattr(self.scheduler, 'model_id', '')},
+                        )
+                        self._telemetry.collect(
+                            "engine_step_memory_usage",
+                            mem_usage,
+                        )
+                        # SpecPrefill: use GPU idle time for priority prefill queue
+                        if mem_usage < 0.7 and self._spec_prefill_engine is not None:
                             try:
-                                kv_mgr = getattr(self.scheduler, '_kv_manager', None)
-                                if kv_mgr is not None:
-                                    evicted = kv_mgr.memory_pressure_evict(0.90)
-                                    if evicted > 0:
-                                        logger.debug(
-                                            f"KV memory pressure eviction: {evicted} blocks"
-                                        )
+                                batch_size = len(scheduler_output.outputs)
+                                budget = max(0, self.config.completion_batch_size - batch_size) * 512
+                                if budget > 0:
+                                    entry = self._spec_prefill_engine.try_prefill(budget)
+                                    if entry is not None and entry.status == "completed":
+                                        self._spec_prefill_engine.remove_entry(entry.request_id)
                             except Exception:
-                                logger.debug("KV pressure eviction failed", exc_info=True)
-                    # Recovery: when memory usage drops below 70%, the auto-tuner
-                    # and AdaptiveBatchSizer will naturally restore batch sizes.
-                    # No explicit recovery needed here — prefill_batch_size stays
-                    # reduced until the auto-tuner evaluates the next tuning cycle.
-                    # Telemetry: record step-level metrics
-                    self._telemetry.collect(
-                        "engine_step_batch_size",
-                        float(len(scheduler_output.outputs)),
-                        tags={"model": getattr(self.scheduler, 'model_id', '')},
-                    )
-                    self._telemetry.collect(
-                        "engine_step_memory_usage",
-                        mem_usage,
-                    )
-                    # SpecPrefill: use GPU idle time for priority prefill queue
-                    if mem_usage < 0.7 and self._spec_prefill_engine is not None:
-                        try:
-                            batch_size = len(scheduler_output.outputs)
-                            budget = max(0, self.config.completion_batch_size - batch_size) * 512
-                            if budget > 0:
-                                entry = self._spec_prefill_engine.try_prefill(budget)
-                                if entry is not None and entry.status == "completed":
-                                    self._spec_prefill_engine.remove_entry(entry.request_id)
-                        except Exception:
-                            logger.debug("spec prefill attempt failed", exc_info=True)
+                                logger.debug("spec prefill attempt failed", exc_info=True)
+                    except Exception:
+                        logger.debug("memory telemetry collection failed", exc_info=True)
+
+                # Accumulate total active time (GPU step + output distribution
+                # + profiler overhead).  This must happen after all post-step
+                # processing so compute_utilization accurately reflects the
+                # fraction of wall time spent doing useful work (not just the
+                # GPU kernel time).
+                self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
+
+                await asyncio.sleep(0)
+            except Exception as _post_step_err:
+                # Catch-all for post-step processing errors.  Individual output
+                # distribution errors are already handled per-request, but
+                # structural errors (e.g., scheduler_output.outputs not iterable,
+                # attribute errors on scheduler state after shutdown race) would
+                # otherwise crash the engine loop, leaving all active requests
+                # hanging forever.  Log and continue to the next iteration.
+                logger.error(
+                    "Post-step processing error: %s", _post_step_err,
+                    exc_info=True,
+                )
+                # Best-effort cleanup: finalize any unfinalized requests
+                try:
+                    if hasattr(scheduler_output, 'outputs'):
+                        for _ro in scheduler_output.outputs:
+                            _rid = getattr(_ro, 'request_id', None)
+                            if _rid and _rid not in self._finalized_ids:
+                                _fc = self._output_collectors.get(_rid)
+                                if _fc is not None:
+                                    try:
+                                        from .request import RequestOutput
+                                        _fc.put(RequestOutput(
+                                            request_id=_rid,
+                                            finished=True,
+                                            finish_reason="error",
+                                            error=f"Post-step processing error: {_post_step_err}",
+                                        ))
+                                        _fc.put(None)
+                                    except Exception:
+                                        pass
+                                self._signal_finished(_rid)
+                                self._finalize_request(_rid)
                 except Exception:
-                    logger.debug("memory telemetry collection failed", exc_info=True)
+                    logger.debug("post-step error cleanup failed", exc_info=True)
 
-            # Accumulate total active time (GPU step + output distribution
-            # + profiler overhead).  This must happen after all post-step
-            # processing so compute_utilization accurately reflects the
-            # fraction of wall time spent doing useful work (not just the
-            # GPU kernel time).
-            self._total_step_time_ms += (time.monotonic() - _step_start) * 1000
-
-            await asyncio.sleep(0)
     def _compute_prefix_hash_for_request(self, req_id: str, prompt_token_ids: list[int]) -> int | None:
         """Compute and store a KV prefix hash for a request.
 

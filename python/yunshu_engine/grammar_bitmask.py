@@ -269,10 +269,9 @@ class GrammarBitmaskEngine:
             # Nothing allowed — all False
             return mx.zeros((vocab_size,), dtype=mx.bool_)
 
-        # Check if "all tokens allowed" (the constraint returned the full vocab)
-        if len(allowed_ids) >= vocab_size * 0.95:
-            return mx.ones((vocab_size,), dtype=mx.bool_)
-
+        # Use the exact allowed set — never approximate with a heuristic.
+        # A percentage-based threshold (e.g. 95%) can silently allow tokens
+        # that violate the grammar, producing invalid JSON/regex output.
         mask = mx.zeros((vocab_size,), dtype=mx.bool_)
         ids_arr = mx.array(allowed_ids)
         mask[ids_arr] = True
@@ -355,8 +354,11 @@ class BitmaskConstrainedSampler:
             self._applicator = BitmaskApplicator(self._table.vocab_size)
 
         if self._engine.is_done:
-            # Force EOS
+            # Force EOS — do NOT advance the constraint after this,
+            # otherwise the EOS token text corrupts the buffer and
+            # breaks checkpoint/rollback correctness.
             masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
+            should_advance = False
         else:
             bitmask = self._engine.compute_bitmask(self._tokenizer)
             if mx.any(bitmask).item():
@@ -365,6 +367,7 @@ class BitmaskConstrainedSampler:
                 # Nothing is grammatically allowed — force EOS to avoid
                 # producing invalid output.
                 masked_logits = self._applicator.apply_allowlist(logits, self._table.eos_ids)
+            should_advance = True
 
         token = self._base_sampler(masked_logits)
 
@@ -372,12 +375,13 @@ class BitmaskConstrainedSampler:
         token_id = int(token)
         self._generated_ids.append(token_id)
 
-        try:
-            token_text = self._tokenizer.decode([token_id])
-        except Exception:
-            logger.debug("operation failed", exc_info=True)
-            token_text = ""
-        self._engine.advance(token_text)
+        if should_advance:
+            try:
+                token_text = self._tokenizer.decode([token_id])
+            except Exception:
+                logger.debug("operation failed", exc_info=True)
+                token_text = ""
+            self._engine.advance(token_text)
 
         return token
 
