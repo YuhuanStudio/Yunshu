@@ -394,6 +394,13 @@ class BlockPool:
         if new_block is not old_block:
             # Copy KV data from old block to new block's slot
             if key_cache is not None and value_cache is not None:
+                # Snapshot originals before modification so we can roll back
+                # on failure.  MLX .at[].set() creates a new array lazily,
+                # so if only key_cache is updated before the exception fires,
+                # returning the partially-modified pair would leave the caller
+                # with inconsistent cache tensors.
+                orig_key_cache = key_cache
+                orig_value_cache = value_cache
                 try:
                     import mlx.core as mx
                     mx.eval(key_cache[new_block.block_id])
@@ -415,7 +422,8 @@ class BlockPool:
                     # is too low and a subsequent free() can free it while other
                     # requests still reference it (use-after-free).
                     old_block.ref_count += 1
-                    return old_block, key_cache, value_cache
+                    # Roll back cache tensors to their pre-modification state.
+                    return old_block, orig_key_cache, orig_value_cache
             # Update the table entry
             table._blocks[logical_idx] = new_block
 

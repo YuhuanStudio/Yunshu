@@ -927,10 +927,12 @@ class ModelWarmupManager:
                         pass
 
             if not self._compile_cached:
-                # Final fallback: try calling with hidden states
+                # Final fallback: try with explicit cache argument.
+                # Some MLX models require cache= to be provided.
                 try:
-                    hidden = mx.zeros((1, 1, hidden_size))
-                    _ = model(dummy_ids)
+                    from mlx_lm.models.cache import make_prompt_cache
+                    cache = make_prompt_cache(model)
+                    _ = model(dummy_ids, cache=cache)
                     mx.eval(_)
                     self._compile_cached = True
                 except Exception:
@@ -1129,13 +1131,38 @@ class ModelWarmupManager:
                     logger.debug(f"Warm prompt already cached: {len(ids)} tokens")
                     continue
 
-                # Prefill: run generate_step to populate KV cache
+                # Prefill: use model forward pass to populate KV cache.
+                # We use a direct forward call instead of generate_step to
+                # avoid advancing the cache with generated tokens. generate_step
+                # would add 1 extra decode entry, causing a stale KV entry
+                # mismatch when the prefix is reused for real requests.
+                # Fallback to generate_step if direct forward fails (e.g. models
+                # that need special input formatting).
                 cache = make_prompt_cache(model)
-                for _ in generate_step(
-                    ids, model, max_tokens=max_tokens,
-                    sampler=sampler, prompt_cache=cache,
-                ):
-                    break
+                try:
+                    # Ensure 2D input: (1, seq_len) for model forward pass.
+                    if hasattr(ids, "reshape"):
+                        ids_2d = ids.reshape(1, -1)
+                    else:
+                        ids_2d = mx.array([list(ids)])
+                    _ = model(ids_2d, cache=cache)
+                    if hasattr(mx, "eval"):
+                        mx.eval(_)
+                except Exception:
+                    # Fallback: generate_step adds 1 stale entry, but trim it
+                    # so the prefix cache matches the prompt token count.
+                    cache = make_prompt_cache(model)
+                    for _ in generate_step(
+                        ids, model, max_tokens=1,
+                        sampler=sampler, prompt_cache=cache,
+                    ):
+                        break
+                    # Trim the 1 extra decode entry from generate_step
+                    try:
+                        from mlx_lm.models.cache import trim_prompt_cache
+                        trim_prompt_cache(cache, 1)
+                    except (ImportError, Exception):
+                        pass
 
                 # Store in KV prefix cache for future cache hits
                 kv_prefix_cache.add(ids, cache)

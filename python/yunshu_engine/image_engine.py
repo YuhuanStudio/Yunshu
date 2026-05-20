@@ -2472,9 +2472,11 @@ class ImageGenEngine:
             dt = sigmas[t + 1] - sigmas[t]
             denoised = latents + noise_pred * dt
 
-            # Blend: keep known regions from original latents,
-            # take denoised output for masked regions
-            latents = (1 - mask_4d) * known_latents_4d + mask_4d * denoised
+            # Blend: keep known regions from the *previous step's latents*
+            # (not the original VAE encoding, which is at a different noise
+            # level and would cause visible seams).  Take denoised output for
+            # the masked (inpainted) regions.
+            latents = (1 - mask_4d) * latents + mask_4d * denoised
             mx.eval(latents)
 
         # 8. VAE decode (auto-tile for large images)

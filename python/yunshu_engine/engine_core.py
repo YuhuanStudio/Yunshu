@@ -1746,6 +1746,12 @@ class EngineCore:
     ) -> Any:
         """Non-streaming generate: add request, wait for completion, return result."""
         from .request import RequestOutput
+
+        # Extract cancel_event before passing kwargs to add_request — it is
+        # not a scheduler parameter but we need it to detect early cancellation
+        # during event.wait().
+        _cancel_event = kwargs.pop('cancel_event', None)
+
         req_id = await self.add_request(**kwargs)
         _cleaned_up = False
 
@@ -1762,7 +1768,43 @@ class EngineCore:
                 if timeout_s is None:
                     timeout_s = self.config.request_timeout_seconds
                 try:
-                    await asyncio.wait_for(event.wait(), timeout=timeout_s)
+                    # Race completion event against cancel_event so that
+                    # gateway disconnects don't block until timeout.
+                    if _cancel_event is not None:
+                        _wait_task = asyncio.ensure_future(event.wait())
+                        if isinstance(_cancel_event, asyncio.Event):
+                            _cancel_waiter = asyncio.ensure_future(_cancel_event.wait())
+                        else:
+                            _cancel_waiter = asyncio.ensure_future(asyncio.sleep(timeout_s))
+                        try:
+                            done, pending = await asyncio.wait(
+                                {_wait_task, _cancel_waiter},
+                                timeout=timeout_s,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            for p in pending:
+                                p.cancel()
+                                try:
+                                    await p
+                                except (asyncio.CancelledError, Exception):
+                                    pass
+                            if _cancel_waiter in done:
+                                # Cancelled by external event — abort request
+                                await self.abort_request(req_id)
+                                _cleaned_up = True
+                                return RequestOutput(
+                                    request_id=req_id,
+                                    finished=True,
+                                    finish_reason="stop",
+                                    error="Request cancelled",
+                                )
+                        except asyncio.CancelledError:
+                            for t in (_wait_task, _cancel_waiter):
+                                if not t.done():
+                                    t.cancel()
+                            raise
+                    else:
+                        await asyncio.wait_for(event.wait(), timeout=timeout_s)
                 except asyncio.TimeoutError:
                     logger.warning(f"generate() timeout ({timeout_s}s) for {req_id}")
                     # Abort the timed-out request so scheduler releases its slot.
@@ -2284,9 +2326,17 @@ class EngineCore:
                 try:
                     batch_size = len(scheduler_output.outputs)
                     _step_wall_ms = self._last_step_wall_ms
+                    # Per-step token count: each scheduler step produces 1 new token
+                    # per decode request (and possibly multiple for prefill).  Use
+                    # new_token_ids length (incremental) rather than cumulative
+                    # completion_tokens to avoid over-counting.
                     _tokens_gen = sum(
-                        o.completion_tokens for o in scheduler_output.outputs if o.completion_tokens
+                        len(o.new_token_ids) for o in scheduler_output.outputs if o.new_token_ids
                     )
+                    # Fallback: if new_token_ids is empty (some scheduler paths
+                    # don't populate it), use batch_size as a reasonable estimate.
+                    if _tokens_gen == 0 and batch_size > 0:
+                        _tokens_gen = batch_size
                     _throughput = _tokens_gen / (_step_wall_ms / 1000) if _step_wall_ms > 0 else 0.0
 
                     # Estimate per-step ITL from step wall time and tokens generated

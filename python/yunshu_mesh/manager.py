@@ -211,13 +211,18 @@ class MeshManager:
 
     def get_stats(self) -> dict:
         """Return mesh status information."""
+        with self._node_lock:
+            topo_type = self._topology.topo_type.value
+            node_count = self._topology.size
+            local_node_dict = self._local_node.to_dict() if self._local_node else None
+
         stats = {
             "distributed": self.is_distributed,
             "rank": self.rank,
             "world_size": self.world_size,
-            "topology": self._topology.topo_type.value,
-            "nodes": len(self._topology.nodes),
-            "local_node": self._local_node.to_dict() if self._local_node else None,
+            "topology": topo_type,
+            "nodes": node_count,
+            "local_node": local_node_dict,
             "pipeline": self._pipeline.to_dict() if self._pipeline else None,
             "data_parallel": self._dp_router.get_stats() if self._dp_router else None,
             "disagg_pd": self._disagg_router.get_stats() if self._disagg_router else None,
@@ -302,6 +307,9 @@ class MeshManager:
 
         with self._node_lock:
             nodes_snapshot = list(self._topology.nodes)
+            topo_type = self._topology.topo_type.value
+            total_count = len(nodes_snapshot)
+
         local_node_id = self._local_node.node_id if self._local_node else ""
 
         nodes = []
@@ -327,10 +335,10 @@ class MeshManager:
 
         return {
             "distributed": self.is_distributed,
-            "topology": self._topology.topo_type.value,
+            "topology": topo_type,
             "nodes": nodes,
             "healthy_count": healthy_count,
-            "total_count": len(self._topology.nodes),
+            "total_count": total_count,
         }
 
     def handle_node_failure(self, node_id: str) -> None:

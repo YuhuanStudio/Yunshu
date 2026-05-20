@@ -212,7 +212,7 @@ class MTPDecoder:
             )
             mx.synchronize()
             # v0 MUST be greedy for spec decode acceptance check
-            v0 = _greedy(verify_out[0, 0, :])
+            v0_greedy = _greedy(verify_out[0, 0, :])
             # v1 (bonus) can use sampler for non-greedy output
             if sampler is not None:
                 v1 = int(sampler(verify_out[0, 1:2, :]).item())
@@ -221,7 +221,7 @@ class MTPDecoder:
 
             stats.total_cycles += 1
 
-            if v0 == draft:
+            if v0_greedy == draft:
                 # Accept: draft matched backbone's prediction at pos0
                 stats.accepts += 1
                 if self.config.use_n_confirmed:
@@ -238,43 +238,37 @@ class MTPDecoder:
                 primary = v1
                 primary_h = verify_h[:, -1:, :]
             else:
-                # Reject
+                # Reject: sample correction token from v0's logits BEFORE
+                # cache commit so the emitted token respects the sampler.
+                if sampler is not None:
+                    correction = int(sampler(verify_out[0, 0:1, :]).item())
+                else:
+                    correction = v0_greedy
                 stats.rejects += 1
 
                 if self.config.use_n_confirmed:
                     restore_rollback(cache)
-                    # On reject, v0 is the correction token (line 262).
-                    # Re-feed v0 through the rolled-back cache to get a
-                    # hidden state consistent with the new primary token.
-                    # Using verify_h[:, 0:1, :] is stale — it's the hidden
-                    # state from the old primary, not v0.
+                    # Re-feed the correction token through the rolled-back
+                    # cache to get a hidden state consistent with the new
+                    # primary token.
                     _out_corr, hid_corr = self.model(
-                        mx.array([[v0]]), cache=cache, return_hidden=True,
+                        mx.array([[correction]]), cache=cache, return_hidden=True,
                     )
                     mx.synchronize()
                     primary_h = hid_corr[:, -1:, :]
                 else:
-                    # Old path: restore cache + refeed primary (expensive)
+                    # Old path: restore cache + refeed correction (expensive)
                     _restore_cache(cache, snap)
                     out2, hid2 = self.model(
-                        mx.array([[primary]]), cache=cache, return_hidden=True,
+                        mx.array([[correction]]), cache=cache, return_hidden=True,
                     )
                     mx.synchronize()
                     primary_h = hid2[:, -1:, :]
 
-                # On reject, use greedy v0 as the correction token.
-                # Do NOT re-sample here — the cache and primary_h were
-                # committed to the greedy v0 above.  Re-sampling would
-                # create an inconsistency between cached token, hidden
-                # state, and output token, causing corruption on the
-                # next iteration.
-                # If sampling is desired, it must happen BEFORE the
-                # cache commit (i.e., apply to verify_out logits first).
-
-                generated.append(v0)
-                if v0 in eos_ids or len(generated) >= max_tokens:
+                generated.append(correction)
+                if correction in eos_ids or len(generated) >= max_tokens:
                     break
-                primary = v0
+                primary = correction
 
                 if self.config.cooldown_on_reject:
                     in_cooldown = True

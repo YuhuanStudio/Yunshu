@@ -175,10 +175,18 @@ class _Histogram:
             # Increment running counters.
             self._sums[key] += value
             self._counts[key] += 1
+            # Prometheus requires CUMULATIVE bucket counts: each bucket
+            # counts all observations <= its upper bound.  Since buckets
+            # are sorted ascending, we increment every bucket with
+            # upper >= value.
             bc = self._bucket_counts[key]
             for i, upper in enumerate(self._buckets):
                 if value <= upper:
-                    bc[i] += 1
+                    # value <= this bucket AND all subsequent (larger)
+                    # buckets — increment them all in one pass.
+                    for j in range(i, len(self._buckets)):
+                        bc[j] += 1
+                    break
             # Cap per-label-series to prevent unbounded growth.
             # Keep _sums, _counts, and _bucket_counts as running totals
             # (monotonically non-decreasing) — only truncate the observations list.
@@ -189,19 +197,22 @@ class _Histogram:
         lines: list[str] = []
         lines.append(f"# HELP {self._name} {self._help}")
         lines.append(f"# TYPE {self._name} histogram")
+        # Snapshot ALL data under a single lock acquisition to prevent
+        # TOCTOU races where observations mutate between per-key lock
+        # acquisitions (keys could be deleted, counts could change).
         with self._lock:
-            # Snapshot keys to avoid RuntimeError during concurrent mutation
             keys = sorted(self._observations.keys(), key=_label_sort_key)
-        for key in keys:
-            with self._lock:
+            snap: list[tuple[frozenset[tuple[str, str]], str, int, float, list[int]]] = []
+            for key in keys:
                 count = self._counts.get(key, 0)
                 if count == 0:
                     continue
                 label_str = _format_labels(key)
                 total = self._sums.get(key, 0.0)
                 bc = list(self._bucket_counts.get(key, [0] * len(self._buckets)))
-            if count == 0:
-                continue
+                snap.append((key, label_str, count, total, bc))
+        # Build output from snapshot (no lock needed — all data is local).
+        for key, label_str, count, total, bc in snap:
             # Build the label portion for bucket lines.  Prometheus format
             # requires the le= label mixed with other labels, e.g.
             #   metric_bucket{le="0.1",method="POST"} 5

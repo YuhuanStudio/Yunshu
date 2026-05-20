@@ -357,7 +357,13 @@ class RequestLifecycleOrchestrator:
         elif finish_reason in ("error",):
             self._total_rejected += 1
             self._model_counts[state.model]["rejected"] += 1
-        # "abort" and "timeout" are counted by their respective handlers
+        elif finish_reason in ("timeout",):
+            # Timeout is a failure — report to concurrency controller so
+            # it backs off. Without this, sustained timeouts never reduce
+            # the concurrency limit, causing continuous timeout storms.
+            self._total_timeouts += 1
+            self._concurrency.report_failure("timeout")
+        # "abort" is counted by on_request_aborted
 
         # Do NOT auto-promote pending requests here. Promotion via
         # on_prefill_start() increments _active_count, but the promoted

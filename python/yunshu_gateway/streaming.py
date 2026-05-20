@@ -189,11 +189,15 @@ class ThinkingParser:
     - Content inside <think/> → thinking field (not shown to user by default)
     - Content outside → visible text field
 
+    Supports the common tag variants that models actually emit:
+      <think/>, <think >, <think\\>, </think/>, </think >, etc.
+
     Based on oMLX's ThinkingParser with full streaming support.
     """
 
-    THINK_START = "<think/>"
-    THINK_END = "</think/>"
+    # All known opening tag variants (models emit these interchangeably)
+    THINK_STARTS = ("<think/>", "<think >", "<think\\>")
+    THINK_ENDS = ("</think/>", "</think >", "</think\\>")
 
     def __init__(self):
         self.buffer = ""
@@ -201,13 +205,58 @@ class ThinkingParser:
         self.thinking_text = ""
         self.visible_text = ""
 
+    def _find_tag_start(self, buf: str) -> int:
+        """Find the earliest occurrence of any THINK_START variant in buf."""
+        best = -1
+        for tag in self.THINK_STARTS:
+            idx = buf.find(tag)
+            if idx != -1 and (best == -1 or idx < best):
+                best = idx
+        return best
+
+    def _find_tag_end(self, buf: str) -> tuple[int, int]:
+        """Find the earliest occurrence of any THINK_END variant in buf.
+
+        Returns (position, tag_length) or (-1, 0) if not found.
+        """
+        best_pos = -1
+        best_len = 0
+        for tag in self.THINK_ENDS:
+            idx = buf.find(tag)
+            if idx != -1 and (best_pos == -1 or idx < best_pos):
+                best_pos = idx
+                best_len = len(tag)
+        return best_pos, best_len
+
+    def _get_start_tag_length(self, buf: str, pos: int) -> int:
+        """Get the length of the THINK_START tag found at buf[pos:]."""
+        for tag in self.THINK_STARTS:
+            if buf[pos:].startswith(tag):
+                return len(tag)
+        return len(self.THINK_STARTS[0])
+
     def _retain_tail(self, buf: str) -> tuple[str, str]:
         """Split buffer into safe-to-emit prefix and potential tag-tail suffix."""
         if not buf:
             return "", ""
-        for i in range(len(buf) - 1, max(-1, len(buf) - max(len(self.THINK_START), len(self.THINK_END)) - 1), -1):
+        max_tag_len = max(
+            max(len(t) for t in self.THINK_STARTS),
+            max(len(t) for t in self.THINK_ENDS),
+        )
+        for i in range(len(buf) - 1, max(-1, len(buf) - max_tag_len - 1), -1):
             tail = buf[i:]
-            if self.THINK_START.startswith(tail) or self.THINK_END.startswith(tail):
+            # Check if tail could be a prefix of any tag variant
+            is_prefix = False
+            for tag in self.THINK_STARTS:
+                if tag.startswith(tail):
+                    is_prefix = True
+                    break
+            if not is_prefix:
+                for tag in self.THINK_ENDS:
+                    if tag.startswith(tail):
+                        is_prefix = True
+                        break
+            if is_prefix:
                 return buf[:i], tail
         return buf, ""
 
@@ -219,11 +268,11 @@ class ThinkingParser:
 
         while self.buffer:
             if self.in_thinking:
-                end_idx = self.buffer.find(self.THINK_END)
+                end_idx, end_len = self._find_tag_end(self.buffer)
                 if end_idx != -1:
                     thinking_parts.append(self.buffer[:end_idx])
                     self.thinking_text += self.buffer[:end_idx]
-                    self.buffer = self.buffer[end_idx + len(self.THINK_END):]
+                    self.buffer = self.buffer[end_idx + end_len:]
                     self.in_thinking = False
                 else:
                     emit, retain = self._retain_tail(self.buffer)
@@ -233,12 +282,13 @@ class ThinkingParser:
                     self.buffer = retain
                     break
             else:
-                start_idx = self.buffer.find(self.THINK_START)
+                start_idx = self._find_tag_start(self.buffer)
                 if start_idx != -1:
                     if start_idx > 0:
                         visible_parts.append(self.buffer[:start_idx])
                         self.visible_text += self.buffer[:start_idx]
-                    self.buffer = self.buffer[start_idx + len(self.THINK_START):]
+                    tag_len = self._get_start_tag_length(self.buffer, start_idx)
+                    self.buffer = self.buffer[start_idx + tag_len:]
                     self.in_thinking = True
                 else:
                     emit, retain = self._retain_tail(self.buffer)
@@ -277,8 +327,8 @@ class ThinkingParser:
 
 # ── Static Thinking Extraction (for complete outputs) ──
 
-_THINKING_PATTERN = re.compile(r"<think/>(.*?)</think/>", re.DOTALL)
-_THINKING_TAIL_PATTERN = re.compile(r"^(.*?)</think/>", re.DOTALL)
+_THINKING_PATTERN = re.compile(r"<think\s*/?\s*>(.*?)</think\s*/?\s*>", re.DOTALL)
+_THINKING_TAIL_PATTERN = re.compile(r"^(.*?)</think\s*/?\s*>", re.DOTALL)
 
 
 def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str]:
@@ -337,8 +387,10 @@ def extract_thinking(text: str, model_name: str | None = None) -> tuple[str, str
         thinking = "\n".join(thinking_parts).strip()
         return (thinking, remaining.strip())
 
-    # Handle partial: content before </think/> without <think/> tag
-    if "</think/>" in text and "<think/>" not in text:
+    # Handle partial: content before </think ...> without <think ...> tag
+    _CLOSE_RE = re.compile(r"</think\s*/?\s*>")
+    _OPEN_RE = re.compile(r"<think\s*/?\s*>")
+    if _CLOSE_RE.search(text) and not _OPEN_RE.search(text):
         match = _THINKING_TAIL_PATTERN.match(text)
         if match:
             thinking = match.group(1).strip()
@@ -358,15 +410,23 @@ _FUNC_CALL_PATTERN = re.compile(
 
 
 def _sanitize_arguments(args: Any) -> str:
-    """Ensure tool call arguments are a valid JSON object string."""
+    """Ensure tool call arguments are a valid JSON object string.
+
+    When the model generates malformed JSON arguments, we preserve the
+    original text rather than silently replacing with "{}". The caller
+    can then decide how to handle the invalid arguments (retry, error,
+    or best-effort parse).
+    """
     if isinstance(args, str):
         try:
             parsed = json.loads(args)
             if isinstance(parsed, dict):
                 return json.dumps(parsed, ensure_ascii=False)
         except json.JSONDecodeError:
-            pass
-        return "{}"
+            # Keep as-is for the caller to handle — don't silently drop
+            return args
+        # Valid JSON but not a dict (e.g. a list or primitive) — wrap
+        return args
     if isinstance(args, dict):
         return json.dumps(args, ensure_ascii=False)
     return "{}"

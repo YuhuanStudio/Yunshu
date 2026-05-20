@@ -1053,7 +1053,7 @@ async def all_monitoring_stats(request: Request) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, handler in _ENDPOINT_MAP.items():
         try:
-            result[key] = await handler()
+            result[key] = await handler(request)
         except Exception:
             result[key] = None
     return result

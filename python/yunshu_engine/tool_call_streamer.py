@@ -453,7 +453,12 @@ class ToolCallStreamer:
             results.append(StreamOutput(text=text, state=self._state))
             self._buffer = ""
         elif self._state == StreamState.TAG_END:
-            text = TOOL_CALL_CLOSE + self._buffer
+            # Must include the pending JSON text that was accumulated before
+            # the partial closing tag was detected, otherwise the JSON body
+            # is silently dropped.
+            json_text = getattr(self, '_pending_json_text', '')
+            self._pending_json_text = ''
+            text = json_text + TOOL_CALL_CLOSE + self._buffer
             results.append(StreamOutput(text=text, state=self._state))
             self._buffer = ""
 

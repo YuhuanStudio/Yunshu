@@ -220,8 +220,11 @@ class SpecDraftVerifier:
             )
         else:
             # Greedy: get model predictions and compare
+            # IMPORTANT: sampler expects raw logits, not log-probabilities.
+            # target_logprobs has been normalized via logsumexp, so using it
+            # with temperature-based samplers produces wrong distributions.
             if sampler is not None:
-                model_picks = sampler(target_logprobs).tolist()
+                model_picks = sampler(batch_logits).tolist()
             else:
                 model_picks = mx.argmax(batch_logits, axis=-1).tolist()
 
@@ -375,8 +378,11 @@ class SpecDraftVerifier:
             )
         else:
             # Greedy: get model predictions and compare
+            # IMPORTANT: sampler expects raw logits, not log-probabilities.
+            # target_logprobs has been normalized via logsumexp, so using it
+            # with temperature-based samplers produces wrong distributions.
             if sampler is not None:
-                model_picks = sampler(target_logprobs).tolist()
+                model_picks = sampler(batch_logits).tolist()
             else:
                 model_picks = mx.argmax(batch_logits, axis=-1).tolist()
 

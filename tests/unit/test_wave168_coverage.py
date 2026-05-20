@@ -855,7 +855,7 @@ class TestResponseFormatParsing:
     def test_responses_parse_json_object(self):
         from yunshu_gateway.routers.responses import _parse_response_format
         result = _parse_response_format({"type": "json_object"})
-        assert result == {}
+        assert result == "json_object"
 
     def test_responses_parse_json_schema(self):
         from yunshu_gateway.routers.responses import _parse_response_format
@@ -869,7 +869,7 @@ class TestResponseFormatParsing:
     def test_responses_parse_grammar_json_no_schema(self):
         from yunshu_gateway.routers.responses import _parse_response_format
         result = _parse_response_format(None, grammar={"type": "json"})
-        assert result == {}
+        assert result == "json_object"
 
     def test_responses_parse_none(self):
         from yunshu_gateway.routers.responses import _parse_response_format

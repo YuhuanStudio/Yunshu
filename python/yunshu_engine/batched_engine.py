@@ -3142,7 +3142,8 @@ class BatchedEngine:
                         mx.synchronize()
                         # Flush remaining detokenizer bytes before cancelling
                         try:
-                            remaining = detokenizer.finalize()
+                            detokenizer.finalize()
+                            remaining = detokenizer.last_segment
                             if remaining:
                                 _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         except Exception:
@@ -3159,7 +3160,8 @@ class BatchedEngine:
                     if _timeout_cancel.is_set():
                         mx.synchronize()
                         try:
-                            remaining = detokenizer.finalize()
+                            detokenizer.finalize()
+                            remaining = detokenizer.last_segment
                             if remaining:
                                 _put((remaining, n_tok, None, len(_thinking_tokens), None, "reasoning" if _in_thinking else "normal"))
                         except Exception:
@@ -4206,8 +4208,16 @@ class BatchedEngine:
                     # Remove the suffix-triggering token — it should not
                     # appear in the output, matching the non-spec pattern.
                     generated_tokens.pop()
-                    if detokenizer.tokens:
-                        detokenizer.tokens.pop()
+                    # Reset detokenizer to state before the suffix token was
+                    # added.  Simply popping from detokenizer.tokens is not
+                    # sufficient because NaiveStreamingDetokenizer computes
+                    # .text from _current_tokens (an internal list), not from
+                    # the .tokens attribute.  Re-decode all remaining tokens
+                    # to produce clean text without the suffix.
+                    _kept_tokens = list(detokenizer.tokens[:-1]) if detokenizer.tokens else []
+                    detokenizer.reset()
+                    for _t in _kept_tokens:
+                        detokenizer.add_token(_t)
                     break
 
             # Compute TTFT before first yield
@@ -5414,9 +5424,11 @@ class BatchedEngine:
                 break
             detokenizer.add_token(tid)
             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                # Truncate token_ids to exclude tokens after the suffix match
-                _mtp_completion_count = i + 1
-                token_ids = token_ids[:i + 1]
+                # Truncate token_ids to exclude the suffix-triggering token
+                # (matching the pattern in _generate_fast where tokens.pop()
+                # removes the suffix token from the output count).
+                _mtp_completion_count = i
+                token_ids = token_ids[:i]
                 hit_suffix = True
                 break
         else:

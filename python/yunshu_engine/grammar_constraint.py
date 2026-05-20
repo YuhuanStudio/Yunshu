@@ -719,9 +719,11 @@ class ChoiceConstraint:
                 eos_ids = [tokenizer.eos_token_id]
             return eos_ids
 
-        # When we have a partial match (text is also a prefix of a longer
-        # choice), include EOS tokens alongside continuation chars.
-        has_eos = "__eos__" in valid_chars
+        # Re-check whether the current buffer position is at a valid
+        # end-of-choice in the trie.  The advance() method sets
+        # _has_partial_match optimistically but never resets it, so we
+        # must verify at query time whether EOS is truly valid here.
+        has_eos = "__end__" in node
 
         # Build allowed tokens from valid chars
         if not hasattr(self.__class__, '_token_char_cache'):
@@ -736,10 +738,9 @@ class ChoiceConstraint:
                 continue
             if ch in char_map:
                 allowed.update(char_map[ch])
-        # When we have a partial match (completed choice is also a prefix
-        # of a longer choice), include EOS tokens so the sampler can pick
-        # the shorter match.
-        if has_eos or self._has_partial_match:
+        # Include EOS tokens only when the current position is a valid
+        # choice end (__end__ marker present in the trie node).
+        if has_eos:
             eos_ids = []
             if hasattr(tokenizer, 'eos_token_ids'):
                 eos_ids = list(tokenizer.eos_token_ids)

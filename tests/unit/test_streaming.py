@@ -332,7 +332,9 @@ class TestQwenXmlToolCalls:
         from yunshu_gateway.streaming import _sanitize_arguments
         assert _sanitize_arguments({"a": 1}) == '{"a": 1}'
         assert _sanitize_arguments('{"a": 1}') == '{"a": 1}'
-        assert _sanitize_arguments("not json") == "{}"
+        # Invalid JSON is preserved as-is for caller to handle (not silently
+        # replaced with "{}")
+        assert _sanitize_arguments("not json") == "not json"
         assert _sanitize_arguments(None) == "{}"
 
 

@@ -152,7 +152,7 @@ def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict
             schema = grammar.get("schema")
             if schema:
                 return schema
-            return {}
+            return "json_object"
         return grammar
     if rf is None:
         return None
@@ -161,7 +161,7 @@ def _parse_response_format(rf: dict | None, grammar: dict | None = None) -> dict
         js = rf.get("json_schema", {})
         return js.get("schema", js)
     elif rf_type == "json_object":
-        return {}
+        return "json_object"
     return None
 
 

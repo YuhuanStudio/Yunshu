@@ -1039,8 +1039,10 @@ async def _stream_anthropic(
                 if hasattr(output, 'cached_tokens') and output.cached_tokens:
                     cached_tokens = max(cached_tokens, output.cached_tokens)
 
-                # Capture finish_reason from the last streaming output
-                if output.finished and output.finish_reason:
+                # Capture finish_reason from the last streaming output.
+                # Use finish_reason whenever it's set (not just when finished=True)
+                # because some engines set finish_reason without the finished flag.
+                if output.finish_reason is not None:
                     _streaming_finish_reason = output.finish_reason
 
                 # Emit message_start on first output with prompt_tokens.
@@ -1119,6 +1121,7 @@ async def _stream_anthropic(
                         # text or complete tool calls, preventing partial tool
                         # call markup from being sent as visible text.
                         if has_tools and _tool_streamer:
+                            output_tokens += 1
                             for _tc_out in _tool_streamer.process_token(_token_text):
                                 if _tc_out.text:
                                     if not text_block_started:
@@ -1139,8 +1142,6 @@ async def _stream_anthropic(
                                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
-                                    if _anth_gen is not None and _anth_gen.cancel_event is not None:
-                                        _anth_gen.cancel_event.set()
                                     break
                         else:
                             # No tools — emit text directly
@@ -1219,12 +1220,12 @@ async def _stream_anthropic(
                         # Route through ToolCallStreamer for incremental detection.
                         # Only confirmed text is emitted; buffered tokens are held
                         # until the streamer can determine if they form a tool call tag.
+                        output_tokens += 1
                         for _tc_out in _tool_streamer.process_token(_token_text):
                             if _tc_out.text:
                                 if not text_block_started:
                                     text_block_started = True
                                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                                output_tokens += 1
                                 _prev_len = len(accumulated_text)
                                 accumulated_text += _tc_out.text
                                 _stop_hit = False
@@ -1254,8 +1255,6 @@ async def _stream_anthropic(
                                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _args_str[_ci:_ci + 8]}})}\n\n"
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                 block_index += 1
-                                if _anth_gen is not None and _anth_gen.cancel_event is not None:
-                                    _anth_gen.cancel_event.set()
                                 break
                     else:
                         # No tool streamer — emit text directly
@@ -1301,7 +1300,6 @@ async def _stream_anthropic(
                         if not text_block_started:
                             text_block_started = True
                             yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                        output_tokens += 1
                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text}})}\n\n"
                     elif _tc_out.tool_call:
                         if text_block_started:

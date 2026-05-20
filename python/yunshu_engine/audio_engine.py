@@ -505,6 +505,7 @@ class TTSEngine:
             "total_synth_ms": round(total_synth_ms, 1),
             "total_stream_ms": round(total_stream_ms, 1),
             "avg_synth_ms": round(total_synth_ms / synth_count, 1) if synth_count > 0 else 0.0,
+            "avg_stream_ms": round(total_stream_ms / stream_count, 1) if stream_count > 0 else 0.0,
         }
 
 
@@ -582,27 +583,31 @@ class ASREngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        # Read audio file once — reuse the bytes for both VAD and LID to avoid
+        # double I/O and double memory allocation for large audio files.
+        _audio_raw: bytes | None = None
+
         # VAD pre-check: skip transcription if no speech detected
         if self._vad is not None:
             try:
                 import numpy as np
                 with open(audio_path, "rb") as f:
-                    raw = f.read()
+                    _audio_raw = f.read()
                 # Try to detect WAV header and extract raw PCM + sample rate
                 file_sr: int | None = None
-                if raw[:4] == b"RIFF":
+                if _audio_raw[:4] == b"RIFF":
                     # Extract sample rate from the fmt chunk (bytes 24-27)
-                    if len(raw) >= 28 and raw[12:16] == b"fmt ":
-                        file_sr = struct.unpack_from('<I', raw, 24)[0]
+                    if len(_audio_raw) >= 28 and _audio_raw[12:16] == b"fmt ":
+                        file_sr = struct.unpack_from('<I', _audio_raw, 24)[0]
                     # Find the 'data' chunk — skip any extra chunks
-                    data_offset = raw.find(b"data")
-                    if data_offset != -1 and len(raw) > data_offset + 8:
-                        data_size = int.from_bytes(raw[data_offset+4:data_offset+8], "little")
-                        pcm = raw[data_offset+8:data_offset+8+data_size]
+                    data_offset = _audio_raw.find(b"data")
+                    if data_offset != -1 and len(_audio_raw) > data_offset + 8:
+                        data_size = int.from_bytes(_audio_raw[data_offset+4:data_offset+8], "little")
+                        pcm = _audio_raw[data_offset+8:data_offset+8+data_size]
                     else:
-                        pcm = raw
+                        pcm = _audio_raw
                 else:
-                    pcm = raw
+                    pcm = _audio_raw
                 samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
                 # Resample to VAD's expected sample rate if different
                 # (VAD models typically expect 16kHz)
@@ -639,8 +644,10 @@ class ASREngine:
         if language is None:
             try:
                 from .lid import detect_language_from_audio
-                with open(audio_path, "rb") as f:
-                    audio_bytes = f.read()
+                if _audio_raw is None:
+                    with open(audio_path, "rb") as f:
+                        _audio_raw = f.read()
+                audio_bytes = _audio_raw
                 lid_result = detect_language_from_audio(audio_bytes)
                 if lid_result.language != "und" and lid_result.confidence > 0.3:
                     detected_lang = lid_result.language

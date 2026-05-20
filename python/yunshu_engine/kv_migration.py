@@ -249,7 +249,7 @@ class KVMigrationManager:
 
         # Statistics
         self._stats = MigrationStats()
-        self._migration_history: list[MigrationRecord] = []
+        self._migration_history: collections.deque[MigrationRecord] = collections.deque(maxlen=1000)
         self._max_history = 1000
 
     # ── Lifecycle ──────────────────────────────────────────────────
@@ -542,13 +542,18 @@ class KVMigrationManager:
                 success=False,
             )
 
-        # Transfer data between simulated stores
+        # Transfer data between simulated stores.
+        # In production, blocks always have data (real KV cache bytes).
+        # In tests with simulated stores, blocks may lack data if registered
+        # without the `data` parameter — in that case, skip the data transfer
+        # but still update tier tracking.
         data = self._pop_from_tier(block_id, source)
         if data is not None:
             self._store_in_tier(block_id, data, dest)
-        else:
-            # No data to transfer, still update tier tracking
-            pass
+
+        # Count logical bytes transferred (based on block's recorded byte_size,
+        # not actual data size, since simulated stores may lack data).
+        self._stats.total_bytes_transferred += temp.byte_size
 
         # Update tier tracking
         self._tier_blocks[source].discard(block_id)
@@ -558,13 +563,9 @@ class KVMigrationManager:
 
         latency = time.monotonic() - start
         self._stats.total_migration_time += latency
-        self._stats.total_bytes_transferred += temp.byte_size
 
-        # Update directional counter
-        counter_key = f"{source.value}_to_{dest.value}_count"
-        if hasattr(self._stats, counter_key):
-            setattr(self._stats, counter_key, getattr(self._stats, counter_key) + 1)
-        # Map tier names to stat fields
+        # Update directional counter (tier enum values don't match stat field
+        # names, so use an explicit mapping rather than string interpolation).
         direction_map = {
             (KVTier.HOT, KVTier.WARM): "gpu_to_cpu_count",
             (KVTier.WARM, KVTier.SSD): "cpu_to_ssd_count",
@@ -586,10 +587,8 @@ class KVMigrationManager:
             success=True,
         )
 
-        # Record in history
+        # Record in history (deque auto-trims to maxlen)
         self._migration_history.append(record)
-        if len(self._migration_history) > self._max_history:
-            self._migration_history = self._migration_history[-self._max_history // 2:]
 
         return record
 
@@ -783,9 +782,10 @@ class MultiTierCacheCoordinator:
             tier = KVTier.SSD
 
         with self._lock:
-            # Remove from any existing tier
-            for _, store in self._tier_stores:
-                store.pop(key, None)
+            # Remove from any existing tier (and update its stats)
+            for tier_enum, store in self._tier_stores:
+                if store.pop(key, None) is not None:
+                    self._tier_stats[tier_enum].entry_count = len(store)
 
             # Evict from target tier if at capacity
             self._evict_if_full(tier)
@@ -834,9 +834,10 @@ class MultiTierCacheCoordinator:
         key = _prefix_hash(token_prefix)
         with self._lock:
             found = False
-            for _, store in self._tier_stores:
+            for tier_enum, store in self._tier_stores:
                 if store.pop(key, None) is not None:
                     found = True
+                    self._tier_stats[tier_enum].entry_count = len(store)
             return found
 
     def rebalance(self) -> int:
@@ -956,7 +957,12 @@ class MultiTierCacheCoordinator:
         return True
 
     def _evict_if_full(self, tier: KVTier) -> int:
-        """Evict LRU entries from a tier if at capacity. Must hold _lock."""
+        """Evict LRU entries from a tier if at capacity. Must hold _lock.
+
+        Cascades eviction: when demoting from HOT → WARM, the WARM tier is
+        also checked for overflow (and similarly WARM → SSD). This prevents
+        a full WARM tier from silently exceeding capacity.
+        """
         store = self._store_for_tier(tier)
         capacity = {
             KVTier.HOT: self._gpu_capacity,
@@ -970,10 +976,17 @@ class MultiTierCacheCoordinator:
             key, entry = store.popitem(last=False)
             # Demote to next slower tier
             if tier == KVTier.HOT:
+                self._evict_if_full(KVTier.WARM)
                 self._cpu_cache[key] = entry
+                self._tier_stats[KVTier.WARM].entry_count = len(self._cpu_cache)
             elif tier == KVTier.WARM:
+                # SSD is the final tier — entries just accumulate there
                 self._ssd_cache[key] = entry
+                self._tier_stats[KVTier.SSD].entry_count = len(self._ssd_cache)
             evicted += 1
+
+        # Keep tier stats in sync after eviction
+        self._tier_stats[tier].entry_count = len(store)
         return evicted
 
 
@@ -1115,12 +1128,21 @@ class CacheWarmingScheduler:
                 # Estimate when it will next be accessed
                 predicted_time = now + (total_accesses / max(count, 1))
 
-                # Determine current tier from coordinator
+                # Determine current tier from coordinator.
+                # Must hold coordinator._lock to avoid reading OrderedDicts
+                # while the main thread is mutating them.
                 source_tier = KVTier.SSD  # default assumption
                 if self._coordinator is not None:
-                    loc = self._coordinator._locate(key)
-                    if loc is not None:
-                        source_tier = loc[0]
+                    try:
+                        with self._coordinator._lock:
+                            loc = self._coordinator._locate(key)
+                            if loc is not None:
+                                source_tier = loc[0]
+                    except Exception:
+                        logger.debug(
+                            "Coordinator tier lookup failed for key %s",
+                            key[:12], exc_info=True,
+                        )
 
                 predictions.append(WarmingPrediction(
                     prefix_hash=key,
@@ -1158,9 +1180,6 @@ class CacheWarmingScheduler:
         if self._coordinator is None:
             return False
 
-        with self._lock:
-            self._stats.warming_operations += 1
-
         # Normalize: if it looks like a hash (32 hex chars), use directly;
         # otherwise hash it. This supports both pre-hashed keys from
         # predictions and raw prefix strings from direct calls.
@@ -1173,6 +1192,7 @@ class CacheWarmingScheduler:
 
         if result:
             with self._lock:
+                self._stats.warming_operations += 1
                 self._stats.warming_bytes_transferred += 2048  # estimate
 
         return result

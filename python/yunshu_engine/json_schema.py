@@ -842,14 +842,15 @@ class JsonSchemaConstraint:
                 if ch in _DIGIT_CHARS:
                     prior_seen_digit = self._number_seen_digit
                     self._number_seen_digit = True
-                    i += 1
                     if self._state == JsonState.NUMBER_ZERO:
                         # Leading zero followed by digit is invalid JSON (e.g., "07").
-                        # Complete the current number as "0". The stray digit is
-                        # consumed (advanced past) since there is no separator —
-                        # generating invalid JSON is a model error, not a parser bug.
+                        # Complete the current number as "0". The stray digit must
+                        # be re-processed by the new state (e.g. OBJECT_COMMA),
+                        # NOT silently consumed — otherwise the state machine
+                        # loses sync with the generated text.
                         self._value_completed()
                         self._number_seen_digit = False
+                        # Do NOT advance i — re-process this digit in the new state
                         continue
                     elif self._state == JsonState.NUMBER_FRACTION:
                         # After digit in fraction, exponent is now allowed.
@@ -864,6 +865,7 @@ class JsonSchemaConstraint:
                     elif self._state == JsonState.NUMBER and ch == '0' and not prior_seen_digit:
                         # e.g. after '-' then '0': treat as leading zero
                         self._state = JsonState.NUMBER_ZERO
+                    i += 1
                     continue
                 if ch == '.' and self._state in (JsonState.NUMBER, JsonState.NUMBER_ZERO) and not self._number_has_dot:
                     self._state = JsonState.NUMBER_FRACTION
@@ -1261,8 +1263,18 @@ class ConstrainedSampler:
             # Mask disallowed tokens
             masked_logits = apply_json_constraint(logits, allowed)
         else:
-            # No valid tokens in current state — force EOS
-            masked_logits = apply_json_constraint(logits, [])
+            # No valid tokens in current state — force EOS to avoid
+            # producing invalid output.  Setting all logits to -inf
+            # causes softmax NaN, so we allowlist only EOS tokens.
+            eos_ids = []
+            if hasattr(self._tokenizer, 'eos_token_ids'):
+                eos_ids = list(self._tokenizer.eos_token_ids)
+            elif hasattr(self._tokenizer, 'eos_token_id'):
+                eos_ids = [self._tokenizer.eos_token_id]
+            if eos_ids:
+                masked_logits = apply_json_constraint(logits, eos_ids)
+            else:
+                masked_logits = apply_json_constraint(logits, [])
 
         # Sample using base sampler
         token = self._base_sampler(masked_logits)

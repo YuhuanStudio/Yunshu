@@ -313,6 +313,10 @@ class VideoEngine:
         gs = guide_scale if guide_scale is not None else cfg.guide_scale
         f = fps or cfg.fps
         s = seed if seed is not None else cfg.seed
+        # Randomize seed when default sentinel -1 is used — without this,
+        # every request without an explicit seed produces identical output.
+        if s < 0:
+            s = int(time.time_ns()) % (2**31)
         sched = scheduler or cfg.scheduler
 
         # Validate num_frames for Wan2.2 (must be 4n+1)

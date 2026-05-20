@@ -392,6 +392,7 @@ async def _stream_completion(
     async def _stream_choice(choice_idx: int):
         nonlocal prompt_tok, cached_tok
         choice_finish_reason = None
+        _choice_streamed_text = ""  # track emitted text for stop-sequence correction
         # Per-choice text offset tracker for logprobs text_offset field.
         # When echo=True, the prompt text is emitted first, so the completion
         # text offsets must account for the prompt length.
@@ -452,6 +453,24 @@ async def _stream_completion(
                 if _pf_prog is not None:
                     yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n".encode()
                     continue  # progress outputs carry no text
+                # Track emitted text for stop-sequence overcount correction
+                if output.new_text:
+                    _choice_streamed_text += output.new_text
+                # Detect stop-sequence overcount on final output
+                if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
+                    for _seq in req.stop:
+                        if _seq and _seq in _choice_streamed_text:
+                            _idx = _choice_streamed_text.find(_seq)
+                            _choice_streamed_text = _choice_streamed_text[:_idx]
+                            _tok = getattr(engine, '_tokenizer', None)
+                            if _tok:
+                                try:
+                                    _correct_count = len(_tok.encode(_choice_streamed_text))
+                                    if _correct_count < completion_tok_per_choice.get(choice_idx, 0):
+                                        completion_tok_per_choice[choice_idx] = _correct_count
+                                except Exception:
+                                    pass
+                            break
                 # Format logprobs for this token if present
                 _chunk_logprobs = None
                 if output.logprobs:
@@ -508,6 +527,24 @@ async def _stream_completion(
                     _chunk_lp, _choice_text_offset = _format_streaming_logprobs(
                         output.logprobs, text_offset_start=_choice_text_offset,
                     )
+                # Track emitted text for stop-sequence overcount correction
+                if output.token_text:
+                    _choice_streamed_text += output.token_text
+                # Detect stop-sequence overcount on final output
+                if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
+                    for _seq in req.stop:
+                        if _seq and _seq in _choice_streamed_text:
+                            _idx = _choice_streamed_text.find(_seq)
+                            _choice_streamed_text = _choice_streamed_text[:_idx]
+                            _tok = getattr(engine, '_tokenizer', None)
+                            if _tok:
+                                try:
+                                    _correct_count = len(_tok.encode(_choice_streamed_text))
+                                    if _correct_count < completion_tok_per_choice.get(choice_idx, 0):
+                                        completion_tok_per_choice[choice_idx] = _correct_count
+                                except Exception:
+                                    pass
+                            break
                 yield format_openai_completion_chunk(
                     completion_id=completion_id,
                     model=req.model,

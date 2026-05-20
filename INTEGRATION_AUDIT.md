@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 282: Anthropic streaming ToolCallStreamer integration — both batched + legacy engine paths now use incremental tool call detection, flush() for truncated output, stop sequence + ToolCallStreamer interaction fix)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 283: 8-agent deep audit — 45+ bugs fixed across engine core (position IDs, finalize, profiler, cancel_event), scheduler (retraction cap, deep_reset, RadixTree), KV (COW recovery, prefix cache locks, migration tier stats), gateway (Anthropic cancel/finish_reason/counting, completions stop, responses json_object), spec decode (verifier logits, MTP rejection), grammar (all-inf NaN, NUMBER_ZERO, ChoiceConstraint EOS, ThinkingParser variants), mesh (Prometheus histogram, monitoring /all, node locks), multimodal (VLM reasoning/budget, inpainting, video seed), LoRA (restore_base, merge))
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,55 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 283 — 8-agent deep audit: 45+ bugs across engine core, scheduler, KV, gateway, spec decode, grammar, mesh, multimodal, auto-tuner)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 283: ForwardBatch decode position ID off-by-one | len(generated_tokens)==0 分支用 num_prompt_tokens，其餘用 num_prompt_tokens+len-1（最後一個而非下一個）。統一為 +len | 注意力計算損壞 (HIGH) |
+| Wave 283: detokenizer.finalize() 返回值當字串 | cancel/timeout handler 調用 remaining=finalize() 但返回 None。改為 finalize()+last_segment | 截斷輸出丟失 (HIGH) |
+| Wave 283: Spec decode streaming suffix 洩漏到 detokenizer.text | 僅 pop tokens 外部列表，未更新 _current_tokens。重置 detokenizer 並重新 add 乾淨 tokens | Suffix 文字洩漏 (MEDIUM) |
+| Wave 283: Engine loop profiler 用累計 completion_tokens | 計算吞吐量用累計值（每次含所有歷史），改為 len(new_token_ids) 增量 | Profiler 膨脹 (MEDIUM) |
+| Wave 283: MTP suffix stop token 多計 completion_tokens | i+1 含 suffix token，改為 i 排除 suffix | 使用量多計 (MEDIUM) |
+| Wave 283: cancel_event 在 engine_core.generate() 被丟棄 | cancel_event 被 **kwargs 吞入 add_request，從不生效。提取並 race completion vs cancel | GPU 浪費 (HIGH) |
+| Wave 283: KVPrefixCache.clear() 鎖外清 _block_refcount | _block_refcount.clear() 和 _access_counter=0 在鎖外。移入鎖內 | 併發損壞 (HIGH) |
+| Wave 283: Retraction 計入 preemption 上限 | _retract_decode_requests 調用 _preempt_request 累加計數，3次後低優先級請求不可被搶佔。加 count_as_preemption 參數 | 優先級反轉 (HIGH) |
+| Wave 283: COW 複製失敗返回部分修改的 cache tensor | key_cache 成功但 value_cache 失敗時返回不一致的 KV。快照原始值，失敗時返回快照 | KV 數據損壞 (HIGH) |
+| Wave 283: deep_reset 不重置累計統計計數器 | _total_prompt_tokens 等保持舊值。加入重置 | 監控不準確 (MEDIUM) |
+| Wave 283: RadixTree insert 用 floor 而 split 用 ceil | 邊界 block 在中間節點和剩餘列表重複。統一為 ceil 除法 | KV block 重複 (HIGH) |
+| Wave 283: Anthropic cancel_event 截斷 SSE 生命週期 | ToolCallStreamer 偵測到工具後 cancel_event.set()，SSE 在 message_delta/message_stop 前終止。移除 cancel_event.set() | 回應不完整 (CRITICAL) |
+| Wave 283: Anthropic output_tokens 在 ToolCallStreamer 路徑未計數 | 批次路徑 output_tokens 未遞增，message_delta 報告 0。改為源頭計數 | 使用量報告錯誤 (HIGH) |
+| Wave 283: Anthropic output_tokens 在 flush 雙重計數 | Legacy flush 路徑 output_tokens+=1 與源頭計數重複。移除 flush 路徑計數 | 使用量虛高 (HIGH) |
+| Wave 283: Anthropic finish_reason 只在 finished=True 捕獲 | 部分引擎設 finish_reason 不設 finished。改為 is not None 時捕獲 | stop_reason 錯誤 (HIGH) |
+| Wave 283: Completions streaming stop-sequence token 多計 | 多 token stop 後 completion_tokens 包含 stop tokens。加入修正邏輯 | 使用量多計 (HIGH) |
+| Wave 283: Responses _parse_response_format 返回 {} | json_object 類型返回 {}，引擎期望字串 "json_object"。改為返回字串 | JSON 約束失效 (HIGH) |
+| Wave 283: Spec verifier sampler 收到 log-probs 而非 logits | sampler(target_logprobs) 收到歸一化值，溫度縮放錯誤。改為 sampler(batch_logits) | 採樣分佈錯誤 (CRITICAL) |
+| Wave 283: LoRA _restore_base 覆蓋已合併權重 | is_loaded=False 過濾跳過已合併 adapter，restore 覆蓋合併結果。移除 is_loaded 過濾 + 清除 _active_adapter_id | 權重損壞 (HIGH) |
+| Wave 283: Warm prompt 多一個 stale KV entry | generate_step(max_tokens=1) 多填一個 decode KV。改為直接 model(ids_2d, cache=cache) | KV 偏移 (MEDIUM) |
+| Wave 283: MTP rejection 用 greedy 而非 sampler | reject 後修正 token 始終 greedy，與 accept 的採樣不一致。在 cache commit 前採樣 | 輸出品質不一致 (MEDIUM) |
+| Wave 283: Prometheus histogram 非累計 bucket 計數 | observe() 只遞增第一個匹配 bucket。改為遞增所有 >= value 的 bucket | 監控不準確 (HIGH) |
+| Wave 283: Prometheus histogram format() TOCTOU race | format() 釋放鎖後重新獲取，併發 observe() 修改數據。單次鎖內快照所有數據 | 監控不一致 (HIGH) |
+| Wave 283: Monitoring /all endpoint TypeError | handler() 缺少 request 參數，每個 handler 需要 request 做 auth。改為 handler(request) | 端點完全損壞 (HIGH) |
+| Wave 283: HeartbeatMonitor 讀取節點字段未持鎖 | _send_loop 讀取 state/_active_requests 未持鎖。改為 to_dict() 快照 | 撕裂讀取 (MEDIUM) |
+| Wave 283: MeshManager get_stats/get_cluster_status 鎖外讀 topology | topology 欄位在 _node_lock 外讀取。移入鎖內 | 數據不一致 (MEDIUM) |
+| Wave 283: ToolCallStreamer flush() TAG_END 丟失 _pending_json_text | flush TAG_END 分支未包含 _pending_json_text。補上 | 數據丟失 (CRITICAL) |
+| Wave 283: json_schema ConstrainedSampler 全部 logits 設 -inf | 零允許 token 時全部 -inf 導致 softmax NaN。改為只允許 EOS | 採樣崩潰 (CRITICAL) |
+| Wave 283: json_schema NUMBER_ZERO 數字丟失 | stray digit 被 i+=1 吞入但新狀態未處理。NUMBER_ZERO 分支跳過 i+=1 讓新狀態重新處理 | 狀態機失同步 (HIGH) |
+| Wave 283: ChoiceConstraint 用過期 _has_partial_match 判斷 EOS | _has_partial_match 永不重置，partial choice 允許 EOS。改為即時查詢 trie 節點 | 提前結束 (HIGH) |
+| Wave 283: ThinkingParser 只匹配 <think/> 不匹配變體 | Qwen3/DeepSeek-R1 用 <think >、<think\\>。擴展為多變體匹配 | 思考內容洩漏 (HIGH) |
+| Wave 283: VLM streaming reasoning_tokens 中間 chunk 報 0 | finish_reason else 分支硬編碼 0。改為始終回報 _thinking_token_count | 推理追蹤不準 (HIGH) |
+| Wave 283: VLM streaming vision thinking_budget 未執行 | _stream_vlm_vision 缺 thinking_budget 參數。加入參數和強制邏輯 | 無限推理 (HIGH) |
+| Wave 283: Image inpainting 用過時 VAE latent 混合 | 每步用原始 VAE 編碼混合，造成 mask 邊界接縫。改為用上一步 latents | 可見接縫 (HIGH) |
+| Wave 283: VideoEngine seed=-1 產生確定性輸出 | mlx-video 路徑直接用 -1 作為種子。負數時隨機化 | 輸出重複 (HIGH) |
+| Wave 283: TTSEngine get_stats() 缺少 avg_stream_ms | 追蹤 _stream_count/_total_stream_ms 但不計算 avg。加入計算 | 監控缺失 (MEDIUM) |
+| Wave 283: ASR 雙重讀取音頻文件 | VAD 和 LID 各讀一次。快取首次讀取 | 記憶體浪費 (MEDIUM) |
+| Wave 283: KV migration _evict_if_full 不級聯不更新統計 | HOT→WARM 不檢查 WARM 容量，_tier_stats 不更新。加入級聯和統計更新 | 容量失控 (CRITICAL) |
+| Wave 283: KV migration store/evict 不更新 tier stats | pop 後 entry_count 不遞減，永久膨脹。加入更新 | 監控不準確 (HIGH) |
+| Wave 283: predict_hot_prefixes 讀取 coordinator 未持鎖 | 背景線程讀取 _locate 未持 _lock。包裹 with lock | 併發崩潰 (CRITICAL) |
+| Wave 283: warm_cache 計數在 promote 前遞增 | 失敗的 promote 也被計數。移入 if result: 分支 | 監控膨脹 (HIGH) |
+| Wave 283: Request lifecycle timeout 不回報 concurrency | finish_reason="timeout" 不調用 report_failure()。加入 branch | 超時風暴 (HIGH) |
+| Wave 283: KV migration history 手動 trim | list 手動切片。改為 deque(maxlen=1000) | 效率 (LOW) |
+| Wave 283: KV migration _do_migrate 死代碼 | f-string counter key 不匹配 MigrationStats 字段。移除 | 混淆 (LOW) |
 
 ### 已完成修復 (2026-05-20 Wave 282 — Anthropic streaming ToolCallStreamer integration for both batched + legacy engine paths)
 

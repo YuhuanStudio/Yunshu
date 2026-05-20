@@ -866,7 +866,13 @@ class VLMEngine:
                     mx.random.seed(seed)
 
                 if has_images or has_audio:
-                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold)
+                    # Resolve reasoning_effort -> thinking_budget for VLM vision streaming
+                    _tb = kwargs.get('thinking_budget')
+                    if _tb is None:
+                        _re = kwargs.get('reasoning_effort')
+                        if _re is not None:
+                            _tb = {"low": 2048, "medium": 8192, "high": 32768}.get(_re, 8192)
+                    self._stream_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, req_id, queue, top_k, min_p, stop, audio_paths=audio_paths, enable_thinking=enable_thinking, cancel_event=cancel_event, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=_tb)
                     return
 
                 input_ids = self._tokenize_with_cache(messages, enable_thinking=enable_thinking)
@@ -1529,6 +1535,7 @@ class VLMEngine:
         cancel_event: Any = None,
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
+        thinking_budget: int | None = None,
     ) -> None:
         """Streaming vision + text generation using mlx_vlm.stream_generate().
 
@@ -1660,6 +1667,33 @@ class VLMEngine:
                 # Count tokens generated while in thinking state
                 if _in_thinking:
                     _thinking_token_count += 1
+                # Thinking budget enforcement — stop generation when the budget
+                # is exceeded while in a thinking segment.  Flush held-back
+                # text before emitting the terminal output.
+                if thinking_budget is not None and _in_thinking and _thinking_token_count >= thinking_budget:
+                    _budget_state = "reasoning" if _in_thinking else "normal"
+                    # Flush any held-back text before the terminal output
+                    _held_budget_text = accumulated[_emitted_pos:]
+                    if _held_budget_text:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            new_text=_held_budget_text,
+                            finish_reason=None,
+                            finished=False,
+                            prompt_tokens=_num_prompt_tokens,
+                            current_state=_budget_state,
+                        ))
+                    queue.put_nowait(RequestOutput(
+                        request_id=req_id,
+                        new_text="",
+                        finish_reason="stop",
+                        finished=True,
+                        completion_tokens=token_count,
+                        prompt_tokens=_num_prompt_tokens,
+                        current_state=_budget_state,
+                        reasoning_tokens=_thinking_token_count,
+                    ))
+                    return
                 finish_reason = None
                 if hasattr(result, 'finish_reason') and result.finish_reason:
                     finish_reason = result.finish_reason
@@ -1702,7 +1736,7 @@ class VLMEngine:
                     _emit_text = accumulated[_emitted_pos:_safe_end] if accumulated else ""
                     _emitted_pos = _safe_end
 
-                _reasoning_tok = _thinking_token_count if finish_reason else 0
+                _reasoning_tok = _thinking_token_count
                 queue.put_nowait(RequestOutput(
                     request_id=req_id,
                     new_text=_emit_text,

@@ -1927,7 +1927,7 @@ class Scheduler:
 
         return preempted
 
-    def _preempt_request(self, request: Request) -> None:
+    def _preempt_request(self, request: Request, count_as_preemption: bool = True) -> None:
         """Preempt a running request and return it to the waiting queue.
 
         vLLM block-level preemption with partial recomputation (SCHED-1):
@@ -2051,7 +2051,8 @@ class Scheduler:
             prompt_len = getattr(request, 'num_prompt_tokens', 0) or len(request.prompt_token_ids)
             request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens, prompt_len)
             request.batch_uid = None
-            request.num_preemptions += 1
+            if count_as_preemption:
+                request.num_preemptions += 1
             # Clear stale output tokens from pre-preemption generation.
             # When re-scheduled, the prompt is re-prefilled and generation
             # restarts from scratch — old tokens are invalid.
@@ -2076,7 +2077,8 @@ class Scheduler:
             )
             request.status = RequestStatus.PREEMPTED
             request.batch_uid = None
-            request.num_preemptions += 1
+            if count_as_preemption:
+                request.num_preemptions += 1
             self.waiting.push_front(request, priority=request.sampling_params.priority)
 
     def _retract_decode_requests(self, count: int) -> int:
@@ -2086,6 +2088,11 @@ class Scheduler:
         memory cost than prefill) to make room for new prefill requests.
         Retracted requests are placed at the front of the waiting queue and
         will be re-inserted with their existing KV state (via prefix cache).
+
+        Unlike priority-based preemption, retraction does NOT increment
+        num_preemptions. This prevents retraction from exhausting the
+        _MAX_PREEMPTIONS_PER_REQUEST cap that protects individual requests
+        from preemption livelock.
 
         Args:
             count: Maximum number of requests to retract.
@@ -2105,7 +2112,7 @@ class Scheduler:
             if retracted >= count:
                 break
             self.running.pop(victim.request_id, None)
-            self._preempt_request(victim)
+            self._preempt_request(victim, count_as_preemption=False)
             retracted += 1
 
         return retracted
@@ -3825,6 +3832,12 @@ class Scheduler:
         self._uids_to_remove.clear()
         self._failed_insert_ids.clear()
         self._pending_prefill.clear()
+        # Reset cumulative stats counters so get_stats() reflects fresh state
+        self._total_prompt_tokens = 0
+        self._total_completion_tokens = 0
+        self._num_requests = 0
+        self._step_counter = 0
+        self._deferred_clear_at = None
         # Reset attention score tracker
         if self._attention_score_tracker is not None:
             self._attention_score_tracker = AttentionScoreTracker(

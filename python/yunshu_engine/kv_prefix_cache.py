@@ -755,8 +755,8 @@ class KVPrefixCache:
             self._access_counts.clear()
             self._hash_index.clear()
             self._prefix_index.clear()
-        self._block_refcount.clear()
-        self._access_counter = 0
+            self._block_refcount.clear()
+            self._access_counter = 0
         gc.collect()
         mx.clear_cache()
 

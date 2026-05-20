@@ -98,11 +98,14 @@ class HeartbeatMonitor:
     def _send_loop(self) -> None:
         while self._running:
             if self._local_node and self._socket:
+                # Use to_dict() for a thread-safe snapshot instead of
+                # reading individual fields without the node lock.
+                node_snapshot = self._local_node.to_dict()
                 msg = json.dumps({
-                    "node_id": self._local_node.node_id,
+                    "node_id": node_snapshot["node_id"],
                     "timestamp": time.time(),
-                    "state": self._local_node.state.name,
-                    "active_requests": self._local_node._active_requests,
+                    "state": node_snapshot["state"],
+                    "active_requests": node_snapshot["active_requests"],
                 }).encode()
                 with self._nodes_lock:
                     peers = list(self._nodes.values())

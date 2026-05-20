@@ -397,6 +397,10 @@ class LoRAAdapterManager:
                     # skipping weight restoration when a merged adapter's
                     # is_merged=True would trigger the guard.
                     entry.is_loaded = False
+                    # Clear _active_adapter_id so subsequent load_adapter()
+                    # calls don't try to "restore" from this merged adapter.
+                    if self._active_adapter_id == adapter_id:
+                        self._active_adapter_id = None
                     logger.info(f"Merged LoRA adapter: {adapter_id}")
                     return True
                 except Exception as e:
@@ -621,11 +625,12 @@ class LoRAAdapterManager:
         if unwrapped:
             self._base_model.update_modules(tree_unflatten(unwrapped))
 
-        # Only restore pre-merge weights if there are no currently merged adapters.
-        # If a merge was active, the weights are already correct (adapter was merged
-        # into the base model), and restoring _base_model_copy would undo the merge.
+        # Only restore pre-merge weights if there are no merged adapters at all.
+        # Merged adapters have is_loaded=False (structure unwrapped during merge),
+        # so we must check ALL adapters, not just loaded ones. Restoring base
+        # weights when a merge is active would undo the merged adapter's weights.
         if self._base_model_copy is not None and not any(
-            e.is_merged for e in self._adapters.values() if e.is_loaded
+            e.is_merged for e in self._adapters.values()
         ):
             import mlx.core as mx
             self._base_model.update(self._base_model_copy)

@@ -123,7 +123,6 @@ async def stop_profile(request: Request):
 async def profile_status(request: Request):
     """Get profiling status."""
     _check_permission(request)
-    """Get profiling status."""
     elapsed = time.perf_counter() - _profile_start_time if _profiling_active else 0
     return JSONResponse({
         "active": _profiling_active,
@@ -135,7 +134,6 @@ async def profile_status(request: Request):
 async def engine_profiling_stats(request: Request):
     """Get engine-level profiling stats from PerformanceProfiler + ProfilingMixin."""
     _check_permission(request)
-    """Get engine-level profiling stats from PerformanceProfiler + ProfilingMixin."""
     from ..engine import get_engine, get_model_manager
     from yunshu_engine.batched_engine import BatchedEngine
 
