@@ -123,9 +123,9 @@ class MetricsMixin(SchedulerMixin):
             else 1.0
         )
         throughput_tps = throughput_60s / max(window_span, 0.001)
-        p50_step = sorted(self._step_times)[len(self._step_times) // 2] if self._step_times else 0.0
-        _sorted_steps = sorted(self._step_times)
-        _p99_idx = max(0, int(len(_sorted_steps) * 0.99) - 1) if _sorted_steps else 0
+        _sorted_steps = sorted(self._step_times) if self._step_times else []
+        p50_step = _sorted_steps[len(_sorted_steps) // 2] if _sorted_steps else 0.0
+        _p99_idx = min(len(_sorted_steps) - 1, int(len(_sorted_steps) * 0.99)) if _sorted_steps else 0
         p99_step = _sorted_steps[_p99_idx] if _sorted_steps else 0.0
         return {
             "step_count": self._step_count,
@@ -331,7 +331,9 @@ class DataParallelMixin(SchedulerMixin):
             return
         for o in output.outputs:
             if getattr(o, 'finished', False):
-                replica_id = getattr(o, 'replica_id', 0)
+                if not hasattr(o, 'replica_id'):
+                    continue
+                replica_id = o.replica_id
                 self._replica_loads[replica_id] = max(
                     0, self._replica_loads.get(replica_id, 0) - 1
                 )

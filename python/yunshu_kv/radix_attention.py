@@ -525,15 +525,18 @@ class RadixTree:
         # Append child's tokens, blocks, and hashes to the node
         node.token_ids.extend(child.token_ids)
         node.blocks.extend(child.blocks)
-        # Dedup boundary blocks that may be shared after _split_node_unlocked
+        node.block_hashes.extend(child.block_hashes)
+        # Dedup boundary blocks and keep hashes aligned
         _seen = set()
-        _deduped = []
-        for b in node.blocks:
+        _deduped_blocks = []
+        _deduped_hashes = []
+        for b, h in zip(node.blocks, node.block_hashes):
             if b.block_id not in _seen:
                 _seen.add(b.block_id)
-                _deduped.append(b)
-        node.blocks = _deduped
-        node.block_hashes.extend(child.block_hashes)
+                _deduped_blocks.append(b)
+                _deduped_hashes.append(h)
+        node.blocks = _deduped_blocks
+        node.block_hashes = _deduped_hashes
 
         # Adopt child's children before clearing child.
         node.children = child.children

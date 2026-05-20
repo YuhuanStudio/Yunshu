@@ -25,6 +25,7 @@ Integration:
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -140,6 +141,7 @@ class StageCache:
         self._ttl = ttl_seconds
         self._hits = 0
         self._misses = 0
+        self._lock = threading.Lock()
 
     @staticmethod
     def _make_key(stage: PipelineStage, inputs: Any) -> str:
@@ -150,32 +152,33 @@ class StageCache:
 
     def get(self, stage: PipelineStage, inputs: Any) -> Optional[Any]:
         key = self._make_key(stage, inputs)
-        entry = self._cache.get(key)
-        if entry is None:
-            self._misses += 1
-            return None
-        ts, value = entry
-        if time.monotonic() - ts > self._ttl:
-            del self._cache[key]
-            self._misses += 1
-            return None
-        self._hits += 1
-        # Move to end for LRU ordering
-        self._cache[key] = self._cache.pop(key)
-        return value
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                self._misses += 1
+                return None
+            ts, value = entry
+            if time.monotonic() - ts > self._ttl:
+                del self._cache[key]
+                self._misses += 1
+                return None
+            self._hits += 1
+            self._cache[key] = self._cache.pop(key)
+            return value
 
     def put(self, stage: PipelineStage, inputs: Any, result: Any) -> None:
         key = self._make_key(stage, inputs)
-        if len(self._cache) >= self._max_entries:
-            # Evict oldest entry
-            oldest_key = next(iter(self._cache))
-            del self._cache[oldest_key]
-        self._cache[key] = (time.monotonic(), result)
+        with self._lock:
+            if len(self._cache) >= self._max_entries:
+                oldest_key = next(iter(self._cache))
+                del self._cache[oldest_key]
+            self._cache[key] = (time.monotonic(), result)
 
     def clear(self) -> None:
-        self._cache.clear()
-        self._hits = 0
-        self._misses = 0
+        with self._lock:
+            self._cache.clear()
+            self._hits = 0
+            self._misses = 0
 
     @property
     def size(self) -> int:

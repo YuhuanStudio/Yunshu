@@ -1889,18 +1889,16 @@ class EngineCore:
                             except (asyncio.CancelledError, Exception):
                                 pass
                         if _cancel_waiter in done:
-                            # The polling sleep (0.05s) completed, but that
-                            # doesn't mean cancel was actually requested — it's
-                            # just the poll interval expiring.  Only break if
-                            # the cancel event is genuinely set.
                             if isinstance(cancel_event, asyncio.Event):
                                 _cancelled = cancel_event._value
                             else:
                                 _cancelled = cancel_event.is_set()
                             if _cancelled:
                                 break
-                        # _get_task completed
-                        output = _get_task.result()
+                            # Poll interval expired but not cancelled — retry
+                            continue
+                        if _get_task in done:
+                            output = _get_task.result()
                     except asyncio.CancelledError:
                         for t in (_get_task, _cancel_waiter):
                             if not t.done():

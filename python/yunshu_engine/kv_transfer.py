@@ -1185,13 +1185,19 @@ class KVTransferServer:
         logger.debug("KV transfer connection from %s", peer)
 
         try:
+            _consecutive_timeouts = 0
+            _max_timeouts = 3
             while self._running:
                 try:
                     frame = await asyncio.wait_for(
                         KVTransferProtocol.read_frame(reader),
                         timeout=self._config.timeout_seconds,
                     )
+                    _consecutive_timeouts = 0
                 except asyncio.TimeoutError:
+                    _consecutive_timeouts += 1
+                    if _consecutive_timeouts >= _max_timeouts:
+                        break
                     continue
                 except (asyncio.IncompleteReadError, ConnectionError):
                     # Client disconnected

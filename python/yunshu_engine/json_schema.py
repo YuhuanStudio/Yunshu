@@ -181,7 +181,7 @@ def _repair_json_schema(
     for key in ("anyOf", "oneOf", "allOf"):
         if key in schema and isinstance(schema[key], list):
             schema[key] = [
-                _repair_json_schema(o, _depth + 1, _root_defs, _seen_refs) if isinstance(o, dict) else o
+                _repair_json_schema(o, _depth + 1, _root_defs, set(_seen_refs)) if isinstance(o, dict) else o
                 for o in schema[key]
             ]
 

@@ -661,12 +661,14 @@ class ExternalPrefillServer:
     ) -> None:
         """Handle a single client connection."""
         async with self._lock:
-            if self._active_connections >= self._config.max_connections:
-                writer.close()
-                await writer.wait_closed()
-                logger.warning("Rejected connection: max_connections reached")
-                return
-            self._active_connections += 1
+            reject = self._active_connections >= self._config.max_connections
+            if not reject:
+                self._active_connections += 1
+        if reject:
+            writer.close()
+            await writer.wait_closed()
+            logger.warning("Rejected connection: max_connections reached")
+            return
 
         try:
             while self._running:

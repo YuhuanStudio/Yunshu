@@ -90,9 +90,9 @@ class ThinkingBudgetProcessor:
         self._in_thinking = current_state == 'reasoning'
 
         if self._in_thinking:
-            # Track per-segment count for multi-segment reasoning awareness
             if not was_thinking:
                 self._segment_start_count = self._thinking_token_count
+                self._budget_exceeded = False
             self._thinking_token_count += 1
 
             if self._thinking_token_count >= self.config.max_thinking_tokens:

@@ -341,11 +341,10 @@ class GrammarBitmaskEngine:
 
             if self._constraint_rollback_needs_arg:
                 if not self._checkpoint_stack:
-                    # No checkpoint saved — nothing to roll back to.
-                    # Cannot call constraint.rollback(saved) without data.
                     return
-                saved = self._checkpoint_stack.pop()
+                saved = self._checkpoint_stack[-1]
                 self._constraint.rollback(saved)
+                self._checkpoint_stack.pop()
             else:
                 self._constraint.rollback()
                 # Pop the stack for no-arg rollback too (keeps stack depth correct)

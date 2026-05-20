@@ -295,7 +295,13 @@ def restore_rollback(cache: list) -> bool:
     For KV layers: trim by 1.
     Returns False if any layer can't be rolled back.
     """
-    success = True
+    # Pre-check: verify all layers can be rolled back before mutating any
+    for c in cache:
+        has_rollback = hasattr(c, "rollback_state") and c.rollback_state is not None
+        is_trimmable = hasattr(c, "is_trimmable") and c.is_trimmable()
+        if not has_rollback and not is_trimmable:
+            return False
+
     for c in cache:
         if hasattr(c, "rollback_state") and c.rollback_state is not None:
             conv_snap, ssm_snap = c.rollback_state
@@ -304,9 +310,6 @@ def restore_rollback(cache: list) -> bool:
             c.rollback_state = None
             if hasattr(c, "lengths") and c.lengths is not None:
                 c.lengths = c.lengths - 1
-            continue
-        if hasattr(c, "is_trimmable") and c.is_trimmable():
+        elif hasattr(c, "is_trimmable") and c.is_trimmable():
             c.trim(1)
-            continue
-        success = False
-    return success
+    return True
