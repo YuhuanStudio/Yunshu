@@ -346,11 +346,8 @@ class SLOMonitor:
 
     def __init__(self, config: Optional[SLOConfig] = None) -> None:
         self._config = config or SLOConfig()
-        self._check_counts: dict[str, int] = {
-            "ttft": 0, "itl": 0, "throughput": 0
-        }
-        self._violation_counts: dict[str, int] = {
-            "ttft": 0, "itl": 0, "throughput": 0
+        self._check_results: dict[str, deque[bool]] = {
+            "ttft": deque(maxlen=100), "itl": deque(maxlen=100), "throughput": deque(maxlen=100)
         }
         self._recent_violations: deque[dict[str, Any]] = deque(maxlen=100)
         self._auto_tuning_triggers: int = 0
@@ -382,16 +379,9 @@ class SLOMonitor:
         callback_violations = None
 
         with self._lock:
-            if metric not in self._check_counts:
+            if metric not in self._check_results:
                 logger.warning("Unknown SLO metric: %s", metric)
                 return True
-
-            self._check_counts[metric] += 1
-            # Sliding window: reset counts periodically to prevent stale
-            # historical violations from triggering auto-tuning after recovery
-            if self._check_counts[metric] > 100:
-                self._check_counts[metric] = 0
-                self._violation_counts[metric] = 0
 
             if metric == "ttft":
                 met = value <= self._config.ttft_ms
@@ -402,8 +392,9 @@ class SLOMonitor:
             else:
                 met = True
 
+            self._check_results[metric].append(met)
+
             if not met:
-                self._violation_counts[metric] += 1
                 violation = {
                     "metric": metric,
                     "value": value,
@@ -416,22 +407,15 @@ class SLOMonitor:
                 }
                 self._recent_violations.append(violation)
 
-                # Trigger auto-tuning if violation rate > 30%
-                checks = self._check_counts[metric]
-                violations = self._violation_counts[metric]
+                results = self._check_results[metric]
+                checks = len(results)
+                violations = sum(1 for r in results if not r)
                 if (checks >= 5
                         and violations / checks > 0.3
                         and self._auto_tuning_callback is not None):
                     self._auto_tuning_triggers += 1
                     callback_to_fire = self._auto_tuning_callback
                     callback_violations = list(self._recent_violations)
-                    # Reset counts after triggering so the tuner needs fresh
-                    # violations before firing again.  Without this, the
-                    # monotonically-growing violation rate would cause the
-                    # callback to fire on every single check once the 30%
-                    # threshold is crossed, even after the system recovers.
-                    self._check_counts[metric] = 0
-                    self._violation_counts[metric] = 0
 
         # Invoke callback outside the lock to avoid deadlock
         if callback_to_fire is not None:
@@ -446,14 +430,12 @@ class SLOMonitor:
         """Return compliance percentage per SLO."""
         with self._lock:
             result: dict[str, float] = {}
-            for metric, total in self._check_counts.items():
-                if total == 0:
+            for metric, results in self._check_results.items():
+                if not results:
                     result[metric] = 100.0
                 else:
-                    violations = self._violation_counts[metric]
-                    result[metric] = round(
-                        (1.0 - violations / total) * 100.0, 2
-                    )
+                    met = sum(1 for r in results if r)
+                    result[metric] = round(met / len(results) * 100.0, 2)
             return result
 
     def get_violations(self, limit: int = 20) -> list[dict[str, Any]]:
@@ -466,6 +448,11 @@ class SLOMonitor:
     def get_stats(self) -> dict[str, Any]:
         """Return SLO monitoring statistics."""
         with self._lock:
+            check_counts = {m: len(r) for m, r in self._check_results.items()}
+            violation_counts = {
+                m: sum(1 for v in r if not v)
+                for m, r in self._check_results.items()
+            }
             return {
                 "config": {
                     "ttft_ms": self._config.ttft_ms,
@@ -473,8 +460,8 @@ class SLOMonitor:
                     "throughput_tok_s": self._config.throughput_tok_s,
                 },
                 "compliance_pct": self.get_slo_compliance(),
-                "check_counts": dict(self._check_counts),
-                "violation_counts": dict(self._violation_counts),
+                "check_counts": check_counts,
+                "violation_counts": violation_counts,
                 "recent_violation_count": len(self._recent_violations),
                 "auto_tuning_triggers": self._auto_tuning_triggers,
             }
@@ -482,9 +469,8 @@ class SLOMonitor:
     def reset(self) -> None:
         """Reset SLO monitoring state."""
         with self._lock:
-            for k in self._check_counts:
-                self._check_counts[k] = 0
-                self._violation_counts[k] = 0
+            for k in self._check_results:
+                self._check_results[k].clear()
             self._recent_violations.clear()
             self._auto_tuning_triggers = 0
 
@@ -579,8 +565,9 @@ class AdaptiveBatchSizer:
                         int(batch * self._scale_up_factor),
                     )
 
-            # Clamp
-            batch = max(self._min_batch, min(batch, queue_depth))
+            # Clamp to [min_batch, max_batch] only.  Do not clamp to
+            # queue_depth — the scale-up condition already checks
+            # queue_ok, and clamping here prevents proactive scaling.
             batch = max(self._min_batch, min(batch, self._max_batch))
 
             # Track SLO compliance (only when latency data is available)

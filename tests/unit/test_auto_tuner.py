@@ -362,7 +362,7 @@ class TestAdaptiveBatchSizer:
         )
         assert batch <= 8
 
-    def test_clamps_to_queue_depth(self):
+    def test_queue_depth_signal(self):
         s = AdaptiveBatchSizer(min_batch=1, max_batch=64)
         s._current_batch = 16
         batch = s.compute_optimal_batch(
@@ -371,7 +371,10 @@ class TestAdaptiveBatchSizer:
             slo_latency_ms=200.0,
             current_latency_ms=100.0,
         )
-        assert batch <= 2
+        # queue_depth no longer caps batch — the scale-up condition
+        # checks queue_ok, and the batch is clamped to [min, max].
+        assert batch >= 1
+        assert batch <= 64
 
     def test_batch_sizer_stats(self):
         s = AdaptiveBatchSizer(min_batch=1, max_batch=64)

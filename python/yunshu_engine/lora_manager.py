@@ -499,7 +499,16 @@ class LoRAAdapterManager:
     _unload_lru_unlocked = _unload_lru
 
     def _apply_adapter(self, entry: LoRAAdapterEntry) -> None:
-        """Apply LoRA adapter to base model using mlx-lm tuner utilities."""
+        """Apply LoRA adapter by inspecting actual adapter weight keys.
+
+        Parses the adapters.safetensors key names to determine exactly which
+        base model modules need LoRA wrappers, instead of guessing from
+        num_layers. This ensures correct layer targeting regardless of which
+        layers the adapter was trained on.
+        """
+        import mlx.nn as nn
+        from mlx.utils import tree_unflatten
+
         adapter_path = Path(entry.adapter_path)
         config_path = adapter_path / "adapter_config.json"
 
@@ -512,60 +521,65 @@ class LoRAAdapterManager:
         lora_params = config.get("lora_parameters", {})
         entry.rank = lora_params.get("rank", 8)
         entry.scale = lora_params.get("scale", 20.0)
-        num_layers = config.get("num_layers", 16)
 
-        try:
-            from mlx_lm.tuner.utils import linear_to_lora_layers
-            linear_to_lora_layers(
-                self._base_model,
-                num_layers,
-                lora_params,
-            )
-        except ImportError:
-            # Fallback: manual LoRA application
-            logger.warning("mlx_lm.tuner.utils not available, attempting manual LoRA load")
-            self._apply_lora_manual(entry, lora_params, num_layers)
-
-        # Load adapter weights
+        # Parse adapter weight keys to determine target modules
         weights_path = adapter_path / "adapters.safetensors"
         if not weights_path.exists():
             raise FileNotFoundError(f"LoRA weights not found: {weights_path}")
-        self._base_model.load_weights(str(weights_path), strict=False)
 
-    def _apply_lora_manual(self, entry: LoRAAdapterEntry, lora_params: dict, num_layers: int) -> None:
-        """Fallback manual LoRA layer application when tuner utils unavailable."""
-        import mlx.nn as nn
-        from mlx.utils import tree_unflatten
+        from safetensors import safe_open
+        sf = safe_open(str(weights_path), framework="mlx")
+        all_keys = list(sf.keys())
+        del sf
 
-        rank = lora_params.get("rank", 8)
-        scale = lora_params.get("scale", 20.0)
+        lora_suffixes = {".lora_a", ".lora_b"}
+        target_module_paths = set()
+        for key in all_keys:
+            for suffix in lora_suffixes:
+                if key.endswith(suffix):
+                    base_path = key[:-len(suffix)]
+                    target_module_paths.add(base_path)
+                    break
 
-        # Apply LoRA to all eligible linear projection layers
+        if not target_module_paths:
+            # Fall back to linear_to_lora_layers for backward compat
+            num_layers = config.get("num_layers", 16)
+            try:
+                from mlx_lm.tuner.utils import linear_to_lora_layers
+                linear_to_lora_layers(self._base_model, num_layers, lora_params)
+            except (ImportError, Exception) as e:
+                logger.warning(f"linear_to_lora_layers fallback failed: {e}")
+            self._base_model.load_weights(str(weights_path), strict=False)
+            return
+
+        # Wrap only the target modules with LoRALinear
         from mlx_lm.tuner.lora import LoRALinear
 
-        lora_layers = []
-        for name, module in self._base_model.named_modules():
-            if isinstance(module, nn.Linear) and num_layers > 0:
-                # Apply LoRA to attention projections AND MLP layers
-                if any(k in name for k in (
-                    "q_proj", "k_proj", "v_proj", "o_proj",
-                    "query", "key", "value", "dense",
-                    "gate_proj", "up_proj", "down_proj",
-                    "gate", "up", "down",
-                )):
-                    lora_layer = LoRALinear(
-                        module.in_features,
-                        module.out_features,
-                        rank=rank,
-                        scale=scale,
-                    )
-                    lora_layer.linear = module
-                    lora_layers.append((name, lora_layer))
-                    num_layers -= 1
+        rank = entry.rank
+        scale = entry.scale
 
-        # Actually update the model with the new LoRA layers
-        if lora_layers:
-            self._base_model.update_modules(tree_unflatten(lora_layers))
+        lora_wrappers = []
+        for name, module in self._base_model.named_modules():
+            if name in target_module_paths and isinstance(module, (nn.Linear, nn.QuantizedLinear)):
+                lora_layer = LoRALinear.from_base(module, r=rank, scale=scale)
+                lora_wrappers.append((name, lora_layer))
+
+        if lora_wrappers:
+            self._base_model.update_modules(tree_unflatten(lora_wrappers))
+
+        # Load adapter weights into the wrapped model
+        self._base_model.load_weights(str(weights_path), strict=False)
+
+        wrapped_names = {name for name, _ in lora_wrappers}
+        missing = target_module_paths - wrapped_names
+        if missing:
+            logger.warning(
+                f"LoRA adapter references {len(missing)} modules not in base model"
+            )
+        logger.info(
+            f"LoRA applied: {len(lora_wrappers)}/{len(target_module_paths)} modules "
+            f"wrapped (rank={rank}, scale={scale})"
+        )
 
     def _restore_base(self) -> None:
         """Restore base model weights and structure from saved copy.

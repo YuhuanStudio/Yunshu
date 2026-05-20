@@ -37,6 +37,14 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
 
+### 已完成修復 (2026-05-20 Wave 281 — LoRA weight-key layer targeting, auto-tuner SLO rolling window, adaptive batch queue_depth clamp removal)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 281: LoRA 權重鍵精確定位 | _apply_adapter 用 num_layers 猜測層數，可能包裝錯誤層。改為解析 adapters.safetensors 鍵名精確定位，移除 _apply_lora_manual | LoRA 輸出損壞 (CRITICAL) |
+| Wave 281: Auto-tuner SLO 滾動視窗 | 計數器重置後合規率跳至 100%。改為 deque(maxlen=100) 滾動視窗，永不重置 | 監控準確性 (HIGH) |
+| Wave 281: Adaptive batch queue_depth 限制 | 批次大小被 queue_depth 鉗制，阻止主動擴展。移除 queue_depth 鉗制，僅用 [min, max] | 調度效率 (MEDIUM) |
+
 ### 已完成修復 (2026-05-20 Wave 280 — TieredKV lock, SSD block resurrection, ngram pool reset, Realtime WebSocket auth, warmup tokenizer, spec decode suffix leak)
 
 | 修復 | 描述 | 影響 |
