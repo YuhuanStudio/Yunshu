@@ -38,6 +38,9 @@ class HardwareInfo:
     gpu_cores: Optional[int] = None
     mlx_device_name: Optional[str] = None
     os_version: str = ""
+    gpu_family: Optional[str] = None
+    memory_bandwidth_gb: Optional[float] = None
+    ane_available: Optional[bool] = None
 
 
 def get_chip_name() -> str:
@@ -139,6 +142,139 @@ def get_mlx_version() -> str:
         return "unavailable"
 
 
+def get_gpu_family() -> Optional[str]:
+    """Detect GPU family name (e.g. "Apple M2 Max").
+
+    Tries system_profiler first (most accurate on macOS), then falls back
+    to sysctl hw.model, then to the existing chip_name from CPU brand.
+    """
+    try:
+        r = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType"],
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+        for line in r.stdout.splitlines():
+            # Match lines like "Chipset Model: Apple M2 Max"
+            if "Chipset Model" in line:
+                m = re.search(r":\s*(Apple\s+\S.*)", line)
+                if m:
+                    return m.group(1).strip()
+            # Also try "Chipset:" on newer macOS
+            if "Chipset:" in line:
+                m = re.search(r":\s*(Apple\s+\S.*)", line)
+                if m:
+                    return m.group(1).strip()
+    except Exception:
+        logger.debug("system_profiler GPU family detection failed", exc_info=True)
+
+    # Fallback: sysctl hw.model (e.g. "Mac15,12")
+    try:
+        r = subprocess.run(
+            ["sysctl", "-n", "hw.model"],
+            capture_output=True, text=True, check=True,
+        )
+        hw_model = r.stdout.strip()
+        if hw_model:
+            # hw.model gives board IDs like "Mac15,12", not human-readable.
+            # Use the CPU brand string as a more useful fallback.
+            cpu_brand = get_chip_name()
+            if "Apple" in cpu_brand:
+                return cpu_brand
+    except Exception:
+        logger.debug("sysctl hw.model fallback failed", exc_info=True)
+
+    # Last resort: use CPU brand string
+    chip = get_chip_name()
+    if "Apple" in chip:
+        return chip
+    return None
+
+
+# Known Apple Silicon memory bandwidth (GB/s) per chip family.
+# Sources: Apple specs, AnandTech, Chipwise measurements.
+_MEMORY_BANDWIDTH: dict[str, float] = {
+    # M1 family
+    "M1": 68.0,
+    "M1 Pro": 200.0,
+    "M1 Max": 400.0,
+    "M1 Ultra": 800.0,
+    # M2 family
+    "M2": 100.0,
+    "M2 Pro": 200.0,
+    "M2 Max": 400.0,
+    "M2 Ultra": 800.0,
+    # M3 family
+    "M3": 100.0,
+    "M3 Pro": 150.0,
+    "M3 Max": 400.0,
+    "M3 Ultra": 800.0,
+    # M4 family
+    "M4": 120.0,
+    "M4 Pro": 273.0,
+    "M4 Max": 546.0,
+    "M4 Ultra": 819.0,
+}
+
+
+def get_memory_bandwidth_gb() -> Optional[float]:
+    """Return memory bandwidth in GB/s for the detected chip.
+
+    Uses a lookup table of known Apple Silicon bandwidth values.  Falls back
+    to None if the chip cannot be identified.
+    """
+    chip = get_chip_name()
+    if not chip:
+        return None
+
+    # Try exact match first (e.g. "Apple M3 Max")
+    for key, bw in _MEMORY_BANDWIDTH.items():
+        if key in chip:
+            return bw
+
+    # Parse chip generation + tier for partial match
+    gen, tier = parse_chip_info(chip)
+    lookup_key = f"{gen} {tier}".strip()
+    if lookup_key in _MEMORY_BANDWIDTH:
+        return _MEMORY_BANDWIDTH[lookup_key]
+    if gen in _MEMORY_BANDWIDTH:
+        return _MEMORY_BANDWIDTH[gen]
+
+    return None
+
+
+def get_ane_available() -> Optional[bool]:
+    """Check if Apple Neural Engine (ANE) is present.
+
+    Detection strategy:
+    1. Check for ANE device in IOKit registry (most reliable)
+    2. Check for CoreML / NeuralEngine framework
+    3. Default: True on Apple Silicon (ANE is present on all M-series)
+    """
+    if not is_apple_silicon():
+        return False
+
+    # Method 1: IOKit registry lookup
+    try:
+        r = subprocess.run(
+            ["ioreg", "-l", "-w0"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if "AppleNeuralEngine" in r.stdout:
+            return True
+    except Exception:
+        logger.debug("ioreg ANE detection failed", exc_info=True)
+
+    # Method 2: CoreML availability
+    try:
+        import coremltools  # noqa: F401
+        return True
+    except ImportError:
+        pass
+
+    # Method 3: All Apple Silicon chips have ANE — assume True on arm64
+    return True
+
+
 def get_mlx_lm_version() -> str:
     try:
         import mlx_lm
@@ -192,6 +328,9 @@ def detect_hardware() -> HardwareInfo:
         gpu_cores=get_gpu_core_count(),
         mlx_device_name=get_mlx_device_name(),
         os_version=get_os_version(),
+        gpu_family=get_gpu_family(),
+        memory_bandwidth_gb=get_memory_bandwidth_gb(),
+        ane_available=get_ane_available(),
     )
 
 
@@ -321,6 +460,9 @@ def get_hardware_profile() -> dict:
         "total_memory_gb": round(hw.total_memory_gb, 1),
         "working_set_gb": round(hw.max_working_set_bytes / (1024 ** 3), 1),
         "gpu_cores": hw.gpu_cores,
+        "gpu_family": hw.gpu_family,
+        "memory_bandwidth_gb": hw.memory_bandwidth_gb,
+        "ane_available": hw.ane_available,
         "mlx_device": hw.mlx_device_name,
         "os_version": hw.os_version,
         "mlx_version": get_mlx_version(),

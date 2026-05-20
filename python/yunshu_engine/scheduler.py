@@ -512,9 +512,19 @@ class AttentionScoreTracker:
 
 
 class SchedulingPolicy(Enum):
-    """Request scheduling policy (oMLX pattern)."""
+    """Request scheduling policy (oMLX / SGLang pluggable pattern).
+
+    To add a new policy:
+    1. Add a new member here (e.g. MY_POLICY = auto()).
+    2. Handle it in ``make_waiting_queue()`` (priority_queue.py) if the
+       queue ordering needs to change.
+    3. Add a branch in ``_schedule_waiting()`` below where the policy is
+       checked (search for ``self.config.policy``).
+    4. Add a test in ``tests/unit/test_scheduler.py``.
+    """
     FCFS = auto()       # First-Come-First-Served
     PRIORITY = auto()   # Priority-based (higher priority = scheduled first)
+    FAIR = auto()       # Round-robin across priority levels (prevents low-priority starvation)
 
 
 @dataclass
@@ -1347,6 +1357,33 @@ class Scheduler:
                 _aged_insert.append((_effective_priority, _req))
             _aged_insert.sort(key=lambda x: -x[0])  # Higher effective priority first
             to_insert = [_req for _, _req in _aged_insert]
+
+        # FAIR policy: round-robin across priority levels (SGLang pattern).
+        #
+        # Instead of serving all high-priority requests first (which can starve
+        # low-priority ones indefinitely), serve one request from each priority
+        # level in turn.  Higher-priority levels get more slots proportional to
+        # how many requests they have, but every level gets at least one slot
+        # per round (if it has requests waiting).
+        #
+        # This is simpler than aging and more predictable: no tuning of
+        # aging_weight needed.  It guarantees bounded waiting time for any
+        # priority level with at least one request.
+        if self.config.policy == SchedulingPolicy.FAIR and len(to_insert) > 1:
+            # Group requests by priority level
+            buckets: dict[int, list] = {}
+            for _req in to_insert:
+                p = _req.sampling_params.priority if _req.sampling_params else 0
+                buckets.setdefault(p, []).append(_req)
+            # Sort priority levels descending (high priority goes first)
+            sorted_priorities = sorted(buckets.keys(), reverse=True)
+            # Round-robin: take one from each priority level in turn
+            round_robin = []
+            while any(buckets[p] for p in sorted_priorities):
+                for p in sorted_priorities:
+                    if buckets[p]:
+                        round_robin.append(buckets[p].pop(0))
+            to_insert = round_robin
 
         # Cache-locality reordering: sort to_insert by KV prefix hash so
         # requests sharing the same system prompt / conversation prefix are

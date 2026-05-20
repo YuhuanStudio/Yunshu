@@ -211,7 +211,13 @@ class ModelManager:
     - Memory settle barrier with tighter polling (learned from oMLX's 10-round approach)
     - Per-model engine isolation (oMLX shares a single ThreadPoolExecutor)
     - Per-model loading events so concurrent requests wait instead of failing
+    - Post-load memory pressure check triggers LRU eviction (vLLM/oMLX pattern)
     """
+
+    # Default threshold for post-load memory pressure eviction.
+    # When MLX active memory exceeds this fraction of the max working set,
+    # the manager will proactively evict the least-recently-used model.
+    _MEMORY_PRESSURE_THRESHOLD = 0.90
 
     def __init__(
         self,
@@ -220,12 +226,14 @@ class ModelManager:
         settle_timeout_s: float = 5.0,
         ttl_seconds: Optional[float] = None,
         max_models: int = 0,
+        memory_pressure_threshold: float = 0.90,
     ) -> None:
         self.max_memory_bytes = max_memory_bytes  # None = unlimited
         self.kv_reserve_ratio = kv_reserve_ratio
         self.settle_timeout_s = settle_timeout_s
         self.ttl_seconds = ttl_seconds
         self.max_models = max_models  # 0 = unlimited
+        self.memory_pressure_threshold = memory_pressure_threshold
 
         self._entries: dict[str, ModelEntry] = {}
         self._current_memory_bytes: int = 0
@@ -233,6 +241,11 @@ class ModelManager:
         # Per-model loading events: concurrent requests for the same model
         # wait on this event instead of raising RuntimeError
         self._loading_events: dict[str, asyncio.Event] = {}
+        self._eviction_stats: dict[str, int] = {
+            "pressure_evictions": 0,
+            "budget_evictions": 0,
+            "slot_evictions": 0,
+        }
 
     @staticmethod
     def _get_mlx_executor():
@@ -385,6 +398,12 @@ class ModelManager:
                     self._get_mlx_executor(),
                     lambda: (mx.synchronize(), mx.clear_cache()),
                 )
+
+                # Post-load memory pressure check (oMLX/vLLM pattern):
+                # After loading a new model, actual MLX active memory may
+                # exceed safe thresholds even when no explicit budget was set.
+                # This triggers LRU eviction of the oldest idle model.
+                await self._check_post_load_memory_pressure()
 
                 logger.info(
                     f"Loaded model {model_id} "
@@ -593,6 +612,7 @@ class ModelManager:
                     f"{self.max_memory_bytes / 1e9:.1f} GB"
                 )
             await self._unload_model_locked(victim.model_id)
+            self._eviction_stats["budget_evictions"] += 1
 
     async def _ensure_model_slot_available(self) -> None:
         """Evict LRU models until under max_models limit.
@@ -614,6 +634,80 @@ class ModelManager:
                     f"all loaded models are pinned or have active requests"
                 )
             await self._unload_model_locked(victim.model_id)
+            self._eviction_stats["slot_evictions"] += 1
+
+    async def _check_post_load_memory_pressure(self) -> None:
+        """Check memory pressure after loading and evict LRU model if needed.
+
+        oMLX/vLLM pattern: after loading a new model, the combined memory
+        footprint of all loaded models may push utilization above a safe
+        threshold.  Unlike ``_ensure_memory_available`` (which only fires
+        when an explicit ``max_memory_bytes`` budget is exceeded), this
+        method looks at *actual* MLX active memory relative to the Metal
+        working-set limit.  This catches cases where:
+        - ``max_memory_bytes`` was not set (unlimited budget mode)
+        - Estimated sizes are inaccurate
+        - The new model is the only model but uses most of working-set
+
+        Caller MUST hold ``self._lock``.
+        """
+        active = mx.get_active_memory()
+        max_ws = mx.metal.get_memory_info()
+        if hasattr(max_ws, "max_recommended_working_set_size"):
+            limit = int(max_ws.max_recommended_working_set_size)
+        else:
+            # Fallback: use 75% of system memory as working-set estimate
+            from .utils.hardware import get_total_memory_bytes
+            limit = int(get_total_memory_bytes() * 0.75)
+
+        if limit <= 0:
+            return
+
+        utilization = active / limit
+        if utilization < self.memory_pressure_threshold:
+            return
+
+        logger.warning(
+            "Post-load memory pressure: %.1f%% active (%.1fGB / %.1fGB working-set), "
+            "threshold=%.0f%% — initiating LRU eviction",
+            utilization * 100,
+            active / 1e9,
+            limit / 1e9,
+            self.memory_pressure_threshold * 100,
+        )
+
+        # Evict one LRU model to relieve pressure.  Keep evicting while
+        # pressure remains high, but stop after a safety limit to avoid
+        # unloading everything.
+        max_evictions = sum(1 for e in self._entries.values() if e.is_loaded and not e.is_pinned)
+        for _ in range(max_evictions):
+            victim = self._find_lru_victim()
+            if victim is None:
+                break
+            await self._unload_model_locked(victim.model_id)
+            self._eviction_stats["pressure_evictions"] += 1
+
+            # Re-check after each eviction
+            active = mx.get_active_memory()
+            if active / limit < self.memory_pressure_threshold:
+                break
+
+    async def _evict_lru_model(self) -> Optional[str]:
+        """Evict the least-recently-used non-pinned, idle model.
+
+        Public wrapper around ``_find_lru_victim`` + ``_unload_model_locked``
+        so callers (e.g. periodic TTL checks, manual admin triggers) can
+        request a single LRU eviction without knowing internal state.
+
+        Returns the model_id of the evicted model, or None if nothing was
+        eligible for eviction.
+        """
+        async with self._lock:
+            victim = self._find_lru_victim()
+            if victim is None:
+                return None
+            await self._unload_model_locked(victim.model_id)
+            return victim.model_id
 
     def _find_lru_victim(self) -> Optional[ModelEntry]:
         """Find the least-recently-used non-pinned, loaded model.
@@ -834,6 +928,8 @@ class ModelManager:
             "current_memory_gb": self._current_memory_bytes / 1e9,
             "models_registered": len(self._entries),
             "models_loaded": sum(1 for e in self._entries.values() if e.is_loaded),
+            "eviction_stats": dict(self._eviction_stats),
+            "memory_pressure_threshold": self.memory_pressure_threshold,
             "models": [
                 {
                     "id": e.model_id,

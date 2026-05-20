@@ -23,11 +23,154 @@ where the sampler is invoked per-token.
 """
 
 
+import copy
 import logging
 from enum import Enum, auto
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+
+# ── JSON Schema Auto-Repair (vLLM pattern) ──────────────────────────────────
+
+
+def _repair_json_schema(
+    schema: dict,
+    _depth: int = 0,
+    _root_defs: dict | None = None,
+) -> dict:
+    """Repair common JSON Schema issues before constrained decoding (vLLM pattern).
+
+    Handles patterns that users commonly send from the OpenAI API but that
+    our constrained decoder does not natively support:
+
+    1. Resolves ``$ref`` by inlining the referenced definition from
+       ``definitions`` / ``$defs``.
+    2. Adds ``"type": "object"`` when ``properties`` is present but ``type``
+       is missing.
+    3. Converts ``"anyOf": [{"type": "string"}, {"type": "null"}]`` (and
+       permutations) to ``{"oneOf": [...]}`` for cleaner resolution.
+    4. Removes ``additionalProperties: false`` if explicitly set (we don't
+       enforce it; it only causes errors in the state machine).
+    5. Sets ``additionalProperties: false`` on objects that never mentioned
+       ``additionalProperties`` at all (common OpenAI pattern — prevents
+       generating extra keys).
+
+    Args:
+        schema: A JSON Schema dict.
+        _depth: Recursion guard (max 10).
+        _root_defs: Definitions block inherited from the root schema for
+                    resolving nested ``$ref``.
+
+    Returns:
+        A repaired copy of the schema.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    if _depth > 10:
+        return schema
+
+    schema = copy.deepcopy(schema)
+
+    # Capture root-level definitions for nested $ref resolution
+    if _root_defs is None:
+        _root_defs = {}
+        for key in ("definitions", "$defs"):
+            if key in schema and isinstance(schema[key], dict):
+                _root_defs.update(schema[key])
+
+    # 1. Resolve $ref by inlining the referenced definition
+    if "$ref" in schema:
+        ref_path = schema["$ref"]
+        if isinstance(ref_path, str) and ref_path.startswith("#/"):
+            parts = ref_path[2:].split("/")
+            target = None
+            # Try local definitions first
+            for key in ("definitions", "$defs"):
+                if key in schema and isinstance(schema[key], dict):
+                    if len(parts) == 2 and parts[0] in ("definitions", "$defs"):
+                        target = schema[key].get(parts[1])
+                    elif len(parts) == 1:
+                        target = schema[key].get(parts[0])
+                    if target is not None:
+                        break
+            # Fall back to root definitions
+            if target is None and _root_defs:
+                if len(parts) == 2 and parts[0] in ("definitions", "$defs"):
+                    target = _root_defs.get(parts[1])
+                elif len(parts) == 1:
+                    target = _root_defs.get(parts[0])
+            if target is not None and isinstance(target, dict):
+                # Merge the referenced schema, removing $ref
+                del schema["$ref"]
+                # Remove the definitions block to avoid re-processing
+                schema.pop("definitions", None)
+                schema.pop("$defs", None)
+                # Merge target into schema (target keys override)
+                for k, v in target.items():
+                    schema[k] = v
+                # Recurse to repair the merged schema
+                return _repair_json_schema(schema, _depth + 1, _root_defs)
+
+    # 2. Add "type": "object" if properties is present but type is missing
+    if "properties" in schema and "type" not in schema:
+        schema["type"] = "object"
+
+    # 3. Convert anyOf with exactly one non-null + null to oneOf
+    if "anyOf" in schema and isinstance(schema["anyOf"], list):
+        options = schema["anyOf"]
+        has_null = any(
+            isinstance(o, dict) and o.get("type") == "null"
+            for o in options
+        )
+        non_null = [o for o in options if isinstance(o, dict) and o.get("type") != "null"]
+        if has_null and len(non_null) == 1:
+            # Pattern: anyOf: [SomeType, null] → oneOf: [SomeType, null]
+            schema["oneOf"] = schema.pop("anyOf")
+
+    # 4. Remove additionalProperties: false (we don't enforce it; it causes
+    #    errors in the constraint state machine).  Track whether it was
+    #    explicitly present so step 5 doesn't re-add it.
+    _had_explicit_additional_props = "additionalProperties" in schema
+    if schema.get("additionalProperties") is False:
+        del schema["additionalProperties"]
+
+    # 5. Set additionalProperties: false for objects when it was never
+    #    specified at all (common OpenAI pattern — prevents generating
+    #    unexpected keys).  Do NOT re-add if the user explicitly set it
+    #    (even if to false, which we removed above — the intent was to
+    #    disallow extras, which we can't enforce, so we just omit it).
+    schema_type = schema.get("type")
+    if (
+        schema_type == "object"
+        and "additionalProperties" not in schema
+        and "properties" in schema
+        and not _had_explicit_additional_props
+    ):
+        schema["additionalProperties"] = False
+
+    # Recurse into sub-schemas
+    if "properties" in schema and isinstance(schema["properties"], dict):
+        for key, value in schema["properties"].items():
+            if isinstance(value, dict):
+                schema["properties"][key] = _repair_json_schema(value, _depth + 1, _root_defs)
+
+    if "items" in schema and isinstance(schema["items"], dict):
+        schema["items"] = _repair_json_schema(schema["items"], _depth + 1, _root_defs)
+
+    if "additionalProperties" in schema and isinstance(schema["additionalProperties"], dict):
+        schema["additionalProperties"] = _repair_json_schema(
+            schema["additionalProperties"], _depth + 1, _root_defs
+        )
+
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key in schema and isinstance(schema[key], list):
+            schema[key] = [
+                _repair_json_schema(o, _depth + 1, _root_defs) if isinstance(o, dict) else o
+                for o in schema[key]
+            ]
+
+    return schema
 
 
 # ── JSON State Machine ──────────────────────────────────────────────────────
@@ -89,8 +232,10 @@ class JsonSchemaConstraint:
 
         Args:
             schema: JSON Schema dict. If None, accepts any valid JSON object.
+                    The schema is auto-repaired via ``_repair_json_schema``
+                    before use (vLLM pattern).
         """
-        self._schema = schema
+        self._schema = _repair_json_schema(schema) if schema is not None else None
         self._state = JsonState.START
         self._text_buffer = ""  # decoded text so far
         self._schema_stack: list[tuple[JsonState, dict]] = []

@@ -155,5 +155,9 @@ def make_waiting_queue(policy) -> RequestPriorityQueue:
 
     if policy == SchedulingPolicy.PRIORITY:
         return RequestPriorityQueue(mode=_QueueMode.PRIORITY)
-    else:
+    elif policy == SchedulingPolicy.FCFS:
         return RequestPriorityQueue(mode=_QueueMode.FCFS)
+    else:
+        # FAIR and any future policies: use PRIORITY ordering in the heap
+        # so that per-priority-level round-robin in _schedule_waiting() works.
+        return RequestPriorityQueue(mode=_QueueMode.PRIORITY)
