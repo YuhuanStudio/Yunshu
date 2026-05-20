@@ -1395,7 +1395,16 @@ class EngineCore:
         # ── Wave 46: KV lifecycle admission ──
         _block_id = hash(req_id) % (10**9)
         try:
-            estimated_kv_bytes = num_prompt_tokens * 2048
+            # Use model-aware estimate: per-token KV = num_layers * num_kv_heads * head_dim * dtype_size * 2 (K+V).
+            # Fall back to the memory_aware_scheduler's formula when available, which
+            # accounts for the actual model architecture.  The old hardcoded 2048
+            # bytes/token was ~64x too small for typical 32-layer models, causing
+            # kv_lifecycle to wildly under-count and migration tier decisions to be
+            # based on incorrect size information.
+            estimated_kv_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
+            if estimated_kv_bytes <= 0:
+                # Fallback: rough estimate if memory-aware scheduler has no model info
+                estimated_kv_bytes = num_prompt_tokens * 2048
             self._kv_lifecycle.admit(
                 block_id=_block_id,
                 size_bytes=estimated_kv_bytes,
@@ -1416,7 +1425,9 @@ class EngineCore:
 
         # ── Wave 43: Memory-aware admission control ──
         try:
-            estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(num_prompt_tokens)
+            estimated_bytes = self._memory_aware_scheduler.estimate_kv_memory(
+                num_prompt_tokens, max_tokens=max_tokens,
+            )
             if isinstance(estimated_bytes, int) and estimated_bytes > 0:
                 admitted = self._memory_aware_scheduler.reserve_memory(
                     request_id=req_id,
@@ -1425,6 +1436,63 @@ class EngineCore:
                 )
                 if not admitted:
                     logger.warning(f"Memory-aware scheduler rejected request {req_id}: estimated {estimated_bytes} bytes")
+                    # Release all resources acquired before this point
+                    try:
+                        from .inflight_prefix_sharing import get_inflight_tracker
+                        get_inflight_tracker().unregister(req_id)
+                    except Exception:
+                        logger.debug(f"inflight unregister failed in mem-aware rejection for {req_id}", exc_info=True)
+                    self._budget_manager.remove(req_id)
+                    if loaded_lora and lora_adapter:
+                        try:
+                            from .lora_manager import get_lora_manager
+                            lora_mgr = get_lora_manager()
+                            if lora_mgr is not None:
+                                lora_mgr.release_adapter(lora_adapter)
+                        except Exception:
+                            logger.debug(f"LoRA release failed in mem-aware rejection for {req_id}", exc_info=True)
+                    try:
+                        self._lifecycle_orchestrator.on_request_failed(
+                            req_id, error="Memory-aware scheduler: insufficient memory", retryable=True,
+                        )
+                    except Exception:
+                        logger.debug(f"lifecycle cleanup failed in mem-aware rejection for {req_id}", exc_info=True)
+                    try:
+                        self._kv_lifecycle.release(_block_id)
+                    except Exception:
+                        logger.debug(f"kv_lifecycle release failed in mem-aware rejection for {req_id}", exc_info=True)
+                    try:
+                        self._kv_migration.unregister_block(_block_id)
+                    except Exception:
+                        logger.debug(f"kv_migration unregister failed in mem-aware rejection for {req_id}", exc_info=True)
+                    if self._sliding_window_mgr is not None:
+                        try:
+                            self._sliding_window_mgr.remove_request(req_id)
+                        except Exception:
+                            logger.debug(f"sliding window cleanup failed in mem-aware rejection for {req_id}", exc_info=True)
+                    # Set up output collector with error response
+                    from .output_collector import RequestOutputCollector, RequestStreamState
+                    from .request import RequestOutput
+                    self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+                    self._stream_states[req_id] = RequestStreamState(
+                        stream_interval=self.config.stream_interval
+                    )
+                    self._finished_events[req_id] = asyncio.Event()
+
+                    error_output = RequestOutput(
+                        request_id=req_id,
+                        finished=True,
+                        finish_reason="memory_exceeded",
+                        error=f"Memory-aware scheduler rejected: insufficient memory (estimated {estimated_bytes} bytes)",
+                        prompt_tokens=num_prompt_tokens,
+                        completion_tokens=0,
+                    )
+                    self._output_collectors[req_id].put(error_output)
+                    self._output_collectors[req_id].put(None)  # sentinel
+                    self._finished_events[req_id].set()
+                    # Fail any dedup shadows waiting for this primary
+                    self._fail_dedup_shadows(req_id, "Memory-aware scheduler: insufficient memory", "memory_exceeded")
+                    return req_id
         except Exception:
             logger.debug("memory-aware admission check skipped", exc_info=True)
 
@@ -2612,17 +2680,34 @@ class EngineCore:
                     )
                     # KV compression under memory pressure: compress old blocks
                     # instead of outright eviction when usage > 85%
-                    if mem_usage > 0.85 and self._kv_compressor is not None:
-                        try:
-                            kv_mgr = getattr(self.scheduler, '_kv_manager', None)
-                            if kv_mgr is not None:
-                                evicted = kv_mgr.memory_pressure_evict(0.90)
-                                if evicted > 0:
-                                    logger.debug(
-                                        f"KV memory pressure eviction: {evicted} blocks"
-                                    )
-                        except Exception:
-                            logger.debug("KV pressure eviction failed", exc_info=True)
+                    if mem_usage > 0.85:
+                        # Reduce prefill batch size to prevent new prefill
+                        # requests from consuming freed blocks faster than
+                        # eviction can release them.  Without this, the
+                        # scheduler admits large prefills that immediately
+                        # re-fill the KV pool and perpetuate OOM.
+                        if self.config.prefill_batch_size > 1:
+                            old_pbs = self.config.prefill_batch_size
+                            self.config.prefill_batch_size = max(1, old_pbs // 2)
+                            logger.info(
+                                "Memory pressure: reducing prefill_batch_size %d -> %d (mem_usage=%.1f%%)",
+                                old_pbs, self.config.prefill_batch_size, mem_usage * 100,
+                            )
+                        if self._kv_compressor is not None:
+                            try:
+                                kv_mgr = getattr(self.scheduler, '_kv_manager', None)
+                                if kv_mgr is not None:
+                                    evicted = kv_mgr.memory_pressure_evict(0.90)
+                                    if evicted > 0:
+                                        logger.debug(
+                                            f"KV memory pressure eviction: {evicted} blocks"
+                                        )
+                            except Exception:
+                                logger.debug("KV pressure eviction failed", exc_info=True)
+                    # Recovery: when memory usage drops below 70%, the auto-tuner
+                    # and AdaptiveBatchSizer will naturally restore batch sizes.
+                    # No explicit recovery needed here — prefill_batch_size stays
+                    # reduced until the auto-tuner evaluates the next tuning cycle.
                     # Telemetry: record step-level metrics
                     self._telemetry.collect(
                         "engine_step_batch_size",
@@ -2716,9 +2801,18 @@ class EngineCore:
             except Exception:
                 logger.debug("LoRA cleanup failed", exc_info=True)
         # Lifecycle + budget + memory + KV lifecycle
-        self._lifecycle_orchestrator.on_request_finished(request_id, completion_tokens=completion_tokens, finish_reason=finish_reason)
-        self._budget_manager.remove(request_id)
-        self._memory_aware_scheduler.release_memory(request_id)
+        try:
+            self._lifecycle_orchestrator.on_request_finished(request_id, completion_tokens=completion_tokens, finish_reason=finish_reason)
+        except Exception:
+            logger.debug("lifecycle orchestrator finish failed", exc_info=True)
+        try:
+            self._budget_manager.remove(request_id)
+        except Exception:
+            logger.debug("budget manager remove failed", exc_info=True)
+        try:
+            self._memory_aware_scheduler.release_memory(request_id)
+        except Exception:
+            logger.debug("memory-aware scheduler release failed", exc_info=True)
         try:
             self._kv_lifecycle.release(_block_id)
         except Exception:
