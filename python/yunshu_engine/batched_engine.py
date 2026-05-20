@@ -6153,6 +6153,28 @@ class BatchedEngine:
         via the backbone forward with n_confirmed=1 for zero-cost reject.
         Best for Qwen3.5 and other models with GatedDeltaNet SSM layers.
         """
+        # MTP path does not support grammar constraints — fall back to fast
+        # path which has full ConstrainedSampler support.
+        if json_schema is not None:
+            return await self._generate_fast(
+                prompt=prompt, max_tokens=max_tokens, temperature=temperature,
+                top_p=top_p, top_k=top_k, min_p=min_p,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                logit_bias=logit_bias,
+                stop=stop, stop_token_ids=stop_token_ids, seed=seed,
+                enable_thinking=enable_thinking,
+                logprobs=logprobs, top_logprobs=top_logprobs,
+                thinking_budget=thinking_budget,
+                cancel_event=cancel_event,
+                json_schema=json_schema,
+                xtc_probability=xtc_probability,
+                xtc_threshold=xtc_threshold,
+                logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds,
+                lora_adapter=lora_adapter,
+            )
         from .mlx_executor import get_mlx_executor
         import mlx.core as mx
         executor = get_mlx_executor()

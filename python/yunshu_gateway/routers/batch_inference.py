@@ -326,6 +326,7 @@ async def upload_batch_csv(
 
     if not isinstance(max_tokens, int) or max_tokens < 1:
         raise HTTPException(status_code=400, detail="max_tokens must be a positive integer")
+    max_tokens = min(max_tokens, 131072)
 
     if not isinstance(max_concurrent, int) or max_concurrent < 1:
         raise HTTPException(status_code=400, detail="max_concurrent must be a positive integer")
@@ -355,6 +356,7 @@ async def upload_batch_csv(
             row_max_tokens = max_tokens
         if row_max_tokens < 1:
             row_max_tokens = max_tokens
+        row_max_tokens = min(row_max_tokens, 131072)
         row_temp_raw = row.get("temperature", "")
         try:
             row_temp = float(row_temp_raw) if row_temp_raw.strip() else 0.7
@@ -426,6 +428,8 @@ async def _execute_chat_completion(body: dict) -> dict:
     max_tokens = body.get("max_tokens", 512)
     if not isinstance(max_tokens, int) or max_tokens < 1:
         raise ValueError("max_tokens: must be a positive integer")
+    if max_tokens > 131072:
+        raise ValueError("max_tokens: must not exceed 131072")
 
     temperature = body.get("temperature", 0.7)
     top_p = body.get("top_p", 1.0)

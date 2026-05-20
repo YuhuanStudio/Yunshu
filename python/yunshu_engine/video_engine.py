@@ -1198,7 +1198,8 @@ class VideoEngine:
         # Do NOT set _lora_loaded = True yet — start() checks it to decide
         # whether to apply the adapter after the model loads.
         if self._model is None:
-            self._lora_loaded = False
+            with self._lora_lock:
+                self._lora_loaded = False
             self._lora_adapter_path = str(adapter_dir)
             logger.info(f"LoRA adapter queued for lazy loading: {adapter_path}")
             return True
@@ -1223,7 +1224,7 @@ class VideoEngine:
             return True
         except Exception as e:
             logger.error(f"Failed to load video LoRA adapter: {e}", exc_info=True)
-            with self._stats_lock:
+            with self._lora_lock:
                 self._lora_loaded = False
             return False
 

@@ -283,8 +283,10 @@ class ContextWindowManager:
         prev_count = -1
         while removable_indices and self._count_messages_tokens(result) > max_tokens:
             if len(removable_indices) == prev_count:
-                # Remaining messages still over budget — strip all non-protected
-                return [m for m in deepcopy(messages) if m.get("role") in self._PROTECTED_ROLES] or []
+                # Remaining messages still over budget — strip all non-protected.
+                # Always keep at least one message to prevent empty conversation.
+                protected = [m for m in deepcopy(messages) if m.get("role") in self._PROTECTED_ROLES]
+                return protected or deepcopy(messages[-1:])
             prev_count = len(removable_indices)
             # Find contiguous group at start of removable_indices
             group = [removable_indices[0]]
