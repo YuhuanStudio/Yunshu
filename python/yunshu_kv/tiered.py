@@ -612,12 +612,11 @@ class TieredKVCacheManager:
             # Promoted blocks replace an equal number of new blocks that
             # were allocated for the same tokens.  Free the surplus.
             surplus = existing[hot_matched_count:hot_matched_count + len(all_promoted)]
-            for block in surplus:
-                # Evict from prefix cache hash map before freeing to prevent
-                # stale lookups returning freed/reused blocks.
-                if block.block_hash is not None:
-                    self.hot.block_pool._evict_cached_block(block)
-                block.ref_count = 1
+            with self.hot.block_pool._lock:
+                for block in surplus:
+                    if block.block_hash is not None:
+                        self.hot.block_pool._evict_cached_block(block)
+                    block.ref_count = 1
             self.hot.block_pool.free(surplus)
             # Rebuild the internal block list with promoted blocks spliced in.
             table._blocks = (

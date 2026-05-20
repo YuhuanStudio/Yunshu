@@ -509,6 +509,12 @@ class KVCacheManager:
                 block_hashes=new_hashes,
                 start_node=matched_node if not matched_node.is_root else None,
             )
+            # Free old blocks from exact-match replacements in the radix tree
+            if matched_node is not None and hasattr(matched_node, '_replaced_blocks'):
+                replaced = matched_node._replaced_blocks
+                if replaced:
+                    self.block_pool.free(replaced)
+                    matched_node._replaced_blocks = []
 
     def free_request(self, table: BlockTable, request_id: str | None = None) -> None:
         """Free all blocks held by a request.

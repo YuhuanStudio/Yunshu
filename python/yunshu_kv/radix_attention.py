@@ -349,26 +349,13 @@ class RadixTree:
                 if len(token_ids) == len(existing.token_ids):
                     # Exact match — update existing node
                     if blocks:
-                        # KNOWN LEAK: old blocks in existing.blocks are
-                        # silently discarded without returning to
-                        # BlockPool.free().  The caller should ideally free
-                        # the old blocks, but the current API does not
-                        # support returning them.  Log a debug warning so
-                        # the leak is trackable in production logs.
                         old_blocks = existing.blocks
-                        if old_blocks:
-                            old_ids = [
-                                getattr(b, "block_id", id(b))
-                                for b in old_blocks
-                            ]
-                            logger.debug(
-                                "RadixTree exact-match block replacement: "
-                                "%d old blocks discarded without free (IDs: %s). "
-                                "This is a known leak point — caller should free.",
-                                len(old_blocks),
-                                old_ids[:8],
-                            )
                         existing.blocks = list(blocks)
+                        # Store old blocks for caller to free via node._replaced_blocks
+                        if old_blocks:
+                            if not hasattr(existing, '_replaced_blocks'):
+                                existing._replaced_blocks = []
+                            existing._replaced_blocks.extend(old_blocks)
                     if block_hashes:
                         existing.block_hashes = list(block_hashes)
                     return existing
@@ -538,6 +525,14 @@ class RadixTree:
         # Append child's tokens, blocks, and hashes to the node
         node.token_ids.extend(child.token_ids)
         node.blocks.extend(child.blocks)
+        # Dedup boundary blocks that may be shared after _split_node_unlocked
+        _seen = set()
+        _deduped = []
+        for b in node.blocks:
+            if b.block_id not in _seen:
+                _seen.add(b.block_id)
+                _deduped.append(b)
+        node.blocks = _deduped
         node.block_hashes.extend(child.block_hashes)
 
         # Adopt child's children before clearing child.
