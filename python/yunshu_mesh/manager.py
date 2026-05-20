@@ -52,6 +52,9 @@ class MeshManager:
         self._rtt_router = RTTAwareRouter.from_env()
         # Lock for thread-safe node state mutations (discovery, heartbeat, timeout)
         self._node_lock = threading.Lock()
+        # Exponential backoff retry for peer lost / node timeout
+        self._retry_tasks: dict[str, asyncio.Task] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
     def is_distributed(self) -> bool:
@@ -139,6 +142,7 @@ class MeshManager:
     async def start(self) -> None:
         """Start background tasks (heartbeat, monitoring, discovery)."""
         self._running = True
+        self._loop = asyncio.get_running_loop()
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         # Start node discovery if enabled
         if os.environ.get("YUNSHU_MESH_DISCOVERY", "").lower() in ("1", "true", "yes"):
@@ -148,6 +152,9 @@ class MeshManager:
     async def shutdown(self) -> None:
         """Gracefully shutdown the mesh."""
         self._running = False
+        for task in self._retry_tasks.values():
+            task.cancel()
+        self._retry_tasks.clear()
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
             try:
@@ -423,10 +430,9 @@ class MeshManager:
             self._publish_event(_event[0], _event[1], _event[2])
 
     def _on_peer_lost(self, node: MeshNode) -> None:
-        """Callback: peer disappeared."""
-        _event = None
+        """Callback: peer disappeared. Schedules exponential backoff retry
+        before permanent removal to tolerate transient network blips."""
         with self._node_lock:
-            # Read state under the node's lock for thread safety.
             with node._lock:
                 current_state = node.state
             if current_state == MeshNodeState.OFFLINE:
@@ -435,22 +441,51 @@ class MeshManager:
             topo_node = self._topology.get_node(node.rank)
             if topo_node is not None and topo_node.node_id == node.node_id:
                 topo_node.mark_unhealthy(reason="peer_lost")
+            # Mark unavailable in DP/RTT routers immediately (traffic diversion),
+            # but defer disagg router removal until retries exhausted.
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
+            self._rtt_router.mark_unhealthy(node.node_id)
+            logger.info(f"Peer lost: {node.hostname} — scheduling retry before removal")
+        # Schedule exponential backoff retry on the event loop
+        if self._loop is not None and self._loop.is_running():
+            existing = self._retry_tasks.get(node.node_id)
+            if existing and not existing.done():
+                existing.cancel()
+            task = asyncio.ensure_future(
+                self._retry_peer_lost(node), loop=self._loop,
+            )
+            self._retry_tasks[node.node_id] = task
+
+    async def _retry_peer_lost(self, node: MeshNode, retry_count: int = 0) -> None:
+        """Exponential backoff retry before permanently removing a peer."""
+        max_retries = 3
+        delays = [2.0, 4.0, 8.0]
+        while retry_count <= max_retries:
+            delay = delays[min(retry_count, len(delays) - 1)]
+            await asyncio.sleep(delay)
+            if not self._running:
+                return
+            with node._lock:
+                current_state = node.state
+            if current_state in (MeshNodeState.READY, MeshNodeState.BUSY):
+                logger.info(f"Peer lost retry cancelled for {node.hostname}: recovered")
+                with self._node_lock:
+                    self._retry_tasks.pop(node.node_id, None)
+                return
+            retry_count += 1
+            logger.info(f"Peer lost retry {retry_count}/{max_retries} for {node.hostname}")
+        # Retries exhausted — permanent removal
+        logger.warning(f"Peer lost retries exhausted for {node.hostname}: permanently removing")
+        with self._node_lock:
+            self._retry_tasks.pop(node.node_id, None)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
-            self._rtt_router.mark_unhealthy(node.node_id)
-            _event = ("node_leave", node.node_id, {"hostname": node.hostname})
-            logger.info(f"Peer lost: {node.hostname}")
-        if _event:
-            self._publish_event(_event[0], _event[1], _event[2])
+        self._publish_event("node_leave", node.node_id, {"hostname": node.hostname})
 
     def _on_node_timeout(self, node: MeshNode) -> None:
-        """Callback: heartbeat timeout."""
-        _failure_id = None
+        """Callback: heartbeat timeout. Schedules exponential backoff retry."""
         with self._node_lock:
-            # Guard: skip if already handled by _on_peer_lost or a prior timeout.
-            # Read state under the node's lock for thread safety.
             with node._lock:
                 current_state = node.state
             if current_state == MeshNodeState.OFFLINE:
@@ -458,12 +493,42 @@ class MeshManager:
             node.mark_unhealthy(reason="node_timeout")
             if self._dp_router:
                 self._dp_router.mark_unavailable(node.node_id)
+            self._rtt_router.mark_unhealthy(node.node_id)
+            logger.info(f"Node timeout: {node.hostname} — scheduling retry before removal")
+        if self._loop is not None and self._loop.is_running():
+            existing = self._retry_tasks.get(node.node_id)
+            if existing and not existing.done():
+                existing.cancel()
+            task = asyncio.ensure_future(
+                self._retry_node_timeout(node), loop=self._loop,
+            )
+            self._retry_tasks[node.node_id] = task
+
+    async def _retry_node_timeout(self, node: MeshNode, retry_count: int = 0) -> None:
+        """Exponential backoff retry before permanently removing a timed-out node."""
+        max_retries = 3
+        delays = [2.0, 4.0, 8.0]
+        while retry_count <= max_retries:
+            delay = delays[min(retry_count, len(delays) - 1)]
+            await asyncio.sleep(delay)
+            if not self._running:
+                return
+            with node._lock:
+                current_state = node.state
+            if current_state in (MeshNodeState.READY, MeshNodeState.BUSY):
+                logger.info(f"Node timeout retry cancelled for {node.hostname}: recovered")
+                with self._node_lock:
+                    self._retry_tasks.pop(node.node_id, None)
+                return
+            retry_count += 1
+            logger.info(f"Node timeout retry {retry_count}/{max_retries} for {node.hostname}")
+        # Retries exhausted — permanent removal
+        logger.warning(f"Node timeout retries exhausted for {node.hostname}: permanently removing")
+        with self._node_lock:
+            self._retry_tasks.pop(node.node_id, None)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
-            self._rtt_router.mark_unhealthy(node.node_id)
-            _failure_id = node.node_id
-        if _failure_id:
-            self.handle_node_failure(_failure_id)
+        self.handle_node_failure(node.node_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:
         """Callback: node recovered after timeout."""
@@ -475,6 +540,10 @@ class MeshManager:
                 current_state = node.state
             if current_state == MeshNodeState.READY:
                 return
+            # Cancel any pending retry task for this node
+            retry_task = self._retry_tasks.pop(node.node_id, None)
+            if retry_task and not retry_task.done():
+                retry_task.cancel()
             # Use mark_healthy to go through RECOVERING → READY path
             node.mark_healthy()
             topo_node = self._topology.get_node(node.rank)

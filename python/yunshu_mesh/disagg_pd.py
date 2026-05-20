@@ -570,6 +570,7 @@ class DisaggRouter:
     def get_stats(self) -> dict[str, Any]:
         """Return disaggregated serving statistics."""
         with self._lock:
+            self._cleanup_stale_transfers()
             # Inline compute_utilization to avoid nested lock acquire
             prefill_nodes = [n for n in self._nodes.values() if n.role == NodeRole.PREFILL]
             decode_nodes = [n for n in self._nodes.values() if n.role == NodeRole.DECODE]

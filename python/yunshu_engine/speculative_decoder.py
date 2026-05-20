@@ -352,6 +352,7 @@ class SpeculativeDecoder:
         tokenizer: Any,
         config: SpecDecodingConfig | None = None,
         lookahead: LookaheadReasoning | None = None,
+        constraint: Any | None = None,
     ) -> None:
         self.target = target_model
         self.draft = draft_model
@@ -359,6 +360,7 @@ class SpeculativeDecoder:
         self.config = config or SpecDecodingConfig()
         self.rng = random.Random()
         self.lookahead = lookahead
+        self.constraint = constraint
 
         self._stats = {
             "total_draft_tokens": 0,
@@ -404,6 +406,16 @@ class SpeculativeDecoder:
         for _ in range(K):
             output = self.draft(current_ids, cache=cache)
             logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
+
+            # Apply grammar constraint masking if available
+            if self.constraint is not None:
+                try:
+                    allowed = self.constraint.get_allowed_tokens(self.tokenizer, token_ids)
+                    if allowed:
+                        from .json_schema import apply_json_constraint
+                        logits = apply_json_constraint(logits.reshape(1, -1), allowed).reshape(logits.shape)
+                except Exception:
+                    pass
 
             # Get log probabilities (numerically stable: avoid log(softmax) underflow)
             log_probs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
@@ -544,6 +556,19 @@ class SpeculativeDecoder:
         from mlx_lm.sample_utils import make_sampler
         sampler = make_sampler(temp=temperature)
 
+        # Apply grammar constraint masking to bonus token logits
+        if self.constraint is not None:
+            try:
+                all_accepted = accepted_ids
+                allowed = self.constraint.get_allowed_tokens(self.tokenizer, all_accepted)
+                if allowed:
+                    from .json_schema import apply_json_constraint
+                    bonus_logits_raw = logits[0, bonus_pos:bonus_pos + 1, :]
+                    bonus_logits_raw = apply_json_constraint(bonus_logits_raw.reshape(1, -1), allowed).reshape(1, 1, -1)
+                    logits = logits.at[0, bonus_pos:bonus_pos + 1, :].set(bonus_logits_raw.reshape(1, -1))
+            except Exception:
+                pass
+
         if rejected_at >= 0:
             # Rejected at bonus_pos: use logits at that position for resample
             bonus_token = sampler(logits[0, bonus_pos:bonus_pos + 1, :])
@@ -669,6 +694,13 @@ class SpeculativeDecoder:
             # Snapshot draft cache before drafting (reference-based, no copy)
             draft_snap = self._snapshot_cache(draft_cache)
 
+            # Checkpoint grammar constraint state before drafting
+            if self.constraint is not None and hasattr(self.constraint, 'checkpoint'):
+                try:
+                    self.constraint.checkpoint()
+                except Exception:
+                    pass
+
             # Step 1: Draft generates K tokens from last generated token
             last_tok = generated_tokens[-1]
             draft_tokens = []
@@ -683,6 +715,15 @@ class SpeculativeDecoder:
                     break
                 d_out = self.draft(d_input, cache=draft_cache)
                 d_logits = d_out.logits[:, -1, :] if hasattr(d_out, 'logits') else d_out[:, -1, :]
+                # Apply grammar constraint masking in inline draft loop
+                if self.constraint is not None:
+                    try:
+                        allowed = self.constraint.get_allowed_tokens(self.tokenizer, draft_tokens)
+                        if allowed:
+                            from .json_schema import apply_json_constraint
+                            d_logits = apply_json_constraint(d_logits.reshape(1, -1), allowed).reshape(d_logits.shape)
+                    except Exception:
+                        pass
                 d_logprobs = d_logits - mx.logsumexp(d_logits, axis=-1, keepdims=True)
                 next_tok = draft_sampler(d_logits)
                 tok_id = int(next_tok.item())
@@ -732,7 +773,21 @@ class SpeculativeDecoder:
 
             # On partial acceptance: trim target cache of rejected entries,
             # restore draft cache, re-feed accepted + correction tokens.
+            # Also rollback grammar constraint on rejection.
             if accepted < len(draft_tokens):
+                # Rollback grammar constraint to pre-draft state
+                if self.constraint is not None and hasattr(self.constraint, 'rollback'):
+                    try:
+                        self.constraint.rollback()
+                    except Exception:
+                        pass
+                # Advance constraint with accepted tokens only
+                if self.constraint is not None and hasattr(self.constraint, 'advance'):
+                    for tid in verify_result.accepted_ids:
+                        try:
+                            self.constraint.advance(self.tokenizer.decode([tid]))
+                        except Exception:
+                            pass
                 # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
                 # After rollback, cache had N-1 entries. After forward K+1: N+K.
                 # Only accepted+1 are valid (last_tok + accepted drafts).

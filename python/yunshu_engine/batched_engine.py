@@ -1296,7 +1296,12 @@ class BatchedEngine:
         import gc
         gc.collect()
 
-        from .mlx_executor import get_mlx_executor, shutdown_mlx_executor
+        # Per-engine cleanup: synchronize GPU work and clear the MLX cache.
+        # Do NOT call shutdown_mlx_executor() — it destroys the GLOBAL
+        # singleton ThreadPoolExecutor shared by all engines (BatchedEngine,
+        # VLM, Video, OCR, etc.). The global executor should only be shut
+        # down at process teardown, not per-engine.
+        from .mlx_executor import get_mlx_executor
         loop = asyncio.get_running_loop()
         import mlx.core as mx
 
@@ -1308,7 +1313,6 @@ class BatchedEngine:
             await loop.run_in_executor(get_mlx_executor(), _cleanup)
         except RuntimeError:
             logger.debug("MLX executor cleanup skipped (executor already shut down)")
-        shutdown_mlx_executor(wait=False)
         logger.info(f"BatchedEngine stopped: {self.model_name}")
 
     def _should_use_engine_loop(self, use_engine_loop: bool | None) -> bool:
@@ -4129,6 +4133,16 @@ class BatchedEngine:
         detokenizer = self._tokenizer.detokenizer
         detokenizer.reset()
 
+        # Wire grammar constraint into spec decoder for structured output
+        _spec_constraint = None
+        if json_schema is not None:
+            try:
+                from .json_schema import JsonSchemaConstraint
+                _spec_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+            except Exception:
+                logger.warning("Grammar constraint setup failed for spec decode", exc_info=True)
+        self._spec_decoder.constraint = _spec_constraint
+
         def _run_spec():
             token_ids = self._spec_decoder.generate(
                 input_ids=input_array,
@@ -4356,6 +4370,16 @@ class BatchedEngine:
         from mlx_lm.models.cache import make_prompt_cache
         target_cache = make_prompt_cache(self._spec_decoder.target)
         draft_cache = make_prompt_cache(self._spec_decoder.draft)
+
+        # Wire grammar constraint into spec decoder for streaming structured output
+        _spec_constraint = None
+        if json_schema is not None:
+            try:
+                from .json_schema import JsonSchemaConstraint
+                _spec_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
+            except Exception:
+                logger.warning("Grammar constraint setup failed for spec streaming", exc_info=True)
+        self._spec_decoder.constraint = _spec_constraint
 
         generated_tokens = []
         prompt_tokens = len(input_ids)

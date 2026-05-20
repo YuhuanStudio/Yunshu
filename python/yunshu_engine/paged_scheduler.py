@@ -127,7 +127,21 @@ class PagedScheduler(Scheduler):
                 request.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_full")
                 return
 
-        table, prefix_match = self._kv_manager.allocate_for_prefill(token_ids)
+        try:
+            table, prefix_match = self._kv_manager.allocate_for_prefill(token_ids)
+        except (MemoryError, ValueError) as exc:
+            # OOM recovery: allocate_for_prefill may have partially allocated
+            # blocks before failing.  Free whatever was allocated and reject.
+            logger.warning(
+                f"allocate_for_prefill failed for {request.request_id}: {exc}"
+            )
+            # The table returned on exception may be partial; if it exists in
+            # _block_tables from a prior attempt, clean it up.
+            partial = self._block_tables.pop(request.request_id, None)
+            if partial is not None:
+                self._kv_manager.free_request(partial, request.request_id)
+            request.set_finished(RequestStatus.FINISHED_ERROR, reason="kv_cache_oom")
+            return
         self._block_tables[request.request_id] = table
         request.cached_tokens = getattr(prefix_match, 'num_matched_tokens', 0)
 

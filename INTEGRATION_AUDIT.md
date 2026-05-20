@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–314: 30 waves, 650+ bugs fixed. Latest: Wave 314 — grammar NaN prevention (3 layers), VLM timeout, max_tokens=0 early return, KV failure fallback, SSRF protection, scoring auth, OpenAI error code field, KV transfer version, pending transfer cleanup, client reuse, anyOf/oneOf null type, preemption cap bypass fix, streaming text buffer cap, CORS hardening, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–315: 31 waves, 660+ bugs fixed. Latest: Wave 315 — spec decode grammar constraint desync fix (draft+verify+bonus masking, checkpoint/rollback), mesh node leave exponential backoff retry (2s/4s/8s), OOM rollback with block cleanup, per-engine executor safety (no global shutdown), disagg stale transfer periodic cleanup, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,20 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 315 — 3 agents, 10+ bugs: spec decode constraint desync, mesh node retry, OOM rollback, executor safety)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Spec decode draft grammar masking | generate_draft 對 draft logits 應用 grammar bitmask | 結構化輸出失效 (HIGH) |
+| Spec decode bonus grammar masking | verify_draft 對 bonus token logits 應用 grammar bitmask | 違反語法 (HIGH) |
+| Spec decode constraint checkpoint/rollback | generate() 中 checkpoint → rollback on rejection → advance on accept | 狀態損壞 (HIGH) |
+| batched_engine 約束接線 | _generate_speculative + _stream_generate_speculative 建構 JsonSchemaConstraint | 功能缺失 (HIGH) |
+| Mesh node leave retry | _on_peer_lost/_on_node_timeout 指數退避重試 (2s/4s/8s) | 瞬態網路中斷 (HIGH) |
+| Node recovery 取消重試 | _on_node_recovered 取消 pending retry tasks | 正確性 (MEDIUM) |
+| Per-engine executor safety | _stop() 不再呼叫 shutdown_mlx_executor (全域單例) | 跨引擎崩潰 (CRITICAL) |
+| OOM block cleanup | paged_scheduler allocate_for_prefill try/except 釋放部分分配 | 記憶體洩漏 (HIGH) |
+| Disagg stale transfer cleanup | get_stats() 呼叫 _cleanup_stale_transfers 進行定期清理 | 記憶體洩漏 (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 314 — 8 agents, 30+ bugs: grammar NaN, VLM timeout, KV failure fallback, SSRF, security, CORS, streaming overflow, preemption cap, KV transfer)
 
