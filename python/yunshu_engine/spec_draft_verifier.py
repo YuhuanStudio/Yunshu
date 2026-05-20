@@ -189,7 +189,7 @@ class SpecDraftVerifier:
         # Step 2: Apply logits processors if provided
         if logits_processors and token_history is not None:
             for i in range(K):
-                context_ids = token_history + draft_ids[:i]
+                context_ids = token_history + draft_ids[:i + 1]
                 for processor in logits_processors:
                     batch_logits = batch_logits.at[i].set(
                         processor(
@@ -347,7 +347,7 @@ class SpecDraftVerifier:
         # Step 3: Apply logits processors
         if logits_processors and token_history is not None:
             for i in range(K + 1):
-                context_ids = token_history + all_input[:i]
+                context_ids = token_history + all_input[:i + 1]
                 for processor in logits_processors:
                     batch_logits = batch_logits.at[i].set(
                         processor(

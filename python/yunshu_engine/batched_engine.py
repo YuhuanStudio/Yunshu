@@ -181,11 +181,13 @@ def _store_thinking_segment(ids, thinking_tokens: list[int], thinking_store, kv_
     try:
         import hashlib as _hl
         conv_id = _hl.sha256(str([int(t) for t in ids[:16]]).encode()).hexdigest()[:16]
+        # Snapshot to avoid sharing mutable reference with prefix_cache
+        _kv_snapshot = [c for c in kv_cache] if kv_cache else None
         thinking_store.store(
             conversation_id=conv_id,
             thinking_tokens=thinking_tokens,
             context_tokens=[int(t) for t in ids],
-            kv_data=kv_cache,
+            kv_data=_kv_snapshot,
         )
     except Exception:
         logger.debug("thinking segment store failed", exc_info=True)
@@ -2253,11 +2255,14 @@ class BatchedEngine:
                 try:
                     import hashlib as _hl
                     conv_id = _hl.sha256(str(ids[:16]).encode()).hexdigest()[:16]
+                    # Snapshot the cache so the thinking store doesn't hold a
+                    # reference to the same mutable list as prefix_cache.
+                    _thinking_kv = [c for c in cache] if cache else None
                     self._thinking_store.store(
                         conversation_id=conv_id,
                         thinking_tokens=_thinking_tokens,
                         context_tokens=[int(t) for t in ids],
-                        kv_data=cache,
+                        kv_data=_thinking_kv,
                     )
                 except Exception:
                     logger.debug("Thinking segment store failed", exc_info=True)
@@ -2271,7 +2276,6 @@ class BatchedEngine:
 
             output_text = tokenizer.decode(tokens, skip_special_tokens=True)
             mx.synchronize()
-            mx.clear_cache()
 
             # Unregister from inflight prefix tracker
             try:
@@ -2955,24 +2959,31 @@ class BatchedEngine:
             # calls) because the SSE client sees a gap with no error.
             if _q.qsize() > 400:  # 78% of 512
                 time.sleep(0.001)  # yield to consumer thread
-            # Retry up to 3 times if the queue is full, sleeping 1ms between
-            # attempts.  This preserves most tokens under backpressure while
-            # preventing the executor thread from blocking indefinitely.
             # NOTE: We do NOT call _q.get_nowait() here because this
             # function runs on the MLX executor thread (not the asyncio
             # event loop thread).  asyncio.Queue.get_nowait() mutates the
             # internal deque AND calls _wakeup_next() which modifies
             # asyncio.Future objects — neither operation is thread-safe.
-            for _attempt in range(4):  # 1 initial + 3 retries
+            for _attempt in range(10):
                 if not _q.full():
                     loop.call_soon_threadsafe(_q.put_nowait, item)
                     return
-                if _attempt < 3:
-                    time.sleep(0.001)
+                if _attempt < 9:
+                    time.sleep(0.005)
+            # Queue is persistently full — put an error sentinel so the
+            # consumer sees finish_reason="error" instead of silently
+            # missing content.
             logger.warning(
-                "Streaming queue overflow after 3 retries — token dropped. "
-                "Client may see a gap in output."
+                "Streaming queue overflow after 50ms — sending error sentinel. "
+                "Client will see finish_reason=error."
             )
+            try:
+                loop.call_soon_threadsafe(
+                    _q.put_nowait,
+                    Exception("Streaming queue overflow — output truncated"),
+                )
+            except Exception:
+                pass
 
         # Inflight prefix sharing: defined at _run level so it's accessible
         # from exception handlers even if _run_inner crashes early
@@ -3214,7 +3225,6 @@ class BatchedEngine:
                                 _pipeline.finish()
                             prefix_cache.add(ids, cache)
                             mx.synchronize()
-                            mx.clear_cache()
                             if _prefill_tracker is not None:
                                 _prefill_tracker.remove(_prefill_req_id)
                             _unregister_inflight()
@@ -3262,7 +3272,6 @@ class BatchedEngine:
                             _pipeline.finish()
                         prefix_cache.add(ids, cache)
                         mx.synchronize()
-                        mx.clear_cache()
                         _unregister_inflight()
                         return
                 # Store thinking segment at end of generation
@@ -3276,7 +3285,6 @@ class BatchedEngine:
                     _put((remaining, n_tok, None, len(_thinking_tokens), None, _final_state))
                 _put(("", n_tok, "length", len(_thinking_tokens), None, _final_state))
                 mx.synchronize()
-                mx.clear_cache()
                 # Finish pipeline tracking at end of generation
                 if _pipeline is not None:
                     _pipeline.finish()

@@ -37,7 +37,7 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
 
-### 已完成修復 (2026-05-20 Wave 279 — 8-Agent Deep Audit: COW TOCTOU, KV Prefix Cache Thread Safety, Scheduler Double-Count, LoRA Base Weight, RadixTree Split Guard, MTP Cache Consistency, KV Migration Deadlock, SSE Error Format, Anthropic tool_choice)
+### 已完成修復 (2026-05-20 Wave 279 — 8-Agent Deep Audit: 24 fixes across COW TOCTOU, KV prefix cache, scheduler, LoRA, RadixTree, MTP, kv_migration, spec decode verifier, batched_engine streaming, gateway SSE, Anthropic, Responses API)
 
 | 修復 | 描述 | 影響 |
 |------|------|------|
@@ -58,6 +58,10 @@
 | Wave 279: Anthropic tool_choice 字串值 | `tool_choice="any"/"none"` 被忽略，加入對應處理邏輯 | API 相容性 (HIGH) |
 | Wave 279: SSE 錯誤格式 | 串流錯誤用 SSE comment (`: error:`) 而非 JSON。改為 `data: {"error": ...}` 格式 | 客戶端無法偵測錯誤 (MEDIUM) |
 | Wave 279: Responses API reasoning_tok 重複計數 | engine 的 reasoning_tokens 為累計值，手動 +1 導致膨脹。移除手動遞增 | Token 計數漂移 (MEDIUM) |
+| Wave 279: 串流佇列 token 丟棄 | `_put()` 重試 3 次後靜默丟棄 token，結構化輸出損壞。增加至 10 次 + 50ms 超時，overflow 時發送 error sentinel | 輸出損壞 (CRITICAL) |
+| Wave 279: mx.clear_cache() 每次請求清除 | 非串流和串流 fast path 每次請求結束清空全域 MLX 編譯快取。移除正常路徑的 clear_cache，僅保留 OOM/error handler | 效能退化 (HIGH) |
+| Wave 279: Thinking store 共享可變引用 | prefix_cache 和 thinking_store 持有同一個 cache list，prefix 驅逐時突變會損壞 thinking store。加入 snapshot 複製 | KV 資料損壞 (HIGH) |
+| Wave 279: Spec decode logits processor 上下文偏移 | `verify()` 和 `verify_with_last_token()` 的 context_ids 排除當前 token（`draft_ids[:i]` 應為 `[:i+1]`）。修正切片 | 重複懲罰失效 (MEDIUM) |
 
 ### 已完成修復 (2026-05-20 Wave 278 — Tool Call Streamer Split Tag, Multimodal Content Stripping, Mesh Thread Safety, VLM Temp File Cleanup)
 
