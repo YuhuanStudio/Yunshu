@@ -689,6 +689,8 @@ class SpeculativeDecoder:
                 draft_tokens.append(tok_id)
                 draft_probs.append(float(d_logprobs[0, tok_id].item()))
                 d_input = next_tok.reshape(1, 1)
+                if tok_id in eos_ids:
+                    break
 
             if not draft_tokens:
                 break

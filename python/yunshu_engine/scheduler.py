@@ -1560,6 +1560,14 @@ class Scheduler:
 
         for req in to_insert:
             try:
+                # Re-check abort status — an abort may have arrived after the
+                # pre-filter loop but before we reached this point.
+                if req.request_id in self._pending_abort_ids:
+                    self._pending_abort_ids.discard(req.request_id)
+                    req.set_finish("aborted")
+                    self._failed_insert_ids.append(req.request_id)
+                    continue
+
                 # ── External prefill path ──
                 if self.config.use_external_prefill:
                     prefill_ok = self._run_external_prefill(req)

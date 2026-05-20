@@ -494,16 +494,22 @@ class TieredKVCacheManager:
                     if self.hot._key_cache is not None:
                         if kv_data.ndim == 4 and kv_data.shape[0] == 2:
                             if isinstance(self.hot._key_cache, mx.array):
-                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                new_key = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                mx.eval(new_key)
+                                self.hot._key_cache = new_key
                                 if self.hot._value_cache is not None:
-                                    self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                                    new_val = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                                    mx.eval(new_val)
+                                    self.hot._value_cache = new_val
                             else:
                                 self.hot._key_cache[new_block.block_id] = kv_data[0]
                                 if self.hot._value_cache is not None:
                                     self.hot._value_cache[new_block.block_id] = kv_data[1]
                         else:
                             if isinstance(self.hot._key_cache, mx.array):
-                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                                new_key = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                                mx.eval(new_key)
+                                self.hot._key_cache = new_key
                             else:
                                 self.hot._key_cache[new_block.block_id] = kv_data
                     # Register in prefix cache for future lookups
@@ -557,16 +563,22 @@ class TieredKVCacheManager:
                     if self.hot._key_cache is not None:
                         if kv_data.ndim == 4 and kv_data.shape[0] == 2:
                             if isinstance(self.hot._key_cache, mx.array):
-                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                new_key = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                mx.eval(new_key)
+                                self.hot._key_cache = new_key
                                 if self.hot._value_cache is not None:
-                                    self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                                    new_val = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                                    mx.eval(new_val)
+                                    self.hot._value_cache = new_val
                             else:
                                 self.hot._key_cache[new_block.block_id] = kv_data[0]
                                 if self.hot._value_cache is not None:
                                     self.hot._value_cache[new_block.block_id] = kv_data[1]
                         else:
                             if isinstance(self.hot._key_cache, mx.array):
-                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                                new_key = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                                mx.eval(new_key)
+                                self.hot._key_cache = new_key
                             else:
                                 self.hot._key_cache[new_block.block_id] = kv_data
                     # Register in prefix cache for future lookups

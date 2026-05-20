@@ -141,6 +141,7 @@ class AnthropicMessagesRequest(BaseModel):
     response_format: Optional[dict] = None
     timeout: Optional[float] = Field(default=None, ge=1.0, le=600.0)  # Request timeout in seconds
     grammar: Optional[dict] = None  # Grammar constraint (regex, choice, CFG)
+    stream_options: Optional[dict] = None  # Anthropic stream_options (include_usage)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -1193,6 +1194,7 @@ async def _stream_anthropic(
                                                 _stop_hit = True
                                                 break
                                     if _stop_hit:
+                                        output_tokens = max(1, output_tokens - 1)
                                         _safe_len = len(accumulated_text) - _prev_len
                                         if _safe_len > 0:
                                             if not text_block_started:
@@ -1316,6 +1318,7 @@ async def _stream_anthropic(
                                             _stop_hit = True
                                             break
                                 if _stop_hit:
+                                    output_tokens = max(1, output_tokens - 1)
                                     _safe_len = len(accumulated_text) - _prev_len
                                     if _safe_len > 0:
                                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'text_delta', 'text': _tc_out.text[:_safe_len]}})}\n\n"

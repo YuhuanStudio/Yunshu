@@ -243,6 +243,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: Optional[dict[int, float]] = None
     max_tokens: int = Field(default=512, ge=1, le=131072)
+    max_completion_tokens: Optional[int] = Field(default=None, ge=1, le=131072)
     stream: bool = False
     stream_options: Optional[StreamOptions] = None
     stop: Optional[list[str]] = None
@@ -290,6 +291,10 @@ class ChatCompletionRequest(BaseModel):
             if gtype not in ("json", "regex", "choice", "cfg", None):
                 raise ValueError(f"grammar.type: must be one of 'json', 'regex', 'choice', 'cfg', got '{gtype}'")
         return self
+
+    def effective_max_tokens(self) -> int:
+        """Return max_completion_tokens if set, else max_tokens (OpenAI SDK compat)."""
+        return self.max_completion_tokens if self.max_completion_tokens is not None else self.max_tokens
 
 
 def _parse_response_format(response_format: dict | None, grammar: dict | None = None) -> dict | str | None:
@@ -645,7 +650,7 @@ async def _build_multi_choice(
         if is_batched:
             result = await engine.chat(
                 messages=messages,
-                max_tokens=req.max_tokens,
+                max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -684,7 +689,7 @@ async def _build_multi_choice(
         else:
             state = await engine.generate(
                 prompt=messages,
-                max_tokens=req.max_tokens,
+                max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -826,14 +831,14 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     trace_id = f"chat-{uuid.uuid4().hex[:16]}"
     trace = tracer.start_trace(trace_id, metadata={
         "model": req.model,
-        "max_tokens": req.max_tokens,
+        "max_tokens": req.effective_max_tokens(),
         "temperature": req.temperature,
         "stream": req.stream,
         "endpoint": "/chat/completions",
     })
     tracer.span(trace_id, "prefill", {"model": req.model})
     slog.info("inference_request", model=req.model, trace_id=trace_id,
-              max_tokens=req.max_tokens, stream=req.stream)
+              max_tokens=req.effective_max_tokens(), stream=req.stream)
 
     messages = _extract_messages(req.messages)
     has_images = _has_images(messages)
@@ -964,7 +969,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 if is_batched:
                     result = await engine.chat(
                         messages=messages,
-                        max_tokens=req.max_tokens,
+                        max_tokens=req.effective_max_tokens(),
                         temperature=req.temperature,
                         top_p=req.top_p,
                         top_k=req.top_k,
@@ -1005,7 +1010,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 else:
                     state = await engine.generate(
                         prompt=messages,
-                        max_tokens=req.max_tokens,
+                        max_tokens=req.effective_max_tokens(),
                         temperature=req.temperature,
                         top_p=req.top_p,
                         top_k=req.top_k,
@@ -1204,7 +1209,7 @@ async def _handle_vlm_chat(
 
     gen_kwargs: dict[str, Any] = dict(
         messages=messages,
-        max_tokens=req.max_tokens,
+        max_tokens=req.effective_max_tokens(),
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
@@ -1396,7 +1401,7 @@ async def _stream_vlm_response(
         )
         stream_kwargs: dict[str, Any] = dict(
             messages=messages,
-            max_tokens=req.max_tokens,
+            max_tokens=req.effective_max_tokens(),
             temperature=req.temperature,
             top_p=req.top_p,
             top_k=req.top_k,
@@ -1646,7 +1651,7 @@ async def _stream_response_multi(
             if is_batched:
                 stream = engine.stream_chat(
                     messages=messages,
-                    max_tokens=req.max_tokens,
+                    max_tokens=req.effective_max_tokens(),
                     temperature=req.temperature,
                     top_p=req.top_p,
                     top_k=req.top_k,
@@ -1768,7 +1773,7 @@ async def _stream_response_multi(
             else:
                 stream = engine.generate_stream(
                     prompt=messages,
-                    max_tokens=req.max_tokens,
+                    max_tokens=req.effective_max_tokens(),
                     temperature=req.temperature,
                     top_p=req.top_p,
                     top_k=req.top_k,
@@ -2130,7 +2135,7 @@ async def _stream_response(
         if is_batched:
             async for output in engine.stream_chat(
                 messages=messages,
-                max_tokens=req.max_tokens,
+                max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -2254,7 +2259,7 @@ async def _stream_response(
         else:
             async for output in engine.generate_stream(
                 prompt=messages,
-                max_tokens=req.max_tokens,
+                max_tokens=req.effective_max_tokens(),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,

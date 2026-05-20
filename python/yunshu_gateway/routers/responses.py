@@ -66,6 +66,7 @@ class ResponsesRequest(BaseModel):
     model: str
     input: str | list[ResponseInputText]
     instructions: Optional[str] = None
+    previous_response_id: Optional[str] = None
     max_output_tokens: int = Field(default=2048, ge=1, le=131072)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -341,6 +342,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         total_ct = 0
         total_reasoning_tokens = 0
         max_cached_tokens = 0
+        last_finish_reason = "stop"
 
         for choice_idx in range(req.n):
             result = None
@@ -430,6 +432,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             total_ct += ct
             total_reasoning_tokens += _reasoning_tokens
             max_cached_tokens = max(max_cached_tokens, _cached_tokens)
+            last_finish_reason = finish_reason
 
             # Extract tool calls for this choice
             tool_calls = None
@@ -487,12 +490,14 @@ async def create_response(req: ResponsesRequest, request: Request):
         slog.info("inference_complete", model=req.model, trace_id=trace_id,
                   prompt_tokens=total_pt, completion_tokens=total_ct, choices=req.n)
 
+        _response_status = "incomplete" if last_finish_reason == "length" else "completed"
+
         return JSONResponse({
             "id": response_id,
             "object": "response",
             "created_at": int(time.time()),
             "model": req.model,
-            "status": "completed",
+            "status": _response_status,
             "output": all_output_items,
             "usage": {
                 "input_tokens": total_pt,

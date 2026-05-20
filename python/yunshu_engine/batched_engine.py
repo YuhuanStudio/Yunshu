@@ -1422,6 +1422,7 @@ class BatchedEngine:
         logits_processors: list | None = None,
         timeout_seconds: float | None = None,
         images: list | None = None,
+        lora_adapter: str | None = None,
     ) -> GenerationOutput:
         """Non-streaming text generation.
 
@@ -2622,6 +2623,7 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         timeout_seconds: float | None = None,
         images: list | None = None,
+        lora_adapter: str | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Streaming text generation.
 
@@ -4252,12 +4254,15 @@ class BatchedEngine:
                     ids = self._tokenizer.encode(s)
                     if len(ids) == 1:
                         eos_ids.add(ids[0])
-                    elif len(s) > 1:
+                    elif len(ids) > 1:
                         stop_suffixes.append(s)
                 except Exception:
                     logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
                     if len(s) > 1:
                         stop_suffixes.append(s)
+
+        if hasattr(self._tokenizer, 'eos_token_ids'):
+            eos_ids.update(self._tokenizer.eos_token_ids)
 
         # Run speculative steps on executor thread, yielding after each step
         from mlx_lm.models.cache import make_prompt_cache
@@ -4379,9 +4384,11 @@ class BatchedEngine:
                     # the .tokens attribute.  Re-decode all remaining tokens
                     # to produce clean text without the suffix.
                     _kept_tokens = list(detokenizer.tokens[:-1]) if detokenizer.tokens else []
+                    _saved_offset = detokenizer.offset
                     detokenizer.reset()
                     for _t in _kept_tokens:
                         detokenizer.add_token(_t)
+                    detokenizer.offset = _saved_offset
                     break
 
             # Compute TTFT before first yield
@@ -5039,7 +5046,7 @@ class BatchedEngine:
                     ids = tokenizer.encode(s)
                     if len(ids) == 1:
                         stop_ids.add(ids[0])
-                    elif len(s) > 1:
+                    elif len(ids) > 1:
                         stop_suffixes.append(s)
                 except Exception:
                     logger.debug(f"failed to encode stop sequence: {s!r}", exc_info=True)
@@ -5923,6 +5930,8 @@ class BatchedEngine:
                 eos_ids.update(eid)
             elif eid is not None:
                 eos_ids.add(eid)
+        if hasattr(tokenizer, 'eos_token_ids'):
+            eos_ids.update(tokenizer.eos_token_ids)
         if stop_token_ids:
             eos_ids.update(stop_token_ids)
         if stop:

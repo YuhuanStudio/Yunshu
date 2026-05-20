@@ -249,52 +249,14 @@ class DFlashProposer:
         context_ids: mx.array,
         n_draft: int,
     ) -> DFlashDraftResult:
-        """Generate draft tokens via DFlash coarse pass."""
-        try:
-            from .dflash import DFlashConfig, DFlashEngine
+        """Generate draft tokens via DFlash coarse pass.
 
-            # Use DFlash with coarse-only configuration for fast drafting
-            config = DFlashConfig(
-                enabled=True,
-                coarse_steps=1,  # Minimal steps for draft speed
-                refine_steps=0,  # No refinement in draft stage
-            )
-
-            # The DFlash engine generates a coarse prediction
-            # For spec decode, we extract token-level predictions from it
-            engine = DFlashEngine(config)
-
-            # Generate coarse tokens
-            token_ids = []
-            logprobs = []
-            current = context_ids
-
-            for _ in range(n_draft):
-                # Run coarse forward pass to get next-token prediction
-                output = engine.generate(None, None, "draft")
-                if output and "tokens" in output:
-                    tid = output["tokens"][-1] if output["tokens"] else -1
-                    lp = output.get("logprobs", [-1.0])[-1] if "logprobs" in output else -1.0
-                    if tid >= 0:
-                        token_ids.append(tid)
-                        logprobs.append(lp)
-                    else:
-                        break
-                else:
-                    break
-
-            if token_ids:
-                return DFlashDraftResult(
-                    token_ids=token_ids,
-                    logprobs=logprobs,
-                    coarse_confidence=sum(logprobs) / len(logprobs) if logprobs else 0.0,
-                )
-            # DFlash engine didn't produce tokens — fall through to fallback
-            logger.debug("DFlash coarse pass produced no tokens, using fallback")
-        except Exception as e:
-            logger.debug("DFlash coarse pass failed: %s", e)
-
-        return self._propose_fallback(context_ids, n_draft)
+        Note: DFlash is a diffusion engine for image generation, not a text
+        spec decode proposer.  This method returns an empty draft as a graceful
+        fallback.  The actual spec decode proposers are NgramProposer,
+        SuffixProposer, and the MTP-based proposers.
+        """
+        return DFlashDraftResult(token_ids=[], logprobs=[])
 
     def _propose_fallback(
         self,

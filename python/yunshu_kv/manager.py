@@ -622,7 +622,9 @@ class KVCacheManager:
         if freed_block_count > 0:
             # Evict roughly the number of tree nodes whose blocks were freed.
             # Use ceiling: each freed block may correspond to one tree node.
-            self._radix_tree.evict(max(1, freed_block_count))
+            freed_tree_blocks = self._radix_tree.evict(max(1, freed_block_count))
+            if freed_tree_blocks:
+                self.block_pool.free(freed_tree_blocks)
 
         return self.block_pool.get_free_block_count() >= needed_blocks
 
@@ -711,7 +713,9 @@ class KVCacheManager:
         # Prune stale radix tree nodes (Bug 1: evict() was never called,
         # causing unbounded memory growth in the tree structure).
         if evicted > 0:
-            self._radix_tree.evict(max(1, evicted))
+            freed_tree_blocks = self._radix_tree.evict(max(1, evicted))
+            if freed_tree_blocks:
+                self.block_pool.free(freed_tree_blocks)
 
         if evicted > 0:
             logger.debug(

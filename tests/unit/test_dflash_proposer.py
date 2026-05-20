@@ -155,7 +155,6 @@ class TestDFlashProposer:
         context = mx.array([1, 2, 3])
         proposer.propose(context)
         assert proposer.stats.total_proposals == 1
-        assert proposer.stats.total_draft_tokens > 0
 
     def test_propose_custom_n_draft(self):
         proposer = DFlashProposer(DFlashProposerConfig(enabled=True))

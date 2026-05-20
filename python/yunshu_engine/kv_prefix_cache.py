@@ -558,9 +558,12 @@ class KVPrefixCache:
                 # the new offset to match the semantic contract.
                 new_offset = max(0, getattr(c, "offset", 0) - trim)
                 snap.offset = new_offset
-                if new_offset < snap.keys.shape[0]:
+                if new_offset > 0 and new_offset < snap.keys.shape[0]:
                     snap.keys = _detached_copy(snap.keys[:new_offset])
                     snap.values = _detached_copy(snap.values[:new_offset])
+                elif new_offset == 0:
+                    snap.keys = _detached_copy(mx.zeros((0, *snap.keys.shape[1:])))
+                    snap.values = _detached_copy(mx.zeros((0, *snap.values.shape[1:])))
             result.append(snap)
         return result
 
@@ -620,6 +623,11 @@ class KVPrefixCache:
         # Swap-and-pop: O(1) removal by swapping with the last element.
         last = len(self._prompts) - 1
         if index != last:
+            # Update hash index for the swapped entry before moving it
+            swapped_prompt = self._prompts[last]
+            swapped_hash = _token_hash(swapped_prompt)
+            if swapped_hash in self._hash_index and self._hash_index[swapped_hash] == last:
+                self._hash_index[swapped_hash] = index
             self._prompts[index] = self._prompts[last]
             self._caches[index] = self._caches[last]
             self._block_hashes[index] = self._block_hashes[last]

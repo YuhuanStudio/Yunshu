@@ -63,6 +63,7 @@ class CompletionRequest(BaseModel):
     model: str
     prompt: str | list[int]
     max_tokens: int = Field(default=128, ge=1, le=131072)
+    max_completion_tokens: Optional[int] = Field(default=None, ge=1, le=131072)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -180,7 +181,7 @@ async def create_completion(req: CompletionRequest, request: Request):
     })
     tracer.span(trace_id, "prefill", {"model": req.model})
     slog.info("inference_request", model=req.model, trace_id=trace_id,
-              max_tokens=req.max_tokens, stream=req.stream)
+              max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens), stream=req.stream)
 
     if req.stream:
         return StreamingResponse(
@@ -212,7 +213,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             if is_batched:
                 result = await engine.generate(
                     prompt=prompt,
-                    max_tokens=req.max_tokens,
+                    max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
                     temperature=req.temperature,
                     top_p=req.top_p,
                     top_k=req.top_k,
@@ -254,7 +255,7 @@ async def create_completion(req: CompletionRequest, request: Request):
             else:
                 state = await engine.generate(
                     prompt=prompt,
-                    max_tokens=req.max_tokens,
+                    max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
                     temperature=req.temperature,
                     top_p=req.top_p,
                     top_k=req.top_k,
@@ -445,7 +446,7 @@ async def _stream_completion(
         if is_batched:
             async for output in engine.stream_generate(
                 prompt=prompt,
-                max_tokens=req.max_tokens,
+                max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
@@ -529,7 +530,7 @@ async def _stream_completion(
         else:
             async for output in engine.generate_stream(
                 prompt=prompt,
-                max_tokens=req.max_tokens,
+                max_tokens=(req.max_completion_tokens if req.max_completion_tokens is not None else req.max_tokens),
                 temperature=req.temperature,
                 top_p=req.top_p,
                 top_k=req.top_k,
