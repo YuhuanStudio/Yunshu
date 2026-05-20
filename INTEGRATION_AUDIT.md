@@ -2755,3 +2755,26 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 - 修復 memory guard bypassed when no requests running
 - 修復 _total_prompt_tokens not decremented for chunked prefill aborts
 - 修復 force-feed path crashes on empty UIDs
+
+### Wave 302 — 8-Agent Parallel Deep Audit (30+ bugs)
+- **CRITICAL**: engine_core `stop()` resets `_shutdown_requested` before `_stopped`, creating window for orphaned collectors during async yields
+- **CRITICAL**: `generate()` TTFT measured total wall time (submit-to-completion), not time-to-first-token — added `_ttft_timestamps` tracking
+- **CRITICAL**: KV `evict_and_free` could steal blocks from active requests (ref_count==1 meant "cache only" but request still held it)
+- **HIGH**: request_dedup `_prune_expired` duplicate `del` causes `KeyError` crash, breaking all dedup pruning
+- **HIGH**: spec_draft_verifier `_sample_correction` passes softmax probabilities to `mx.random.categorical` which expects logits
+- **HIGH**: spec_draft_verifier `_math_exp` returns `float("inf")` instead of finite `math.exp(50.0)` — inconsistent with vectorized path
+- **HIGH**: model_optimizations `mx.clear_cache()` after warmup destroys Metal compile cache, defeating warmup purpose
+- **HIGH**: scheduler `_total_prompt_tokens` leak in `_process_aborts` — never decremented for aborted requests
+- **HIGH**: scheduler `_total_prompt_tokens` can go negative in `_preempt_request` (no max(0,...) guard)
+- **HIGH**: scheduler double-increment of `num_preemptions` in exception handler (main + except both increment)
+- **HIGH**: scheduler `_active_partial_prefills` double-decrement when completed_ids already popped by cleanup
+- **HIGH**: KV manager `cache_to_radix_tree` floor division vs ceiling mismatch causes block duplication
+- **HIGH**: TieredKV `_allocate_prefill_promote` total_tokens undercounted after warm/SSD block splicing
+- **HIGH**: Anthropic streaming error handlers skip closing open content blocks (protocol violation)
+- **HIGH**: Anthropic streaming batched path feeds raw tool markup into `accumulated_text` before ToolCallStreamer
+- **MEDIUM**: Responses API unconditional zero-value `output_tokens_details`/`input_tokens_details`
+- **MEDIUM**: engine_core logprobs not deep-copied in dedup shadow fan-out (shared mutable state)
+- **MEDIUM**: engine_core CancelledError doesn't accumulate `_total_step_time_ms`
+- **MEDIUM**: event_sourcing `snapshots_taken` incremented outside lock (data race)
+- **MEDIUM**: request_lifecycle abort finish_reason doesn't report failure to concurrency controller
+- **MEDIUM**: video engine `stop()` now provides both sync (`stop()`) and async (`stop_async()`) paths for executor-routed GPU cleanup
