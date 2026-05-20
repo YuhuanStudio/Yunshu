@@ -878,7 +878,9 @@ class SpeculativeDecoder:
                 # grows unbounded over long generations).
                 if self.constraint is not None:
                     try:
-                        if hasattr(self.constraint, '_snapshots') and self.constraint._snapshots:
+                        if hasattr(self.constraint, 'discard_checkpoint'):
+                            self.constraint.discard_checkpoint()
+                        elif hasattr(self.constraint, '_snapshots') and self.constraint._snapshots:
                             self.constraint._snapshots.pop()
                         elif hasattr(self.constraint, '_checkpoint_stack') and self.constraint._checkpoint_stack:
                             self.constraint._checkpoint_stack.pop()

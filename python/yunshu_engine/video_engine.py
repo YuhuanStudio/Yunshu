@@ -714,9 +714,6 @@ class VideoEngine:
             import numpy as np
             from PIL import Image
 
-            fd2, frame_pattern = tempfile.mkstemp(suffix="_%04d.png")
-            os.close(fd2)
-            os.unlink(fd2)
             frame_dir = tempfile.mkdtemp(prefix="yunshu_video_frames_")
 
             for i, frame in enumerate(frames):

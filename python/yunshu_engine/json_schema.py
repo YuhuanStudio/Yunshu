@@ -742,6 +742,15 @@ class JsonSchemaConstraint:
             self._is_integer,
         ))
 
+    def discard_checkpoint(self) -> None:
+        """Discard the most recent checkpoint without restoring state.
+
+        Used in speculative decoding when all draft tokens are accepted
+        so the checkpoint is no longer needed.
+        """
+        if self._snapshots:
+            self._snapshots.pop()
+
     def rollback(self) -> None:
         """Restore state to last checkpoint."""
         if not self._snapshots:

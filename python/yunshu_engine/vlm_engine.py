@@ -682,7 +682,7 @@ class VLMEngine:
                     # convert it to json_schema for the text generator.
                     if js is None:
                         js = kwargs.get('grammar', None)
-                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, stop_token_ids=stop_token_ids, repetition_penalty=repetition_penalty, frequency_penalty=freq_p, presence_penalty=pres_p, logit_bias=lb, json_schema=js, enable_thinking=_enable_thinking, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=thinking_budget)
+                    return self._generate_vlm_text(input_ids, max_tokens, temperature, top_p, top_k, min_p, stop, stop_token_ids=stop_token_ids, repetition_penalty=repetition_penalty, frequency_penalty=freq_p, presence_penalty=pres_p, logit_bias=lb, json_schema=js, enable_thinking=_enable_thinking, xtc_probability=xtc_probability, xtc_threshold=xtc_threshold, thinking_budget=thinking_budget, cancel_event=kwargs.get('cancel_event'))
 
                 from mlx_lm.generate import generate_step
                 from mlx_lm.sample_utils import make_sampler
@@ -1515,6 +1515,7 @@ class VLMEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         thinking_budget: int | None = None,
+        cancel_event: Any = None,
     ) -> str:
         """Text generation for VLM models using model.language_model."""
         from mlx_vlm.models.cache import make_prompt_cache
@@ -1562,16 +1563,26 @@ class VLMEngine:
 
         # Build stop IDs from string sequences + explicit stop_token_ids
         stop_ids = set(eos_ids)
+        stop_suffixes = []
         if stop:
             for s in stop:
                 try:
                     ids = self._tokenizer.encode(s)
                     if len(ids) == 1:
                         stop_ids.add(ids[0])
+                    else:
+                        stop_suffixes.append(s)
                 except Exception:
                     logger.debug("failed", exc_info=True)
         if stop_token_ids:
             stop_ids.update(stop_token_ids)
+
+        def _is_cancelled() -> bool:
+            if cancel_event is None:
+                return False
+            if isinstance(cancel_event, asyncio.Event):
+                return cancel_event._value
+            return cancel_event.is_set()
 
         with mx.stream(generation_stream):
             # SpecPrefill: for long text prompts, use attention-based sparse
@@ -1615,7 +1626,11 @@ class VLMEngine:
                 _think_single_token = False
 
             _thinking_text = ""  # for text-based thinking detection
-            for _ in range(max_tokens - 1):
+            for _step_idx in range(max_tokens - 1):
+                # Check cancellation every 16 steps to reduce overhead
+                if _step_idx % 16 == 0 and _is_cancelled():
+                    break
+
                 output = lm(current[None], cache=cache)
                 logits = output.logits[:, -1, :]
 
@@ -1688,7 +1703,15 @@ class VLMEngine:
                     _stop_hit = True
                     break
 
-        return self._tokenizer.decode(tokens, skip_special_tokens=True), _thinking_tokens, len(tokens), _stop_hit, _budget_hit
+        text = self._tokenizer.decode(tokens, skip_special_tokens=True)
+        # Handle multi-token stop sequences: check if decoded text ends with any suffix
+        if stop_suffixes and not _stop_hit:
+            for s in stop_suffixes:
+                if text.endswith(s):
+                    text = text[:-len(s)]
+                    _stop_hit = True
+                    break
+        return text, _thinking_tokens, len(tokens), _stop_hit, _budget_hit
 
     def _stream_vlm_vision(
         self,

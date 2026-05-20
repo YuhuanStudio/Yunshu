@@ -349,12 +349,18 @@ class KVCacheManager:
         """Build a BlockTable from RadixTree-matched blocks.
 
         Handles the "gap" when a radix tree split occurs at a non-block-aligned
-        position: floor division in _split_node assigns only fully-contained
-        blocks to the prefix, so matched_blocks may cover fewer tokens than
-        num_matched_tokens. The gap tokens need fresh blocks and re-prefill.
+        position: ceiling division in _split_node assigns the boundary block to
+        the prefix, so matched_blocks may cover more tokens than
+        num_matched_tokens. We cap covered_tokens at num_matched_tokens to
+        avoid overcounting the partial last block.
         """
         bs = self.config.block_size
-        covered_tokens = len(matched_blocks) * bs
+        # Ceiling division in _split_node means the boundary block is included,
+        # so len(matched_blocks) * bs can exceed num_matched_tokens by up to
+        # bs-1.  Cap at the actual matched count.
+        covered_tokens = min(len(matched_blocks) * bs, num_matched_tokens)
+        # gap is now always 0 (ceiling gives >= enough blocks), but keep the
+        # computation for robustness in case the split logic changes.
         gap = max(0, num_matched_tokens - covered_tokens)
 
         remaining_tokens = token_ids[num_matched_tokens:]
@@ -370,13 +376,38 @@ class KVCacheManager:
         for block in new_blocks:
             table.append_block(block)
 
-        # num_matched_tokens stays as-is so the caller knows how many tokens
-        # matched in the tree, but the PrefixMatch must indicate that
-        # prefill should start from covered_tokens (not num_matched_tokens)
-        # to re-fill the gap.
+        # Adjust total_tokens: append_block sets total_tokens assuming each
+        # block is full (block_size tokens).  But the last matched block may
+        # be partial — only covering (covered_tokens % bs) tokens (or bs if
+        # aligned).  Correct the overcount.
+        if matched_blocks and new_blocks:
+            # There are matched blocks followed by new blocks.  append_block
+            # finalizes the previous block as full when appending the first
+            # new block.  The last matched block was finalized at block_size,
+            # but it may only have covered_tokens - (num_full * bs) actual
+            # tokens.  Adjust by the overcount.
+            full_blocks_covered = covered_tokens // bs
+            partial_occupancy = covered_tokens % bs
+            if partial_occupancy != 0:
+                # append_block added block_size for the last matched block,
+                # but it should have been partial_occupancy.
+                overcount = bs - partial_occupancy
+                table.total_tokens -= overcount
+                table._last_block_occupancy = partial_occupancy
+        elif matched_blocks and not new_blocks:
+            # All tokens are in matched blocks.  The last block's occupancy
+            # is covered_tokens % bs (or bs if aligned).
+            partial_occupancy = covered_tokens % bs
+            if partial_occupancy != 0:
+                overcount = bs - partial_occupancy
+                table.total_tokens -= overcount
+                table._last_block_occupancy = partial_occupancy
+            else:
+                table._last_block_occupancy = bs
+
         prefix_match = PrefixMatch(
             matched_blocks=matched_blocks,
-            num_matched_tokens=covered_tokens,  # Only count fully-covered tokens
+            num_matched_tokens=covered_tokens,  # Actual matched count (capped)
             unmatched_token_ids=token_ids[covered_tokens:],
         )
         return table, prefix_match

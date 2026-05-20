@@ -331,6 +331,24 @@ class GrammarBitmaskEngine:
                 sig = inspect.signature(self._constraint.rollback)
                 self._constraint_rollback_needs_arg = len(sig.parameters) > 0
 
+    def discard_checkpoint(self) -> None:
+        """Discard the most recent checkpoint without restoring state.
+
+        Used in speculative decoding when all draft tokens are accepted
+        so the checkpoint is no longer needed. Forwards to the wrapped
+        constraint's discard_checkpoint() if available, otherwise pops
+        the local checkpoint stack.
+        """
+        if hasattr(self._constraint, "discard_checkpoint"):
+            self._constraint.discard_checkpoint()
+            # Keep local stack in sync
+            if self._checkpoint_stack:
+                self._checkpoint_stack.pop()
+        elif self._checkpoint_stack:
+            # Constraint doesn't have discard_checkpoint (e.g. LarkGrammar
+            # returns the saved state from rollback). Pop without restoring.
+            self._checkpoint_stack.pop()
+
     def rollback(self) -> None:
         if hasattr(self._constraint, "rollback"):
             # Probe rollback signature once if not yet determined
@@ -439,6 +457,11 @@ class BitmaskConstrainedSampler:
         """Restore constraint state from last checkpoint."""
         if hasattr(self._engine, 'rollback'):
             self._engine.rollback()
+
+    def discard_checkpoint(self) -> None:
+        """Discard the most recent checkpoint without restoring."""
+        if hasattr(self._engine, 'discard_checkpoint'):
+            self._engine.discard_checkpoint()
 
 
 # ── Factory ─────────────────────────────────────────────────────────────────

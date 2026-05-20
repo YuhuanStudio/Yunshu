@@ -204,6 +204,13 @@ class RadixTree:
         if split_pos <= 0:
             return child
 
+        # Guard: if split_pos covers the entire child token_ids, there is
+        # nothing to split — the child already represents the exact prefix.
+        # Creating a new node and shrinking child to empty token_ids would
+        # produce an orphaned empty node with no logical content.
+        if split_pos >= len(child.token_ids):
+            return child
+
         # Convert token-based split_pos to block-based index.
         # Use ceiling division: when split_pos is not block-aligned, the
         # boundary block (which straddles the split point) goes to the

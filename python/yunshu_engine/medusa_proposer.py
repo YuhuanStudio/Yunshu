@@ -403,10 +403,11 @@ class MedusaProposer:
                     )
                     new_frontier.append(child)
 
-            # Prune: keep only tree_size best nodes by cumulative logprob
+            # Prune: keep only tree_size best nodes by normalized logprob
+            # (divide by depth to avoid bias toward shorter paths)
             if len(new_frontier) > tree_size:
                 new_frontier.sort(
-                    key=lambda n: n.cumulative_logprob,
+                    key=lambda n: n.cumulative_logprob / max(n.depth, 1),
                     reverse=True,
                 )
                 new_frontier = new_frontier[:tree_size]

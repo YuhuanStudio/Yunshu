@@ -80,10 +80,15 @@ class SSDCacheStore:
         # between load()'s index lookup and file read (TOCTOU race).
         self._lock = threading.Lock()
 
-        # Deferred I/O from _evict_lru_locked(): populated under _lock,
-        # flushed by _flush_pending_io() after lock release.
+        # Deferred I/O from _evict_lru_locked() / _store_new_block():
+        # populated under _lock, flushed by _flush_pending_io() after
+        # lock release.
         self._pending_index_write: tuple[Path, list[dict]] | None = None
         self._pending_unlinks: list[Path] | None = None
+        self._pending_block_writes: list[tuple[Path, bytes, int, int, int]] | None = None
+        # ^ Each tuple: (path, raw_bytes, block_hash, block_index, header_size)
+        # block_index is included so _flush_pending_io can skip the write
+        # if the entry was already evicted before the write happened.
 
         # Load existing index
         self._load_index()
@@ -196,10 +201,20 @@ class SSDCacheStore:
     def _store_new_block(
         self, block_hash: int, kv_data: mx.array, num_tokens: int
     ) -> bool:
-        """Store a brand-new block.  Caller must hold ``_lock``."""
+        """Prepare a brand-new block for SSD storage.
+
+        Serializes KV data to bytes under the lock, but defers the
+        actual file I/O to ``_flush_pending_io()`` which runs after
+        the lock is released.  The index is tentatively updated so
+        that concurrent lookups see the entry; the file will exist
+        by the time any concurrent ``load()`` acquires the lock next.
+
+        Caller must hold ``_lock``.
+        """
         if self._current_size_bytes >= self.max_size_bytes:
             return False  # Cannot free enough space
 
+        # Step 1: Serialize KV data to bytes (CPU-bound, fast).
         try:
             import numpy as np
             data_mx = mx.array(kv_data).astype(mx.float16)
@@ -213,21 +228,21 @@ class SSDCacheStore:
         block_index = self._next_block_index
         self._next_block_index += 1
 
-        try:
-            import zlib
-            crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
-            with open(self._block_path(block_index), "wb") as f:
-                # Header: ndim (4 bytes) + shape values (4 bytes each) + CRC32
-                f.write(struct.pack("<I", len(shape)))
-                for dim in shape:
-                    f.write(struct.pack("<I", dim))
-                f.write(struct.pack("<I", crc))
-                f.write(raw_bytes)
-        except OSError as e:
-            logger.warning(f"Failed to write SSD cache block: {e}")
-            return False
-
+        # Build the full on-disk payload (header + raw bytes) in memory
+        # so the actual file write is a single sequential write.
+        import zlib
+        crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
         header_size = 4 + 4 * len(shape) + 4  # ndim + shape dims + CRC32
+        file_payload = bytearray(header_size + len(raw_bytes))
+        off = 0
+        struct.pack_into("<I", file_payload, off, len(shape)); off += 4
+        for dim in shape:
+            struct.pack_into("<I", file_payload, off, dim); off += 4
+        struct.pack_into("<I", file_payload, off, crc); off += 4
+        file_payload[off:] = raw_bytes
+
+        # Step 2: Tentatively update the in-memory index so concurrent
+        # contains() / lookups see the entry immediately.
         entry = SSDCacheEntry(
             block_hash=block_hash,
             block_index=block_index,
@@ -237,6 +252,19 @@ class SSDCacheStore:
         )
         self._index[block_hash] = entry
         self._current_size_bytes += entry.size_bytes
+
+        # Step 3: Defer the file write until after the lock is released.
+        if self._pending_block_writes is None:
+            self._pending_block_writes = []
+        self._pending_block_writes.append((
+            self._block_path(block_index),
+            bytes(file_payload),
+            block_hash,
+            block_index,
+            header_size,
+        ))
+        # Also snapshot the index for persistence after the write.
+        self._pending_index_write = (self._index_path(), self._snapshot_index())
         return True
 
     def load(self, block_hash: int) -> Optional[mx.array]:
@@ -354,18 +382,45 @@ class SSDCacheStore:
         self._pending_unlinks = paths_to_unlink
 
     def _flush_pending_io(self) -> None:
-        """Perform deferred I/O (index write + block file deletion).
+        """Perform deferred I/O (block writes + index write + block file deletion).
 
         Must be called **after** releasing ``_lock``.  Safe to call even
         when there is nothing pending (no-op).
         """
         # Swap pending fields under the lock into locals so that
-        # _evict_lru_locked() can safely repopulate them while we do I/O.
+        # _evict_lru_locked() / _store_new_block() can safely repopulate
+        # them while we do I/O.
         with self._lock:
             pending_write = self._pending_index_write
             pending_unlinks = self._pending_unlinks
+            pending_block_writes = self._pending_block_writes
             self._pending_index_write = None
             self._pending_unlinks = None
+            self._pending_block_writes = None
+
+        # Write deferred block data files first — the index snapshot already
+        # includes the entries, so on crash the index file will reference
+        # these blocks.  If the process crashes mid-write, the block file
+        # may be truncated/missing, which load() handles gracefully.
+        if pending_block_writes:
+            for path, payload, block_hash, block_index, header_size in pending_block_writes:
+                try:
+                    with open(path, "wb") as f:
+                        f.write(payload)
+                except OSError as e:
+                    logger.warning(
+                        "Failed to write SSD cache block %d: %s — rolling back index",
+                        block_index, e,
+                    )
+                    # Roll back the in-memory index entry so future lookups
+                    # don't reference a missing file.  The space accounting
+                    # must also be reverted.
+                    with self._lock:
+                        entry = self._index.pop(block_hash, None)
+                        if entry is not None:
+                            self._current_size_bytes = max(
+                                0, self._current_size_bytes - entry.size_bytes
+                            )
 
         if pending_write is not None:
             index_path, entries = pending_write

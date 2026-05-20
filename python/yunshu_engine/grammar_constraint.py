@@ -884,7 +884,7 @@ class LarkGrammarConstraint:
             # Without this, patterns like `start: /[a-z]+/` terminate after
             # the first character "a" because parse("a") succeeds.
             extendable = False
-            for ch in "abcdefghijklmnopqrstuvwxyz0123456789":
+            for ch in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-.,:;!?@#$%":
                 try:
                     self._parser.parse(self._text_buffer + ch)
                     extendable = True

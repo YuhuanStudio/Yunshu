@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import threading
+import concurrent.futures
 from typing import Any, Optional
 
 import mlx.core as mx
@@ -53,7 +54,7 @@ class MeshManager:
         # Lock for thread-safe node state mutations (discovery, heartbeat, timeout)
         self._node_lock = threading.Lock()
         # Exponential backoff retry for peer lost / node timeout
-        self._retry_tasks: dict[str, asyncio.Task] = {}
+        self._retry_tasks: dict[str, concurrent.futures.Future] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
@@ -453,16 +454,16 @@ class MeshManager:
                 existing = self._retry_tasks.get(node.node_id)
                 if existing and not existing.done():
                     existing.cancel()
-                task = asyncio.ensure_future(
-                    self._retry_peer_lost(node), loop=self._loop,
+                future = asyncio.run_coroutine_threadsafe(
+                    self._retry_peer_lost(node), self._loop,
                 )
-                self._retry_tasks[node.node_id] = task
+                self._retry_tasks[node.node_id] = future
 
     async def _retry_peer_lost(self, node: MeshNode, retry_count: int = 0) -> None:
         """Exponential backoff retry before permanently removing a peer."""
         max_retries = 3
         delays = [2.0, 4.0, 8.0]
-        while retry_count <= max_retries:
+        while retry_count < max_retries:
             delay = delays[min(retry_count, len(delays) - 1)]
             await asyncio.sleep(delay)
             if not self._running:
@@ -498,7 +499,10 @@ class MeshManager:
         with self._node_lock:
             with node._lock:
                 current_state = node.state
-            if current_state == MeshNodeState.OFFLINE:
+            # Skip if a recovery already happened.  Only act on nodes in
+            # OFFLINE or INITIALIZING — READY / BUSY / DRAINING / RECOVERING
+            # mean the node is healthy or recovery is already in progress.
+            if current_state not in (MeshNodeState.OFFLINE, MeshNodeState.INITIALIZING):
                 return
             node.mark_unhealthy(reason="node_timeout")
             if self._dp_router:
@@ -509,16 +513,16 @@ class MeshManager:
                 existing = self._retry_tasks.get(node.node_id)
                 if existing and not existing.done():
                     existing.cancel()
-                task = asyncio.ensure_future(
-                    self._retry_node_timeout(node), loop=self._loop,
+                future = asyncio.run_coroutine_threadsafe(
+                    self._retry_node_timeout(node), self._loop,
                 )
-                self._retry_tasks[node.node_id] = task
+                self._retry_tasks[node.node_id] = future
 
     async def _retry_node_timeout(self, node: MeshNode, retry_count: int = 0) -> None:
         """Exponential backoff retry before permanently removing a timed-out node."""
         max_retries = 3
         delays = [2.0, 4.0, 8.0]
-        while retry_count <= max_retries:
+        while retry_count < max_retries:
             delay = delays[min(retry_count, len(delays) - 1)]
             await asyncio.sleep(delay)
             if not self._running:

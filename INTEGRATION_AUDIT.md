@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–329: 44 waves, 860+ bugs fixed. Latest: Wave 329 — spec decode double grammar advance fix, SP-PEN bonus cache undo, N-gram penalty double-count, constraint restore on OOM, logprobs OOB guard, detokenizer offset, responses.py LoRA passthrough 4 sites, mesh heartbeat add_node + recovery node_id guard, engine_core shadow fail on output/post-step errors, scheduler step exception preserve outputs + fail_all cleanup, Anthropic grammar passthrough, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–330: 45 waves, 880+ bugs fixed. Latest: Wave 330 — VLM multi-token stop + cancel support, video temp file leak, mesh retry off-by-one + timeout race + thread-safe coroutines, SSD cache lock-free I/O, radix split guard, BlockTable partial block fix, grammar discard_checkpoint API, Medusa normalized logprob, LarkGrammar extended charset, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,23 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 330 — 4-agent MEDIUM bug sweep: VLM multi-token stop + cancel, video temp leak, mesh retry+timeout+thread-safety, SSD lock-free I/O, radix split guard, BlockTable partial block, grammar discard_checkpoint, Medusa logprob, LarkGrammar charset)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| VLM non-streaming multi-token stop sequences | _generate_vlm_text 只加單 token stop → 多 token stop 如 "\n\n" 永不觸發 | 提前停止失效 (HIGH) |
+| VLM non-streaming cancel support | _generate_vlm_text 不接受 cancel_event → 客戶端斷線後仍繼續生成 | GPU 資源浪費 (MEDIUM) |
+| Video temp file leak in _encode_frames_to_mp4 | tempfile.mkstemp 創建但未清理的暫存檔 → 每次編碼洩漏一個檔案 | 磁碟空間洩漏 (MEDIUM) |
+| Mesh retry off-by-one (4 instead of 3) | while retry_count <= max_retries → 4 次而非 3 次 | 移除節點延遲 (MEDIUM) |
+| Mesh _on_node_timeout races with recovery | 只檢查 OFFLINE → 已恢復的 READY 節點被覆蓋為 OFFLINE | 叢集不穩定 (HIGH) |
+| Mesh asyncio.ensure_future from non-event-loop thread | heartbeat callback 用 ensure_future → Python 3.10+ 不安全 | 崩潰風險 (HIGH) |
+| SSD cache store holds lock during file I/O | _store_new_block 持鎖寫檔 → 阻塞所有並發操作 | 效能瓶頸 (MEDIUM) |
+| RadixTree split edge case (split_pos >= len) | split_pos == len(token_ids) 創建空節點 → 子樹孤立 | 樹結構損壞 (MEDIUM) |
+| BlockTable total_tokens overcount | covered_tokens 用 full block_size → 部分塊多算 | KV 調度錯誤 (MEDIUM) |
+| Grammar checkpoint internal _snapshots access | 直接操作私有屬性 → 包裝器不同步 | 封裝破壞 (MEDIUM) |
+| Medusa tree pruning cumulative logprob | 未按深度正規化 → 偏好短路徑 | 推測解碼效率差 (MEDIUM) |
+| LarkGrammar extendability limited charset | 只測試小寫+數字 → 大寫/標點語法提前終止 | 語法約束失效 (MEDIUM) |
 
 ### 已完成修復 (2026-05-21 Wave 329 — 8-agent deep audit, 20+ CRITICAL/HIGH/MEDIUM fixes: spec decode double grammar advance, SP-PEN cache undo, N-gram penalty history, constraint restore, logprobs OOB, detokenizer offset, responses LoRA 4 sites, mesh heartbeat add_node + recovery guard, engine_core shadow fail 2 sites, scheduler step exception preserve, fail_all cleanup, Anthropic grammar)
 
