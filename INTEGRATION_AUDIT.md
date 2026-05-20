@@ -2688,3 +2688,70 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 ---
 
 > **多模態結論**: Yunshu 的多模態已全面完成。LLM 完整可用，VLM streaming + 連續批處理 (VLMAsyncEngineCore)，Audio 格式轉換，OCR (GLM-OCR-bf16)，視頻音頻提取，視頻理解 (VLM frame extraction)，Realtime token-level 音頻串流，MCP client，TTS 原生串流，LoRA gateway + 圖像 LoRA，圖像預覽串流 (preview_interval)，Grammar 約束 (regex/choice/CFG)，分離式 P/D 端點，VLM request 字段完善。Wave 26 新增: STS Engine (enhance/separate/transform)，VAE encoder + inpainting，VAE tiling (cosine blend)，ControlNet + depth-guided，TeaCache (diffusion acceleration)，Video Engine (Wan2.2/LTX2)，Pipeline Registry (多模型)，VLM SpecPrefill。Wave 255 新增: VLM 思考狀態文字匹配修復、多 token stop 後綴截斷修復。測試套件 **6694 passed, 16 skipped**。
+
+---
+
+## 23. Waves 282–301 Deep Audit 摘要
+
+> Waves 282–301 涵蓋 20 波深度審計，修復 250+ bugs，測試套件從 6694 增長到 **6744 passed, 16 skipped**。
+
+### Wave 282 — Anthropic ToolCallStreamer Integration
+- 完成 `ToolCallStreamer` 替換 `_try_parse_tool_call_delta`，支援 batched + legacy streaming 路徑
+- 修復 `_emit_message_start` async def → regular def（從未被 await）
+- 修復 `_anth_tracker` NameError（finally block）
+- 修復 output_tokens double-counting（tool streamer path）
+- 修復 finish_reason capture（is not None vs finished flag）
+
+### Wave 283 — Anthropic Streaming + Anthropic Router Deep Fixes
+- 修復 error path missing message_start before message_stop
+- 修復 tool_choice dict form handling（type:any/none/tool）
+- 修復 count_tokens 使用正確 message conversion
+- 修復 empty text block emitted when tool calls found
+- 修復 image URL source blocks silently dropped
+
+### Wave 284 — Architecture Gap Analysis + Spec Decode
+- 完成 8-agent 並行審計，50+ bugs found/fixed
+- KV Tiered: SSD LRU ignores reads, flush always writes num_tokens=0
+- Spec decode: verify_draft KV duplicate, target cache desync
+- Warm tier: premature eviction, memory accounting leak
+
+### Waves 285–296 — Parallel Agent Deep Audits (12 waves)
+- **285**: engine_core quadratic budget, dedup shadow bugs, abort_all not failing shadows
+- **286**: batched_engine SpecPrefill loop, thinking budget duplicate think_end_token, MTP streaming missing thinking budget
+- **287**: scheduler preemption ITL corruption, insert failure request leak, _num_requests double-count
+- **288**: forward_batch position IDs off-by-one (CRITICAL), RequestSlot total_tokens, BatchComposer ignores max_decode_batch
+- **289**: spec_draft_verifier sampler receives log-probs not logits (CRITICAL), mx.exp overflow
+- **290**: speculative_decoder verify_draft KV duplicate, log(softmax) instability, bonus token temp=0
+- **291**: context_window importance_aware splits tool groups, ignores thinking budget
+- **292**: server_metrics ITL percentile wrong, compute utilization fundamentally wrong
+- **293**: image_engine DiffusionScheduler bypassed, ControlNet double-counts, inpainting stale VAE
+- **294**: video_engine TeaCache not thread-safe, seed=-1 deterministic
+- **295**: audio_engine ASR VAD compressed audio, ASR returns language: None
+- **296**: streaming.py ThinkingParser missing plain think tags, brace counter broken
+
+### Wave 297 — Detokenizer Lifecycle Audit
+- 修復 detokenizer lifecycle: token not added when stop_suffixes empty
+- 修復 forced think_end missing from detokenizer
+- 修復 missing finalize() in streaming paths
+
+### Wave 298 — 4-Agent Parallel Audit
+- 修復 20 bugs: json_schema allOf/oneOf, integer type, $defs recursion, if/then/else
+- 修復 grammar_constraint DFA 77x too slow for negated patterns (CRITICAL perf)
+- 修復 grammar_bitmask EOS corrupts state, 95% heuristic allows violations
+
+### Wave 299 — 4-Agent Parallel Audit
+- 修復 18 bugs: gateway SSE errors comment format, grammar param dropped in 14 paths
+- 修復 chat.py top_logprobs format mismatch, echo mode text_offset
+- 修復 completions.py missing suffix/best_of params
+
+### Wave 300 — 2-Agent Parallel Audit
+- 修復 12 bugs: responses.py streaming tool calls lifecycle, usage omits details
+- 修復 lora_manager TOCTOU race, register_adapter defaults
+
+### Wave 301 — LoRA + Scheduler CRITICAL Fixes
+- **CRITICAL**: merge_adapter silently drops all LoRA weights (used module.linear instead of module.fuse())
+- 修復 _apply_adapter ignores HuggingFace lora_alpha/r scaling
+- 修復 scheduler _active_partial_prefills counter leak on chunked prefill timeout
+- 修復 memory guard bypassed when no requests running
+- 修復 _total_prompt_tokens not decremented for chunked prefill aborts
+- 修復 force-feed path crashes on empty UIDs
