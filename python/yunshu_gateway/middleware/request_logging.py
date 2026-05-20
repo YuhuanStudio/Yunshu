@@ -3,9 +3,10 @@
 Structured request/response logging with:
 - Request ID tracking (X-Request-ID header)
 - Latency measurement with slow request warnings
-- Active request counting for graceful shutdown drain
-- SSE-aware counting: keeps stream counted until body fully consumed
 - Configurable log levels per status code
+
+Note: Active request counting for graceful shutdown is handled by
+track_active_requests middleware in main.py, not here.
 """
 
 import os
@@ -14,7 +15,6 @@ import time
 import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import StreamingResponse
 
 logger = logging.getLogger("yunshu.gateway")
 
@@ -62,12 +62,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     _mem_check_interval: float = 10.0  # seconds
 
     async def dispatch(self, request: Request, call_next):
-        import yunshu_gateway.main as _main
-
         request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:24]}"
         request.state.request_id = request_id
-
-        _main._active_requests += 1
 
         # Periodic memory pressure check
         now = time.monotonic()
@@ -84,35 +80,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 f"[{request_id}] {request.method} {request.url.path} "
                 f"ERROR {elapsed*1000:.1f}ms — {e}"
             )
-            # Decrement counter that was incremented above — the response
-            # path below won't run since we're re-raising.
-            _main._active_requests -= 1
-            if _main._active_requests == 0 and _main._drain_event is not None:
-                _main._drain_event.set()
             raise
 
         elapsed = time.monotonic() - t0
         response.headers["X-Request-ID"] = request_id
-
-        # For SSE responses, keep request counted until stream completes
-        is_sse = isinstance(response, StreamingResponse)
-        if is_sse:
-            original_body = response.body_iterator
-
-            async def _tracked_body():
-                try:
-                    async for chunk in original_body:
-                        yield chunk
-                finally:
-                    _main._active_requests -= 1
-                    if _main._active_requests == 0 and _main._drain_event is not None:
-                        _main._drain_event.set()
-
-            response.body_iterator = _tracked_body()
-        else:
-            _main._active_requests -= 1
-            if _main._active_requests == 0 and _main._drain_event is not None:
-                _main._drain_event.set()
 
         if request.url.path not in self.SKIP_PATHS:
             level = logging.DEBUG

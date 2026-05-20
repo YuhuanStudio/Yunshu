@@ -295,12 +295,15 @@ class STSEngine:
             while offset + 8 <= len(audio_input):
                 chunk_id = audio_input[offset:offset + 4]
                 chunk_size = struct.unpack_from("<I", audio_input, offset + 4)[0]
+                # Clamp chunk_size to remaining buffer to prevent over-read
+                max_chunk = len(audio_input) - (offset + 8)
+                if chunk_size > max_chunk:
+                    chunk_size = max_chunk
                 chunk_end = offset + 8 + chunk_size
                 if chunk_id == b"fmt ":
                     fmt_data = audio_input[offset + 8:chunk_end]
                 elif chunk_id == b"data":
-                    # Clamp to available bytes to avoid over-reading
-                    audio_data = audio_input[offset + 8:min(chunk_end, len(audio_input))]
+                    audio_data = audio_input[offset + 8:chunk_end]
                 offset = chunk_end
                 # WAV chunks are word-aligned
                 if chunk_size % 2 != 0:

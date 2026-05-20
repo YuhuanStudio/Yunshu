@@ -205,6 +205,15 @@ class LoRAAdapterManager:
             # Mark as loading to prevent concurrent load of same adapter
             entry.is_loaded = True  # tentative — will be reverted on failure
 
+            # CRITICAL: Save base weights BEFORE applying any LoRA adapter.
+            # If save_base_weights() is only called in merge_adapter(), and an
+            # adapter was already loaded via load_adapter() first, then the saved
+            # "base" weights would include LoRA parameters (lora_a, lora_b).
+            # Later _restore_base() would re-inject stale LoRA params into the
+            # structurally-unwrapped model, corrupting output quality.
+            # Idempotent — only the first call actually saves.
+            self.save_base_weights()
+
             # Apply adapter under gpu_lock while still holding _lock.
             # _lock is an RLock so reentrant acquisition is safe.
             # This prevents unload_adapter from seeing is_loaded=True and

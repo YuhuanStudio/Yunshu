@@ -1346,6 +1346,7 @@ class ImageGenEngine:
 
         # TeaCache (opt-in via YUNSHU_TEACACHE=1 or threshold value)
         self._teacache = None
+        self._teacache_lock = threading.Lock()
         teacache_env = os.environ.get("YUNSHU_TEACACHE", "").strip()
         if teacache_env in ("1", "true", "yes"):
             from .teacache import TeaCacheConfig, TeaCacheHook
@@ -1958,36 +1959,45 @@ class ImageGenEngine:
             first_key = f"coarse_{block_plan.blocks[0][0]}_{block_plan.blocks[0][1]}"
             latents = coarse_latents[first_key]
 
-        if self._teacache is not None:
-            self._teacache.reset()
+        # TeaCache: hold lock for the entire denoising loop to prevent
+        # concurrent requests from corrupting shared cache state.
+        tc_lock = self._teacache_lock if self._teacache is not None else None
+        if tc_lock is not None:
+            tc_lock.acquire()
+        try:
+            if self._teacache is not None:
+                self._teacache.reset()
 
-        # Refinement denoising loop with full steps
-        for t in range(config.refine_steps):
-            sigma_t = sigmas_refine[t].reshape((1,))
-            timestep = mx.ones_like(sigma_t) - sigma_t
+            # Refinement denoising loop with full steps
+            for t in range(config.refine_steps):
+                sigma_t = sigmas_refine[t].reshape((1,))
+                timestep = mx.ones_like(sigma_t) - sigma_t
+
+                if self._teacache is not None:
+                    noise_pred = self._teacache.forward(
+                        self._transformer, latents, timestep, sigmas_refine, cap_feats,
+                    )
+                else:
+                    noise_pred = self._transformer(
+                        x=latents,
+                        timestep=timestep,
+                        sigmas=sigmas_refine,
+                        cap_feats=cap_feats,
+                    )
+
+                dt = sigmas_refine[t + 1] - sigmas_refine[t]
+                latents = latents + noise_pred * dt
+                mx.eval(latents)
+                logger.debug(f"DFlash refine step {t+1}/{config.refine_steps}")
 
             if self._teacache is not None:
-                noise_pred = self._teacache.forward(
-                    self._transformer, latents, timestep, sigmas_refine, cap_feats,
-                )
-            else:
-                noise_pred = self._transformer(
-                    x=latents,
-                    timestep=timestep,
-                    sigmas=sigmas_refine,
-                    cap_feats=cap_feats,
-                )
-
-            dt = sigmas_refine[t + 1] - sigmas_refine[t]
-            latents = latents + noise_pred * dt
-            mx.eval(latents)
-            logger.debug(f"DFlash refine step {t+1}/{config.refine_steps}")
-
-        if self._teacache is not None:
-            tc_stats = self._teacache.get_stats()
-            logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
-                        f"{tc_stats['cache_misses']} misses, "
-                        f"hit_rate={tc_stats['hit_rate']:.1%}")
+                tc_stats = self._teacache.get_stats()
+                logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
+                            f"{tc_stats['cache_misses']} misses, "
+                            f"hit_rate={tc_stats['hit_rate']:.1%}")
+        finally:
+            if tc_lock is not None:
+                tc_lock.release()
 
         # 6. VAE decode
         if width * height > 1024 * 1024:
@@ -2097,52 +2107,61 @@ class ImageGenEngine:
                 )
 
         # 5. Denoising loop
-        if self._teacache is not None:
-            self._teacache.reset()
+        # TeaCache: hold lock for the entire denoising loop to prevent
+        # concurrent requests from corrupting shared cache state.
+        tc_lock = self._teacache_lock if self._teacache is not None else None
+        if tc_lock is not None:
+            tc_lock.acquire()
+        try:
+            if self._teacache is not None:
+                self._teacache.reset()
 
-        # 5b. LoRA offloader: load adapters needed for step 0
-        if self._lora_offloader is not None:
-            self._lora_offloader.load_for_step(0)
+            # 5b. LoRA offloader: load adapters needed for step 0
+            if self._lora_offloader is not None:
+                self._lora_offloader.load_for_step(0)
 
-        for t in range(num_steps):
-            sigma_t = sigmas[t].reshape((1,))
-            timestep = mx.ones_like(sigma_t) - sigma_t
+            for t in range(num_steps):
+                sigma_t = sigmas[t].reshape((1,))
+                timestep = mx.ones_like(sigma_t) - sigma_t
+
+                if self._teacache is not None:
+                    noise_pred = self._teacache.forward(
+                        self._transformer, latents, timestep, sigmas, cap_feats,
+                    )
+                else:
+                    noise_pred = self._transformer(
+                        x=latents,
+                        timestep=timestep,
+                        sigmas=sigmas,
+                        cap_feats=cap_feats,
+                    )
+
+                # Euler step: x_{t+1} = x_t + (sigma_{t+1} - sigma_t) * noise
+                dt = sigmas[t + 1] - sigmas[t]
+                latents = latents + noise_pred * dt
+                mx.eval(latents)
+                logger.debug(f"Step {t+1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+
+                # LoRA offloader: swap adapters for next step
+                if self._lora_offloader is not None:
+                    self._lora_offloader.unload_after_step(t)
+                    if t + 1 < num_steps:
+                        self._lora_offloader.load_for_step(t + 1)
+
+                # Distributed coordinator: record sync checkpoint at interval boundaries
+                if self._diffusion_coordinator is not None:
+                    self._diffusion_coordinator.sync_latents(
+                        source_node=0, target_node=0, step=t, latent_data=latents,
+                    )
 
             if self._teacache is not None:
-                noise_pred = self._teacache.forward(
-                    self._transformer, latents, timestep, sigmas, cap_feats,
-                )
-            else:
-                noise_pred = self._transformer(
-                    x=latents,
-                    timestep=timestep,
-                    sigmas=sigmas,
-                    cap_feats=cap_feats,
-                )
-
-            # Euler step: x_{t+1} = x_t + (sigma_{t+1} - sigma_t) * noise
-            dt = sigmas[t + 1] - sigmas[t]
-            latents = latents + noise_pred * dt
-            mx.eval(latents)
-            logger.debug(f"Step {t+1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
-
-            # LoRA offloader: swap adapters for next step
-            if self._lora_offloader is not None:
-                self._lora_offloader.unload_after_step(t)
-                if t + 1 < num_steps:
-                    self._lora_offloader.load_for_step(t + 1)
-
-            # Distributed coordinator: record sync checkpoint at interval boundaries
-            if self._diffusion_coordinator is not None:
-                self._diffusion_coordinator.sync_latents(
-                    source_node=0, target_node=0, step=t, latent_data=latents,
-                )
-
-        if self._teacache is not None:
-            tc_stats = self._teacache.get_stats()
-            logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
-                        f"{tc_stats['cache_misses']} misses, "
-                        f"hit_rate={tc_stats['hit_rate']:.1%}")
+                tc_stats = self._teacache.get_stats()
+                logger.info(f"TeaCache: {tc_stats['cache_hits']} hits, "
+                            f"{tc_stats['cache_misses']} misses, "
+                            f"hit_rate={tc_stats['hit_rate']:.1%}")
+        finally:
+            if tc_lock is not None:
+                tc_lock.release()
 
         # LoRA offloader cleanup after denoising
         if self._lora_offloader is not None:
@@ -2284,30 +2303,39 @@ class ImageGenEngine:
         mx.eval(latents)
 
         # 6. Partial denoising loop (from start_step to num_steps)
-        if self._teacache is not None:
-            self._teacache.reset()
-
-        for t in range(start_step, num_steps):
-            sigma_t = sigmas[t].reshape((1,))
-            timestep = mx.ones_like(sigma_t) - sigma_t
-
+        # TeaCache: hold lock for the entire denoising loop to prevent
+        # concurrent requests from corrupting shared cache state.
+        tc_lock = self._teacache_lock if self._teacache is not None else None
+        if tc_lock is not None:
+            tc_lock.acquire()
+        try:
             if self._teacache is not None:
-                noise_pred = self._teacache.forward(
-                    self._transformer, latents, timestep, sigmas, cap_feats,
-                )
-            else:
-                noise_pred = self._transformer(
-                    x=latents,
-                    timestep=timestep,
-                    sigmas=sigmas,
-                    cap_feats=cap_feats,
-                )
+                self._teacache.reset()
 
-            # Euler step
-            dt = sigmas[t + 1] - sigmas[t]
-            latents = latents + noise_pred * dt
-            mx.eval(latents)
-            logger.debug(f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+            for t in range(start_step, num_steps):
+                sigma_t = sigmas[t].reshape((1,))
+                timestep = mx.ones_like(sigma_t) - sigma_t
+
+                if self._teacache is not None:
+                    noise_pred = self._teacache.forward(
+                        self._transformer, latents, timestep, sigmas, cap_feats,
+                    )
+                else:
+                    noise_pred = self._transformer(
+                        x=latents,
+                        timestep=timestep,
+                        sigmas=sigmas,
+                        cap_feats=cap_feats,
+                    )
+
+                # Euler step
+                dt = sigmas[t + 1] - sigmas[t]
+                latents = latents + noise_pred * dt
+                mx.eval(latents)
+                logger.debug(f"img2img step {t + 1}/{num_steps}: sigma={float(sigmas[t]):.4f}")
+        finally:
+            if tc_lock is not None:
+                tc_lock.release()
 
         # 7. VAE decode (auto-tile for large images)
         if width * height > 1024 * 1024:

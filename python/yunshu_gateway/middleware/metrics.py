@@ -181,10 +181,20 @@ class _Metrics:
             if manager is not None:
                 for entry in manager.list_entries():
                     total_registered += 1
-                    if entry.is_loaded:
+                    # Re-check is_loaded under a snapshot — the engine may be
+                    # unloaded concurrently between the outer check and get_stats().
+                    if entry.is_loaded and entry.engine is not None:
                         total_running += 1
-                        if entry.engine and hasattr(entry.engine, "get_stats"):
-                            s = entry.engine.get_stats()
+                        if hasattr(entry.engine, "get_stats"):
+                            try:
+                                s = entry.engine.get_stats()
+                            except Exception:
+                                logger.debug(
+                                    "engine.get_stats() failed for %s (concurrent unload?)",
+                                    getattr(entry, "model_id", "?"),
+                                    exc_info=True,
+                                )
+                                continue
                             total_active += s.get("active_collectors",
                                                   s.get("scheduler_running",
                                                         s.get("active", 0)))

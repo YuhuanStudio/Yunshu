@@ -740,6 +740,11 @@ def _find_tts_engine() -> "TTSEngine | None":
     return _find_engine("tts")
 
 
+# ── Whisper model cache for transcription fallback ─────────────────────────────
+_whisper_model_cache = None
+_whisper_model_lock = threading.Lock()
+
+
 async def transcribe(audio_path: str, language: str | None = None) -> dict[str, Any]:
     """Transcribe an audio file using the best available ASR engine.
 
@@ -767,12 +772,22 @@ async def transcribe(audio_path: str, language: str | None = None) -> dict[str, 
     if asr is not None and asr.is_loaded:
         return await asr.transcribe(audio_path, language=language)
 
-    # 2. mlx-audio fallback — try to load & use inline
+    # 2. mlx-audio fallback — try to load & use inline (cached model)
     try:
         from mlx_audio.stt.utils import load_model as _load_stt  # type: ignore[import-untyped]
 
+        def _get_whisper_model():
+            """Load and cache the whisper model to avoid reloading on every call."""
+            global _whisper_model_cache
+            if _whisper_model_cache is not None:
+                return _whisper_model_cache
+            with _whisper_model_lock:
+                if _whisper_model_cache is None:
+                    _whisper_model_cache = _load_stt("mlx-community/whisper-small")
+                return _whisper_model_cache
+
         def _sync_transcribe() -> dict:
-            model = _load_stt("mlx-community/whisper-small")  # small, fast
+            model = _get_whisper_model()
             result = model.generate(audio_path)
             text = getattr(result, "text", str(result))
             lang = getattr(result, "language", language)
