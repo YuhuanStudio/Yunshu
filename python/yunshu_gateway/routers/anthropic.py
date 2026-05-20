@@ -536,15 +536,22 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                 tool_prompt += f"\n  Parameters: {tool.input_schema}"
             tool_prompt += "\n"
 
-        if req.tool_choice and isinstance(req.tool_choice, dict):
-            forced = req.tool_choice.get("name")
-            if forced:
-                tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+        if req.tool_choice:
+            if isinstance(req.tool_choice, dict):
+                forced = req.tool_choice.get("name")
+                if forced:
+                    tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+            elif req.tool_choice == "any":
+                tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
+            elif req.tool_choice == "none":
+                has_tools = False
+                tool_prompt = ""
 
-        if messages and messages[0].get("role") == "system":
-            messages[0]["content"] += tool_prompt
-        else:
-            messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+        if tool_prompt:
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] += tool_prompt
+            else:
+                messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
 
     # Resolve engine
     try:
@@ -1415,14 +1422,20 @@ async def count_tokens(req: AnthropicMessagesRequest) -> dict:
             if tool.input_schema:
                 tool_prompt += f"\n  Parameters: {tool.input_schema}"
             tool_prompt += "\n"
-        if req.tool_choice and isinstance(req.tool_choice, dict):
-            forced = req.tool_choice.get("name")
-            if forced:
-                tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
-        if messages and messages[0].get("role") == "system":
-            messages[0]["content"] += tool_prompt
-        else:
-            messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
+        if req.tool_choice:
+            if isinstance(req.tool_choice, dict):
+                forced = req.tool_choice.get("name")
+                if forced:
+                    tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+            elif req.tool_choice == "any":
+                tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
+            elif req.tool_choice == "none":
+                tool_prompt = ""
+        if tool_prompt:
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] += tool_prompt
+            else:
+                messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
 
     for m in req.messages:
         content = _extract_text_from_content(m.content)

@@ -307,7 +307,8 @@ class BlockPool:
 
     def get_cached_blocks(self) -> list[KVBlock]:
         """Return all blocks currently in the prefix cache."""
-        return list(self._hash_to_block.values())
+        with self._lock:
+            return list(self._hash_to_block.values())
 
     def reset_prefix_cache(self) -> None:
         """Clear all prefix cache entries."""
@@ -338,10 +339,9 @@ class BlockPool:
         Raises:
             ValueError: If no free blocks are available for cloning.
         """
-        if block.ref_count <= 1:
-            return block
-
         with self._lock:
+            if block.ref_count <= 1:
+                return block
             if self.free_queue.num_free_blocks == 0:
                 raise ValueError(
                     "COW failed: no free blocks available for cloning"
@@ -410,6 +410,11 @@ class BlockPool:
                     # permanently (ref_count=1 but nobody holds a reference).
                     new_block.ref_count = 0
                     self.free_queue.append(new_block)
+                    # Undo the ref_count decrement that cow_block applied to
+                    # the original block.  Without this the original's ref_count
+                    # is too low and a subsequent free() can free it while other
+                    # requests still reference it (use-after-free).
+                    old_block.ref_count += 1
                     return old_block, key_cache, value_cache
             # Update the table entry
             table._blocks[logical_idx] = new_block

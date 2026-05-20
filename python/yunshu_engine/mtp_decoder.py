@@ -262,10 +262,14 @@ class MTPDecoder:
                     mx.synchronize()
                     primary_h = hid2[:, -1:, :]
 
-                # On reject, apply sampler to correction token if available
-                if sampler is not None:
-                    # Re-sample from position 0 logits for non-greedy output
-                    v0 = int(sampler(verify_out[0, 0:1, :]).item())
+                # On reject, use greedy v0 as the correction token.
+                # Do NOT re-sample here — the cache and primary_h were
+                # committed to the greedy v0 above.  Re-sampling would
+                # create an inconsistency between cached token, hidden
+                # state, and output token, causing corruption on the
+                # next iteration.
+                # If sampling is desired, it must happen BEFORE the
+                # cache commit (i.e., apply to verify_out logits first).
 
                 generated.append(v0)
                 if v0 in eos_ids or len(generated) >= max_tokens:

@@ -449,12 +449,11 @@ class KVMigrationManager:
         """Process all pending migrations in the queue."""
         processed = 0
         while True:
-            with self._queue_lock:
-                if not self._migration_queue:
-                    break
-                block_id, source, dest = self._migration_queue.pop(0)
-
             with self._lock:
+                with self._queue_lock:
+                    if not self._migration_queue:
+                        break
+                    block_id, source, dest = self._migration_queue.pop(0)
                 self._do_migrate(block_id, source, dest)
             processed += 1
         return processed

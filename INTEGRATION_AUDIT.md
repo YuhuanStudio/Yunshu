@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 268-277: 8-agent deep audit — 60+ fixes + architecture gap completion: auth, scheduler, KV thread safety, TieredKV TOCTOU, spec decode, streaming, dedup, LoRA, TeaCache, cancel propagation, prefill progress, hash collision, Prometheus, model eviction, hardware detection, JSON schema repair, FAIR scheduling)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Wave 279: 8-agent deep audit — 20+ critical/high fixes: COW TOCTOU race, KV prefix cache thread safety + stale index, scheduler prompt double-count + deep_reset leaks + abort double-remove, LoRA merge base weight corruption, RadixTree split_pos==0 guard, MTP rejection cache/token inconsistency, kv_migration AB-BA deadlock, model_discovery KeyError, Anthropic tool_choice string handling, SSE error JSON format, Responses API reasoning_tok double-count)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,28 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6743 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-20 Wave 279 — 8-Agent Deep Audit: COW TOCTOU, KV Prefix Cache Thread Safety, Scheduler Double-Count, LoRA Base Weight, RadixTree Split Guard, MTP Cache Consistency, KV Migration Deadlock, SSE Error Format, Anthropic tool_choice)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Wave 279: COW ref_count TOCTOU 競態 | `block.py cow_block()` 在鎖外檢查 `ref_count<=1` 提前返回，其他執行緒可同時 touch() 使 block 變成共享。將檢查移入鎖內 | KV 資料損壞 (CRITICAL) |
+| Wave 279: cow_block_in_table 錯誤恢復 refcount | KV 複製失敗時新 block 歸還但未回復舊 block 的 ref_count，導致 use-after-free | KV 區塊洩漏 (HIGH) |
+| Wave 279: get_cached_blocks 無鎖 | `list(_hash_to_block.values())` 在鎖外遍歷，並行 cache_block() 可導致 RuntimeError | KV 併發崩潰 (MEDIUM) |
+| Wave 279: KV prefix cache 執行緒安全 | KVPrefixCache 所有共享狀態無鎖保護。add/get/evict/clear 加入 threading.Lock | KV 併發損壞 (HIGH) |
+| Wave 279: KV prefix cache swap-and-pop 陳舊索引 | `_evict_if_full` 批次驅逐時 swap-and-pop 不更新索引，select_victim 可選到錯誤條目。改為每次移除後重建索引 | 快取損壞 (CRITICAL) |
+| Wave 279: allocate_block_for_decode 無鎖 | manager.py 解碼分配不持鎖，ref_count 檢查有競態。加入 _lock 保護 | KV 併發損壞 (HIGH) |
+| Wave 279: Scheduler 提示 token 重複計數 | preemption + re-insert 使 `_total_prompt_tokens` 重複累加。在 preemption 時扣減 | 監控/計費漂移 (HIGH) |
+| Wave 279: Scheduler deep_reset 遺漏 | `_spec_draft_cache_snapshots`, `_kv_prefix_hashes`, `_last_token_time`, `_itl_samples` 未清理。加入 clear() | 記憶體洩漏 (MEDIUM) |
+| Wave 279: Scheduler abort 雙重移除 | `_process_aborts` 和 step preamble 都移除同一 UID。abort 後從 `_uids_to_remove` 移除已處理的 UID | 批次生成器崩潰 (MEDIUM) |
+| Wave 279: LoRA merge 後 _restore_base 跳過恢復 | merge_adapter 後 `is_loaded=True` + `is_merged=True`，_restore_base 的 any() guard 仍找到 merged adapter，跳過權重恢復。merge 後設 `is_loaded=False` | 模型權重損壞 (CRITICAL) |
+| Wave 279: RadixTree split_pos==0 防護 | split_pos=0 時產生空 token_ids 節點和 None key。加入 early return | 樹結構損壞 (MEDIUM) |
+| Wave 279: MTP rejection cache/token 不一致 | reject 後 cache 和 hidden 已 commit 到 greedy v0，但 re-sample 改變 v0。移除 re-sample | 推測解碼損壞 (CRITICAL) |
+| Wave 279: kv_migration AB-BA 死鎖 | `_drain_queue` 先 `_queue_lock` 後 `_lock`，`schedule_auto_migration` 反序。統一為先 `_lock` 後 `_queue_lock` | 分散式死鎖 (HIGH) |
+| Wave 279: model_discovery KeyError | OCR/STS/VIDEO 模型類型不在 `_engine_for_type` 映射中，使用 dict.get() 防崩潰 | 模型發現崩潰 (HIGH) |
+| Wave 279: Anthropic tool_choice 字串值 | `tool_choice="any"/"none"` 被忽略，加入對應處理邏輯 | API 相容性 (HIGH) |
+| Wave 279: SSE 錯誤格式 | 串流錯誤用 SSE comment (`: error:`) 而非 JSON。改為 `data: {"error": ...}` 格式 | 客戶端無法偵測錯誤 (MEDIUM) |
+| Wave 279: Responses API reasoning_tok 重複計數 | engine 的 reasoning_tokens 為累計值，手動 +1 導致膨脹。移除手動遞增 | Token 計數漂移 (MEDIUM) |
 
 ### 已完成修復 (2026-05-20 Wave 278 — Tool Call Streamer Split Tag, Multimodal Content Stripping, Mesh Thread Safety, VLM Temp File Cleanup)
 

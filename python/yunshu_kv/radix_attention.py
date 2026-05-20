@@ -198,6 +198,9 @@ class RadixTree:
         Returns:
             The new intermediate node containing the shared prefix.
         """
+        if split_pos <= 0:
+            return child
+
         # Convert token-based split_pos to block-based index.
         # Use ceiling division: when split_pos is not block-aligned, the
         # boundary block (which straddles the split point) goes to the

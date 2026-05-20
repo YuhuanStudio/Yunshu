@@ -75,7 +75,10 @@ def _engine_for_type(mt: ModelType) -> EngineType:
         "audio_tts": "audio",
         "audio_stt": "audio",
         "image_gen": "image",
-    }[mt]
+        "ocr": "vlm",
+        "sts": "audio",
+        "video": "vlm",
+    }.get(mt, "batched")
 
 
 def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:

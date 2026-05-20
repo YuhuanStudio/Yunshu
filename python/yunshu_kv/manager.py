@@ -383,20 +383,21 @@ class KVCacheManager:
         written during decode doesn't corrupt other requests sharing the
         same prefix block.
         """
-        # COW the last block if shared — the decode may write into it
-        # during the transition from partial → full → new block
-        blocks = table.get_blocks()
-        if blocks:
-            last = blocks[-1]
-            if last.ref_count > 1:
-                _, self._key_cache, self._value_cache = self.block_pool.cow_block_in_table(
-                    table, len(blocks) - 1,
-                    self._key_cache, self._value_cache,
-                )
+        with self._lock:
+            # COW the last block if shared — the decode may write into it
+            # during the transition from partial → full → new block
+            blocks = table.get_blocks()
+            if blocks:
+                last = blocks[-1]
+                if last.ref_count > 1:
+                    _, self._key_cache, self._value_cache = self.block_pool.cow_block_in_table(
+                        table, len(blocks) - 1,
+                        self._key_cache, self._value_cache,
+                    )
 
-        block = self.block_pool.allocate(1)[0]
-        table.append_block(block)
-        return block
+            block = self.block_pool.allocate(1)[0]
+            table.append_block(block)
+            return block
 
     def cache_completed_blocks(
         self,

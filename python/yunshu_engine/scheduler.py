@@ -2042,6 +2042,9 @@ class Scheduler:
                     logger.debug("failed", exc_info=True)
 
             request.status = RequestStatus.PREEMPTED
+            # Undo prompt token count — re-insertion will re-add it.
+            # Without this, each preemption cycle double-counts prompt tokens.
+            self._total_prompt_tokens -= request.num_prompt_tokens
             # Reset submit time so timeout doesn't count time spent preempted
             request._submit_time = time.monotonic()
             # Preserve cached prefix tokens — only reset beyond cache boundary
@@ -2900,6 +2903,13 @@ class Scheduler:
 
         if abort_uids and self._batch_gen:
             self._batch_gen.remove(abort_uids)
+        # Dedup: prevent the step preamble's _uids_to_remove from removing
+        # these UIDs a second time (double removal from BatchGenerator).
+        if self._uids_to_remove:
+            abort_set = set(abort_uids)
+            self._uids_to_remove = [
+                u for u in self._uids_to_remove if u not in abort_set
+            ]
 
         for req_id in list(self._pending_abort_ids):
             req = self.requests.get(req_id)
@@ -3842,9 +3852,13 @@ class Scheduler:
         self._spec_drafts.clear()
         self._spec_draft_start_pos.clear()
         self._spec_stats.clear()
+        self._spec_draft_cache_snapshots.clear()
         self._spec_total_proposals = 0
         self._spec_total_accepted = 0
         self._spec_total_rejected = 0
+        self._kv_prefix_hashes.clear()
+        self._last_token_time.clear()
+        self._itl_samples.clear()
         self._rope_delta_mgr.clear()
         # §12.2: clear encoder-decoder cache
         self._encoder_cache.clear()

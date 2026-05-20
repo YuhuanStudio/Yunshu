@@ -26,6 +26,7 @@ Studied from:
 import gc
 import hashlib
 import logging
+import threading
 from copy import copy
 from typing import Any, Optional
 
@@ -279,6 +280,8 @@ class KVPrefixCache:
         self._block_evict_checker: Any | None = None
         # Hash collision counter (vLLM pattern: verify token IDs on hash match)
         self._hash_collisions: int = 0
+        # Thread safety: protects all mutable state (lists, dicts)
+        self._lock = threading.Lock()
 
     def add(
         self,
@@ -289,42 +292,44 @@ class KVPrefixCache:
         if len(prompt_tokens) < self._min_prefix:
             return
 
-        self._evict_if_full()
+        with self._lock:
+            self._evict_if_full()
 
-        prompt_copy = _detached_copy(prompt_tokens)
-        cache_copy = self._snapshot_cache(cache)
+            prompt_copy = _detached_copy(prompt_tokens)
+            cache_copy = self._snapshot_cache(cache)
+
+            # Remove old entry with same hash if exists
+            h = _token_hash(prompt_copy)
+            if h in self._hash_index:
+                old_idx = self._hash_index.pop(h)
+                self._remove_entry(old_idx)
+
+            # Compute block hashes for prefix index
+            block_hashes = _compute_block_hashes(np_array(prompt_copy))
+
+            idx = len(self._prompts)
+            self._prompts.append(prompt_copy)
+            self._caches.append(cache_copy)
+            self._block_hashes.append(block_hashes)
+            self._access_counter += 1
+            self._last_used.append(self._access_counter)
+            self._priorities.append(0)
+            self._access_counts.append(1)
+            self._hash_index[h] = idx
+
+            # Add to prefix index with block dedup refcounting (vLLM pattern)
+            for bi, bh in enumerate(block_hashes):
+                if bh not in self._prefix_index:
+                    self._prefix_index[bh] = []
+                self._prefix_index[bh].append((idx, bi))
+                self._block_refcount[bh] = self._block_refcount.get(bh, 0) + 1
+
+            logger.info(
+                f"KV prefix cache added: {len(prompt_tokens)} tokens, "
+                f"blocks={len(block_hashes)}, total entries={len(self._prompts)}"
+            )
+
         mx.eval(prompt_copy)
-
-        # Remove old entry with same hash if exists
-        h = _token_hash(prompt_copy)
-        if h in self._hash_index:
-            old_idx = self._hash_index.pop(h)
-            self._remove_entry(old_idx)
-
-        # Compute block hashes for prefix index
-        block_hashes = _compute_block_hashes(np_array(prompt_copy))
-
-        idx = len(self._prompts)
-        self._prompts.append(prompt_copy)
-        self._caches.append(cache_copy)
-        self._block_hashes.append(block_hashes)
-        self._access_counter += 1
-        self._last_used.append(self._access_counter)
-        self._priorities.append(0)
-        self._access_counts.append(1)
-        self._hash_index[h] = idx
-
-        # Add to prefix index with block dedup refcounting (vLLM pattern)
-        for bi, bh in enumerate(block_hashes):
-            if bh not in self._prefix_index:
-                self._prefix_index[bh] = []
-            self._prefix_index[bh].append((idx, bi))
-            self._block_refcount[bh] = self._block_refcount.get(bh, 0) + 1
-
-        logger.info(
-            f"KV prefix cache added: {len(prompt_tokens)} tokens, "
-            f"blocks={len(block_hashes)}, total entries={len(self._prompts)}"
-        )
 
     def get(
         self,
@@ -342,6 +347,14 @@ class KVPrefixCache:
             (cached_kv, remaining_token_count, matched_token_count)
             cached_kv is None if no useful match found.
         """
+        with self._lock:
+            return self._get_unlocked(prompt_tokens)
+
+    def _get_unlocked(
+        self,
+        prompt_tokens: mx.array,
+    ) -> tuple[Optional[list], int, int]:
+        """Internal get without lock — callers must hold _lock."""
         if not self._prompts:
             return None, len(prompt_tokens), 0
 
@@ -630,17 +643,15 @@ class KVPrefixCache:
 
     def _evict_if_full(self) -> None:
         """Evict entries using the configured strategy when at capacity."""
-        _skip_count = 0  # guard against infinite loop when checker blocks all
+        _skip_count = 0
         _evicted_any = False
         while len(self._prompts) >= self._max_entries and _skip_count < len(self._prompts):
-            # Update SLRU access counts if applicable
             if isinstance(self._eviction_strategy, SLRUStrategy):
                 self._eviction_strategy.update_access_counts(self._access_counts)
             victim = self._eviction_strategy.select_victim(
                 self._prompts, self._last_used, self._access_counter,
                 self._priorities,
             )
-            # Check if block eviction is allowed (e.g., MemoryGuard.should_evict_block)
             if self._block_evict_checker is not None and self._block_hashes[victim]:
                 skip = False
                 for bh in self._block_hashes[victim]:
@@ -650,14 +661,17 @@ class KVPrefixCache:
                 if skip:
                     _skip_count += 1
                     continue
-            self._remove_entry(victim, rebuild_index=False)
+            # Rebuild index after each removal to keep select_victim's
+            # parallel lists consistent after swap-and-pop mutates them.
+            self._remove_entry(victim, rebuild_index=True)
             _evicted_any = True
             logger.info(
                 f"KV prefix cache evicted entry via {type(self._eviction_strategy).__name__} (capacity)"
             )
-        # Rebuild the hash index once after all batch evictions (not per-entry).
-        if _evicted_any:
-            self._rebuild_hash_index()
+        if not _evicted_any and len(self._prompts) >= self._max_entries:
+            logger.warning(
+                "KV prefix cache at capacity but no entries evictable — cache will exceed max_entries"
+            )
 
     def evict_under_pressure(self, threshold_pct: float = 85.0) -> int:
         """Evict LRU entries when GPU memory is under pressure.
@@ -675,9 +689,6 @@ class KVPrefixCache:
         Returns:
             Number of entries evicted.
         """
-        if not self._prompts:
-            return 0
-
         try:
             info = mx.device_info()
             max_ws = info.get("max_recommended_working_set_size") if isinstance(info, dict) else None
@@ -689,43 +700,44 @@ class KVPrefixCache:
             if util_pct < threshold_pct:
                 return 0
 
-            evicted = 0
-            # Evict up to 25% of entries to amortize the check cost
-            max_evict = max(1, len(self._prompts) // 4)
-            _skip_count = 0  # guard against infinite loop when checker blocks all
+            with self._lock:
+                if not self._prompts:
+                    return 0
+                evicted = 0
+                max_evict = max(1, len(self._prompts) // 4)
+                _skip_count = 0
 
-            while self._prompts and evicted < max_evict and _skip_count < len(self._prompts):
-                # Re-check pressure each iteration
-                active = mx.get_active_memory()
-                if (active / max_ws) * 100 < threshold_pct - 5.0:
-                    break
+                while self._prompts and evicted < max_evict and _skip_count < len(self._prompts):
+                    active = mx.get_active_memory()
+                    if (active / max_ws) * 100 < threshold_pct - 5.0:
+                        break
 
-                if isinstance(self._eviction_strategy, SLRUStrategy):
-                    self._eviction_strategy.update_access_counts(self._access_counts)
-                victim = self._eviction_strategy.select_victim(
-                    self._prompts, self._last_used, self._access_counter,
-                    self._priorities,
-                )
-                # Check if block eviction is allowed (e.g., MemoryGuard.should_evict_block)
-                if self._block_evict_checker is not None and self._block_hashes[victim]:
-                    skip = False
-                    for bh in self._block_hashes[victim]:
-                        if not self._block_evict_checker(bh):
-                            skip = True
-                            break
-                    if skip:
-                        _skip_count += 1
-                        continue
-                self._remove_entry(victim, rebuild_index=False)
-                evicted += 1
+                    if isinstance(self._eviction_strategy, SLRUStrategy):
+                        self._eviction_strategy.update_access_counts(self._access_counts)
+                    victim = self._eviction_strategy.select_victim(
+                        self._prompts, self._last_used, self._access_counter,
+                        self._priorities,
+                    )
+                    if self._block_evict_checker is not None and self._block_hashes[victim]:
+                        skip = False
+                        for bh in self._block_hashes[victim]:
+                            if not self._block_evict_checker(bh):
+                                skip = True
+                                break
+                        if skip:
+                            _skip_count += 1
+                            continue
+                    self._remove_entry(victim, rebuild_index=False)
+                    evicted += 1
 
-            if evicted > 0:
-                self._rebuild_hash_index()
-                mx.clear_cache()
-                logger.info(
-                    f"KV prefix cache pressure eviction: {evicted} entries freed "
-                    f"(utilization was {util_pct:.1f}%)"
-                )
+                if evicted > 0:
+                    self._rebuild_hash_index()
+
+            mx.clear_cache()
+            logger.info(
+                f"KV prefix cache pressure eviction: {evicted} entries freed "
+                f"(utilization was {util_pct:.1f}%)"
+            )
             return evicted
 
         except Exception:
@@ -734,14 +746,15 @@ class KVPrefixCache:
 
     def clear(self) -> None:
         """Clear all cached entries."""
-        self._prompts.clear()
-        self._caches.clear()
-        self._block_hashes.clear()
-        self._last_used.clear()
-        self._priorities.clear()
-        self._access_counts.clear()
-        self._hash_index.clear()
-        self._prefix_index.clear()
+        with self._lock:
+            self._prompts.clear()
+            self._caches.clear()
+            self._block_hashes.clear()
+            self._last_used.clear()
+            self._priorities.clear()
+            self._access_counts.clear()
+            self._hash_index.clear()
+            self._prefix_index.clear()
         self._block_refcount.clear()
         self._access_counter = 0
         gc.collect()

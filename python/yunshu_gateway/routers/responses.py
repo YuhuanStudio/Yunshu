@@ -662,9 +662,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     completion_tok += 1
                 if output.new_text:
                     _is_reasoning = getattr(output, 'current_state', None) == "reasoning"
-                    if _is_reasoning:
-                        reasoning_tok += 1
-                    else:
+                    if not _is_reasoning:
                         accumulated_text += output.new_text
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
@@ -720,9 +718,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                 elif token_text and not _is_reasoning:
                     completion_tok += 1
                 if token_text:
-                    if _is_reasoning:
-                        reasoning_tok += 1
-                    else:
+                    if not _is_reasoning:
                         accumulated_text += token_text
                 if getattr(output, 'finish_reason', None) is not None:
                     last_finish_reason = output.finish_reason

@@ -391,6 +391,12 @@ class LoRAAdapterManager:
                         return False
                     entry = self._adapters[adapter_id]
                     entry.is_merged = True
+                    # The LoRA structure has been unwrapped back to nn.Linear
+                    # and the weights baked into the base model.  Marking
+                    # is_loaded=False prevents _restore_base from incorrectly
+                    # skipping weight restoration when a merged adapter's
+                    # is_merged=True would trigger the guard.
+                    entry.is_loaded = False
                     logger.info(f"Merged LoRA adapter: {adapter_id}")
                     return True
                 except Exception as e:

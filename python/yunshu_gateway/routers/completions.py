@@ -577,14 +577,15 @@ async def _stream_completion(
     except MemoryError:
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
-        yield b": error: Insufficient GPU memory\n\n"
+        yield b'data: {"error": {"message": "Insufficient GPU memory", "type": "memory_error", "code": "oom"}}\n\n'
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
     except Exception as e:
         if _comp_cancel_evt is not None:
             _comp_cancel_evt.set()
         logger.error(f"Completions streaming error: {e}", exc_info=True)
-        yield b": error: Internal server error\n\n"
+        err_msg = str(e).replace('"', '\\"').replace("\n", " ")[:200]
+        yield f'data: {{"error": {{"message": "{err_msg}", "type": "internal_error"}}}}\n\n'.encode("utf-8")
         if not _done_emitted:
             yield b"data: [DONE]\n\n"
     finally:
