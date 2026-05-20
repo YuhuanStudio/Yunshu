@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–321: 36 waves, 730+ bugs fixed. Latest: Wave 321 — 8-agent deep audit, 30+ bugs (scheduler AttributeError CRITICAL, mesh deadlock CRITICAL, KV block leak CRITICAL, spec decode grammar advancement, batch sampler NaN, hysteresis bypass, forward_batch EOS detection), 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–322: 37 waves, 745+ bugs fixed. Latest: Wave 322 — 4-agent audit, 12+ bugs (engine_core InvalidStateError, kv_transfer infinite retry, radix block_hashes desync, grammar checkpoint loss, thinking_budget segment reset, staged_pipeline thread safety), 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
