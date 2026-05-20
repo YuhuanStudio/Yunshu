@@ -437,14 +437,17 @@ async def create_response(req: ResponsesRequest, request: Request):
                     finish_reason = "tool_calls"
 
             # Build output item for this choice
-            text_part = {"type": "output_text", "text": text.strip()}
+            text_part = {"type": "output_text", "text": text.strip(), "annotations": []}
             # Include logprobs if requested
+            # Responses API logprobs format: flat list of {"token", "logprob", "top_logprobs"}
+            # NOT the Chat Completions {"content": [...]} wrapper.
             if req.logprobs:
                 _result_lp = getattr(result, 'logprobs', None) if is_batched else getattr(state, 'logprobs', None)
                 if _result_lp:
-                    _chunk_lp = _format_chat_logprobs(_result_lp)
-                    if _chunk_lp:
-                        text_part["logprobs"] = _chunk_lp
+                    _chat_lp = _format_chat_logprobs(_result_lp)
+                    if _chat_lp:
+                        # Unwrap from Chat Completions {"content": [...]} to flat list
+                        text_part["logprobs"] = _chat_lp.get("content", [])
             content_parts = [text_part]
             choice_item = {
                 "type": "message",
@@ -491,8 +494,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "input_tokens": total_pt,
                 "output_tokens": total_ct,
                 "total_tokens": total_pt + total_ct,
-                **({"output_tokens_details": {"reasoning_tokens": total_reasoning_tokens}} if total_reasoning_tokens else {}),
-                **({"input_tokens_details": {"cached_tokens": max_cached_tokens}} if max_cached_tokens else {}),
+                "output_tokens_details": {"reasoning_tokens": total_reasoning_tokens},
+                "input_tokens_details": {"cached_tokens": max_cached_tokens},
             },
         })
     except MemoryError:
@@ -733,33 +736,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                         seq=_next_seq(),
                     )
 
-        # ── Lifecycle: response.output_text.done ──
-        yield format_responses_text_done(
-            text=accumulated_text,
-            item_id=msg_id,
-            output_index=0,
-            content_index=0,
-            seq=_next_seq(),
-        )
-
-        # ── Lifecycle: response.content_part.done ──
-        yield format_responses_content_part_done(
-            item_id=msg_id,
-            text=accumulated_text,
-            output_index=0,
-            content_index=0,
-            seq=_next_seq(),
-        )
-
-        # ── Lifecycle: response.output_item.done ──
-        yield format_responses_output_item_done(
-            item_id=msg_id,
-            text=accumulated_text,
-            output_index=0,
-            seq=_next_seq(),
-        )
-
-        # ── Check for tool calls in the accumulated text ──
+        # ── Check for tool calls in the accumulated text (before closing lifecycles) ──
         tool_calls = None
         clean_text = accumulated_text
         if req.tools:
@@ -767,6 +744,32 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             tool_calls = extract_tool_calls_model_aware(accumulated_text, req.model)
             if tool_calls:
                 clean_text = clean_tool_call_markup(accumulated_text)
+
+        # ── Lifecycle: response.output_text.done (use cleaned text) ──
+        yield format_responses_text_done(
+            text=clean_text,
+            item_id=msg_id,
+            output_index=0,
+            content_index=0,
+            seq=_next_seq(),
+        )
+
+        # ── Lifecycle: response.content_part.done (use cleaned text) ──
+        yield format_responses_content_part_done(
+            item_id=msg_id,
+            text=clean_text,
+            output_index=0,
+            content_index=0,
+            seq=_next_seq(),
+        )
+
+        # ── Lifecycle: response.output_item.done (use cleaned text) ──
+        yield format_responses_output_item_done(
+            item_id=msg_id,
+            text=clean_text,
+            output_index=0,
+            seq=_next_seq(),
+        )
 
         # ── Build final output for response.completed ──
         content_parts = [
@@ -788,14 +791,50 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
         # Append function_call items for detected tool calls
         if tool_calls:
-            for tc in tool_calls:
-                final_output.append({
-                    "type": "function_call",
-                    "id": f"fc-{uuid.uuid4().hex[:24]}",
-                    "call_id": f"call_{uuid.uuid4().hex[:8]}",
+            for tc_idx, tc in enumerate(tool_calls):
+                fc_id = f"fc-{uuid.uuid4().hex[:24]}"
+                fc_call_id = f"call_{uuid.uuid4().hex[:8]}"
+                output_index = len(final_output)  # next output slot
+
+                # Lifecycle: response.output_item.added for the function_call
+                yield format_responses_output_item_added(
+                    response_id, req.model,
+                    item_id=fc_id,
+                    output_index=output_index,
+                    seq=_next_seq(),
+                    item_type="function_call",
+                )
+
+                # Lifecycle: response.function_call_arguments.done
+                _args_done_data = {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": fc_id,
+                    "output_index": output_index,
+                    "call_id": fc_call_id,
                     "name": tc["name"],
                     "arguments": tc["arguments"],
-                })
+                    "sequence_number": _next_seq(),
+                }
+                yield "event: response.function_call_arguments.done\ndata: " + json.dumps(_args_done_data, ensure_ascii=False) + "\n\n"
+
+                # Lifecycle: response.output_item.done for the function_call
+                fc_item = {
+                    "type": "function_call",
+                    "id": fc_id,
+                    "call_id": fc_call_id,
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                    "status": "completed",
+                }
+                _fc_done_data = {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": fc_item,
+                    "sequence_number": _next_seq(),
+                }
+                yield "event: response.output_item.done\ndata: " + json.dumps(_fc_done_data, ensure_ascii=False) + "\n\n"
+
+                final_output.append(fc_item)
 
         # ── Lifecycle: response.completed (includes usage) ──
         yield format_responses_completed(

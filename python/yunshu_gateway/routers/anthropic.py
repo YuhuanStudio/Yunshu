@@ -377,8 +377,9 @@ def _convert_anthropic_messages(
                 elif bt == "image":
                     source = block.get("source", {})
                     media_type = source.get("media_type", "unknown")
+                    source_type = source.get("type", "")
                     data = source.get("data")
-                    if data and source.get("type") == "base64":
+                    if data and source_type == "base64":
                         import base64 as _b64
                         import tempfile as _tf
                         try:
@@ -393,6 +394,9 @@ def _convert_anthropic_messages(
                         tmp.close()
                         temp_files.append(tmp.name)
                         converted_parts.append({"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}})
+                    elif source_type == "url" and source.get("url"):
+                        # Anthropic url source: pass through the URL directly
+                        converted_parts.append({"type": "image_url", "image_url": {"url": source["url"]}})
                     else:
                         converted_parts.append({"type": "text", "text": f"[Image: {media_type}]"})
                 else:
@@ -412,8 +416,9 @@ def _convert_image_block(block: dict, intermediate: list[dict], temp_files: list
     """Convert an Anthropic image block and append to intermediate messages."""
     source = block.get("source", {})
     media_type = source.get("media_type", "unknown")
+    source_type = source.get("type", "")
     data = source.get("data")
-    if data and source.get("type") == "base64":
+    if data and source_type == "base64":
         import base64 as _b64
         import tempfile as _tf
         try:
@@ -429,6 +434,12 @@ def _convert_image_block(block: dict, intermediate: list[dict], temp_files: list
         intermediate.append({
             "role": "user",
             "content": [{"type": "image_url", "image_url": {"url": f"file://{tmp.name}"}}],
+        })
+    elif source_type == "url" and source.get("url"):
+        # Anthropic url source: pass through the URL directly
+        intermediate.append({
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": source["url"]}}],
         })
     else:
         intermediate.append({"role": "user", "content": f"[Image: {media_type}]"})
@@ -539,9 +550,17 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
         if req.tool_choice:
             if isinstance(req.tool_choice, dict):
-                forced = req.tool_choice.get("name")
-                if forced:
-                    tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+                tc_type = req.tool_choice.get("type", "")
+                if tc_type == "none":
+                    has_tools = False
+                    tool_prompt = ""
+                elif tc_type == "any":
+                    tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
+                elif tc_type == "tool":
+                    forced = req.tool_choice.get("name")
+                    if forced:
+                        tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+                # {"type": "auto"} is the default — no additional prompt needed
             elif req.tool_choice == "any":
                 tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
             elif req.tool_choice == "none":
@@ -743,7 +762,11 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None):
         if tool_calls:
             has_tool_calls = True
             # Remove the text block and replace with cleaned version
-            text_block["text"] = clean_tool_call_markup(visible_text)
+            cleaned = clean_tool_call_markup(visible_text)
+            text_block["text"] = cleaned
+            # Per Anthropic spec: omit empty text blocks when tool_use is present
+            if not cleaned.strip():
+                content.remove(text_block)
             for tc in tool_calls:
                 tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                 try:
@@ -885,7 +908,11 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None):
         if tool_calls:
             has_tool_calls = True
             # Remove the text block and replace with cleaned version
-            text_block["text"] = clean_tool_call_markup(visible_text)
+            cleaned = clean_tool_call_markup(visible_text)
+            text_block["text"] = cleaned
+            # Per Anthropic spec: omit empty text blocks when tool_use is present
+            if not cleaned.strip():
+                content.remove(text_block)
             for tc in tool_calls:
                 tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                 try:
@@ -1474,9 +1501,15 @@ async def count_tokens(req: AnthropicMessagesRequest) -> dict:
             tool_prompt += "\n"
         if req.tool_choice:
             if isinstance(req.tool_choice, dict):
-                forced = req.tool_choice.get("name")
-                if forced:
-                    tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
+                tc_type = req.tool_choice.get("type", "")
+                if tc_type == "none":
+                    tool_prompt = ""
+                elif tc_type == "any":
+                    tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
+                elif tc_type == "tool":
+                    forced = req.tool_choice.get("name")
+                    if forced:
+                        tool_prompt += f"\nYou MUST call the tool '{forced}'.\n"
             elif req.tool_choice == "any":
                 tool_prompt += "\nYou MUST call at least one tool. Do NOT respond with only text.\n"
             elif req.tool_choice == "none":
@@ -1487,9 +1520,15 @@ async def count_tokens(req: AnthropicMessagesRequest) -> dict:
             else:
                 messages.insert(0, {"role": "system", "content": tool_prompt.strip()})
 
-    for m in req.messages:
-        content = _extract_text_from_content(m.content)
-        messages.append({"role": m.role, "content": content})
+    # Use the same conversion as /messages for accurate token counting.
+    # _extract_text_from_content flattens tool_use/tool_result to text which
+    # undercounts tokens compared to the actual OpenAI-format messages that
+    # the /messages endpoint sends to the engine.
+    has_images = any(_has_image_blocks(m.content) for m in req.messages)
+    converted_msgs, _ = _convert_anthropic_messages(
+        req.messages, has_images=has_images,
+    )
+    messages.extend(converted_msgs)
     try:
         prompt = tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True,

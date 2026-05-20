@@ -970,15 +970,24 @@ def format_responses_output_item_added(
     item_id: str,
     output_index: int = 0,
     seq: int = 2,
+    item_type: str = "message",
 ) -> str:
-    """response.output_item.added — new output item (message) added."""
-    item = {
-        "type": "message",
-        "id": item_id,
-        "role": "assistant",
-        "content": [],
-        "status": "in_progress",
-    }
+    """response.output_item.added — new output item (message or function_call) added."""
+    if item_type == "message":
+        item = {
+            "type": "message",
+            "id": item_id,
+            "role": "assistant",
+            "content": [],
+            "status": "in_progress",
+        }
+    else:
+        # Generic item (e.g. function_call) — caller will fill details via done event
+        item = {
+            "type": item_type,
+            "id": item_id,
+            "status": "in_progress",
+        }
     data = {
         "type": "response.output_item.added",
         "output_index": output_index,
