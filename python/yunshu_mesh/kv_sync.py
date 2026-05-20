@@ -625,6 +625,7 @@ class KVSynchronizationService:
             if response.status != TransferStatus.COMPLETED:
                 self._stats.transfers_failed += 1
                 self._transfer_history[response.request_id] = response
+                self._pending_transfers.pop(response.request_id, None)
                 self._trim_history()
                 return 0
 

@@ -365,7 +365,11 @@ class JsonSchemaConstraint:
             # Collect ALL option types (not just first) for union semantics
             options = schema.get("anyOf") or schema.get("oneOf") or []
             non_null = [o for o in options if isinstance(o, dict) and o.get("type") != "null"]
-            if not non_null:
+            has_null = any(
+                isinstance(o, dict) and o.get("type") == "null"
+                for o in options
+            )
+            if not non_null and not has_null:
                 return "any"
             # Collect unique types across all options
             all_types: list[str] = []
@@ -375,6 +379,8 @@ class JsonSchemaConstraint:
                     all_types.extend(t)
                 elif t != "any":
                     all_types.append(t)
+            if has_null:
+                all_types.append("null")
             unique = list(dict.fromkeys(all_types))  # preserve order, dedupe
             if not unique:
                 return "any"
@@ -1409,6 +1415,10 @@ def apply_json_constraint(
 ) -> Any:
     """Mask logits for disallowed tokens to -inf.
 
+    When no tokens are allowed (empty ``allowed_token_ids``), falls back to
+    the argmax of the original logits instead of masking all to -inf, which
+    would cause softmax NaN.
+
     Args:
         logits: mx.array of shape (1, vocab_size) or (vocab_size,)
         allowed_token_ids: List of token IDs that are allowed
@@ -1418,12 +1428,19 @@ def apply_json_constraint(
     """
     import mlx.core as mx
 
+    neg_inf = mx.array(float('-inf'), dtype=logits.dtype)
+
     if not allowed_token_ids:
-        # No valid tokens in current state — mask everything to -inf so the
-        # sampler is forced toward EOS.  Returning raw logits would silently
-        # disable the constraint.
-        neg_inf = mx.array(float('-inf'), dtype=logits.dtype)
-        return mx.broadcast_to(neg_inf, logits.shape)
+        # No valid tokens in current state — fall back to argmax of original
+        # logits to avoid all-inf -> softmax NaN
+        logger.warning(
+            "JSON constraint: no allowed tokens in current state, "
+            "falling back to argmax of original logits"
+        )
+        best = int(mx.argmax(logits.reshape(-1)))
+        mask = mx.ones(logits.shape[-1:], dtype=mx.bool_)
+        mask[best] = False
+        return mx.where(mask, neg_inf, logits)
 
     # Create mask: True where token is NOT allowed
     vocab_size = logits.shape[-1]
@@ -1432,8 +1449,20 @@ def apply_json_constraint(
     mask[allowed] = False
 
     # Apply mask
-    neg_inf = mx.array(float('-inf'), dtype=logits.dtype)
     result = mx.where(mask, neg_inf, logits)
+
+    # Safety: if all allowed tokens already had -inf logits, fall back to argmax
+    is_finite = mx.isfinite(result.reshape(-1))
+    if not mx.any(is_finite).item():
+        logger.warning(
+            "JSON constraint: all allowed tokens have -inf logits, "
+            "falling back to argmax of original logits"
+        )
+        best = int(mx.argmax(logits.reshape(-1)))
+        fallback_mask = mx.ones(logits.shape[-1:], dtype=mx.bool_)
+        fallback_mask[best] = False
+        return mx.where(fallback_mask, neg_inf, logits)
+
     return result
 
 

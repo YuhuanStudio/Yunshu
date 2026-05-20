@@ -625,7 +625,7 @@ def _normalize_finish_reason(reason: str | None) -> str:
     _INTERNAL_MAP = {
         "abort": "stop",
         "cancel": "stop",
-        "error": "stop",
+        "error": "length",
         "timeout": "length",
         "memory_limit": "length",
         "memory_exceeded": "length",

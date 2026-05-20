@@ -146,6 +146,7 @@ class ExternalPrefiller:
         self._model = model
         self._tokenizer = tokenizer
         self._executor = executor
+        self._kv_transfer_client = None
 
     def prefill(
         self,
@@ -348,7 +349,9 @@ class ExternalPrefiller:
                 )
                 return None
 
-            client = KVTransferClient(config)
+            if self._kv_transfer_client is None:
+                self._kv_transfer_client = KVTransferClient(config)
+            client = self._kv_transfer_client
             transfer_result = client.send_blocks_sync(
                 blocks=blocks,
                 request_id=request_id,

@@ -63,6 +63,9 @@ class BitmaskApplicator:
     def apply(self, logits: Any, bitmask: Any) -> Any:
         """Apply bitmask to logits.
 
+        When no tokens are allowed (all-False bitmask), falls back to
+        allowing only the argmax of the original logits to avoid NaN.
+
         Args:
             logits: mx.array of shape (..., vocab_size)
             bitmask: mx.array of shape (vocab_size,), bool dtype.
@@ -73,10 +76,47 @@ class BitmaskApplicator:
         """
         import mlx.core as mx
 
+        # If no tokens allowed, fall back to argmax to avoid all-inf -> NaN
+        if not mx.any(bitmask).item():
+            logger.warning(
+                "BitmaskApplicator: no tokens allowed by bitmask, "
+                "falling back to argmax of original logits"
+            )
+            flat = logits.reshape(-1)
+            best = int(mx.argmax(flat))
+            vocab_size = logits.shape[-1]
+            neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
+            fallback_mask = mx.ones((vocab_size,), dtype=mx.bool_)
+            fallback_mask[best] = False
+            return mx.where(
+                mx.broadcast_to(fallback_mask, logits.shape),
+                neg_inf,
+                logits,
+            )
+
         # bitmask is True where allowed; we want True where BLOCKED
         blocked = mx.logical_not(bitmask)
         neg_inf = mx.array(float("-inf"), dtype=logits.dtype)
-        return mx.where(blocked, neg_inf, logits)
+        result = mx.where(blocked, neg_inf, logits)
+
+        # Safety: if all allowed tokens were already -inf, fall back to argmax
+        if not mx.any(mx.isfinite(result.reshape(-1))).item():
+            logger.warning(
+                "BitmaskApplicator: all allowed tokens have -inf logits, "
+                "falling back to argmax of original logits"
+            )
+            flat = logits.reshape(-1)
+            best = int(mx.argmax(flat))
+            vocab_size = logits.shape[-1]
+            fallback_mask = mx.ones((vocab_size,), dtype=mx.bool_)
+            fallback_mask[best] = False
+            return mx.where(
+                mx.broadcast_to(fallback_mask, logits.shape),
+                neg_inf,
+                logits,
+            )
+
+        return result
 
     def apply_allowlist(self, logits: Any, allowed_ids: list[int]) -> Any:
         """Convenience: build mask from an allowlist, then apply.

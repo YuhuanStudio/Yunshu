@@ -615,6 +615,11 @@ class KVTransferProtocol:
         header_len = struct.unpack("!I", buf.read(4))[0]
         header_bytes = buf.read(header_len)
         header = KVTransferHeader.from_json(header_bytes)
+        if header.version != _HEADER_VERSION:
+            raise ValueError(
+                f"KV transfer protocol version mismatch: received v{header.version}, "
+                f"expected v{_HEADER_VERSION}"
+            )
 
         # Payload
         payload_len = struct.unpack("!Q", buf.read(8))[0]

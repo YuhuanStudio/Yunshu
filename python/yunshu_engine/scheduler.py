@@ -2246,6 +2246,8 @@ class Scheduler:
         for victim in candidates:
             if retracted >= count:
                 break
+            if getattr(victim, 'num_preemptions', 0) >= self._MAX_PREEMPTIONS_PER_REQUEST:
+                continue
             self.running.pop(victim.request_id, None)
             self._preempt_request(victim)
             retracted += 1

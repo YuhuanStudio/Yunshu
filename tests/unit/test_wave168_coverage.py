@@ -39,7 +39,7 @@ class TestNormalizeFinishReasonEdgeCases:
         expected = {
             "abort": "stop",
             "cancel": "stop",
-            "error": "stop",
+            "error": "length",
             "timeout": "length",
             "memory_limit": "length",
             "memory_exceeded": "length",

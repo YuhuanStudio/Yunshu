@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–312: 29 waves, 620+ bugs fixed. Latest: Wave 312 — streaming spec thinking_budget enforcement, penalty/bias bonus token, tiered KV token accounting, warm tier num_tokens warning, 20+ Prometheus metrics, stale gauge cleanup, label cardinality cap, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–314: 30 waves, 650+ bugs fixed. Latest: Wave 314 — grammar NaN prevention (3 layers), VLM timeout, max_tokens=0 early return, KV failure fallback, SSRF protection, scoring auth, OpenAI error code field, KV transfer version, pending transfer cleanup, client reuse, anyOf/oneOf null type, preemption cap bypass fix, streaming text buffer cap, CORS hardening, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -36,6 +36,31 @@
 ## 修復進度追蹤
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
+
+### 已完成修復 (2026-05-21 Wave 314 — 8 agents, 30+ bugs: grammar NaN, VLM timeout, KV failure fallback, SSRF, security, CORS, streaming overflow, preemption cap, KV transfer)
+
+| 修復 | 描述 | 影響 |
+|------|------|------|
+| Agent 1: apply_json_constraint 全遮罩 NaN | 空 allowed_token_ids 改為 argmax fallback 而非全 -inf | softmax NaN 導致無限垃圾 (CRITICAL) |
+| Agent 1: BitmaskApplicator all-False fallback | 全 False bitmask 改為 argmax fallback | softmax NaN (HIGH) |
+| Agent 1: batch_sampler grammar bitmask fallback | _apply_grammar_bitmask 空 bitmask argmax fallback | softmax NaN (HIGH) |
+| Agent 1: _apply_batch_top_p all-inf 跳過 | top-p 對全 -inf 行跳過處理 | NaN 傳播 (MEDIUM) |
+| Agent 1: logprobs NaN→-100.0 | 4 個 log(softmax()) 計算點加 NaN 保護 | 日誌概率損壞 (MEDIUM) |
+| Agent 2: VLM generate timeout | asyncio.wait_for 包裹 VLM generate，120s 預設 | 無限掛起 (HIGH) |
+| Agent 2: max_tokens=0 early return | generate() 在 max_tokens=0 時直接返回空結果 | 資源浪費 (MEDIUM) |
+| Agent 3: _snapshot_cache try/except | 3 個 snapshot 點 + SSD restore 加 try/except | 部分快取損壞 (HIGH) |
+| Agent 3: prefix_cache.get() try/except | 4 個 batched_engine prefix_cache.get() 加 fallback | KV 提取失敗崩潰 (HIGH) |
+| Agent 4: scoring 4 端點加 auth | pooling/score/rerank/classify 加 _check_permission | 未授權存取 (HIGH) |
+| Agent 4: OpenAI error format 加 code 欄位 | HTTP error handler 加入 bad_request/model_not_found 等碼 | 客戶端相容性 (MEDIUM) |
+| Agent 4: SSRF _VALIDATE_URL | VLM 圖片下載阻擋私有 IP (169.254/16, 10/8, 等) | SSRF 攻擊 (CRITICAL) |
+| Agent 5: KV transfer 版本驗證 | decode_message 檢查版本不符 | 協議不匹配數據損壞 (HIGH) |
+| Agent 5: pending_transfers 失敗清理 | complete_transfer 非完成狀態也移除 pending | 記憶體洩漏 (HIGH) |
+| Agent 5: KVTransferClient 重用 | ExternalPrefiller 懶單例重用客戶端 | 連接浪費 (MEDIUM) |
+| Agent 6: anyOf/oneOf null 類型 | has_null 追蹤，null 加入類型聯集 | 結構化輸出不完整 (HIGH) |
+| Agent 7: retraction preemption cap | _retract_decode_requests 檢查 MAX_PREEMPTIONS | 活鎖 (HIGH) |
+| Agent 8: streaming text buffer 1MB cap | 3 個 streaming 路徑加 _MAX_STREAMING_TEXT_BUFFER | OOM (HIGH) |
+| Agent 8: error→length mapping | streaming error finish_reason 改為 "length" | 靜默截斷 (MEDIUM) |
+| Agent 8: CORS 預設 localhost | gateway + control plane CORS 從 * 改 localhost | 安全 (MEDIUM) |
 
 ### 已完成修復 (2026-05-20 Waves 288–296 — 9 waves, 160+ bugs: batched engine streaming, forward batch, context window, LoRA, KV migration, auto-tuner, monitoring, diffusion, scheduler batch composition, Anthropic, embeddings, engine_core memory)
 

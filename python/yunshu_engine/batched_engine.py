@@ -44,6 +44,7 @@ def _is_cancelled(event: Any) -> bool:
     return event.is_set()
 
 _REASONING_EFFORT_MAP = {"low": 2048, "medium": 8192, "high": 32768}
+_MAX_STREAMING_TEXT_BUFFER = 1 * 1024 * 1024  # 1MB safety limit for streaming text buffer
 
 
 @contextmanager
@@ -1501,6 +1502,17 @@ class BatchedEngine:
         if not self._loaded:
             await self.start()
 
+        # Early return: max_tokens <= 0 produces no output
+        if max_tokens <= 0:
+            return GenerationOutput(
+                text="",
+                new_text="",
+                prompt_tokens=0,
+                completion_tokens=0,
+                finished=True,
+                finish_reason="length",
+            )
+
         _use_engine_loop = self._should_use_engine_loop(use_engine_loop)
 
         # Memory guard preflight check
@@ -2078,7 +2090,11 @@ class BatchedEngine:
                     except Exception:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
             if not _pc_hit:
-                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                try:
+                    cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+                except Exception:
+                    logger.warning("KV prefix cache get failed — falling back to full prefill", exc_info=True)
+                    cached_kv, _, matched = None, None, 0
                 cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
                 if cached_kv is not None:
                     cached_tokens = matched
@@ -2170,6 +2186,7 @@ class BatchedEngine:
                     tokens.append(first_token)
                     if logprobs:
                         log_probs = mx.log(mx.softmax(logits[:, -1, :].astype(mx.float32), axis=-1))
+                        log_probs = mx.where(mx.isnan(log_probs), mx.array(-100.0, dtype=log_probs.dtype), log_probs)
                         tok_lp = float(log_probs[0, first_token])
                         token_logprobs.append({"token_id": first_token, "logprob": tok_lp})
                     if first_token in stop_ids:
@@ -2196,6 +2213,7 @@ class BatchedEngine:
                             tokens.append(token)
                             if logprobs:
                                 log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
+                                log_probs = mx.where(mx.isnan(log_probs), mx.array(-100.0, dtype=log_probs.dtype), log_probs)
                                 tok_lp = float(log_probs[token])
                                 token_logprobs.append({"token_id": int(token), "logprob": tok_lp})
                             if token in stop_ids:
@@ -2291,6 +2309,7 @@ class BatchedEngine:
                         if logprobs:
                             import mlx.core as mx
                             log_probs = mx.log(mx.softmax(logits.astype(mx.float32), axis=-1))
+                            log_probs = mx.where(mx.isnan(log_probs), mx.array(-100.0, dtype=log_probs.dtype), log_probs)
                             tok_lp = float(log_probs[token])
                             entry = {"token_id": int(token), "logprob": tok_lp}
                             if top_logprobs and top_logprobs > 0:
@@ -3257,7 +3276,11 @@ class BatchedEngine:
                         )
                     except Exception:
                         logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+            try:
+                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+            except Exception:
+                logger.warning("KV prefix cache get failed in streaming — falling back to full prefill", exc_info=True)
+                cached_kv, _, matched = None, None, 0
             cache = cached_kv if cached_kv is not None else _create_prompt_cache_with_quant(model, self._kv_quant_bits, self._kv_quant_group_size)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
             _stream_cached_tokens = matched
@@ -3313,6 +3336,7 @@ class BatchedEngine:
                     if logprobs and logits is not None:
                         import mlx.core as _mx
                         _log_probs = _mx.log(_mx.softmax(logits.astype(_mx.float32), axis=-1))
+                        _log_probs = _mx.where(_mx.isnan(_log_probs), _mx.array(-100.0, dtype=_log_probs.dtype), _log_probs)
                         _tok_lp = float(_log_probs[token])
                         if _tok_lp != _tok_lp or _tok_lp == float('-inf'):
                             _tok_lp = -100.0
@@ -3623,6 +3647,12 @@ class BatchedEngine:
                     finish_reason = _fr_val  # str or None
                     done = _fr_val is not None
                 accumulated += new_text
+                if len(accumulated) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error(
+                        "Streaming text buffer exceeded 1MB limit (%d bytes) — truncating",
+                        len(accumulated),
+                    )
+                    break
                 n_tok = tok_count
 
                 # TokenPipeline: run stage 3 overlap for stats tracking
@@ -4828,7 +4858,11 @@ class BatchedEngine:
                     )
                 except Exception:
                     logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+            try:
+                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+            except Exception:
+                logger.warning("KV prefix cache get failed in spec path — falling back to full prefill", exc_info=True)
+                cached_kv, _, matched = None, None, 0
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
@@ -5328,7 +5362,11 @@ class BatchedEngine:
                     )
                 except Exception:
                     logger.debug("paged KV pressure eviction failed", exc_info=True)
-            cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+            try:
+                cached_kv, _, matched = (prefix_cache.get(ids) if prefix_cache is not None else (None, None, 0))
+            except Exception:
+                logger.warning("KV prefix cache get failed in spec path — falling back to full prefill", exc_info=True)
+                cached_kv, _, matched = None, None, 0
             cache = cached_kv if cached_kv is not None else make_prompt_cache(model)
             ids_to_prefill = ids[matched:] if cached_kv is not None else ids
 
@@ -5784,6 +5822,12 @@ class BatchedEngine:
                     finish_reason = _fr_val
                     done = _fr_val is not None
                 accumulated += new_text
+                if len(accumulated) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error(
+                        "Streaming text buffer exceeded 1MB limit (%d bytes) — truncating",
+                        len(accumulated),
+                    )
+                    break
                 n_tok = tok_count
                 # Consumer-side thinking state tracking for reasoning_tokens reporting
                 if _ng_consumer_think_start is not None and isinstance(token_id, int):
@@ -6682,6 +6726,12 @@ class BatchedEngine:
                     finish_reason = _fr_val
                     done = _fr_val is not None
                 accumulated += new_text
+                if len(accumulated) > _MAX_STREAMING_TEXT_BUFFER:
+                    logger.error(
+                        "Streaming text buffer exceeded 1MB limit (%d bytes) — truncating",
+                        len(accumulated),
+                    )
+                    break
                 n_tok = tok_count
                 # Consumer-side thinking state tracking for reasoning_tokens reporting
                 if _mtp_consumer_think_start is not None and isinstance(token_id, int):

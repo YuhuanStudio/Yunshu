@@ -289,6 +289,9 @@ class BatchSampler:
 
             row = result[i : i + 1]  # shape [1, vocab]
             # Use softmax for proper probabilities (not raw exp which can overflow)
+            # Guard against all-inf rows from grammar masking: softmax(-inf...) = NaN
+            if not mx.any(mx.isfinite(row.reshape(-1))).item():
+                continue
             probs = mx.softmax(row, axis=-1)
             sorted_indices = mx.argsort(row, axis=-1)
             sorted_probs = mx.take_along_axis(probs, sorted_indices, axis=-1)
@@ -586,18 +589,51 @@ class LogitsProcessorBatch:
     def _apply_grammar_bitmask(
         logits_row: mx.array, config: LogitsProcessorConfig
     ) -> mx.array | None:
-        """Apply grammar constraint bitmask: mask disallowed tokens to -inf."""
+        """Apply grammar constraint bitmask: mask disallowed tokens to -inf.
+
+        When the bitmask is all-False (no tokens allowed), falls back to
+        allowing only the argmax token to avoid all-inf -> softmax NaN.
+        """
         bitmask = config.grammar_bitmask
         if bitmask is None:
             return None
 
+        # If no tokens allowed, fall back to argmax to avoid all-inf NaN
+        if not mx.any(bitmask).item():
+            flat = logits_row.reshape(-1)
+            best = int(mx.argmax(flat))
+            vocab_size = logits_row.shape[-1]
+            neg_inf = mx.array(-float("inf"), logits_row.dtype)
+            fallback = mx.ones((vocab_size,), dtype=mx.bool_)
+            fallback[best] = False
+            return mx.where(
+                fallback.reshape(1, -1),
+                neg_inf,
+                logits_row,
+            )
+
         # bitmask is True where tokens are allowed
-        logits_row = mx.where(
+        result = mx.where(
             bitmask.reshape(1, -1),
             logits_row,
             mx.array(-float("inf"), logits_row.dtype),
         )
-        return logits_row
+
+        # Safety: if all allowed tokens were already -inf, fall back to argmax
+        if not mx.any(mx.isfinite(result.reshape(-1))).item():
+            flat = logits_row.reshape(-1)
+            best = int(mx.argmax(flat))
+            vocab_size = logits_row.shape[-1]
+            neg_inf = mx.array(-float("inf"), logits_row.dtype)
+            fallback = mx.ones((vocab_size,), dtype=mx.bool_)
+            fallback[best] = False
+            return mx.where(
+                fallback.reshape(1, -1),
+                neg_inf,
+                logits_row,
+            )
+
+        return result
 
 
 # ---------------------------------------------------------------------------

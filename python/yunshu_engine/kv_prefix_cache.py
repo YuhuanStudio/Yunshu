@@ -389,7 +389,15 @@ class KVPrefixCache:
                     # Verified: tokens match the hash entry.
                     cached = self._caches[idx]
                     matched = len(prompt_tokens)
-                    result = self._snapshot_cache(cached)
+                    try:
+                        result = self._snapshot_cache(cached)
+                    except Exception:
+                        logger.warning(
+                            "KV prefix cache snapshot failed during exact match "
+                            "(%d tokens) — falling back to full prefill",
+                            matched, exc_info=True,
+                        )
+                        return None, len(prompt_tokens), 0
                     self._touch(idx)
                     logger.info(
                         f"KV prefix cache exact hit: {matched}/{len(prompt_tokens)} tokens"
@@ -417,7 +425,15 @@ class KVPrefixCache:
             if best_length >= self._min_prefix:
                 cached = self._caches[best_index]
                 tokens_to_trim = cached_len - best_length
-                result = self._snapshot_cache(cached, trim=tokens_to_trim)
+                try:
+                    result = self._snapshot_cache(cached, trim=tokens_to_trim)
+                except Exception:
+                    logger.warning(
+                        "KV prefix cache snapshot failed during hash-chain match "
+                        "(%d tokens, trim=%d) — falling back to full prefill",
+                        best_length, tokens_to_trim, exc_info=True,
+                    )
+                    return None, len(prompt_tokens), 0
                 self._touch(best_index)
 
                 remaining = len(prompt_tokens) - best_length
@@ -443,7 +459,14 @@ class KVPrefixCache:
             # SSD fallback: try loading first block from SSD if available
             if self._ssd_cache is not None and query_blocks:
                 bh_bytes = query_blocks[0].to_bytes(8, "little") if isinstance(query_blocks[0], int) else query_blocks[0]
-                ssd_data = self.try_ssd_restore(bh_bytes)
+                try:
+                    ssd_data = self.try_ssd_restore(bh_bytes)
+                except Exception:
+                    logger.warning(
+                        "KV prefix cache SSD restore failed — falling back to full prefill",
+                        exc_info=True,
+                    )
+                    return None, len(prompt_tokens), 0
                 if ssd_data is not None:
                     block_len = _BLOCK_SIZE
                     if block_len >= self._min_prefix:
@@ -459,7 +482,15 @@ class KVPrefixCache:
         cached_len = cache_length(cached)
         tokens_to_trim = cached_len - best_length
 
-        result = self._snapshot_cache(cached, trim=tokens_to_trim)
+        try:
+            result = self._snapshot_cache(cached, trim=tokens_to_trim)
+        except Exception:
+            logger.warning(
+                "KV prefix cache snapshot failed during scan match "
+                "(%d tokens, trim=%d) — falling back to full prefill",
+                best_length, tokens_to_trim, exc_info=True,
+            )
+            return None, len(prompt_tokens), 0
         self._touch(best_index)
 
         remaining = len(prompt_tokens) - best_length

@@ -28,11 +28,20 @@ def create_admin_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS: configurable via YUNSHU_CORS_ORIGINS (comma-separated).
+    # Defaults to localhost origins for admin API security.
+    _cors_str = os.environ.get("YUNSHU_CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
+    if _cors_str == "*":
+        _cors_origins = ["*"]
+        logger.warning("CORS: allow_origins=['*'] on control plane — restrict YUNSHU_CORS_ORIGINS for production")
+    else:
+        _cors_origins = [o.strip() for o in _cors_str.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=_cors_origins,
+        allow_credentials=_cors_origins != ["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
     )
 
     # Auth middleware (token-based)

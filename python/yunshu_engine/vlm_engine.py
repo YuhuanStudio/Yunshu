@@ -43,6 +43,40 @@ from .request import RequestOutput
 logger = logging.getLogger(__name__)
 
 
+def _VALIDATE_URL(url: str) -> None:
+    """SSRF protection: reject URLs pointing to private/reserved IPs."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Blocked URL scheme: {parsed.scheme}")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL has no hostname")
+    try:
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        raise ValueError(f"Cannot resolve hostname: {hostname}")
+    _PRIVATE_NETWORKS = [
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("0.0.0.0/8"),
+        ipaddress.ip_network("::1/128"),
+        ipaddress.ip_network("fc00::/7"),
+        ipaddress.ip_network("fe80::/10"),
+    ]
+    for _, _, _, _, addr in resolved:
+        ip = ipaddress.ip_address(addr[0])
+        for net in _PRIVATE_NETWORKS:
+            if ip in net:
+                raise ValueError(f"SSRF blocked: {hostname} resolves to private IP {ip}")
+
+
 def _get_model_classes_with_vlm_fallback(config: dict):
     """Resolve model classes: try mlx-lm first, fall back to mlx-vlm."""
     from mlx_lm.utils import MODEL_REMAPPING
@@ -735,7 +769,24 @@ class VLMEngine:
 
             loop = asyncio.get_running_loop()
             try:
-                result, reasoning_tokens, completion_token_count, stop_hit, budget_hit = await loop.run_in_executor(self._executor, _generate_sync)
+                _timeout_seconds = kwargs.get('timeout_seconds') or 120.0
+                result, reasoning_tokens, completion_token_count, stop_hit, budget_hit = await asyncio.wait_for(
+                    loop.run_in_executor(self._executor, _generate_sync),
+                    timeout=_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                self._active_count -= 1
+                self._num_requests_processed += 1
+                logger.warning(f"VLM non-streaming generate timed out after {_timeout_seconds}s")
+                return {
+                    "text": "",
+                    "finish_reason": "timeout",
+                    "model": self.model_name,
+                    "created": int(time.time()),
+                    "reasoning_tokens": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                }
             except Exception:
                 self._active_count -= 1
                 self._num_requests_processed += 1
@@ -2700,6 +2751,14 @@ class VLMEngine:
         """Download an image from HTTP/HTTPS URL to a temp file."""
         import urllib.request
         import ssl
+        import ipaddress
+        import socket
+        from urllib.parse import urlparse
+
+        # SSRF validation: block private/internal IPs
+        _VALIDATE_URL(url)
+
+        ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
 
         ext = url.rsplit(".", 1)[-1].lower() if "." in url.split("?")[0] else "png"
         ext = ext if ext in ("png", "jpg", "jpeg", "webp", "gif") else "png"

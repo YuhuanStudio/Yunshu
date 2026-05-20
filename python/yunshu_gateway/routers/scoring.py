@@ -14,10 +14,12 @@ import logging
 import math
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
+
+from .models import _check_permission
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +135,8 @@ class ClassifyRequest(BaseModel):
 # ── /v1/pooling ──────────────────────────────────────────────────────────────
 
 @router.post("/pooling", response_model=None)
-async def create_pooling(req: PoolingRequest):
+async def create_pooling(req: PoolingRequest, request: Request):
+    _check_permission(request, "can_infer")
     texts = req.input if isinstance(req.input, list) else [req.input]
 
     engine = await _resolve_engine(req.model)
@@ -180,7 +183,8 @@ async def create_pooling(req: PoolingRequest):
 # ── /v1/score ────────────────────────────────────────────────────────────────
 
 @router.post("/score", response_model=None)
-async def create_score(req: ScoreRequest):
+async def create_score(req: ScoreRequest, request: Request):
+    _check_permission(request, "can_infer")
     texts_a = req.text_1 if isinstance(req.text_1, list) else [req.text_1]
     texts_b = req.text_2 if isinstance(req.text_2, list) else [req.text_2]
 
@@ -234,7 +238,8 @@ async def create_score(req: ScoreRequest):
 # ── /v1/rerank ───────────────────────────────────────────────────────────────
 
 @router.post("/rerank", response_model=None)
-async def create_rerank(req: RerankRequest):
+async def create_rerank(req: RerankRequest, request: Request):
+    _check_permission(request, "can_infer")
     # Truncate long documents
     truncated_docs = []
     for doc in req.documents:
@@ -312,7 +317,8 @@ async def create_rerank(req: RerankRequest):
 # ── /v1/classify ─────────────────────────────────────────────────────────────
 
 @router.post("/classify", response_model=None)
-async def classify_input(req: ClassifyRequest):
+async def classify_input(req: ClassifyRequest, request: Request):
+    _check_permission(request, "can_infer")
     """Classify input text using a model's hidden states.
 
     Returns class probabilities computed from the model's pooled

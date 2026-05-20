@@ -114,9 +114,11 @@ class TestBitmaskApplicator:
         logits = mx.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
         mask = mx.zeros((10,), dtype=mx.bool_)
         result = app.apply(logits, mask)
-        # All should be -inf
-        for i in range(10):
-            assert float(result[i]) == float("-inf")
+        # All-False bitmask now falls back to argmax (token 9 = 10.0) to avoid NaN.
+        # Token 9 should keep its value, all others should be -inf.
+        assert float(result[9]) == pytest.approx(10.0, rel=1e-4)
+        for i in range(9):
+            assert float(result[i]) < -1e10, f"token {i} should be -inf but got {float(result[i])}"
 
     def test_apply_partial_mask(self):
         import mlx.core as mx

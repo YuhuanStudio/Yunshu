@@ -483,11 +483,23 @@ def create_app() -> FastAPI:
                 },
             )
 
-        # Default: OpenAI error format
+        # Default: OpenAI error format with code field
         error_type = "invalid_request_error" if exc.status_code < 500 else "server_error"
+        _code_map = {
+            400: "bad_request",
+            401: "authentication_required",
+            403: "permission_denied",
+            404: "model_not_found",
+            409: "conflict",
+            413: "request_too_large",
+            429: "rate_limit_exceeded",
+            500: "internal_server_error",
+            503: "service_unavailable",
+        }
+        error_code = _code_map.get(exc.status_code)
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error": {"message": str(exc.detail), "type": error_type}},
+            content={"error": {"message": str(exc.detail), "type": error_type, "code": error_code}},
         )
 
     @app.exception_handler(Exception)
@@ -531,7 +543,7 @@ def create_app() -> FastAPI:
     # Defaults to ["*"] in dev, should be restricted in production.
     # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
     # browsers will reject the response. Use specific origins in production.
-    cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "*")
+    cors_origins_str = os.environ.get("YUNSHU_CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
     cors_origins = (
         cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
     )

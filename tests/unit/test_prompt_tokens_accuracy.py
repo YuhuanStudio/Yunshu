@@ -425,7 +425,7 @@ class TestNormalizeFinishReason:
         from yunshu_gateway.routers.chat import _normalize_finish_reason
         assert _normalize_finish_reason("abort") == "stop"
         assert _normalize_finish_reason("cancel") == "stop"
-        assert _normalize_finish_reason("error") == "stop"
+        assert _normalize_finish_reason("error") == "length"
         assert _normalize_finish_reason("timeout") == "length"
         assert _normalize_finish_reason("memory_limit") == "length"
         assert _normalize_finish_reason("memory_exceeded") == "length"
