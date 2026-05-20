@@ -1673,9 +1673,12 @@ class VLMEngine:
                             idx = accumulated.find(s, _emitted_pos)
                             accumulated = accumulated[:idx]
                             finish_reason = "stop"
-                            # Clamp thinking scan cursor to new length so it
-                            # doesn't point past the trimmed text.
-                            _think_scan_pos = min(_think_scan_pos, len(accumulated))
+                            # Reset thinking scan cursor since accumulated text
+                            # was trimmed — old cursor may point into deleted
+                            # portion where a partial <think or </think fragment
+                            # was being tracked. Force a full rescan from the
+                            # new end of the string.
+                            _think_scan_pos = len(accumulated)
                             break
 
                 # Compute the safe-to-emit text: everything up to _emitted_pos

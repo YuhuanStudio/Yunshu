@@ -2285,6 +2285,37 @@ class EngineCore:
                                         self._cleanup_request(sid)
                                 self._signal_finished(rid)
                                 self._finalize_request(rid)
+
+                        # ── Shadow request timeout enforcement ──
+                        # Shadow requests are never in scheduler.running, so the loop
+                        # above skips them.  If the primary request's output distribution
+                        # never fires (e.g. engine loop crashed between scheduler step
+                        # and output distribution, or primary was aborted externally
+                        # without fan-out), the shadow's event is never set and its
+                        # generate()/stream_outputs() hangs forever.  Check shadows
+                        # directly against their timestamps.
+                        if self._request_dedup is not None:
+                            for sid in list(self._dedup_shadows.keys()):
+                                start = self._request_timestamps.get(sid)
+                                if start is None:
+                                    continue
+                                if (now - start) > timeout_s:
+                                    logger.warning(
+                                        f"Dedup shadow {sid} timed out "
+                                        f"({now - start:.0f}s > {timeout_s}s)"
+                                    )
+                                    s_collector = self._output_collectors.get(sid)
+                                    if s_collector is not None:
+                                        from .request import RequestOutput
+                                        s_collector.put(RequestOutput(
+                                            request_id=sid,
+                                            finished=True,
+                                            finish_reason="timeout",
+                                            error=f"Dedup shadow timed out after {timeout_s}s (primary never completed)",
+                                        ))
+                                        s_collector.put(None)
+                                    self._signal_finished(sid)
+                                    self._cleanup_request(sid)
                 except Exception:
                     logger.debug("timeout enforcement failed", exc_info=True)
 

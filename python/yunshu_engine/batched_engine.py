@@ -2947,28 +2947,30 @@ class BatchedEngine:
         _timeout_cancel = threading.Event()
 
         def _put(item):
-            # Backpressure-aware queue: slow down producer when queue is
-            # nearly full to avoid silently dropping tokens.  Tokens that
+            # Backpressure-aware queue with retry: slow down producer when
+            # queue is nearly full to avoid dropping tokens.  Tokens that
             # are dropped silently corrupt structured output (JSON, tool
             # calls) because the SSE client sees a gap with no error.
             if _q.qsize() > 400:  # 78% of 512
-                # Yield to let the consumer thread drain the queue.
-                # time.sleep on the GPU thread blocks ALL GPU work, but
-                # this is only hit under extreme backpressure.
-                time.sleep(0.001)
-            if _q.full():
-                # Queue is still full after backpressure — drop this token.
-                # NOTE: We do NOT call _q.get_nowait() here because this
-                # function runs on the MLX executor thread (not the asyncio
-                # event loop thread).  asyncio.Queue.get_nowait() mutates the
-                # internal deque AND calls _wakeup_next() which modifies
-                # asyncio.Future objects — neither operation is thread-safe.
-                logger.warning(
-                    "Streaming queue overflow — token dropped. "
-                    "Client may see a gap in output."
-                )
-                return
-            loop.call_soon_threadsafe(_q.put_nowait, item)
+                time.sleep(0.001)  # yield to consumer thread
+            # Retry up to 3 times if the queue is full, sleeping 1ms between
+            # attempts.  This preserves most tokens under backpressure while
+            # preventing the executor thread from blocking indefinitely.
+            # NOTE: We do NOT call _q.get_nowait() here because this
+            # function runs on the MLX executor thread (not the asyncio
+            # event loop thread).  asyncio.Queue.get_nowait() mutates the
+            # internal deque AND calls _wakeup_next() which modifies
+            # asyncio.Future objects — neither operation is thread-safe.
+            for _attempt in range(4):  # 1 initial + 3 retries
+                if not _q.full():
+                    loop.call_soon_threadsafe(_q.put_nowait, item)
+                    return
+                if _attempt < 3:
+                    time.sleep(0.001)
+            logger.warning(
+                "Streaming queue overflow after 3 retries — token dropped. "
+                "Client may see a gap in output."
+            )
 
         # Inflight prefix sharing: defined at _run level so it's accessible
         # from exception handlers even if _run_inner crashes early
@@ -4847,18 +4849,22 @@ class BatchedEngine:
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
-            # Backpressure-aware queue (same logic as main streaming path)
+            # Backpressure-aware queue with retry (same logic as main streaming path)
             if _q.qsize() > 400:  # 78% of 512
                 time.sleep(0.01)
-            if _q.full():
-                # Thread-safe: skip get_nowait() — see main streaming _put
-                # for rationale (executor thread must not mutate asyncio Queue).
-                logger.warning(
-                    "N-gram spec streaming queue overflow — token dropped. "
-                    "Client may see a gap in output."
-                )
-                return
-            loop.call_soon_threadsafe(_q.put_nowait, item)
+            # Retry up to 3 times if the queue is full, sleeping 1ms between
+            # attempts.  Thread-safe: skip get_nowait() — see main streaming
+            # _put for rationale (executor thread must not mutate asyncio Queue).
+            for _attempt in range(4):  # 1 initial + 3 retries
+                if not _q.full():
+                    loop.call_soon_threadsafe(_q.put_nowait, item)
+                    return
+                if _attempt < 3:
+                    time.sleep(0.001)
+            logger.warning(
+                "N-gram spec streaming queue overflow after 3 retries — token dropped. "
+                "Client may see a gap in output."
+            )
 
         # Inflight prefix sharing for streaming n-gram spec
         _ng_s_inflight_req_id = f"ng-s-{int(time.monotonic()*1e6)}"
@@ -5558,18 +5564,22 @@ class BatchedEngine:
         _backpressure = StreamingBackpressureController(max_queue_size=100)
 
         def _put(item):
-            # Backpressure-aware queue (same logic as main streaming path)
+            # Backpressure-aware queue with retry (same logic as main streaming path)
             if _q.qsize() > 400:  # 78% of 512
                 time.sleep(0.01)
-            if _q.full():
-                # Thread-safe: skip get_nowait() — see main streaming _put
-                # for rationale (executor thread must not mutate asyncio Queue).
-                logger.warning(
-                    "MTP streaming queue overflow — token dropped. "
-                    "Client may see a gap in output."
-                )
-                return
-            loop.call_soon_threadsafe(_q.put_nowait, item)
+            # Retry up to 3 times if the queue is full, sleeping 1ms between
+            # attempts.  Thread-safe: skip get_nowait() — see main streaming
+            # _put for rationale (executor thread must not mutate asyncio Queue).
+            for _attempt in range(4):  # 1 initial + 3 retries
+                if not _q.full():
+                    loop.call_soon_threadsafe(_q.put_nowait, item)
+                    return
+                if _attempt < 3:
+                    time.sleep(0.001)
+            logger.warning(
+                "MTP streaming queue overflow after 3 retries — token dropped. "
+                "Client may see a gap in output."
+            )
 
         def _run():
             try:
