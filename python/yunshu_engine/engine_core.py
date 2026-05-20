@@ -1951,6 +1951,10 @@ class EngineCore:
 
             _step_start = time.monotonic()
             scheduler_output = None  # Bug 1 fix: initialize before try block
+            # Capture queue depth BEFORE scheduler step — the step may promote
+            # waiting requests to running, so reading after underestimates
+            # queue pressure reported to Prometheus.
+            _pre_step_queue_depth = len(self.scheduler.waiting)
 
             try:
                 # Cache hardware info once per step (avoid 3+ repeated syscalls per step)
@@ -2100,7 +2104,7 @@ class EngineCore:
                     # compute_utilization overestimates GPU fraction.
                     self._last_step_wall_ms = _step_wall_ms
                     self._last_batch_size = len(scheduler_output.outputs) if hasattr(scheduler_output, 'outputs') else 0
-                    self._last_queue_depth = len(self.scheduler.waiting)
+                    self._last_queue_depth = _pre_step_queue_depth
                     # Record batch size in ServerMetrics for histogram distribution
                     try:
                         from .server_metrics import get_server_metrics
@@ -2295,6 +2299,13 @@ class EngineCore:
                 for req_output in scheduler_output.outputs:
                     rid = req_output.request_id
                     if not req_output.finished and req_output.completion_tokens > 0:
+                        # Guard: skip if this request was already finalized earlier
+                        # in this step (e.g., budget exhaustion on a previous output
+                        # for the same request when stream_interval > 1 produces
+                        # multiple outputs per step).  Without this, consume() returns
+                        # "budget_not_found" and triggers duplicate error handling.
+                        if rid in self._finalized_ids:
+                            continue
                         state = self._lifecycle_orchestrator.get_state(rid)
                         if state is not None and state.phase.name in ("PREFILLING",):
                             self._lifecycle_orchestrator.on_decode_start(rid)
@@ -2341,6 +2352,11 @@ class EngineCore:
                                     self._signal_finished(_sid)
                             self._signal_finished(rid)
                             self._finalize_request(rid, completion_tokens=req_output.completion_tokens, finish_reason=budget_result)
+                            # Request is fully finalized — skip remaining per-output
+                            # processing (sliding window, lifecycle) to avoid operating
+                            # on a request whose scheduler state has already been
+                            # removed by abort_request + _finalize_request.
+                            continue
                         # Sliding window tracking
                         if self._sliding_window_mgr is not None:
                             try:
@@ -2431,8 +2447,10 @@ class EngineCore:
                         rid = getattr(o, 'request_id', None)
                         if not rid or rid in self._ttft_done:
                             continue
-                        if getattr(o, 'finished', False):
-                            continue
+                        # Do NOT skip finished requests — a request that
+                        # finishes on its first decode step (e.g. max_tokens=1)
+                        # still has a valid TTFT that should be recorded.
+                        # Skipping it biases TTFT estimates upward.
                         if getattr(o, 'completion_tokens', 0) > 0:
                             _start_ts = self._request_timestamps.get(rid)
                             if _start_ts is not None:
@@ -2771,6 +2789,13 @@ class EngineCore:
                 collector.put(None)  # sentinel
             self._signal_finished(req_id)
             self._finalize_request(req_id)
+
+        # Count failed requests so get_stats() and Prometheus report
+        # accurate totals.  Without this, engine-loop crash recovery
+        # under-counts because the normal finish path (line 2195) is
+        # never reached for these requests.
+        if all_ids:
+            self._num_requests_processed += len(all_ids)
 
     def _fail_dedup_shadows(self, primary_id: str, error_msg: str, finish_reason: str = "error") -> None:
         """Deliver error output to all dedup shadows of a failed primary request.

@@ -492,7 +492,10 @@ def _probabilistic_accept(
     draft_lp = mx.array(draft_logprobs)
 
     # Acceptance ratio: min(1, exp(target_lp - draft_lp))
-    ratios = mx.minimum(mx.ones(K), mx.exp(target_lp - draft_lp))
+    # Clamp exponent to avoid overflow — large values mean guaranteed acceptance
+    # (ratio >= 1), so clamping to exp(50) is safe and avoids inf/nan.
+    log_diff = mx.clip(target_lp - draft_lp, -50.0, 50.0)
+    ratios = mx.minimum(mx.ones(K), mx.exp(log_diff))
 
     # Sequential scan: accept until first rejection
     accepted_tokens = []

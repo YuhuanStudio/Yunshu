@@ -327,7 +327,8 @@ class RadixTree:
                 remaining_hashes = block_hashes[match_block_idx:]
                 return self._insert_unlocked(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
             else:
-                # New tokens are a prefix of or equal to existing child
+                # match_len == len(existing.token_ids): the existing child is
+                # fully matched.  Two sub-cases:
                 if len(token_ids) == len(existing.token_ids):
                     # Exact match — update existing node
                     if blocks:
@@ -336,9 +337,17 @@ class RadixTree:
                         existing.block_hashes = list(block_hashes)
                     return existing
                 else:
-                    # New is shorter — split existing at len(token_ids)
-                    split_node = self._split_node_unlocked(node, existing, len(token_ids))
-                    return split_node
+                    # len(token_ids) > len(existing.token_ids): the new tokens
+                    # extend BEYOND the existing child.  Recurse with the
+                    # remaining tokens inserted as a child of existing.
+                    remaining_new = token_ids[match_len:]
+                    match_block_idx = len(existing.blocks)
+                    remaining_blocks = blocks[match_block_idx:]
+                    remaining_hashes = block_hashes[match_block_idx:]
+                    return self._insert_unlocked(
+                        remaining_new, remaining_blocks, remaining_hashes,
+                        start_node=existing,
+                    )
 
         # No existing child: create a new leaf node
         now = _now()

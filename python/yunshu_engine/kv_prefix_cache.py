@@ -643,15 +643,20 @@ class KVPrefixCache:
 
     def _evict_if_full(self) -> None:
         """Evict entries using the configured strategy when at capacity."""
-        _skip_count = 0
+        _skipped_indices: set[int] = set()
         _evicted_any = False
-        while len(self._prompts) >= self._max_entries and _skip_count < len(self._prompts):
+        while len(self._prompts) >= self._max_entries and len(_skipped_indices) < len(self._prompts):
             if isinstance(self._eviction_strategy, SLRUStrategy):
                 self._eviction_strategy.update_access_counts(self._access_counts)
             victim = self._eviction_strategy.select_victim(
                 self._prompts, self._last_used, self._access_counter,
                 self._priorities,
             )
+            if victim in _skipped_indices:
+                # Already tried this victim and it was skipped — try the
+                # next-best victim by temporarily marking it ineligible.
+                # Build a filtered view so select_victim picks a different one.
+                break
             if self._block_evict_checker is not None and self._block_hashes[victim]:
                 skip = False
                 for bh in self._block_hashes[victim]:
@@ -659,11 +664,12 @@ class KVPrefixCache:
                         skip = True
                         break
                 if skip:
-                    _skip_count += 1
+                    _skipped_indices.add(victim)
                     continue
             # Rebuild index after each removal to keep select_victim's
             # parallel lists consistent after swap-and-pop mutates them.
             self._remove_entry(victim, rebuild_index=True)
+            _skipped_indices.clear()  # Reset: indices shifted after removal
             _evicted_any = True
             logger.info(
                 f"KV prefix cache evicted entry via {type(self._eviction_strategy).__name__} (capacity)"
@@ -705,9 +711,9 @@ class KVPrefixCache:
                     return 0
                 evicted = 0
                 max_evict = max(1, len(self._prompts) // 4)
-                _skip_count = 0
+                _skipped_indices: set[int] = set()
 
-                while self._prompts and evicted < max_evict and _skip_count < len(self._prompts):
+                while self._prompts and evicted < max_evict and len(_skipped_indices) < len(self._prompts):
                     active = mx.get_active_memory()
                     if (active / max_ws) * 100 < threshold_pct - 5.0:
                         break
@@ -718,6 +724,8 @@ class KVPrefixCache:
                         self._prompts, self._last_used, self._access_counter,
                         self._priorities,
                     )
+                    if victim in _skipped_indices:
+                        break
                     if self._block_evict_checker is not None and self._block_hashes[victim]:
                         skip = False
                         for bh in self._block_hashes[victim]:
@@ -725,9 +733,10 @@ class KVPrefixCache:
                                 skip = True
                                 break
                         if skip:
-                            _skip_count += 1
+                            _skipped_indices.add(victim)
                             continue
                     self._remove_entry(victim, rebuild_index=False)
+                    _skipped_indices.clear()  # Indices shifted after removal
                     evicted += 1
 
                 if evicted > 0:
@@ -766,33 +775,35 @@ class KVPrefixCache:
 
     def set_priority(self, index: int, priority: int) -> None:
         """Set eviction priority for a cached entry (higher = kept longer)."""
-        if 0 <= index < len(self._priorities):
-            self._priorities[index] = priority
+        with self._lock:
+            if 0 <= index < len(self._priorities):
+                self._priorities[index] = priority
 
     def get_stats(self) -> dict:
-        total_tokens = sum(len(p) for p in self._prompts)
-        total_blocks = sum(len(bh) for bh in self._block_hashes)
-        unique_blocks = len(self._block_refcount)
-        shared_blocks = sum(1 for c in self._block_refcount.values() if c > 1)
-        stats = {
-            "entries": len(self._prompts),
-            "max_entries": self._max_entries,
-            "total_cached_tokens": total_tokens,
-            "total_cached_blocks": total_blocks,
-            "unique_blocks": unique_blocks,
-            "shared_blocks": shared_blocks,
-            "prefix_index_size": len(self._prefix_index),
-            "min_prefix_length": self._min_prefix,
-            "block_size": _BLOCK_SIZE,
-            "eviction_strategy": type(self._eviction_strategy).__name__,
-            "hash_collisions": self._hash_collisions,
-        }
-        if self._ssd_cache is not None:
-            try:
-                stats["ssd_cache"] = self._ssd_cache.get_stats()
-            except Exception:
-                logger.debug("SSD cache stats unavailable", exc_info=True)
-        return stats
+        with self._lock:
+            total_tokens = sum(len(p) for p in self._prompts)
+            total_blocks = sum(len(bh) for bh in self._block_hashes)
+            unique_blocks = len(self._block_refcount)
+            shared_blocks = sum(1 for c in self._block_refcount.values() if c > 1)
+            stats = {
+                "entries": len(self._prompts),
+                "max_entries": self._max_entries,
+                "total_cached_tokens": total_tokens,
+                "total_cached_blocks": total_blocks,
+                "unique_blocks": unique_blocks,
+                "shared_blocks": shared_blocks,
+                "prefix_index_size": len(self._prefix_index),
+                "min_prefix_length": self._min_prefix,
+                "block_size": _BLOCK_SIZE,
+                "eviction_strategy": type(self._eviction_strategy).__name__,
+                "hash_collisions": self._hash_collisions,
+            }
+            if self._ssd_cache is not None:
+                try:
+                    stats["ssd_cache"] = self._ssd_cache.get_stats()
+                except Exception:
+                    logger.debug("SSD cache stats unavailable", exc_info=True)
+            return stats
 
     def enable_ssd_cache(
         self,

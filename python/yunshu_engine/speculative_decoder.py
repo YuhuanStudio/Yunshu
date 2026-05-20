@@ -405,8 +405,8 @@ class SpeculativeDecoder:
             output = self.draft(current_ids, cache=cache)
             logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
 
-            # Get log probabilities
-            log_probs = mx.log(mx.softmax(logits, axis=-1))
+            # Get log probabilities (numerically stable: avoid log(softmax) underflow)
+            log_probs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
 
             # Sample token
             next_token = sampler(logits)
@@ -427,6 +427,7 @@ class SpeculativeDecoder:
         draft_result: DraftResult,
         input_ids: mx.array,
         cache: list,
+        temperature: float = 0.0,
     ) -> VerifyResult:
         """Verify draft tokens against the target model in one pass.
 
@@ -447,6 +448,9 @@ class SpeculativeDecoder:
             draft_result: Draft tokens and logprobs from generate_draft().
             input_ids: Last token(s) to include in forward pass for alignment.
             cache: Target model's KV cache.
+            temperature: Sampling temperature for bonus/correction token.
+                         Must match the target model's temperature for correct
+                         output distribution.
 
         Returns:
             VerifyResult with accepted tokens and bonus token.
@@ -483,8 +487,8 @@ class SpeculativeDecoder:
         output = self.target(aligned_input, cache=cache)
         logits = output.logits if hasattr(output, 'logits') else output
 
-        # Get target log probabilities at each position
-        target_logprobs_full = mx.log(mx.softmax(logits, axis=-1))
+        # Get target log probabilities (numerically stable: avoid log(softmax) underflow)
+        target_logprobs_full = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
 
         # Verify: logits[i] predicts position i+1 -> compare with draft[i]
         # We need logits[0..K-1] for draft verification, logits[K] for bonus
@@ -499,10 +503,17 @@ class SpeculativeDecoder:
         ).squeeze(-1)
         draft_lps_arr = mx.array(draft_result.logprobs)
 
-        # Vectorized acceptance ratio: min(1, exp(target_lp - draft_lp))
+        # Vectorized acceptance ratio: min(threshold, exp(target_lp - draft_lp))
+        # Clamp exponent to avoid mx.exp overflow/inf (matches _math_exp clamping
+        # in spec_draft_verifier.py).  Large positive values mean p_target >> p_draft,
+        # so ratio >= 1 and acceptance is guaranteed — clamping to exp(50) preserves this.
+        # Uses acceptance_threshold from config (default 1.0 = standard speculative sampling).
+        log_diff = mx.clip(target_lps_arr - draft_lps_arr, -50.0, 50.0)
+        raw_ratios = mx.exp(log_diff)
+        threshold = self.config.acceptance_threshold
         ratios = mx.minimum(
-            mx.ones(K),
-            mx.exp(target_lps_arr - draft_lps_arr),
+            mx.full(K, threshold),
+            raw_ratios,
         )
 
         # Generate uniform random numbers for all positions at once
@@ -522,10 +533,12 @@ class SpeculativeDecoder:
                 rejected_at = i
                 break
 
-        # Bonus token: from target's distribution at rejection point or last
+        # Bonus token: from target's distribution at rejection point or last.
+        # Use the caller's temperature so the output distribution matches the
+        # target model's sampling distribution (not hardcoded greedy).
         bonus_pos = len(accepted_ids)
         from mlx_lm.sample_utils import make_sampler
-        sampler = make_sampler(temp=0.0)
+        sampler = make_sampler(temp=temperature)
 
         if rejected_at >= 0:
             # Rejected at bonus_pos: use logits at that position for resample
@@ -685,7 +698,7 @@ class SpeculativeDecoder:
                 token_ids=draft_tokens,
                 logprobs=draft_probs,
             )
-            verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache)
+            verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache, temperature=temperature)
 
             accepted = verify_result.accepted_count
             all_accepted = (accepted == len(draft_tokens))
@@ -702,8 +715,9 @@ class SpeculativeDecoder:
             bonus_id = verify_result.bonus_token_id
             if bonus_id >= 0 and len(generated_tokens) < max_tokens:
                 generated_tokens.append(bonus_id)
-                if all_accepted:
-                    self._stats["total_bonus_tokens"] += 1
+                # Bonus/correction token is always produced — count it regardless
+                # of whether all drafts were accepted or only a prefix matched.
+                self._stats["total_bonus_tokens"] += 1
                 if bonus_id in eos_ids:
                     return generated_tokens
 
