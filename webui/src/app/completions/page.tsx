@@ -171,9 +171,13 @@ export default function CompletionsPage() {
         const data: CompletionResult = await res.json();
         setResults((prev) => [data, ...prev]);
       }
-    } catch (e: any) {
-      if (e.name !== "AbortError") {
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        // User cancelled — do nothing
+      } else if (e instanceof Error) {
         setStreamingText(`Error: ${e.message}`);
+      } else {
+        setStreamingText(`Error: ${String(e)}`);
       }
     } finally {
       setIsGenerating(false);
@@ -183,6 +187,22 @@ export default function CompletionsPage() {
 
   const handleStop = () => {
     abortRef.current?.abort();
+    // Save partial streaming text as a result before clearing
+    setStreamingText((current) => {
+      if (current) {
+        setResults((prev) => [
+          {
+            id: `cmpl-${Date.now()}`,
+            choices: [
+              { text: current, index: 0, finish_reason: "abort", logprobs: null },
+            ],
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          },
+          ...prev,
+        ]);
+      }
+      return "";
+    });
     setIsGenerating(false);
   };
 
