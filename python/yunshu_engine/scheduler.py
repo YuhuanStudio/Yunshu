@@ -1053,6 +1053,8 @@ class Scheduler:
         request.status = RequestStatus.WAITING
         self.requests[request.request_id] = request
         import time as _time
+        # SCHED-3: Record submit time for priority aging (vLLM pattern).
+        # _submit_time is a proper field on Request (default 0.0).
         request._submit_time = _time.monotonic()
         self.waiting.push(request, priority=request.sampling_params.priority)
 
@@ -1296,7 +1298,7 @@ class Scheduler:
                 req.set_finished(RequestStatus.FINISHED_ABORTED, reason="abort")
                 self._failed_insert_ids.append(req.request_id)
                 continue
-            submit = getattr(req, '_submit_time', now)
+            submit = req._submit_time if req._submit_time > 0 else now
             if timeout > 0 and (now - submit) > timeout:
                 req.set_finished(RequestStatus.FINISHED_TIMEOUT, reason="timeout")
                 self.finished_ids.add(req.request_id)
@@ -1307,20 +1309,29 @@ class Scheduler:
                 continue
             to_insert.append(req)
 
-        # No need to sort — the heap maintains order (FCFS or PRIORITY)
+        # Heap order is by raw priority; we re-sort below with aging.
 
         # SCHED-3: Apply aging to prevent starvation of low-priority requests.
-        # Requests that have waited a long time get an age bonus that boosts
-        # their effective priority, eventually overtaking newer high-priority requests.
-        # The age bonus is: age_seconds * aging_weight, added to the request's
-        # original priority for scheduling purposes.
+        #
+        # vLLM pattern: each request has a _submit_time (set when entering the
+        # waiting queue).  The effective priority is:
+        #     effective_priority = raw_priority + (now - _submit_time) * aging_weight
+        #
+        # A request waiting 10s with aging_weight=0.1 gets +1.0 boost, enough
+        # to overtake a request with priority 1 higher that just arrived.
+        # This prevents indefinite starvation under sustained high-priority load.
+        #
+        # Since ALL items are popped from the heap before this sort, the aging
+        # is applied to the full waiting queue contents (not just the visible
+        # top).  Overflow requests pushed back via push_front retain their
+        # _submit_time so aging accumulates correctly across scheduling rounds.
         if (self.config.aging_enabled
             and self.config.policy == SchedulingPolicy.PRIORITY
             and len(to_insert) > 1):
             aging_weight = self.config.aging_weight
             _aged_insert = []
             for _req in to_insert:
-                _submit = getattr(_req, '_submit_time', now)
+                _submit = _req._submit_time if _req._submit_time > 0 else now
                 _age = max(0.0, now - _submit)
                 _effective_priority = _req.sampling_params.priority + _age * aging_weight
                 _aged_insert.append((_effective_priority, _req))
@@ -1423,7 +1434,7 @@ class Scheduler:
                     priority=req.sampling_params.priority if req.sampling_params else 0,
                     is_prefill=True,
                     num_prompt_tokens=len(req.prompt_token_ids or []),
-                    arrival_time=getattr(req, '_submit_time', now),
+                    arrival_time=req._submit_time if req._submit_time > 0 else now,
                 )
                 for req in to_insert
             ]
@@ -1603,6 +1614,37 @@ class Scheduler:
                                 )
                     except Exception:
                         logger.debug("prefix cache lookup failed in batch path", exc_info=True)
+
+                # Inflight prefix sharing (SGLang pattern): if the completed
+                # prefix cache didn't have a match, check if another request
+                # is currently being prefilled with the same prefix.  If so,
+                # reuse its partial KV cache so we skip the shared prefill.
+                #
+                # This handles the case where Request A starts prefilling and
+                # Request B arrives with the same system prompt.  B finds A's
+                # in-flight KV via the tracker and starts from the shared
+                # prefix boundary, avoiding redundant prefill.
+                if cached_kv is None and not should_chunk and req.prompt_token_ids:
+                    try:
+                        from .inflight_prefix_sharing import get_inflight_tracker
+                        _tracker = get_inflight_tracker()
+                        _inflight_entry = _tracker.find_prefix(
+                            req.prompt_token_ids,
+                            getattr(self, 'model_id', '') or '',
+                        )
+                        if _inflight_entry is not None and _inflight_entry.kv_cache_ref is not None:
+                            cached_kv = _inflight_entry.kv_cache_ref
+                            shared_len = min(len(_inflight_entry.token_ids), len(req.prompt_token_ids))
+                            remaining_tokens = req.prompt_token_ids[shared_len:]
+                            req.cached_tokens = shared_len
+                            logger.debug(
+                                "inflight prefix reuse: %d tokens from req=%s for %s",
+                                shared_len,
+                                _inflight_entry.request_id[:12],
+                                req.request_id[:12],
+                            )
+                    except Exception:
+                        logger.debug("inflight prefix lookup failed in batch path", exc_info=True)
 
                 # §12.2: Check encoder cache for encoder-decoder models.
                 # If the request has a cached encoder hidden state (from a prior
@@ -2527,6 +2569,25 @@ class Scheduler:
 
             is_stop = resp.finish_reason == "stop"
             is_finished = resp.finish_reason is not None
+
+            # Inflight prefix sharing: update the tracker with the KV cache
+            # ref from the first response.  The entry was registered in
+            # engine_core.add_request() with kv_cache_ref=None.  After the
+            # first forward pass, resp.prompt_cache contains the full prompt
+            # KV, which concurrent requests can now reuse (SGLang pattern).
+            if not is_stop and hasattr(resp, 'prompt_cache') and resp.prompt_cache is not None:
+                try:
+                    from .inflight_prefix_sharing import get_inflight_tracker
+                    _tracker = get_inflight_tracker()
+                    _entry = _tracker._entries.get(req_id)
+                    if _entry is not None and _entry.kv_cache_ref is None:
+                        _entry.kv_cache_ref = resp.prompt_cache
+                        logger.debug(
+                            "inflight prefix KV updated for req=%s (%d tokens)",
+                            req_id[:12], len(_entry.token_ids),
+                        )
+                except Exception:
+                    logger.debug("inflight KV update failed", exc_info=True)
 
             token_text = ""
             new_token_ids = []

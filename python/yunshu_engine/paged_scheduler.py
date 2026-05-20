@@ -33,6 +33,10 @@ class PagedScheduler(Scheduler):
         super().__init__(model, tokenizer, config)
         self._kv_manager = kv_cache_manager
         self._block_tables: dict[str, Any] = {}
+        # Tracks request IDs that have already been finalized to prevent
+        # double finalization (e.g., _manage_kv_cache finishes a request,
+        # then _cleanup_finished calls _finalize_request_blocks again).
+        self._finalized_requests: set[str] = set()
         # Boundary snapshot store for non-sliceable cache layers
         self._boundary_store = None
         ssd_dir = os.environ.get("YUNSHU_SSD_CACHE_DIR")
@@ -179,11 +183,16 @@ class PagedScheduler(Scheduler):
 
         Extracted from _manage_kv_cache and _cleanup_finished to avoid
         duplication.  Safe to call multiple times — the second call is a
-        no-op because _block_tables.pop returns None.
+        no-op because _block_tables.pop returns None and the
+        _finalized_requests guard catches the race between
+        _manage_kv_cache and _cleanup_finished.
         """
+        if req_id in self._finalized_requests:
+            return
         table = self._block_tables.pop(req_id, None)
         if table is None:
             return
+        self._finalized_requests.add(req_id)
         req = self.requests.get(req_id)
         if req is not None:
             prompt_ids = req.prompt_token_ids or []
@@ -229,6 +238,13 @@ class PagedScheduler(Scheduler):
                 if RequestStatus.is_finished(req.status):
                     self._finalize_request_blocks(req_id)
         super()._cleanup_finished()
+        # Clean up finalized tracking set entries that have been fully
+        # removed by the base class _cleanup_finished (no longer in
+        # self.running or self.waiting).
+        self._finalized_requests -= {
+            rid for rid in self._finalized_requests
+            if rid not in self.running and rid not in self.waiting
+        }
 
     def get_stats(self) -> dict:
         stats = super().get_stats()

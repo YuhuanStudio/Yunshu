@@ -1103,14 +1103,17 @@ class EngineCore:
 
         num_prompt_tokens = len(token_ids)
 
-        # Inflight prefix sharing: register for concurrent KV prefix reuse (SGLang pattern)
+        # Inflight prefix sharing: register for concurrent KV prefix reuse (SGLang pattern).
+        # Token IDs are registered here so concurrent requests can match the prefix.
+        # KV cache ref starts as None — updated by scheduler after the first forward
+        # pass produces a prompt_cache (see scheduler response processing loop).
         try:
             from .inflight_prefix_sharing import get_inflight_tracker
             _inflight_tracker = get_inflight_tracker()
             _inflight_tracker.register(
                 req_id,
                 token_ids,
-                None,  # KV cache ref not yet available
+                None,  # KV cache ref updated by scheduler after first response
                 getattr(self.scheduler, 'model_id', '') or '',
             )
         except Exception:
@@ -1335,12 +1338,41 @@ class EngineCore:
                     logger.debug(f"inflight unregister failed in dedup shadow for {req_id}", exc_info=True)
                 # Create output collector + finished event so the caller can await
                 from .output_collector import RequestOutputCollector, RequestStreamState
-                self._output_collectors[req_id] = RequestOutputCollector(aggregate=True)
+                shadow_collector = RequestOutputCollector(aggregate=True)
+                self._output_collectors[req_id] = shadow_collector
                 self._stream_states[req_id] = RequestStreamState(
                     stream_interval=self.config.stream_interval
                 )
                 self._finished_events[req_id] = asyncio.Event()
                 self._request_timestamps[req_id] = time.monotonic()
+
+                # Forward primary's accumulated output so the shadow doesn't
+                # miss tokens produced before the shadow registered.  Peek at
+                # the primary's collector buffered output (not consumed yet by
+                # its own consumer).  This may be partial — the primary could
+                # have already had tokens consumed by its stream — but it's the
+                # best we can do without maintaining a separate replay buffer.
+                primary_collector = self._output_collectors.get(primary_id)
+                if primary_collector is not None and primary_collector.output is not None:
+                    from .request import RequestOutput as _RO
+                    primary_out = primary_collector.output
+                    shadow_collector.put(_RO(
+                        request_id=req_id,
+                        new_token_ids=list(primary_out.new_token_ids),
+                        new_text=primary_out.new_text,
+                        output_text=primary_out.output_text,
+                        output_token_ids=list(primary_out.output_token_ids) if primary_out.output_token_ids else [],
+                        completion_tokens=primary_out.completion_tokens,
+                        finished=False,
+                        prompt_tokens=primary_out.prompt_tokens,
+                        logprobs=primary_out.logprobs,
+                        current_state=primary_out.current_state,
+                        reasoning_tokens=primary_out.reasoning_tokens,
+                        cached_tokens=primary_out.cached_tokens,
+                        error=None,
+                        ttft_ms=0.0,  # TTFT is for primary, not shadow
+                    ))
+
                 return req_id
             else:
                 self._request_dedup.register(req_id, content_hash)
@@ -1487,6 +1519,34 @@ class EngineCore:
             enable_thinking=enable_thinking,
             images=_mm_images if _mm_images else None,
         )
+
+        # Inflight prefix sharing (SGLang pattern): check for in-flight
+        # prefills with matching prefix to share partial KV blocks.
+        # This complements the scheduler's own inflight lookup (which runs
+        # inside _schedule_waiting) by catching matches at enqueue time.
+        # Both checks are needed: this one catches matches between add_request
+        # calls, while the scheduler's catches matches at scheduling time.
+        if token_ids:
+            try:
+                from .inflight_prefix_sharing import get_inflight_tracker
+                _tracker = get_inflight_tracker()
+                _inflight_match = _tracker.find_prefix(
+                    token_ids,
+                    getattr(self.scheduler, 'model_id', '') or '',
+                )
+                if _inflight_match is not None and _inflight_match.kv_cache_ref is not None:
+                    request.prompt_cache = _inflight_match.kv_cache_ref
+                    shared_len = min(len(_inflight_match.token_ids), len(token_ids))
+                    request.cached_tokens = shared_len
+                    request.remaining_tokens = token_ids[shared_len:]
+                    logger.debug(
+                        "inflight prefix reuse at enqueue: %d tokens from req=%s for %s",
+                        shared_len,
+                        _inflight_match.request_id[:12],
+                        req_id[:12],
+                    )
+            except Exception:
+                logger.debug("inflight prefix lookup at enqueue failed", exc_info=True)
 
         # Set up per-request output management (oMLX EngineCore pattern)
         from .output_collector import RequestOutputCollector, RequestStreamState
@@ -1754,7 +1814,7 @@ class EngineCore:
                     ]
                     _waiting = [
                         _SReq(request_id=r.request_id, priority=r.sampling_params.priority if r.sampling_params else 0,
-                              wait_time=time.monotonic() - getattr(r, '_submit_time', time.monotonic()) if hasattr(r, '_submit_time') else 0.0,
+                              wait_time=time.monotonic() - r._submit_time if r._submit_time > 0 else 0.0,
                               context_length=r.num_prompt_tokens)
                         for r in self.scheduler.waiting
                     ] if hasattr(self.scheduler.waiting, '__iter__') else []

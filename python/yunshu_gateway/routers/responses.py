@@ -300,6 +300,37 @@ async def create_response(req: ResponsesRequest, request: Request):
         from yunshu_engine.batched_engine import BatchedEngine
         is_batched = isinstance(engine, BatchedEngine)
 
+        # Non-batched Engine path: apply chat template ourselves before
+        # passing to engine.generate().  The legacy Engine / EngineCore
+        # _messages_to_text() does not call adapt_messages() and may strip
+        # tool-related fields, producing garbage for tool-use conversations.
+        _non_batched_prompt: str | list[dict] = messages
+        if not is_batched and messages:
+            _tokenizer = getattr(engine, '_tokenizer', None)
+            if _tokenizer is not None and hasattr(_tokenizer, 'apply_chat_template'):
+                try:
+                    from yunshu_engine.message_adapter import adapt_messages
+                    _adapted = adapt_messages(messages, getattr(engine, 'model_name', '') or '')
+                except Exception:
+                    _adapted = messages
+                try:
+                    _tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+                    if req.enable_thinking is not None:
+                        _tpl_kwargs["enable_thinking"] = req.enable_thinking
+                    _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
+                    if _rendered:
+                        _non_batched_prompt = _rendered
+                except TypeError as _te:
+                    if 'enable_thinking' in str(_te):
+                        _tpl_kwargs.pop('enable_thinking', None)
+                        _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
+                        if _rendered:
+                            _non_batched_prompt = _rendered
+                    else:
+                        logger.debug("chat template failed for non-batched Responses path", exc_info=True)
+                except Exception:
+                    logger.debug("chat template failed for non-batched Responses path", exc_info=True)
+
         # ── n>1 support: generate n responses sequentially ──
         # Single GPU cannot parallelize multiple generations; they run
         # sequentially.  Each choice gets its own message output item.
@@ -350,7 +381,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _cached_tokens = getattr(result, 'cached_tokens', 0)
             else:
                 state = await engine.generate(
-                    prompt=messages,
+                    prompt=_non_batched_prompt,
                     max_tokens=req.max_output_tokens,
                     temperature=req.temperature,
                     top_p=req.top_p,
@@ -504,6 +535,38 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
     from yunshu_engine.batched_engine import BatchedEngine
     from .chat import _release_lora_adapter
     is_batched = isinstance(engine, BatchedEngine)
+
+    # Non-batched Engine path: apply chat template ourselves before passing
+    # to engine.generate_stream().  The legacy Engine / EngineCore
+    # _messages_to_text() does not call adapt_messages() and may strip
+    # tool-related fields, producing garbage for tool-use conversations.
+    _stream_prompt: str | list[dict] = messages
+    if not is_batched and messages:
+        _tokenizer = getattr(engine, '_tokenizer', None)
+        if _tokenizer is not None and hasattr(_tokenizer, 'apply_chat_template'):
+            try:
+                from yunshu_engine.message_adapter import adapt_messages
+                _adapted = adapt_messages(messages, getattr(engine, 'model_name', '') or '')
+            except Exception:
+                _adapted = messages
+            try:
+                _tpl_kwargs: dict = {"tokenize": False, "add_generation_prompt": True}
+                if req.enable_thinking is not None:
+                    _tpl_kwargs["enable_thinking"] = req.enable_thinking
+                _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
+                if _rendered:
+                    _stream_prompt = _rendered
+            except TypeError as _te:
+                if 'enable_thinking' in str(_te):
+                    _tpl_kwargs.pop('enable_thinking', None)
+                    _rendered = _tokenizer.apply_chat_template(_adapted, **_tpl_kwargs)
+                    if _rendered:
+                        _stream_prompt = _rendered
+                else:
+                    logger.debug("chat template failed for non-batched streaming Responses path", exc_info=True)
+            except Exception:
+                logger.debug("chat template failed for non-batched streaming Responses path", exc_info=True)
+
     _logit_bias = req.logit_bias
     if _logit_bias:
         _logit_bias = {int(k): v for k, v in _logit_bias.items()}
@@ -617,7 +680,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     )
         else:
             async for output in engine.generate_stream(
-                prompt=messages,
+                prompt=_stream_prompt,
                 max_tokens=req.max_output_tokens,
                 temperature=req.temperature,
                 top_p=req.top_p,

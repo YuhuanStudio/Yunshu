@@ -195,6 +195,12 @@ class Request:
     generation_start: float = 0.0
     generation_end: float = 0.0
 
+    # SCHED-3: Priority aging — time.monotonic() when request enters the waiting queue.
+    # Used by scheduler._schedule_waiting() to compute effective_priority =
+    # original_priority + (now - _submit_time) * aging_weight.
+    # Set by scheduler._add_request() and reset on preemption.
+    _submit_time: float = 0.0
+
     @property
     def num_output_tokens(self) -> int:
         return len(self.output_token_ids)
