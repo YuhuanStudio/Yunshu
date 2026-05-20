@@ -4276,6 +4276,21 @@ class BatchedEngine:
         detokenizer = self._tokenizer.detokenizer
         detokenizer.reset()
 
+        # Thinking budget enforcement — detect <think/</think via single-token IDs
+        _spec_think_start_token = None
+        _spec_think_end_token = None
+        if thinking_budget is not None or enable_thinking:
+            try:
+                _ts_ids = self._tokenizer.encode("<think")
+                _te_ids = self._tokenizer.encode("</think")
+                if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                    _spec_think_start_token = _ts_ids[0]
+                    _spec_think_end_token = _te_ids[0]
+            except Exception:
+                logger.debug("spec streaming thinking token encode failed", exc_info=True)
+        _spec_in_thinking = False
+        _spec_thinking_tokens_used = 0
+
         # Prefill both models
         def _prefill():
             self._spec_decoder.target(input_array, cache=target_cache)
@@ -4371,9 +4386,29 @@ class BatchedEngine:
                 if token_id in eos_ids:
                     hit_eos = True
                     break
+                # Thinking budget tracking — detect <think/</think via token IDs
+                if _spec_think_start_token is not None:
+                    if not _spec_in_thinking and token_id == _spec_think_start_token:
+                        _spec_in_thinking = True
+                    elif _spec_in_thinking:
+                        _spec_thinking_tokens_used += 1
+                        if token_id == _spec_think_end_token:
+                            _spec_in_thinking = False
                 generated_tokens.append(token_id)
                 detokenizer.add_token(token_id)
                 _yielded_token_count += 1
+                # Thinking budget enforcement: force </think when budget exceeded
+                if (thinking_budget is not None and _spec_in_thinking
+                        and _spec_thinking_tokens_used >= thinking_budget
+                        and _spec_think_end_token is not None):
+                    _spec_in_thinking = False
+                    # Force-insert </think token
+                    generated_tokens.append(_spec_think_end_token)
+                    detokenizer.add_token(_spec_think_end_token)
+                    _yielded_token_count += 1
+                    # Treat as stop — no more tokens after budget hit
+                    hit_eos = True
+                    break
                 if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
                     _hit_suffix = True
                     # Remove the suffix-triggering token — it should not
@@ -4446,7 +4481,7 @@ class BatchedEngine:
                 completion_tokens=len(generated_tokens),
                 finished=finish_reason is not None,
                 finish_reason=finish_reason,
-                reasoning_tokens=0,
+                reasoning_tokens=_spec_thinking_tokens_used if _spec_think_start_token is not None else 0,
                 cached_tokens=0,
                 logprobs=_chunk_logprobs,
                 ttft_ms=_spec_ttft_ms_val,
@@ -5204,6 +5239,50 @@ class BatchedEngine:
             detokenizer.reset()
             n_tok = 0
 
+            # Thinking budget enforcement — detect <think/</think via single-token IDs
+            _ng_think_start_token = None
+            _ng_think_end_token = None
+            if thinking_budget is not None or enable_thinking:
+                try:
+                    _ts_ids = tokenizer.encode("<think")
+                    _te_ids = tokenizer.encode("</think")
+                    if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                        _ng_think_start_token = _ts_ids[0]
+                        _ng_think_end_token = _te_ids[0]
+                except Exception:
+                    logger.debug("n-gram streaming thinking token encode failed", exc_info=True)
+            _ng_in_thinking = False
+            _ng_thinking_tokens_used = 0
+
+            def _ng_track_thinking(tid):
+                """Track thinking state and enforce budget. Returns True if budget exceeded."""
+                nonlocal _ng_in_thinking, _ng_thinking_tokens_used
+                if _ng_think_start_token is None:
+                    return False
+                if not _ng_in_thinking and tid == _ng_think_start_token:
+                    _ng_in_thinking = True
+                elif _ng_in_thinking:
+                    _ng_thinking_tokens_used += 1
+                    if tid == _ng_think_end_token:
+                        _ng_in_thinking = False
+                        return False
+                    if (thinking_budget is not None
+                            and _ng_thinking_tokens_used >= thinking_budget
+                            and _ng_think_end_token is not None):
+                        _ng_in_thinking = False
+                        # Force-insert </think token
+                        tokens.append(_ng_think_end_token)
+                        all_token_ids.append(_ng_think_end_token)
+                        n_tok_cur = n_tok + 1
+                        detokenizer.add_token(_ng_think_end_token)
+                        _end_text = detokenizer.last_segment
+                        if _end_text:
+                            _put((_end_text, n_tok_cur, None, _ng_think_end_token))
+                        # Stop token to end generation
+                        _put(("", n_tok_cur, "stop", _ng_think_end_token))
+                        return True
+                return False
+
             with _wired_limit_ctx(model):
                 # Prefill + first token
                 for token, _logits in generate_step(
@@ -5224,9 +5303,13 @@ class BatchedEngine:
                         _unregister_inflight()
                         return
                     detokenizer.add_token(first_token)
+                    if _ng_track_thinking(first_token):
+                        if prefix_cache is not None:
+                            prefix_cache.add(ids, cache)
+                        mx.synchronize()
+                        _unregister_inflight()
+                        return
                     _put((detokenizer.last_segment, n_tok, None, first_token))
-
-                # Decode with N-gram lookahead
                 remaining = max_tokens - 1
                 while remaining > 0:
                     if _is_cancelled(cancel_event):

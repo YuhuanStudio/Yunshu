@@ -327,16 +327,6 @@ class PrometheusMetrics:
             "Prefill phase duration in seconds",
             buckets=_Histogram.INFERENCE_BUCKETS,
         )
-        self._histograms["ttft_seconds"] = _Histogram(
-            "yunshu_ttft_seconds",
-            "Time to first token in seconds",
-            buckets=_Histogram.INFERENCE_BUCKETS,
-        )
-        self._histograms["itl_seconds"] = _Histogram(
-            "yunshu_itl_seconds",
-            "Inter-token latency in seconds",
-            buckets=_Histogram.INFERENCE_BUCKETS,
-        )
 
         # Spec decode gauges
         # NOTE: Cumulative totals use _Counter so PromQL rate()/increase() work.
@@ -513,6 +503,109 @@ class PrometheusMetrics:
         self._gauges["attention_eviction_total_blocks"] = _Gauge(
             "yunshu_attention_eviction_total_blocks",
             "Total KV blocks scored by H2O attention eviction",
+        )
+
+        # LoRA adapter metrics (load/unload/merge tracking)
+        self._counters["lora_load_total"] = _Counter(
+            "yunshu_lora_load_total",
+            "Total LoRA adapter load operations",
+        )
+        self._counters["lora_unload_total"] = _Counter(
+            "yunshu_lora_unload_total",
+            "Total LoRA adapter unload operations",
+        )
+        self._counters["lora_merge_total"] = _Counter(
+            "yunshu_lora_merge_total",
+            "Total LoRA adapter merge operations",
+        )
+        self._counters["lora_load_errors_total"] = _Counter(
+            "yunshu_lora_load_errors_total",
+            "Total LoRA adapter load errors",
+        )
+        self._gauges["lora_loaded_adapters"] = _Gauge(
+            "yunshu_lora_loaded_adapters",
+            "Number of currently loaded LoRA adapters",
+        )
+        self._gauges["lora_registered_adapters"] = _Gauge(
+            "yunshu_lora_registered_adapters",
+            "Number of registered LoRA adapters",
+        )
+        self._gauges["lora_max_adapters"] = _Gauge(
+            "yunshu_lora_max_adapters",
+            "Maximum number of simultaneously loaded LoRA adapters",
+        )
+
+        # Model warmup metrics
+        self._counters["model_warmup_total"] = _Counter(
+            "yunshu_model_warmup_total",
+            "Total model warmup operations completed",
+        )
+        self._counters["model_warmup_errors_total"] = _Counter(
+            "yunshu_model_warmup_errors_total",
+            "Total model warmup errors",
+        )
+        self._histograms["model_warmup_duration_seconds"] = _Histogram(
+            "yunshu_model_warmup_duration_seconds",
+            "Model warmup duration in seconds",
+        )
+        self._gauges["model_warmup_compile_cached"] = _Gauge(
+            "yunshu_model_warmup_compile_cached",
+            "Whether compile caching completed during warmup (1=yes, 0=no)",
+        )
+        self._counters["model_warmup_prompts_prefilled"] = _Counter(
+            "yunshu_model_warmup_prompts_prefilled_total",
+            "Total warm prompts prefilled into KV cache during warmup",
+        )
+
+        # KV migration metrics (multi-tier block management)
+        self._counters["kv_migrations_total"] = _Counter(
+            "yunshu_kv_migrations_total",
+            "Total KV block migration operations",
+        )
+        self._counters["kv_migration_errors_total"] = _Counter(
+            "yunshu_kv_migration_errors_total",
+            "Total KV block migration errors",
+        )
+        self._gauges["kv_migration_pending_queue"] = _Gauge(
+            "yunshu_kv_migration_pending_queue",
+            "Number of pending KV block migrations in queue",
+        )
+        self._gauges["kv_migration_tracked_blocks"] = _Gauge(
+            "yunshu_kv_migration_tracked_blocks",
+            "Number of KV blocks tracked by the migration manager",
+        )
+        self._histograms["kv_migration_duration_seconds"] = _Histogram(
+            "yunshu_kv_migration_duration_seconds",
+            "Duration of individual KV block migrations in seconds",
+            buckets=_Histogram.INFERENCE_BUCKETS,
+        )
+
+        # Gateway active requests gauge (wired from main.py track_active_requests)
+        self._gauges["gateway_active_requests"] = _Gauge(
+            "yunshu_gateway_active_requests",
+            "Currently in-flight gateway requests (inference paths only)",
+        )
+
+        # Response cache metrics
+        self._counters["response_cache_hits_total"] = _Counter(
+            "yunshu_response_cache_hits_total",
+            "Total response cache hits",
+        )
+        self._counters["response_cache_misses_total"] = _Counter(
+            "yunshu_response_cache_misses_total",
+            "Total response cache misses",
+        )
+
+        # TTFT histogram with inference buckets (was missing from predefined)
+        self._histograms["ttft_seconds"] = _Histogram(
+            "yunshu_ttft_seconds",
+            "Time to first token in seconds",
+            buckets=_Histogram.INFERENCE_BUCKETS,
+        )
+        self._histograms["itl_seconds"] = _Histogram(
+            "yunshu_itl_seconds",
+            "Inter-token latency in seconds",
+            buckets=_Histogram.INFERENCE_BUCKETS,
         )
 
     # --- Counter API ---

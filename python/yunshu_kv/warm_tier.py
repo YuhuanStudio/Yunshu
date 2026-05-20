@@ -67,17 +67,28 @@ class KVWarmTier:
 
     # ── Core API ──────────────────────────────────────────────────
 
-    def demote(self, block_hash: int, kv_data, num_tokens: int = 0) -> bool:
+    def demote(self, block_hash: int, kv_data, num_tokens: int = -1) -> bool:
         """Accept a KV block from the hot tier, compress and store it.
 
         Args:
             block_hash: Hash identifying the block content.
             kv_data: FP16 KV data (MLX array or numpy array).
             num_tokens: Number of tokens in this block (for SSD flush fidelity).
+                Defaults to -1 (sentinel). A warning is logged if <= 0 is
+                explicitly passed, as zero token counts make SSD-flushed
+                blocks invisible to prefix matching.
 
         Returns:
             True if the block was stored successfully.
         """
+        if num_tokens <= 0:
+            logger.warning(
+                "demote(block_hash=0x%x): num_tokens=%d — "
+                "SSD-flushed blocks will have zero token counts "
+                "and be invisible to prefix matching",
+                block_hash,
+                num_tokens,
+            )
         with self._lock:
             try:
                 from .compression import quantize_kv_4bit

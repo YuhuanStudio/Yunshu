@@ -630,8 +630,13 @@ class TieredKVCacheManager:
                 table.total_tokens = max(0, num_blocks - 1) * block_size
                 table._last_block_occupancy = 0
             else:
-                table.total_tokens = num_blocks * block_size
-                table._last_block_occupancy = block_size
+                # All tokens are covered by blocks — compute from actual
+                # token count to avoid overcounting when the prompt length
+                # is not a multiple of block_size.
+                actual_tokens = match.num_matched_tokens
+                table.total_tokens = actual_tokens
+                remainder = actual_tokens % block_size
+                table._last_block_occupancy = remainder if remainder != 0 else block_size
             match.matched_blocks = match.matched_blocks + all_promoted
 
         return table, match
