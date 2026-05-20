@@ -1547,6 +1547,7 @@ class BatchedEngine:
                 json_schema=json_schema,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds or 300.0,
             )
 
         # MTP speculative decoding (built-in multi-token prediction heads)
@@ -1574,6 +1575,7 @@ class BatchedEngine:
                 xtc_probability=xtc_probability,
                 xtc_threshold=xtc_threshold,
                 logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds or 300.0,
             )
 
         # N-gram speculative decoding (model-free, CPU-based proposal)
@@ -1601,6 +1603,7 @@ class BatchedEngine:
                 thinking_budget=thinking_budget,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds or 300.0,
             )
 
         # Fast path: direct generate_step on executor thread for full GPU utilization
@@ -2737,6 +2740,8 @@ class BatchedEngine:
                     cancel_event=_cancel_event,
                     timeout_seconds=timeout_seconds or 300.0,
                     logits_processors=logits_processors,
+                    enable_thinking=enable_thinking,
+                    thinking_budget=thinking_budget,
                 ):
                     yield output
             finally:
@@ -3914,6 +3919,7 @@ class BatchedEngine:
         json_schema: dict | str | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
+        timeout_seconds: float = 300.0,
     ) -> GenerationOutput:
         """Generate using speculative decoding (single-request EAGLE-3 path).
 
@@ -3939,6 +3945,7 @@ class BatchedEngine:
                 json_schema=json_schema,
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
+                timeout_seconds=timeout_seconds,
             )
 
         from .mlx_executor import get_mlx_executor
@@ -4007,7 +4014,25 @@ class BatchedEngine:
 
         _spec_gen_t0 = time.perf_counter()
         try:
-            token_ids, hit_stop = await loop.run_in_executor(executor, _run_spec)
+            token_ids, hit_stop = await asyncio.wait_for(
+                loop.run_in_executor(executor, _run_spec),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Speculative generation timed out after {timeout_seconds}s")
+            try:
+                import mlx.core as _mx
+                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+            except Exception:
+                pass
+            return GenerationOutput(
+                finished=True,
+                finish_reason="error",
+                prompt_tokens=len(input_ids),
+                completion_tokens=0,
+                error=f"Speculative generation timed out after {timeout_seconds}s",
+                ttft_ms=0.0,
+            )
         except MemoryError:
             logger.warning("OOM during speculative generation — returning memory_limit finish reason")
             try:
@@ -4021,6 +4046,8 @@ class BatchedEngine:
                 prompt_tokens=len(input_ids),
                 completion_tokens=0,
                 error="OOM during speculative generation",
+                ttft_ms=0.0,
+                cached_tokens=0,
             )
         except RuntimeError as e:
             if "memory" in str(e).lower() or "out of" in str(e).lower():
@@ -4036,6 +4063,8 @@ class BatchedEngine:
                     prompt_tokens=len(input_ids),
                     completion_tokens=0,
                     error=str(e),
+                    ttft_ms=0.0,
+                    cached_tokens=0,
                 )
             raise
         except Exception as e:
@@ -4445,6 +4474,7 @@ class BatchedEngine:
         thinking_budget: int | None = None,
         cancel_event: asyncio.Event | None = None,
         logits_processors: list | None = None,
+        timeout_seconds: float = 300.0,
     ) -> GenerationOutput:
         """Generate using N-gram speculative decoding (model-free).
 
@@ -4605,6 +4635,8 @@ class BatchedEngine:
 
             try:
                 gen_t0 = time.perf_counter()
+                _timeout_deadline = gen_t0 + timeout_seconds
+                _timeout_check_interval = 32
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
                 all_token_ids = list(input_ids)  # Track full history for N-gram matching
@@ -4639,6 +4671,16 @@ class BatchedEngine:
                         # a previous iteration's accepted/bonus tokens.
                         if _stopped_by_stop_id or _stopped_by_suffix:
                             break
+                        # Request-level timeout: check every N tokens to bound
+                        # generation time. Without this, a pathological N-gram
+                        # proposal/accept cycle can loop indefinitely.
+                        if len(tokens) % _timeout_check_interval == 0:
+                            if time.perf_counter() > _timeout_deadline:
+                                logger.warning(
+                                    f"N-gram spec generation timed out after "
+                                    f"{timeout_seconds}s ({len(tokens)} tokens)"
+                                )
+                                break
                         # Propose K draft tokens via N-gram
                         # Use adaptive K if controller is active, else use proposer default
                         _adaptive_k = self._adaptive_spec.get_draft_length() if self._adaptive_spec else None
@@ -4894,6 +4936,8 @@ class BatchedEngine:
         cancel_event: asyncio.Event | None = None,
         timeout_seconds: float = 300.0,
         logits_processors: list | None = None,
+        enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generate using N-gram speculative decoding (queue-based)."""
         from mlx_lm.generate import generate_step
@@ -4910,6 +4954,8 @@ class BatchedEngine:
         # Handle messages-format prompts (list of dicts) — apply chat template
         if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict):
             tpl_kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": True}
+            if enable_thinking is not None:
+                tpl_kwargs["enable_thinking"] = enable_thinking
             text = tokenizer.apply_chat_template(prompt, **tpl_kwargs)
         else:
             text = prompt if isinstance(prompt, str) else str(prompt)
@@ -5316,6 +5362,10 @@ class BatchedEngine:
         _ng_ttft_recorded = False
         _ng_ttft_ms_val = 0.0
         _ng_gen_t0 = time.perf_counter()
+        _ng_fp_lock = getattr(self, '_fast_path_lock', None)
+        if _ng_fp_lock is not None:
+            with _ng_fp_lock:
+                self._active_fast_path_count += 1
         try:
             while True:
                 # Check cancel_event from consumer side (mirrors MTP streaming path)
@@ -5418,6 +5468,11 @@ class BatchedEngine:
                 if done:
                     break
         finally:
+            # Decrement active fast path count (prevents model eviction mid-generation)
+            _ng_fp_lock = getattr(self, '_fast_path_lock', None)
+            if _ng_fp_lock is not None:
+                with _ng_fp_lock:
+                    self._active_fast_path_count -= 1
             if not future.done():
                 future.cancel()
                 try:
@@ -5457,6 +5512,7 @@ class BatchedEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         logits_processors: list | None = None,
+        timeout_seconds: float = 300.0,
     ) -> GenerationOutput:
         """Generate using MTP speculative decoding (built-in prediction heads).
 
@@ -5530,7 +5586,26 @@ class BatchedEngine:
 
         _mtp_gen_t0 = time.perf_counter()
         try:
-            token_ids = await loop.run_in_executor(executor, _run)
+            token_ids = await asyncio.wait_for(
+                loop.run_in_executor(executor, _run),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"MTP generation timed out after {timeout_seconds}s")
+            try:
+                import mlx.core as _mx
+                await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
+            except Exception:
+                pass
+            return GenerationOutput(
+                finished=True,
+                finish_reason="error",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+                error=f"MTP generation timed out after {timeout_seconds}s",
+                ttft_ms=0.0,
+                cached_tokens=0,
+            )
         except MemoryError:
             logger.warning("OOM during MTP generation — returning memory_limit finish reason")
             try:
@@ -5609,7 +5684,13 @@ class BatchedEngine:
                 # reasoning_tokens + content_tokens == completion_tokens.
                 _mtp_thinking_tokens_used += 1
 
-        # Truncate at stop tokens (exclude stop token from output)
+        # Truncate at stop tokens (exclude stop token from output).
+        # Use a temporary detokenizer to probe for suffix matches WITHOUT
+        # corrupting the main detokenizer's state when a suffix is hit.
+        # Previously, add_token(tid) was called before the suffix check,
+        # so the suffix-triggering token leaked into detokenizer.text even
+        # though token_ids was correctly truncated — causing the suffix
+        # to appear in the output despite the trimming below.
         hit_stop = False
         hit_suffix = False
         _mtp_completion_count = len(token_ids)  # Track actual completion count
@@ -5619,11 +5700,22 @@ class BatchedEngine:
                 _mtp_completion_count = i
                 hit_stop = True
                 break
+            # Probe suffix match using the main detokenizer, but be
+            # prepared to roll back if it triggers.
             detokenizer.add_token(tid)
             if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                # Truncate token_ids to exclude the suffix-triggering token
-                # (matching the pattern in _generate_fast where tokens.pop()
-                # removes the suffix token from the output count).
+                # Roll back: remove the suffix-triggering token from the
+                # detokenizer so its state matches the truncated token_ids.
+                # NaiveStreamingDetokenizer supports .tokens attribute.
+                if hasattr(detokenizer, 'tokens') and detokenizer.tokens:
+                    detokenizer.tokens.pop()
+                # Re-initialize detokenizer state from remaining tokens
+                # to ensure .text is consistent (simply popping .tokens
+                # does not update the internal byte buffer).
+                _kept = list(detokenizer.tokens) if hasattr(detokenizer, 'tokens') else token_ids[:i]
+                detokenizer.reset()
+                for _t in _kept:
+                    detokenizer.add_token(_t)
                 _mtp_completion_count = i
                 token_ids = token_ids[:i]
                 hit_suffix = True
@@ -5633,13 +5725,6 @@ class BatchedEngine:
             _mtp_completion_count = len(token_ids)
         detokenizer.finalize()
         output_text = _clean_special_tokens(detokenizer.text)
-
-        # Trim stop suffix from output text when matched
-        if hit_suffix and stop_suffixes:
-            for s in stop_suffixes:
-                if output_text.endswith(s):
-                    output_text = output_text[:-len(s)]
-                    break
 
         # Determine finish_reason with cancel awareness
         _cancelled = _is_cancelled(cancel_event)
@@ -6029,6 +6114,10 @@ class BatchedEngine:
         _mtp_ttft_recorded = False
         _mtp_ttft_ms_val = 0.0
         _mtp_gen_t0 = time.perf_counter()
+        _mtp_fp_lock = getattr(self, '_fast_path_lock', None)
+        if _mtp_fp_lock is not None:
+            with _mtp_fp_lock:
+                self._active_fast_path_count += 1
         try:
             while True:
                 # Check cancel_event from consumer side
@@ -6133,6 +6222,11 @@ class BatchedEngine:
                     break
         finally:
             _unregister_inflight()
+            # Decrement active fast path count (prevents model eviction mid-generation)
+            _mtp_fp_lock = getattr(self, '_fast_path_lock', None)
+            if _mtp_fp_lock is not None:
+                with _mtp_fp_lock:
+                    self._active_fast_path_count -= 1
             if not future.done():
                 future.cancel()
                 try:

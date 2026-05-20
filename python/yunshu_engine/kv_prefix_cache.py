@@ -551,7 +551,16 @@ class KVPrefixCache:
             if trim > 0 and hasattr(snap, "trim"):
                 snap.trim(trim)
             elif trim > 0 and hasattr(snap, "offset"):
-                snap.offset = max(0, getattr(c, "offset", 0) - trim)
+                # Bug fix: only adjusting offset without trimming the
+                # actual tensors leaves stale KV data beyond the logical
+                # boundary.  Downstream code that reads by tensor shape
+                # (not offset) would see garbage.  Slice the tensors to
+                # the new offset to match the semantic contract.
+                new_offset = max(0, getattr(c, "offset", 0) - trim)
+                snap.offset = new_offset
+                if new_offset < snap.keys.shape[0]:
+                    snap.keys = _detached_copy(snap.keys[:new_offset])
+                    snap.values = _detached_copy(snap.values[:new_offset])
             result.append(snap)
         return result
 
@@ -765,6 +774,7 @@ class KVPrefixCache:
             self._hash_index.clear()
             self._prefix_index.clear()
             self._block_refcount.clear()
+            self._hash_collisions = 0
             self._access_counter = 0
         gc.collect()
         mx.clear_cache()

@@ -191,11 +191,16 @@ class KVCacheManager:
             num_matched_tokens = matched_node.total_tokens()
             # Validate matched blocks: evicted blocks may still be
             # referenced by radix tree nodes.  A block is usable only
-            # if it has a non-None hash (still cached) or a positive
-            # ref_count (actively held by a request).
+            # if it is actively held (ref_count > 0) or is a valid
+            # prefix cache entry (block_hash set, NOT cache_only —
+            # cache_only blocks are in the free queue and can be
+            # evicted/reallocated at any moment, so using them would
+            # give the request a block whose KV data could be silently
+            # overwritten).
             valid_blocks = [
                 b for b in matched_blocks
-                if b.block_hash is not None or b.ref_count > 0
+                if b.ref_count > 0
+                or (b.block_hash is not None and not b.cache_only)
             ]
             if len(valid_blocks) < len(matched_blocks):
                 # Some blocks were evicted — fall through to hash-chain
@@ -485,11 +490,14 @@ class KVCacheManager:
         if remaining_tokens:
             # Insert new nodes for the unmatched portion
             bs = self.config.block_size
-            # Ceiling division: the boundary block that straddles the split
-            # point stays with the matched prefix in the tree.  Only blocks
-            # fully beyond the match boundary are assigned to the remaining
-            # tokens, avoiding misaligned KV data.
-            new_start_block = (matched_len + bs - 1) // bs
+            # Floor division: the boundary block (the block that straddles
+            # the match boundary) must be INCLUDED in new_blocks.  Using
+            # ceiling division previously skipped this block, losing its KV
+            # data for the unmatched portion of the token sequence.
+            # The radix tree's split logic handles the partial overlap
+            # correctly — it splits the boundary block's node at the
+            # exact token boundary.
+            new_start_block = matched_len // bs
             if new_start_block > len(blocks):
                 return  # Defensive: matched more than we have blocks for
             new_blocks = blocks[new_start_block:]
