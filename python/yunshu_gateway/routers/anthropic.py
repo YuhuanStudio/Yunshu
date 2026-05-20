@@ -1005,6 +1005,7 @@ async def _stream_anthropic(
     thinking_block_started = False
     text_block_started = False
     tool_use_block_started = False
+    _has_tool_calls = False  # persists across blocks (unlike tool_use_block_started)
     accumulated_text = ""  # for tool-call detection
     matched_stop: str | None = None
     _streaming_finish_reason: str | None = None
@@ -1235,6 +1236,7 @@ async def _stream_anthropic(
                                             block_index += 1
                                             text_block_started = False
                                         tool_use_block_started = True
+                                        _has_tool_calls = True
                                     _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                                     _args_str = _tc_out.tool_call.arguments or '{}'
@@ -1357,6 +1359,7 @@ async def _stream_anthropic(
                                     block_index += 1
                                     text_block_started = False
                                 tool_use_block_started = True
+                                _has_tool_calls = True
                                 _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                 yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                                 _args_str = _tc_out.tool_call.arguments or '{}'
@@ -1420,6 +1423,7 @@ async def _stream_anthropic(
                             block_index += 1
                             text_block_started = False
                         tool_use_block_started = True
+                        _has_tool_calls = True
                         _tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': _tool_id, 'name': _tc_out.tool_call.name, 'input': {}}})}\n\n"
                         _args_str = _tc_out.tool_call.arguments or '{}'
@@ -1454,7 +1458,7 @@ async def _stream_anthropic(
         # cache_creation_input_tokens / cache_read_input_tokens are in message_start
         # (emitted deferred above when the first engine output arrives).
         stop_reason = _map_stop_reason(
-            _streaming_finish_reason, matched_stop, has_tool_calls=tool_use_block_started
+            _streaming_finish_reason, matched_stop, has_tool_calls=_has_tool_calls
         )
         _delta_usage: dict = {"output_tokens": output_tokens}
         if reasoning_tok > 0:

@@ -33,7 +33,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ class PrefillResponse(BaseModel):
 
 class DecodeRequest(BaseModel):
     cache_handle: str = ""
-    max_tokens: int = 256
+    max_tokens: int = Field(default=256, ge=1, le=131072)
     temperature: float = 0.7
     top_p: float = 1.0
     top_k: int = 0

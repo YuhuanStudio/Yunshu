@@ -27,12 +27,12 @@ class VideoGenerateRequest(BaseModel):
     prompt: str = Field(description="Text description of the video to generate")
     negative_prompt: str = ""
     image: Optional[str] = Field(default=None, description="Base64-encoded source image for I2V mode")
-    width: int = 1280
-    height: int = 704
-    num_frames: int = 81  # Must be 4n+1
-    num_inference_steps: int = 20
+    width: int = Field(default=1280, ge=64, le=2048)
+    height: int = Field(default=704, ge=64, le=2048)
+    num_frames: int = Field(default=81, ge=1, le=257)
+    num_inference_steps: int = Field(default=20, ge=1, le=100)
     guide_scale: float = 5.0
-    fps: int = 16
+    fps: int = Field(default=16, ge=1, le=60)
     seed: Optional[int] = None
     scheduler: str = "unipc"
     response_format: str = "mp4"  # mp4 or frames

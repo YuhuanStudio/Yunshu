@@ -140,7 +140,7 @@ class VideoEngine:
         self._lora_adapter_path: str = ""
         self._lora_loaded: bool = False
         self._lora_merged: bool = False
-        self._lora_lock = threading.Lock()
+        self._lora_lock = threading.RLock()
 
         # Wave 43: Native MLX video pipeline (Wan2.2/LTX2)
         self._native_pipeline = None  # Created lazily after model load
@@ -1267,7 +1267,7 @@ class VideoEngine:
         The merged model has zero LoRA inference overhead.
         Follows the same pattern as LoRAAdapterManager.merge_adapter().
         """
-        with self._stats_lock:
+        with self._lora_lock:
             if not self._lora_loaded:
                 logger.error("No LoRA adapter loaded to merge")
                 return False

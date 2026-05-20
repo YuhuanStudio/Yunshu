@@ -116,29 +116,29 @@ class MeshTopology:
         """Get neighbor ranks based on topology type."""
         with self._lock:
             ranks = self._sorted_ranks()
-        if not ranks:
+            if not ranks:
+                return []
+            if self.topo_type == TopologyType.RING:
+                idx = ranks.index(rank) if rank in ranks else -1
+                if idx < 0:
+                    return []
+                return [
+                    ranks[(idx - 1) % len(ranks)],
+                    ranks[(idx + 1) % len(ranks)],
+                ]
+            elif self.topo_type == TopologyType.FULLY_CONNECTED:
+                return [r for r in ranks if r != rank]
+            elif self.topo_type == TopologyType.PIPELINE:
+                idx = ranks.index(rank) if rank in ranks else -1
+                if idx < 0:
+                    return []
+                neighbors = []
+                if idx > 0:
+                    neighbors.append(ranks[idx - 1])
+                if idx < len(ranks) - 1:
+                    neighbors.append(ranks[idx + 1])
+                return neighbors
             return []
-        if self.topo_type == TopologyType.RING:
-            idx = ranks.index(rank) if rank in ranks else -1
-            if idx < 0:
-                return []
-            return [
-                ranks[(idx - 1) % len(ranks)],
-                ranks[(idx + 1) % len(ranks)],
-            ]
-        elif self.topo_type == TopologyType.FULLY_CONNECTED:
-            return [r for r in ranks if r != rank]
-        elif self.topo_type == TopologyType.PIPELINE:
-            idx = ranks.index(rank) if rank in ranks else -1
-            if idx < 0:
-                return []
-            neighbors = []
-            if idx > 0:
-                neighbors.append(ranks[idx - 1])
-            if idx < len(ranks) - 1:
-                neighbors.append(ranks[idx + 1])
-            return neighbors
-        return []
 
     def auto_select(self) -> TopologyType:
         """Auto-select topology based on node count and capabilities.

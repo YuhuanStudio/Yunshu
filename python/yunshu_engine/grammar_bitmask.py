@@ -452,11 +452,14 @@ class BitmaskConstrainedSampler:
         """Save constraint state for potential rollback."""
         if hasattr(self._engine, 'checkpoint'):
             self._engine.checkpoint()
+        self._checkpoint_ids_len = len(self._generated_ids)
 
     def rollback(self) -> None:
         """Restore constraint state from last checkpoint."""
         if hasattr(self._engine, 'rollback'):
             self._engine.rollback()
+        if hasattr(self, '_checkpoint_ids_len'):
+            del self._generated_ids[self._checkpoint_ids_len:]
 
     def discard_checkpoint(self) -> None:
         """Discard the most recent checkpoint without restoring."""

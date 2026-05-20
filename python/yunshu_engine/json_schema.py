@@ -1548,11 +1548,14 @@ class ConstrainedSampler:
         """Forward checkpoint to underlying constraint (for spec decode)."""
         if hasattr(self._constraint, 'checkpoint'):
             self._constraint.checkpoint()
+        self._checkpoint_ids_len = len(self._generated_ids)
 
     def rollback(self) -> None:
         """Forward rollback to underlying constraint (for spec decode)."""
         if hasattr(self._constraint, 'rollback'):
             self._constraint.rollback()
+        if hasattr(self, '_checkpoint_ids_len'):
+            del self._generated_ids[self._checkpoint_ids_len:]
 
 
 def make_constrained_sampler(

@@ -404,6 +404,10 @@ class MeshManager:
         """Callback: new peer discovered."""
         _event = None
         with self._node_lock:
+            # Cancel any pending retry for this node (it's back online)
+            retry_task = self._retry_tasks.pop(node.node_id, None)
+            if retry_task and not retry_task.done():
+                retry_task.cancel()
             rank = self._topology.add_node(node)
             if self._dp_router:
                 self._dp_router.add_node(node.node_id, rank)

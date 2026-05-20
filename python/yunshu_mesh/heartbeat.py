@@ -184,6 +184,8 @@ class HeartbeatMonitor:
             timed_out_nodes = []
             with self._nodes_lock:
                 for node_id, last_hb in list(self._last_heartbeat.items()):
+                    if node_id not in self._nodes:
+                        continue
                     if node_id not in self._missed_counts:
                         self._missed_counts[node_id] = 0
                     if now - last_hb > self.timeout:

@@ -535,6 +535,7 @@ class EngineCore:
         self._request_timestamps: dict[str, float] = {}  # req_id → monotonic start time
         self._ttft_timestamps: dict[str, float] = {}  # req_id → monotonic first-token time
         self._request_lora_adapters: dict[str, str] = {}  # req_id → lora_adapter_id
+        self._original_prefill_batch_size = self.config.prefill_batch_size
 
         # Cache-locality request reordering (SGLang/vLLM pattern)
         # Maps request_id → KV prefix hash for grouping requests with shared
@@ -2824,10 +2825,18 @@ class EngineCore:
                                             )
                                 except Exception:
                                     logger.debug("KV pressure eviction failed", exc_info=True)
-                        # Recovery: when memory usage drops below 70%, the auto-tuner
-                        # and AdaptiveBatchSizer will naturally restore batch sizes.
-                        # No explicit recovery needed here — prefill_batch_size stays
-                        # reduced until the auto-tuner evaluates the next tuning cycle.
+                        # Recovery: when memory usage drops below 70%, restore
+                        # prefill_batch_size back toward original.
+                        if mem_usage < 0.70:
+                            if self.config.prefill_batch_size < self._original_prefill_batch_size:
+                                self.config.prefill_batch_size = min(
+                                    self.config.prefill_batch_size * 2,
+                                    self._original_prefill_batch_size,
+                                )
+                                logger.info(
+                                    "Memory recovered: restoring prefill_batch_size to %d (mem_usage=%.1f%%)",
+                                    self.config.prefill_batch_size, mem_usage * 100,
+                                )
                         # Telemetry: record step-level metrics
                         self._telemetry.collect(
                             "engine_step_batch_size",
