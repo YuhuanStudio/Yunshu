@@ -160,6 +160,7 @@ class RequestCoalescingMiddleware:
 
         # Track the request in the coalescer for statistics
         # The actual batching is handled at the engine level
+        body = None
         try:
             body = await request.body()
             body_json = json.loads(body)
@@ -170,8 +171,12 @@ class RequestCoalescingMiddleware:
         except Exception:
             logger.debug("coalescer tracking failed", exc_info=True)
 
-        # Replay the consumed body so downstream handlers can read it
-        async def _replay_receive():
-            return {"type": "http.request", "body": body, "more_body": False}
-
-        await self.app(scope, _replay_receive, send)
+        # Replay the consumed body so downstream handlers can read it.
+        # If body read failed (body is None), fall through with original
+        # receive — downstream will attempt to read the body itself.
+        if body is not None:
+            async def _replay_receive():
+                return {"type": "http.request", "body": body, "more_body": False}
+            await self.app(scope, _replay_receive, send)
+        else:
+            await self.app(scope, receive, send)

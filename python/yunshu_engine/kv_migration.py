@@ -446,14 +446,21 @@ class KVMigrationManager:
                 logger.debug("Migration loop error", exc_info=True)
 
     def _drain_queue(self) -> int:
-        """Process all pending migrations in the queue."""
+        """Process all pending migrations in the queue.
+
+        Acquires _lock per-iteration instead of holding it for the
+        entire drain, so that concurrent operations (register_block,
+        record_access, etc.) are not starved.
+        """
         processed = 0
         while True:
+            with self._queue_lock:
+                if not self._migration_queue:
+                    break
+                block_id, source, dest = self._migration_queue.pop(0)
+            # Acquire _lock per-migration so other threads can make
+            # progress between iterations.
             with self._lock:
-                with self._queue_lock:
-                    if not self._migration_queue:
-                        break
-                    block_id, source, dest = self._migration_queue.pop(0)
                 self._do_migrate(block_id, source, dest)
             processed += 1
         return processed
@@ -463,6 +470,8 @@ class KVMigrationManager:
     def get_stats(self) -> dict:
         """Return migration statistics."""
         with self._lock:
+            with self._queue_lock:
+                pending_queue_size = len(self._migration_queue)
             return {
                 "gpu_to_cpu_count": self._stats.gpu_to_cpu_count,
                 "cpu_to_ssd_count": self._stats.cpu_to_ssd_count,
@@ -476,7 +485,7 @@ class KVMigrationManager:
                 "avg_migration_time_s": round(self._stats.avg_migration_time, 6),
                 "failed_migrations": self._stats.failed_migrations,
                 "active_migrations": self._stats.active_migrations,
-                "pending_queue_size": len(self._migration_queue),
+                "pending_queue_size": pending_queue_size,
                 "tracked_blocks": len(self._temperatures),
                 "tier_counts": {
                     tier.value: len(blocks)
@@ -542,55 +551,59 @@ class KVMigrationManager:
                 success=False,
             )
 
-        # Transfer data between simulated stores.
-        # In production, blocks always have data (real KV cache bytes).
-        # In tests with simulated stores, blocks may lack data if registered
-        # without the `data` parameter — in that case, skip the data transfer
-        # but still update tier tracking.
-        data = self._pop_from_tier(block_id, source)
-        if data is not None:
-            self._store_in_tier(block_id, data, dest)
+        self._stats.active_migrations += 1
+        try:
+            # Transfer data between simulated stores.
+            # In production, blocks always have data (real KV cache bytes).
+            # In tests with simulated stores, blocks may lack data if registered
+            # without the `data` parameter — in that case, skip the data transfer
+            # but still update tier tracking.
+            data = self._pop_from_tier(block_id, source)
+            if data is not None:
+                self._store_in_tier(block_id, data, dest)
 
-        # Count logical bytes transferred (based on block's recorded byte_size,
-        # not actual data size, since simulated stores may lack data).
-        self._stats.total_bytes_transferred += temp.byte_size
+            # Count logical bytes transferred (based on block's recorded byte_size,
+            # not actual data size, since simulated stores may lack data).
+            self._stats.total_bytes_transferred += temp.byte_size
 
-        # Update tier tracking
-        self._tier_blocks[source].discard(block_id)
-        self._tier_blocks[dest].add(block_id)
-        temp.tier = dest
-        temp.migration_count += 1
+            # Update tier tracking
+            self._tier_blocks[source].discard(block_id)
+            self._tier_blocks[dest].add(block_id)
+            temp.tier = dest
+            temp.migration_count += 1
 
-        latency = time.monotonic() - start
-        self._stats.total_migration_time += latency
+            latency = time.monotonic() - start
+            self._stats.total_migration_time += latency
 
-        # Update directional counter (tier enum values don't match stat field
-        # names, so use an explicit mapping rather than string interpolation).
-        direction_map = {
-            (KVTier.HOT, KVTier.WARM): "gpu_to_cpu_count",
-            (KVTier.WARM, KVTier.SSD): "cpu_to_ssd_count",
-            (KVTier.SSD, KVTier.WARM): "ssd_to_cpu_count",
-            (KVTier.WARM, KVTier.HOT): "cpu_to_gpu_count",
-            (KVTier.HOT, KVTier.SSD): "gpu_to_ssd_count",
-            (KVTier.SSD, KVTier.HOT): "ssd_to_gpu_count",
-        }
-        key = direction_map.get((source, dest))
-        if key is not None:
-            setattr(self._stats, key, getattr(self._stats, key) + 1)
+            # Update directional counter (tier enum values don't match stat field
+            # names, so use an explicit mapping rather than string interpolation).
+            direction_map = {
+                (KVTier.HOT, KVTier.WARM): "gpu_to_cpu_count",
+                (KVTier.WARM, KVTier.SSD): "cpu_to_ssd_count",
+                (KVTier.SSD, KVTier.WARM): "ssd_to_cpu_count",
+                (KVTier.WARM, KVTier.HOT): "cpu_to_gpu_count",
+                (KVTier.HOT, KVTier.SSD): "gpu_to_ssd_count",
+                (KVTier.SSD, KVTier.HOT): "ssd_to_gpu_count",
+            }
+            key = direction_map.get((source, dest))
+            if key is not None:
+                setattr(self._stats, key, getattr(self._stats, key) + 1)
 
-        record = MigrationRecord(
-            block_id=block_id,
-            source_tier=source,
-            dest_tier=dest,
-            bytes_transferred=temp.byte_size,
-            latency_seconds=latency,
-            success=True,
-        )
+            record = MigrationRecord(
+                block_id=block_id,
+                source_tier=source,
+                dest_tier=dest,
+                bytes_transferred=temp.byte_size,
+                latency_seconds=latency,
+                success=True,
+            )
 
-        # Record in history (deque auto-trims to maxlen)
-        self._migration_history.append(record)
+            # Record in history (deque auto-trims to maxlen)
+            self._migration_history.append(record)
 
-        return record
+            return record
+        finally:
+            self._stats.active_migrations -= 1
 
     def _store_in_tier(self, block_id: int, data: bytes, tier: KVTier) -> None:
         """Store data in the specified tier's simulated store."""

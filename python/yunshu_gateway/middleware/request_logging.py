@@ -11,6 +11,7 @@ track_active_requests middleware in main.py, not here.
 
 import os
 import logging
+import threading
 import time
 import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -57,18 +58,25 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     SKIP_PATHS = {"/health", "/health/ready", "/health/live", "/metrics", "/docs", "/openapi.json", "/redoc"}
 
-    # Periodic memory pressure check (avoid checking every single request)
+    # Periodic memory pressure check (avoid checking every single request).
+    # Use threading.Lock for safe concurrent access across async coroutines
+    # (asyncio is single-threaded in practice, but thread-safety is defensive).
     _last_mem_check: float = 0.0
     _mem_check_interval: float = 10.0  # seconds
+    _mem_check_lock = threading.Lock()
 
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:24]}"
         request.state.request_id = request_id
 
-        # Periodic memory pressure check
+        # Periodic memory pressure check (thread-safe compare-and-swap)
         now = time.monotonic()
-        if now - RequestLoggingMiddleware._last_mem_check >= RequestLoggingMiddleware._mem_check_interval:
-            RequestLoggingMiddleware._last_mem_check = now
+        should_check = False
+        with RequestLoggingMiddleware._mem_check_lock:
+            if now - RequestLoggingMiddleware._last_mem_check >= RequestLoggingMiddleware._mem_check_interval:
+                RequestLoggingMiddleware._last_mem_check = now
+                should_check = True
+        if should_check:
             _check_memory_pressure()
 
         t0 = time.monotonic()
@@ -83,7 +91,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             raise
 
         elapsed = time.monotonic() - t0
-        response.headers["X-Request-ID"] = request_id
+        try:
+            response.headers["X-Request-ID"] = request_id
+        except (TypeError, AttributeError):
+            # Response headers may be immutable for some response types
+            # (e.g., StreamingResponse from certain middleware); skip gracefully.
+            pass
 
         if request.url.path not in self.SKIP_PATHS:
             level = logging.DEBUG

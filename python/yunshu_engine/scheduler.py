@@ -1931,10 +1931,14 @@ class Scheduler:
             if not self.running:
                 break
 
-            # Exclude requests already preempted too many times
+            # Exclude requests already preempted too many times, and requests
+            # pending abort (preempting an aborted request wastes KV extraction
+            # work and can cause the abort to miss the request if it's been
+            # moved from running to waiting between _process_aborts and here).
             eligible = {
                 rid for rid in self.running
                 if self.running[rid].num_preemptions < self._MAX_PREEMPTIONS_PER_REQUEST
+                and rid not in self._pending_abort_ids
             }
             if not eligible:
                 break
@@ -1968,7 +1972,7 @@ class Scheduler:
 
         return preempted
 
-    def _preempt_request(self, request: Request, count_as_preemption: bool = True) -> None:
+    def _preempt_request(self, request: Request) -> None:
         """Preempt a running request and return it to the waiting queue.
 
         vLLM block-level preemption with partial recomputation (SCHED-1):
@@ -2103,13 +2107,31 @@ class Scheduler:
             prompt_len = getattr(request, 'num_prompt_tokens', 0) or len(request.prompt_token_ids)
             request.num_computed_tokens = min(cached_prefix, request.num_computed_tokens, prompt_len)
             request.batch_uid = None
-            if count_as_preemption:
-                request.num_preemptions += 1
+            # BUG FIX: Always increment num_preemptions for both priority
+            # preemption and retraction.  Previously, retraction left
+            # num_preemptions at 0, causing _schedule_waiting to
+            # double-count the request in self._num_requests on re-insertion
+            # (line: "if getattr(req, 'num_preemptions', 0) == 0").
+            # The _MAX_PREEMPTIONS_PER_REQUEST cap in _preempt_lowest_priority
+            # now covers both priority preemption and retraction, which is
+            # desirable — a request evicted 3 times for any reason should be
+            # protected from further livelock.
+            request.num_preemptions += 1
             # Clear stale output tokens from pre-preemption generation.
             # When re-scheduled, the prompt is re-prefilled and generation
             # restarts from scratch — old tokens are invalid.
             request.output_token_ids = []
             request.output_text = ""
+            # BUG FIX: Reset cached_tokens so re-insertion recalculates it.
+            # Without this, stale cached_tokens from the original prefill
+            # persists and gets reported in RequestOutput.cached_tokens,
+            # over-reporting cache hits to the client / billing.
+            request.cached_tokens = 0
+            # BUG FIX: Clear stale finish_reason from the original lifecycle.
+            # If the request was previously finished (e.g. thinking budget
+            # overflow) and then preempted, the stale finish_reason would be
+            # reported in the error output if re-insertion fails (line 1119).
+            request.finish_reason = None
 
             self.waiting.push_front(request, priority=request.sampling_params.priority)
 
@@ -2129,8 +2151,9 @@ class Scheduler:
             )
             request.status = RequestStatus.PREEMPTED
             request.batch_uid = None
-            if count_as_preemption:
-                request.num_preemptions += 1
+            request.num_preemptions += 1
+            request.cached_tokens = 0
+            request.finish_reason = None
             self.waiting.push_front(request, priority=request.sampling_params.priority)
 
     def _retract_decode_requests(self, count: int) -> int:
@@ -2141,10 +2164,10 @@ class Scheduler:
         Retracted requests are placed at the front of the waiting queue and
         will be re-inserted with their existing KV state (via prefix cache).
 
-        Unlike priority-based preemption, retraction does NOT increment
-        num_preemptions. This prevents retraction from exhausting the
-        _MAX_PREEMPTIONS_PER_REQUEST cap that protects individual requests
-        from preemption livelock.
+        Retraction now increments num_preemptions (same as priority preemption),
+        which prevents _num_requests double-counting on re-insertion and makes
+        the _MAX_PREEMPTIONS_PER_REQUEST cap cover both eviction types — a
+        request evicted 3 times for any reason should be protected from livelock.
 
         Args:
             count: Maximum number of requests to retract.
@@ -2164,7 +2187,7 @@ class Scheduler:
             if retracted >= count:
                 break
             self.running.pop(victim.request_id, None)
-            self._preempt_request(victim, count_as_preemption=False)
+            self._preempt_request(victim)
             retracted += 1
 
         return retracted

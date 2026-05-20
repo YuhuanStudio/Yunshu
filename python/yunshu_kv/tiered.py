@@ -286,7 +286,15 @@ class SSDCacheStore:
                 self._index.pop(block_hash, None)
                 return None
             except Exception as e:
-                logger.warning(f"Failed to load SSD cache block: {e}")
+                # Corrupt or unreadable block — remove from index so future
+                # lookups don't retry a known-bad entry, and reclaim the
+                # accounting space.  The orphaned file on disk is harmless.
+                logger.warning(
+                    "Corrupt SSD cache block 0x%x, removing from index: %s",
+                    block_hash, e,
+                )
+                self._current_size_bytes = max(0, self._current_size_bytes - entry.size_bytes)
+                self._index.pop(block_hash, None)
                 return None
 
     def contains(self, block_hash: int) -> bool:
@@ -679,6 +687,7 @@ class BackgroundSSDFlush:
         self._thread: threading.Thread | None = None
         self._flush_count: int = 0
         self._last_flush_time: float = 0.0
+        self._stats_lock = threading.Lock()
 
     def start(self) -> None:
         """Start the background flush thread (daemon)."""
@@ -732,8 +741,9 @@ class BackgroundSSDFlush:
                         "Failed to flush block 0x%x to SSD: %s",
                         block_hash, e,
                     )
-        self._flush_count += 1
-        self._last_flush_time = time.monotonic()
+        with self._stats_lock:
+            self._flush_count += 1
+            self._last_flush_time = time.monotonic()
         return flushed
 
     def _run(self) -> None:
@@ -748,8 +758,9 @@ class BackgroundSSDFlush:
 
     def get_stats(self) -> dict:
         """Return flush thread statistics."""
-        return {
-            "flush_count": self._flush_count,
-            "last_flush_time": self._last_flush_time,
-            "running": self._thread is not None and self._thread.is_alive(),
-        }
+        with self._stats_lock:
+            return {
+                "flush_count": self._flush_count,
+                "last_flush_time": self._last_flush_time,
+                "running": self._thread is not None and self._thread.is_alive(),
+            }

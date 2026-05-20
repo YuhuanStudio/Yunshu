@@ -438,9 +438,13 @@ class DPRouterMiddleware(BaseHTTPMiddleware):
         if node_id is not None:
             lb.record_end(node_id, latency_ms, success=success)
 
-        # Add tracing headers
+        # Add tracing headers (some response types have immutable headers,
+        # e.g. certain StreamingResponse wrappers — skip gracefully if so).
         if node_id is not None:
-            response.headers["X-DP-Node"] = node_id
-            response.headers["X-DP-Latency"] = f"{latency_ms:.2f}"
+            try:
+                response.headers["X-DP-Node"] = node_id
+                response.headers["X-DP-Latency"] = f"{latency_ms:.2f}"
+            except (TypeError, AttributeError):
+                pass
 
         return response

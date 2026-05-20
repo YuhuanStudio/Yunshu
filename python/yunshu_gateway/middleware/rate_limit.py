@@ -232,10 +232,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     },
                     headers={"Retry-After": str(retry_after)},
                 )
-            # Key-level rate limit passed — still apply IP-level rate limit
-            # for defense-in-depth (prevents single key from unlimited IPs).
+            # Key-level rate limit passed — skip IP-level rate limiting.
+            # RBAC keys have their own per-key bucket; applying IP-level too
+            # would be redundant and could waste the RBAC token if IP bucket rejects.
+            return await call_next(request)
 
-        # Per-IP rate limiting (LRU + TTL safe) — always applied
+        # Per-IP rate limiting (LRU + TTL safe) — only for non-RBAC requests
         # Security: only trust X-Forwarded-For when the direct client is a
         # configured trusted proxy. This prevents header spoofing attacks.
         direct_ip = request.client.host if request.client else "unknown"

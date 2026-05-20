@@ -23,6 +23,19 @@ from starlette.background import BackgroundTask
 logger = logging.getLogger(__name__)
 
 
+async def _chain_background(existing_bg: BackgroundTask, cleanup_fn) -> None:
+    """Run an existing BackgroundTask, then a cleanup coroutine.
+
+    Used to chain tenant finish_request() after an already-registered
+    background task (e.g., streaming cleanup) without overwriting it.
+    """
+    try:
+        if existing_bg is not None:
+            await existing_bg()
+    finally:
+        cleanup_fn()
+
+
 # Paths served by the Anthropic router — must use Anthropic error format.
 # Use exact matching, not endswith, to avoid overmatching paths like
 # /api/v1/admin/messages that merely end in '/messages'.
@@ -162,9 +175,19 @@ class TenantAuthMiddleware(BaseHTTPMiddleware):
                     )
                 request.state.tenant = tenant
                 response = await call_next(request)
-                # Decrement active_requests when the response finishes
+                # Decrement active_requests when the response finishes.
+                # Chain the tenant cleanup after any existing background task
+                # to avoid overwriting a previously set cleanup callback.
                 if isinstance(response, StreamingResponse):
-                    response.background = BackgroundTask(tenant.finish_request)
+                    existing_bg = response.background
+                    if existing_bg is not None:
+                        # Create a chained task that runs the existing task first,
+                        # then the tenant cleanup.
+                        response.background = BackgroundTask(
+                            _chain_background, existing_bg, tenant.finish_request,
+                        )
+                    else:
+                        response.background = BackgroundTask(tenant.finish_request)
                 else:
                     tenant.finish_request()
                 return response
