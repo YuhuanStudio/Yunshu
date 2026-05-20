@@ -1421,7 +1421,6 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n".encode("utf-8")
         error_event = {"type": "error", "error": {"type": "overloaded_error", "message": "Out of GPU memory"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
-        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     except Exception as e:
         logger.error("Anthropic streaming error", exc_info=True)
         # Emit message_start if it was never sent (error before first engine output)
@@ -1432,7 +1431,6 @@ async def _stream_anthropic(
             yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n".encode("utf-8")
         error_event = {"type": "error", "error": {"type": "api_error", "message": "Internal server error"}}
         yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode("utf-8")
-        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode("utf-8")
     finally:
         _release_lora_adapter(engine, loaded_adapter)
         if _anth_tracker is not None:

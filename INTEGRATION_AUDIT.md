@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-20 — Waves 282–296: 15 waves, 400+ bugs fixed. Latest: Wave 296 engine_core memory-aware scheduling (CRITICAL rejection bypass, 64x size underestimate, 50% budget miss). All waves use parallel agents. Key CRITICAL fixes: SSD stale prune data loss, prompt cache overwrite, forward batch position IDs, trim_kv_cache no-op, memory rejection ignored, RadixTree insert crash)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–303: 22 waves, 430+ bugs fixed. Latest: Wave 303 streaming + grammar CRITICAL fixes (50ms false abort, unbounded regex premature termination, allOf schema merge, ngram KV corruption, suffix leak, brace tracking, Anthropic error protocol). All waves use parallel agents.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -2778,3 +2778,12 @@ oMLX 的 MCP 是 **Client** — 讓 LLM 調用外部 MCP 工具服務器 (文件
 - **MEDIUM**: event_sourcing `snapshots_taken` incremented outside lock (data race)
 - **MEDIUM**: request_lifecycle abort finish_reason doesn't report failure to concurrency controller
 - **MEDIUM**: video engine `stop()` now provides both sync (`stop()`) and async (`stop_async()`) paths for executor-routed GPU cleanup
+
+### Wave 303 — CRITICAL Streaming + Grammar Fixes (8 fixes, 7 files)
+- **CRITICAL**: engine_core `stream_outputs` 50ms false abort — non-asyncio.Event cancel_event uses `asyncio.sleep(0.05)` polling; after 50ms, sleep completes and code breaks the output loop even though cancel is NOT set. Fixed: check `cancel_event.is_set()` before breaking
+- **CRITICAL**: `RegexConstraint.advance()` sets `_done=True` on first full match for unbounded patterns (`\d+`, `a*`, `[abc]+`), terminating generation after 1 character. Fixed: only mark done when no valid extension characters exist
+- **CRITICAL**: `allOf` merging in json_schema.py only copies `properties`, ignoring `required` and `items` — validation constraints silently dropped. Fixed: merge `required` (deduped) and `items`, persist back into schema
+- **HIGH**: ngram streaming KV cache corruption — after trimming rejected draft tokens, the bonus/correction token's KV entry is lost (it was at position `accepted` in the trimmed range). Fixed: feed correction token through model to populate its KV entry after trim (GPU + CPU paths)
+- **HIGH**: ngram streaming `_remaining` suffix leak — stop suffix not stripped from finalized text, partial suffix text leaks into output. Fixed: strip suffix from `_remaining` (matching MTP path pattern)
+- **HIGH**: `extract_tool_calls_v2` brace counter ignores braces inside JSON strings (`{"name": "test{"}` increments depth incorrectly). Fixed: string-aware brace tracking with escape handling
+- **HIGH**: Anthropic streaming `message_stop` emitted after `error` events in error handlers — protocol violation. Fixed: remove `message_stop` from error paths, stream ends with error event

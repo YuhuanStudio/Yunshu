@@ -533,9 +533,18 @@ class RegexConstraint:
         if self._done:
             return
         self._text_buffer += token_text
-        # Check if current buffer is a full match via DFA (fast)
+        # Only mark done if the buffer is a full match AND no further
+        # characters can extend the match.  For unbounded patterns (e.g.,
+        # \d+, a*, [a-z]+) a partial buffer like "1" already fully matches,
+        # but the model should keep generating — setting _done=True here
+        # would prematurely terminate the output.
         if self._dfa.is_full_match(self._text_buffer):
-            self._done = True
+            # Check if ANY character can extend the match
+            char_range = list(range(32, 127))
+            char_range.extend([ord('\n'), ord('\t'), ord('\r')])
+            extendable = self._dfa.valid_next_chars(self._text_buffer, char_range)
+            if not extendable:
+                self._done = True
 
     def checkpoint(self) -> dict[str, Any]:
         """Save current state for rollback (speculative decoding support)."""

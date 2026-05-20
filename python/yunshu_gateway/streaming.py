@@ -564,15 +564,26 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
 
     # Pattern 5: Mistral-style {"function": {"name": ..., "arguments": ...}}
     # Try to find and parse JSON objects containing "function" key.
-    # Uses a brace counter that resets on negative depth to handle
-    # unmatched closing braces in surrounding text (e.g. model output).
+    # Uses a brace counter with string-awareness to handle braces
+    # inside JSON string values (e.g., {"name": "test{"}).
     _brace_depth = 0
+    _in_string = False
+    _escape_next = False
     _json_start = -1
     for i, ch in enumerate(text):
+        if _escape_next:
+            _escape_next = False
+            continue
+        if ch == '\\' and _in_string:
+            _escape_next = True
+            continue
+        if ch == '"':
+            _in_string = not _in_string
+            continue
+        if _in_string:
+            continue
         if ch == '{':
             if _brace_depth <= 0:
-                # Start of a new top-level object (also resets after
-                # stray closing braces drove depth negative).
                 _json_start = i
                 _brace_depth = 1
             else:
@@ -583,10 +594,8 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                 candidate = text[_json_start:i + 1]
                 try:
                     data = json.loads(candidate)
-                    # Mistral format: {"function": {"name": ...}}
                     func = data.get("function", {})
                     name = func.get("name", "") if isinstance(func, dict) else ""
-                    # Also handle bare {"name": ..., "arguments": ...} format
                     if not name and "name" in data and isinstance(data.get("name"), str):
                         name = data["name"]
                         func = data
@@ -599,8 +608,6 @@ def extract_tool_calls_v2(text: str) -> list[dict]:
                     pass
                 _json_start = -1
             elif _brace_depth < 0:
-                # Unmatched closing brace — reset counter so the next
-                # opening brace starts a fresh JSON object.
                 _brace_depth = 0
                 _json_start = -1
     if calls:

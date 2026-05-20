@@ -5273,6 +5273,8 @@ class BatchedEngine:
                         # Trim KV cache to remove entries for rejected draft tokens.
                         # The batch forward populated the cache with n_draft entries,
                         # but only `accepted` were verified. Trim the rejected ones.
+                        # Then feed the bonus/correction token so its KV entry is
+                        # present for the next iteration's batch forward.
                         if accepted < n_draft:
                             try:
                                 from mlx_lm.models.cache import trim_prompt_cache
@@ -5281,6 +5283,10 @@ class BatchedEngine:
                                 for c in cache:
                                     if hasattr(c, "trim"):
                                         c.trim(n_draft - accepted)
+                            # Feed the correction token to populate its KV entry
+                            if not stopped and tokens:
+                                _correction = tokens[-1]
+                                _ = model(mx.array([[_correction]]), cache=cache)
                     else:
                         # CPU sequential fallback
                         for i in range(n_draft):
@@ -5331,6 +5337,10 @@ class BatchedEngine:
                                 for c in cache:
                                     if hasattr(c, "trim"):
                                         c.trim(n_draft - accepted)
+                            # Feed the correction token to populate its KV entry
+                            if not stopped and tokens:
+                                _correction = tokens[-1]
+                                _ = model(mx.array([[_correction]]), cache=cache)
 
                     self._ngram_stats["accepted"] += accepted
                     if self._adaptive_spec is not None:
@@ -5338,6 +5348,14 @@ class BatchedEngine:
                     if stopped:
                         detokenizer.finalize()
                         _remaining = detokenizer.last_segment
+                        # Trim stop suffix from remaining text — the suffix may
+                        # span multiple tokens, so detokenizer.text still
+                        # contains it even after finalize().
+                        if stop_suffixes and _remaining:
+                            for s in stop_suffixes:
+                                if _remaining.endswith(s):
+                                    _remaining = _remaining[:-len(s)]
+                                    break
                         if _remaining:
                             _put((_remaining, n_tok, None, 0))
                         if prefix_cache is not None:

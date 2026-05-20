@@ -316,15 +316,33 @@ class JsonSchemaConstraint:
         if "const" in schema:
             return "const"
         if "allOf" in schema:
-            # Merge types from all sub-schemas; prefer "object" if any
-            # sub-schema has properties.
+            # Merge fields from all sub-schemas: properties, required,
+            # items, etc.  Previously only properties were merged, causing
+            # required constraints from sub-schemas to be silently dropped.
             merged_props: dict = {}
+            merged_required: list[str] = []
+            merged_items: dict | None = None
             for sub in schema["allOf"]:
                 if isinstance(sub, dict):
                     if "properties" in sub:
                         merged_props.update(sub["properties"])
+                    if "required" in sub and isinstance(sub["required"], list):
+                        merged_required.extend(sub["required"])
+                    if "items" in sub and isinstance(sub["items"], dict):
+                        if merged_items is None:
+                            merged_items = sub["items"].copy()
+                        else:
+                            merged_items.update(sub["items"])
             if merged_props:
+                # Persist merged results back into the schema so downstream
+                # constraint resolution sees the full merged definition.
+                schema["properties"] = merged_props
+                if merged_required:
+                    schema["required"] = list(dict.fromkeys(merged_required))
                 return "object"
+            if merged_items is not None:
+                schema["items"] = merged_items
+                return "array"
             # Otherwise collect unique types from sub-schemas
             types: list[str] = []
             for sub in schema["allOf"]:

@@ -60,7 +60,14 @@ class TestRegexConstraint:
     def test_advance_invalid_then_valid(self):
         c = RegexConstraint(r"[abc]+")
         c.advance("abc")
-        assert c.is_done
+        # Unbounded pattern [abc]+ — "abc" is a full match but can be
+        # extended (e.g., "abca"), so is_done must be False.  Termination
+        # should come from max_tokens/stop_tokens/EOS, not the constraint.
+        assert not c.is_done
+        # Bounded pattern — "abc" fully matches and cannot be extended
+        c2 = RegexConstraint(r"[abc]{3}")
+        c2.advance("abc")
+        assert c2.is_done
 
     def test_get_allowed_tokens_initial(self):
         tok = FakeTokenizer()
@@ -94,6 +101,10 @@ class TestRegexConstraint:
     def test_email_pattern(self):
         c = RegexConstraint(r"[a-z]+@[a-z]+\.[a-z]{2,4}")
         c.advance("test@example.com")
+        # {2,4} allows up to 4 chars — "com" (3) can extend to "comm" (4),
+        # so the constraint must NOT mark done yet.
+        assert not c.is_done
+        c.advance("m")  # Now "comm" = 4 chars, max of {2,4} reached
         assert c.is_done
 
     def test_date_pattern(self):
