@@ -2151,6 +2151,7 @@ class BatchedEngine:
                                     if token != think_end_token:
                                         tokens.append(think_end_token)
                                         _thinking_tokens.append(think_end_token)
+                                        detokenizer.add_token(think_end_token)
                                     break
                     cleanup_rope(model)
                     spec_prefill_done = True
@@ -2221,12 +2222,15 @@ class BatchedEngine:
                             tokens.pop()  # Exclude stop token from output
                             _stopped_by_stop_id = True
                             break
-                        if stop_suffixes:
-                            detokenizer.add_token(token)
-                            if any(detokenizer.text.endswith(s) for s in stop_suffixes):
-                                tokens.pop()  # Exclude suffix-triggering token from count
-                                _stopped_by_suffix = True
-                                break
+                        # Always add token to detokenizer for incremental state
+                        # consistency — previously only added when stop_suffixes
+                        # was non-empty, leaving the detokenizer empty and its
+                        # state stale when no suffix matching was requested.
+                        detokenizer.add_token(token)
+                        if stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes):
+                            tokens.pop()  # Exclude suffix-triggering token from count
+                            _stopped_by_suffix = True
+                            break
                         # Cancellation check
                         if _is_cancelled(cancel_event):
                             mx.synchronize()
@@ -2254,9 +2258,15 @@ class BatchedEngine:
                                 _in_thinking = False
                                 # Add forced closing tag to tokens so it appears in
                                 # tokenizer.decode(tokens) output (non-streaming path).
+                                # Also add to detokenizer so detokenizer.text stays
+                                # consistent with the tokens list — previously the
+                                # forced tag was only in tokens[], causing
+                                # detokenizer.text to miss it when suffix matching
+                                # chose the detokenizer path for output assembly.
                                 if token != think_end_token:
                                     tokens.append(think_end_token)
                                     _thinking_tokens.append(think_end_token)
+                                    detokenizer.add_token(think_end_token)
                                 break
 
             # Cache the completed KV state for future prefix matching
@@ -4746,7 +4756,27 @@ class BatchedEngine:
                     _maybe_quantize_kv_cache(cache, self._kv_quant_start, self._kv_quant_group_size, self._kv_quant_bits)
                 prefix_cache.add(mx.array(input_ids), cache)
 
-                output_text = tokenizer.decode(tokens, skip_special_tokens=True)
+                # Finalize detokenizer to flush partial UTF-8 bytes before
+                # assembling output.  Without this, multi-byte characters
+                # at token boundaries can be truncated, causing incorrect
+                # suffix detection via detokenizer.text.endswith() above.
+                try:
+                    detokenizer.finalize()
+                except Exception:
+                    logger.debug("detokenizer finalize failed in n-gram spec", exc_info=True)
+
+                # Use detokenizer text when suffix matching is active (same
+                # pattern as _generate_fast) because tokenizer.decode(tokens)
+                # may contain a partial suffix that leaked across boundaries.
+                if _stopped_by_suffix and stop_suffixes:
+                    output_text = detokenizer.text
+                    for s in stop_suffixes:
+                        if output_text.endswith(s):
+                            output_text = output_text[:-len(s)]
+                            break
+                    output_text = _clean_special_tokens(output_text)
+                else:
+                    output_text = tokenizer.decode(tokens, skip_special_tokens=True)
                 mx.synchronize()
                 return tokens, output_text, [], ttft_s, matched, _stopped_by_suffix, _stopped_by_stop_id
             finally:
@@ -5929,6 +5959,16 @@ class BatchedEngine:
                 _put(("", len(generated), "length", None))
             except Exception as e:
                 logger.error(f"MTP streaming generation failed: {e}", exc_info=True)
+                # Finalize detokenizer to flush partial UTF-8 bytes before
+                # reporting the error — without this, any bytes buffered in
+                # the detokenizer's internal state are silently lost.
+                try:
+                    detokenizer.finalize()
+                    _final_segment = detokenizer.last_segment
+                    if _final_segment:
+                        _put((_final_segment, len(generated), None, None))
+                except Exception:
+                    logger.debug("detokenizer finalize in MTP error handler failed", exc_info=True)
                 try:
                     mx.synchronize()
                     mx.clear_cache()
