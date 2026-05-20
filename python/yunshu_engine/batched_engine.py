@@ -135,6 +135,64 @@ def _wrap_custom_logits_processor(proc):
     return _wrapped
 
 
+
+
+def _apply_spec_bonus_penalties(
+    logits: "mx.array",
+    all_token_ids: list[int],
+    prompt_token_count: int,
+    repetition_penalty: float = 1.0,
+    frequency_penalty: float = 0.0,
+    presence_penalty: float = 0.0,
+    logit_bias: dict[int, float] | None = None,
+    recent_ctx: int = 20,
+) -> "mx.array":
+    """Apply penalty and logit_bias processors to bonus token logits.
+
+    For speculative decode paths, penalties are only applied to the BONUS
+    token (first new token after acceptance) since draft tokens are already
+    committed.  This matches vLLM's spec-decode penalty strategy.
+
+    Args:
+        logits: 1-D or 2-D logits array (vocab_size,) or (1, vocab_size).
+        all_token_ids: Full token history (prompt + generated).
+        prompt_token_count: Number of prompt tokens (for freq/presence penalty).
+        repetition_penalty: Multiplier for repeated tokens (>1 = penalize).
+        frequency_penalty: Subtractive penalty proportional to token count.
+        presence_penalty: Subtractive penalty for any token seen >0 times.
+        logit_bias: Additive bias per token ID.
+        recent_ctx: How many recent tokens to check for repetition penalty.
+
+    Returns:
+        Modified logits array (same shape).
+    """
+    import mlx.core as _mx
+
+    # Generated tokens only (exclude prompt)
+    gen_tokens = all_token_ids[prompt_token_count:] if len(all_token_ids) > prompt_token_count else []
+
+    if repetition_penalty != 1.0 and len(gen_tokens) > 0:
+        recent = gen_tokens[-recent_ctx:]
+        sel = logits[..., recent]
+        sel = _mx.where(sel < 0, sel * repetition_penalty, sel / repetition_penalty)
+        logits = logits.at[..., _mx.array(recent)].set(sel)
+
+    if (frequency_penalty != 0.0 or presence_penalty != 0.0) and len(gen_tokens) > 0:
+        counts: dict[int, int] = {}
+        for t in gen_tokens:
+            counts[t] = counts.get(t, 0) + 1
+        for tid, cnt in counts.items():
+            if frequency_penalty > 0:
+                logits = logits.at[..., tid].set(logits[..., tid] - frequency_penalty * cnt)
+            if presence_penalty > 0 and cnt > 0:
+                logits = logits.at[..., tid].set(logits[..., tid] - presence_penalty)
+
+    if logit_bias:
+        for tid, bias in logit_bias.items():
+            logits = logits.at[..., tid].set(logits[..., tid] + bias)
+
+    return logits
+
 def _maybe_quantize_kv_cache(
     prompt_cache: list,
     quantized_kv_start: int,
@@ -4364,6 +4422,57 @@ class BatchedEngine:
                 verify_result = self._spec_decoder.verify_draft(
                     draft_result, current_ids, target_cache,
                 )
+
+                # SP-PEN: Apply penalty/bias to bonus token logits.
+                # After verify_draft, target_cache has K+1 entries but only the
+                # first (accepted_count + 1) are valid.  Trim the rejected entries
+                # so the cache is consistent, then do a single forward pass for
+                # the bonus position to get fresh logits with penalties applied.
+                _has_penalties = (
+                    repetition_penalty != 1.0
+                    or frequency_penalty != 0.0
+                    or presence_penalty != 0.0
+                    or (logit_bias is not None and len(logit_bias) > 0)
+                )
+                if _has_penalties:
+                    import mlx.core as _sp_mx
+                    K_local = len(draft_result.token_ids)
+                    ac = verify_result.accepted_count
+                    if ac < K_local:
+                        # Trim rejected entries from target cache
+                        from mlx_lm.models.cache import trim_prompt_cache
+                        _trim_n = K_local - ac
+                        try:
+                            trim_prompt_cache(target_cache, _trim_n)
+                        except Exception:
+                            for _c in target_cache:
+                                if hasattr(_c, "trim"):
+                                    _c.trim(_trim_n)
+                    # Feed last accepted token (or current_ids if none accepted) to get bonus logits
+                    _bonus_input = mx.array([[verify_result.accepted_ids[-1]]]) if verify_result.accepted_ids else current_ids
+                    _bonus_out = self._model(_bonus_input, cache=target_cache)
+                    _bonus_logits = _bonus_out.logits if hasattr(_bonus_out, 'logits') else _bonus_out
+                    _bonus_logits = _bonus_logits[0, -1, :]
+                    # Build token history: prompt + all generated so far + accepted drafts
+                    _token_hist = list(input_ids) + generated_tokens + verify_result.accepted_ids
+                    _bonus_logits = _apply_spec_bonus_penalties(
+                        _bonus_logits, _token_hist, len(input_ids),
+                        repetition_penalty=repetition_penalty,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
+                        logit_bias=logit_bias,
+                    )
+                    # Re-sample bonus token from penalized logits
+                    _bonus_id = int(_sp_mx.argmax(_bonus_logits).item())
+                    # Overwrite bonus token in verify_result (simple reconstruction)
+                    verify_result = type(verify_result)(
+                        accepted_count=verify_result.accepted_count,
+                        accepted_ids=verify_result.accepted_ids,
+                        rejected_at=verify_result.rejected_at,
+                        bonus_token_id=_bonus_id,
+                        target_logprobs=verify_result.target_logprobs,
+                    )
+
                 return draft_result, verify_result
 
             _, verify_result = await loop.run_in_executor(executor, _spec_step)
@@ -5349,6 +5458,12 @@ class BatchedEngine:
                                 _unregister_inflight()
                                 return
                             detokenizer.add_token(token_id)
+                            if _ng_track_thinking(token_id):
+                                if prefix_cache is not None:
+                                    prefix_cache.add(ids, cache)
+                                mx.synchronize()
+                                _unregister_inflight()
+                                return
                             suffix_hit = False
                             if stop_suffixes:
                                 suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
@@ -5392,6 +5507,27 @@ class BatchedEngine:
                         )
                         accepted = rej_result.accepted_count
 
+                        # NG-PEN: Apply penalty/bias to bonus position logits.
+                        # Only the bonus token (first new token after accepted drafts)
+                        # gets penalties — draft tokens are already committed.
+                        _has_ng_pen = (
+                            repetition_penalty != 1.0
+                            or frequency_penalty != 0.0
+                            or presence_penalty != 0.0
+                            or (logit_bias is not None and len(logit_bias) > 0)
+                        )
+                        if _has_ng_pen and accepted < n_draft:
+                            _ng_bonus_logits = batch_logits[0, accepted, :]
+                            _ng_token_hist = list(input_ids) + all_token_ids
+                            _ng_bonus_logits = _apply_spec_bonus_penalties(
+                                _ng_bonus_logits, _ng_token_hist, len(input_ids),
+                                repetition_penalty=repetition_penalty,
+                                frequency_penalty=frequency_penalty,
+                                presence_penalty=presence_penalty,
+                                logit_bias=logit_bias,
+                            )
+                            batch_logits = batch_logits.at[0, accepted, :].set(_ng_bonus_logits)
+
                         for i in range(n_draft):
                             if i < accepted:
                                 accepted_id = draft_ids[i]
@@ -5412,6 +5548,9 @@ class BatchedEngine:
                                 stopped = True
                             else:
                                 detokenizer.add_token(accepted_id)
+                                if _ng_track_thinking(accepted_id):
+                                    stopped = True
+                                    break
                                 suffix_hit = False
                                 if stop_suffixes:
                                     suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
@@ -5452,7 +5591,27 @@ class BatchedEngine:
                                 _ = model(mx.array([[_correction]]), cache=cache)
                     else:
                         # CPU sequential fallback
+                        # NG-PEN: Apply penalty/bias to the bonus/correction logits
+                        # at the first rejection position (the first "new" token).
+                        _has_ng_pen_cpu = (
+                            repetition_penalty != 1.0
+                            or frequency_penalty != 0.0
+                            or presence_penalty != 0.0
+                            or (logit_bias is not None and len(logit_bias) > 0)
+                        )
                         for i in range(n_draft):
+                            # Apply penalties at the first rejection position only
+                            if _has_ng_pen_cpu and i == accepted:
+                                _ng_bonus_logits_cpu = batch_logits[0, i, :]
+                                _ng_token_hist_cpu = list(input_ids) + all_token_ids
+                                _ng_bonus_logits_cpu = _apply_spec_bonus_penalties(
+                                    _ng_bonus_logits_cpu, _ng_token_hist_cpu, len(input_ids),
+                                    repetition_penalty=repetition_penalty,
+                                    frequency_penalty=frequency_penalty,
+                                    presence_penalty=presence_penalty,
+                                    logit_bias=logit_bias,
+                                )
+                                batch_logits = batch_logits.at[0, i, :].set(_ng_bonus_logits_cpu)
                             model_pick = int(mx.argmax(batch_logits[0, i], axis=-1).item())
                             draft_id = draft_ids[i]
                             is_accept = (model_pick == draft_id)
@@ -5470,6 +5629,9 @@ class BatchedEngine:
                                 stopped = True
                             else:
                                 detokenizer.add_token(accepted_id)
+                                if _ng_track_thinking(accepted_id):
+                                    stopped = True
+                                    break
                                 suffix_hit = False
                                 if stop_suffixes:
                                     suffix_hit = any(detokenizer.text.endswith(s) for s in stop_suffixes)
@@ -5543,6 +5705,20 @@ class BatchedEngine:
         _ng_ttft_recorded = False
         _ng_ttft_ms_val = 0.0
         _ng_gen_t0 = time.perf_counter()
+        # Consumer-side thinking state mirrors GPU-side tracking for reporting
+        _ng_consumer_think_start = None
+        _ng_consumer_think_end = None
+        _ng_consumer_in_thinking = False
+        _ng_consumer_thinking_tokens = 0
+        if thinking_budget is not None or enable_thinking:
+            try:
+                _ts_ids = tokenizer.encode("<think")
+                _te_ids = tokenizer.encode("</think")
+                if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                    _ng_consumer_think_start = _ts_ids[0]
+                    _ng_consumer_think_end = _te_ids[0]
+            except Exception:
+                pass
         _ng_fp_lock = getattr(self, '_fast_path_lock', None)
         if _ng_fp_lock is not None:
             with _ng_fp_lock:
@@ -5609,6 +5785,14 @@ class BatchedEngine:
                     done = _fr_val is not None
                 accumulated += new_text
                 n_tok = tok_count
+                # Consumer-side thinking state tracking for reasoning_tokens reporting
+                if _ng_consumer_think_start is not None and isinstance(token_id, int):
+                    if not _ng_consumer_in_thinking and token_id == _ng_consumer_think_start:
+                        _ng_consumer_in_thinking = True
+                    elif _ng_consumer_in_thinking:
+                        _ng_consumer_thinking_tokens += 1
+                        if token_id == _ng_consumer_think_end:
+                            _ng_consumer_in_thinking = False
 
                 # Streaming backpressure: slow down if client can't keep up
                 if _backpressure.check_backpressure(_q.qsize()):
@@ -5649,7 +5833,7 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
-                    reasoning_tokens=0,
+                    reasoning_tokens=_ng_consumer_thinking_tokens if _ng_consumer_think_start is not None else 0,
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
                     ttft_ms=_ng_ttft_ms_val,
@@ -6141,6 +6325,48 @@ class BatchedEngine:
                 detokenizer = tokenizer.detokenizer
                 detokenizer.reset()
 
+                # Thinking budget enforcement — detect <think/</think via single-token IDs
+                _mtp_think_start_token = None
+                _mtp_think_end_token = None
+                if thinking_budget is not None or enable_thinking:
+                    try:
+                        _ts_ids = tokenizer.encode("<think")
+                        _te_ids = tokenizer.encode("</think")
+                        if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                            _mtp_think_start_token = _ts_ids[0]
+                            _mtp_think_end_token = _te_ids[0]
+                    except Exception:
+                        logger.debug("MTP streaming thinking token encode failed", exc_info=True)
+                _mtp_in_thinking = False
+                _mtp_thinking_tokens_used = 0
+
+                def _mtp_track_thinking(tid):
+                    """Track thinking state and enforce budget. Returns True if budget exceeded."""
+                    nonlocal _mtp_in_thinking, _mtp_thinking_tokens_used
+                    if _mtp_think_start_token is None:
+                        return False
+                    if not _mtp_in_thinking and tid == _mtp_think_start_token:
+                        _mtp_in_thinking = True
+                    elif _mtp_in_thinking:
+                        _mtp_thinking_tokens_used += 1
+                        if tid == _mtp_think_end_token:
+                            _mtp_in_thinking = False
+                            return False
+                        if (thinking_budget is not None
+                                and _mtp_thinking_tokens_used >= thinking_budget
+                                and _mtp_think_end_token is not None):
+                            _mtp_in_thinking = False
+                            # Force-insert </think token
+                            generated.append(_mtp_think_end_token)
+                            detokenizer.add_token(_mtp_think_end_token)
+                            _end_text = detokenizer.last_segment
+                            _n = len(generated)
+                            if _end_text:
+                                _put((_end_text, _n, None, _mtp_think_end_token))
+                            _put(("", _n, "stop", _mtp_think_end_token))
+                            return True
+                    return False
+
                 # Prefill
                 out, hidden = model(ids.reshape(1, -1), cache=cache, return_hidden=True)
                 mx.synchronize()
@@ -6162,6 +6388,7 @@ class BatchedEngine:
 
                 # Yield first token via incremental detokenizer
                 detokenizer.add_token(first)
+                _mtp_track_thinking(first)
                 chunk = _clean_special_tokens(detokenizer.last_segment)
                 _put((chunk, 1, None, first))
 
@@ -6192,6 +6419,26 @@ class BatchedEngine:
                     mx.synchronize()
                     # v0 MUST be greedy for spec decode acceptance check
                     v0 = int(mx.argmax(verify_out[0, 0, :]).item())
+                    # MTP-PEN: Apply penalty/bias to bonus token logits (v1).
+                    # Penalties are applied to the bonus token only — draft tokens
+                    # are already committed via acceptance check.
+                    _has_mtp_pen = (
+                        repetition_penalty != 1.0
+                        or frequency_penalty != 0.0
+                        or presence_penalty != 0.0
+                        or (logit_bias is not None and len(logit_bias) > 0)
+                    )
+                    _mtp_bonus_logits = verify_out[0, 1, :]
+                    if _has_mtp_pen:
+                        _mtp_token_hist = list(input_ids) + generated
+                        _mtp_bonus_logits = _apply_spec_bonus_penalties(
+                            _mtp_bonus_logits, _mtp_token_hist, len(input_ids),
+                            repetition_penalty=repetition_penalty,
+                            frequency_penalty=frequency_penalty,
+                            presence_penalty=presence_penalty,
+                            logit_bias=logit_bias,
+                        )
+                        verify_out = verify_out.at[0, 1, :].set(_mtp_bonus_logits)
                     # v1 (bonus) can use sampler for non-greedy output
                     if _mtp_sampler is not None:
                         v1 = int(_mtp_sampler(verify_out[0, 1:2, :]).item())
@@ -6209,6 +6456,9 @@ class BatchedEngine:
                             break
 
                         detokenizer.add_token(draft)
+                        if _mtp_track_thinking(draft):
+                            _early_stop = True
+                            break
                         # Check stop suffixes on draft token
                         _suffix_hit = stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes)
                         chunk = "" if _suffix_hit else _clean_special_tokens(detokenizer.last_segment)
@@ -6235,6 +6485,9 @@ class BatchedEngine:
                             break
 
                         detokenizer.add_token(v1)
+                        if _mtp_track_thinking(v1):
+                            _early_stop = True
+                            break
                         # Check stop suffixes on bonus token
                         _suffix_hit = stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes)
                         chunk = "" if _suffix_hit else _clean_special_tokens(detokenizer.last_segment)
@@ -6256,6 +6509,19 @@ class BatchedEngine:
                     else:
                         # Reject: restore rollback (zero-cost)
                         restore_rollback(cache)
+                        # MTP-PEN: Apply penalty/bias to rejection correction logits (v0).
+                        # The correction token is the first new token after the rejection.
+                        if _has_mtp_pen:
+                            _mtp_corr_logits = verify_out[0, 0, :]
+                            _mtp_token_hist_corr = list(input_ids) + generated
+                            _mtp_corr_logits = _apply_spec_bonus_penalties(
+                                _mtp_corr_logits, _mtp_token_hist_corr, len(input_ids),
+                                repetition_penalty=repetition_penalty,
+                                frequency_penalty=frequency_penalty,
+                                presence_penalty=presence_penalty,
+                                logit_bias=logit_bias,
+                            )
+                            verify_out = verify_out.at[0, 0, :].set(_mtp_corr_logits)
                         # Apply sampler to rejection correction token
                         if _mtp_sampler is not None:
                             v0 = int(_mtp_sampler(verify_out[0, 0:1, :]).item())
@@ -6267,6 +6533,9 @@ class BatchedEngine:
                             break
 
                         detokenizer.add_token(v0)
+                        if _mtp_track_thinking(v0):
+                            _early_stop = True
+                            break
                         # Check stop suffixes on rejection correction token
                         _suffix_hit = stop_suffixes and any(detokenizer.text.endswith(s) for s in stop_suffixes)
                         chunk = "" if _suffix_hit else _clean_special_tokens(detokenizer.last_segment)
@@ -6333,6 +6602,20 @@ class BatchedEngine:
         _mtp_ttft_recorded = False
         _mtp_ttft_ms_val = 0.0
         _mtp_gen_t0 = time.perf_counter()
+        # Consumer-side thinking state mirrors GPU-side tracking for reporting
+        _mtp_consumer_think_start = None
+        _mtp_consumer_think_end = None
+        _mtp_consumer_in_thinking = False
+        _mtp_consumer_thinking_tokens = 0
+        if thinking_budget is not None or enable_thinking:
+            try:
+                _ts_ids = tokenizer.encode("<think")
+                _te_ids = tokenizer.encode("</think")
+                if len(_ts_ids) == 1 and len(_te_ids) == 1:
+                    _mtp_consumer_think_start = _ts_ids[0]
+                    _mtp_consumer_think_end = _te_ids[0]
+            except Exception:
+                pass
         _mtp_fp_lock = getattr(self, '_fast_path_lock', None)
         if _mtp_fp_lock is not None:
             with _mtp_fp_lock:
@@ -6400,6 +6683,14 @@ class BatchedEngine:
                     done = _fr_val is not None
                 accumulated += new_text
                 n_tok = tok_count
+                # Consumer-side thinking state tracking for reasoning_tokens reporting
+                if _mtp_consumer_think_start is not None and isinstance(token_id, int):
+                    if not _mtp_consumer_in_thinking and token_id == _mtp_consumer_think_start:
+                        _mtp_consumer_in_thinking = True
+                    elif _mtp_consumer_in_thinking:
+                        _mtp_consumer_thinking_tokens += 1
+                        if token_id == _mtp_consumer_think_end:
+                            _mtp_consumer_in_thinking = False
 
                 # Streaming backpressure: slow down if client can't keep up
                 if _backpressure.check_backpressure(_q.qsize()):
@@ -6441,7 +6732,7 @@ class BatchedEngine:
                     completion_tokens=n_tok,
                     finished=done,
                     finish_reason=finish_reason,
-                    reasoning_tokens=0,
+                    reasoning_tokens=_mtp_consumer_thinking_tokens if _mtp_consumer_think_start is not None else 0,
                     cached_tokens=0,
                     logprobs=_chunk_logprobs,
                     ttft_ms=_mtp_ttft_ms_val,

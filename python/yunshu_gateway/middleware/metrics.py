@@ -329,6 +329,26 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                                     pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
                             except Exception:
                                 logger.debug("scheduler monitoring gauge population failed", exc_info=True)
+                            # Response cache and KV migration Prometheus gauges
+                            try:
+                                core = getattr(eng, '_engine_core', None)
+                                if core is not None and hasattr(core, '_kv_migration') and core._kv_migration is not None:
+                                    mig_stats = core._kv_migration.get_stats()
+                                    pm.set_counter("kv_migrations_total", mig_stats.get("total_migrations", 0), labels=ml)
+                                    pm.set_counter("kv_migration_errors_total", mig_stats.get("failed_migrations", 0), labels=ml)
+                                    pm.set_gauge("kv_migration_pending_queue", float(mig_stats.get("pending_queue_size", 0)), labels=ml)
+                                    pm.set_gauge("kv_migration_tracked_blocks", float(mig_stats.get("tracked_blocks", 0)), labels=ml)
+                            except Exception:
+                                logger.debug("KV migration gauge population failed", exc_info=True)
+                            # Response cache
+                            try:
+                                s = eng.get_stats() if hasattr(eng, 'get_stats') else {}
+                                rc = s.get("response_cache")
+                                if rc:
+                                    pm.set_counter("response_cache_hits_total", rc.get("hits", 0), labels=ml)
+                                    pm.set_counter("response_cache_misses_total", rc.get("misses", 0), labels=ml)
+                            except Exception:
+                                logger.debug("response cache gauge population failed", exc_info=True)
                 except Exception:
                     logger.debug("operation failed", exc_info=True)
                 pm_text = pm.generate()

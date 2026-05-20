@@ -115,15 +115,15 @@ class TestHistogramObservation:
 class TestGaugeOperations:
     def test_set_and_get(self):
         pm = PrometheusMetrics()
-        pm.set_gauge("active_requests", 5.0)
-        assert pm._gauges["active_requests"].get() == 5.0
+        pm.set_gauge("gateway_active_requests", 5.0)
+        assert pm._gauges["gateway_active_requests"].get() == 5.0
 
     def test_inc_and_dec(self):
         pm = PrometheusMetrics()
-        pm.inc_gauge("active_requests")
-        pm.inc_gauge("active_requests")
-        pm.dec_gauge("active_requests")
-        assert pm._gauges["active_requests"].get() == 1.0
+        pm.inc_gauge("gateway_active_requests")
+        pm.inc_gauge("gateway_active_requests")
+        pm.dec_gauge("gateway_active_requests")
+        assert pm._gauges["gateway_active_requests"].get() == 1.0
 
     def test_kv_cache_gauges(self):
         pm = PrometheusMetrics()
@@ -148,7 +148,7 @@ class TestFormatGeneration:
         pm = PrometheusMetrics()
         pm.inc_counter("request_total", {"method": "GET"})
         pm.observe_histogram("request_duration_seconds", 0.1, {"endpoint": "/"})
-        pm.set_gauge("active_requests", 3)
+        pm.set_gauge("gateway_active_requests", 3)
         text = pm.generate()
 
         # Each metric family should have HELP and TYPE lines.
@@ -156,8 +156,8 @@ class TestFormatGeneration:
         assert "# TYPE yunshu_request_total counter" in text
         assert "# HELP yunshu_request_duration_seconds" in text
         assert "# TYPE yunshu_request_duration_seconds histogram" in text
-        assert "# HELP yunshu_active_requests" in text
-        assert "# TYPE yunshu_active_requests gauge" in text
+        assert "# HELP yunshu_gateway_active_requests" in text
+        assert "# TYPE yunshu_gateway_active_requests gauge" in text
 
     def test_generate_includes_uptime(self):
         pm = PrometheusMetrics()
@@ -169,7 +169,7 @@ class TestFormatGeneration:
         text = pm.generate()
         # Should still produce valid text with counters/gauges/histograms.
         assert "# TYPE yunshu_request_total counter" in text
-        assert "# TYPE yunshu_active_requests gauge" in text
+        assert "# TYPE yunshu_gateway_active_requests gauge" in text
         assert "# TYPE yunshu_request_duration_seconds histogram" in text
 
 

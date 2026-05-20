@@ -885,6 +885,21 @@ class ModelWarmupManager:
             f"compile={self._compile_cached}, "
             f"prompts={len(self._prompts_warmed)}"
         )
+
+        # Record warmup metrics in Prometheus
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            pm.inc_counter("model_warmup_total", labels={"model_type": model_type})
+            pm.observe_histogram("model_warmup_duration_seconds", elapsed,
+                                 labels={"model_type": model_type})
+            pm.set_gauge("model_warmup_compile_cached",
+                         1.0 if self._compile_cached else 0.0)
+            pm.set_counter("model_warmup_prompts_prefilled",
+                           len(self._prompts_warmed))
+        except Exception:
+            pass
+
         return self._result
 
     def warmup_compile(self, model: Any) -> bool:

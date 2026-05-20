@@ -549,6 +549,14 @@ class ModelManager:
         # Clear load_error so a subsequent load gets a clean slate
         entry.load_error = None
 
+        # Clear stale Prometheus gauge labels for this model to prevent
+        # ghost metric series accumulating after model unload.
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            get_prometheus_metrics().clear_model_labels(model_id)
+        except Exception:
+            pass
+
         # Force GC + clear cache on MLX executor (oMLX #85, #300)
         gc.collect()
         loop = asyncio.get_running_loop()

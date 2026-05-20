@@ -281,11 +281,13 @@ class LoRAAdapterManager:
                     self._touch(adapter_id)
                     self._active_adapter_id = adapter_id
                     logger.info(f"Loaded LoRA adapter: {adapter_id}")
+                    self._record_prometheus_load(adapter_id, success=True)
                     return True
                 except Exception as e:
                     entry.is_loaded = False
                     self._active_adapter_id = None
                     logger.error(f"Failed to load LoRA adapter {adapter_id}: {e}", exc_info=True)
+                    self._record_prometheus_load(adapter_id, success=False)
                     return False
 
     def unload_adapter(self, adapter_id: str) -> bool:
@@ -320,6 +322,7 @@ class LoRAAdapterManager:
                 try:
                     self._restore_base()
                     logger.info(f"Unloaded LoRA adapter: {adapter_id}")
+                    self._record_prometheus_unload(adapter_id)
                     return True
                 except Exception as e:
                     # Revert state on failure
@@ -462,6 +465,7 @@ class LoRAAdapterManager:
                     if self._active_adapter_id == adapter_id:
                         self._active_adapter_id = None
                     logger.info(f"Merged LoRA adapter: {adapter_id}")
+                    self._record_prometheus_merge(adapter_id)
                     return True
                 except Exception as e:
                     logger.error(f"Failed to merge LoRA adapter {adapter_id}: {e}", exc_info=True)
@@ -487,13 +491,58 @@ class LoRAAdapterManager:
     def get_stats(self) -> dict:
         with self._lock:
             loaded = [a for a in self._adapters.values() if a.is_loaded]
-            return {
+            stats = {
                 "max_loras": self.max_loras,
                 "registered": len(self._adapters),
                 "loaded": len(loaded),
                 "merged": sum(1 for a in self._adapters.values() if a.is_merged),
                 "adapters": self.list_adapters(),
             }
+            # Update Prometheus gauges for LoRA state
+            self._update_prometheus_gauges(len(loaded), len(self._adapters))
+            return stats
+
+    def _record_prometheus_load(self, adapter_id: str, success: bool) -> None:
+        """Record LoRA load event in Prometheus metrics."""
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            labels = {"adapter_id": adapter_id}
+            if success:
+                pm.inc_counter("lora_load_total", labels=labels)
+            else:
+                pm.inc_counter("lora_load_errors_total", labels=labels)
+        except Exception:
+            pass
+
+    def _record_prometheus_unload(self, adapter_id: str) -> None:
+        """Record LoRA unload event in Prometheus metrics."""
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            pm.inc_counter("lora_unload_total", labels={"adapter_id": adapter_id})
+        except Exception:
+            pass
+
+    def _record_prometheus_merge(self, adapter_id: str) -> None:
+        """Record LoRA merge event in Prometheus metrics."""
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            pm.inc_counter("lora_merge_total", labels={"adapter_id": adapter_id})
+        except Exception:
+            pass
+
+    def _update_prometheus_gauges(self, loaded_count: int, registered_count: int) -> None:
+        """Update Prometheus gauges with current LoRA state."""
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            pm.set_gauge("lora_loaded_adapters", float(loaded_count))
+            pm.set_gauge("lora_registered_adapters", float(registered_count))
+            pm.set_gauge("lora_max_adapters", float(self.max_loras))
+        except Exception:
+            pass
 
     def discover_adapters(self, model_path: str) -> list[str]:
         """Discover LoRA adapters in the model directory or adapters/ subdirectory."""

@@ -11,10 +11,20 @@ Predefined metrics
 - request_total           (counter)   — total HTTP requests
 - request_duration_seconds (histogram) — request latency
 - tokens_generated_total  (counter)   — completion tokens served
-- active_requests         (gauge)     — currently in-flight requests
+- gateway_active_requests (gauge)     — currently in-flight gateway requests
 - inference_duration_seconds (histogram) — per-inference latency
 - kv_cache_blocks_used    (gauge)     — KV cache blocks in use
 - kv_cache_blocks_total   (gauge)     — KV cache blocks allocated
+- lora_load_total         (counter)   — LoRA adapter load operations
+- lora_unload_total       (counter)   — LoRA adapter unload operations
+- lora_merge_total        (counter)   — LoRA adapter merge operations
+- lora_load_errors_total  (counter)   — LoRA adapter load errors
+- model_warmup_total      (counter)   — model warmup operations
+- model_warmup_duration_seconds (histogram) — warmup latency
+- kv_migrations_total     (counter)   — KV block migration operations
+- kv_migration_errors_total (counter) — KV migration errors
+- response_cache_hits_total (counter) — response cache hits
+- response_cache_misses_total (counter) — response cache misses
 """
 
 
@@ -90,6 +100,11 @@ class _Gauge:
 
     __slots__ = ("_name", "_help", "_lock", "_values")
 
+    # Maximum number of distinct label combinations per gauge.
+    # Prevents cardinality explosion from model load/unload cycles
+    # or dynamically generated label values.
+    MAX_LABEL_SERIES = 256
+
     def __init__(self, name: str, help_text: str) -> None:
         self._name = name
         self._help = help_text
@@ -99,6 +114,13 @@ class _Gauge:
     def set(self, value: float, labels: Optional[dict[str, str]] = None) -> None:
         key = frozenset((labels or {}).items())
         with self._lock:
+            if key not in self._values and len(self._values) >= self.MAX_LABEL_SERIES:
+                # Drop the oldest (first-inserted) label series to stay under cap.
+                # Using dict popitem(last=False) removes in insertion order (Python 3.7+).
+                try:
+                    self._values.popitem(last=False)
+                except KeyError:
+                    pass
             self._values[key] = value
 
     def inc(self, labels: Optional[dict[str, str]] = None, amount: float = 1.0) -> None:
@@ -301,10 +323,6 @@ class PrometheusMetrics:
             "Total completion tokens generated",
         )
 
-        self._gauges["active_requests"] = _Gauge(
-            "yunshu_active_requests",
-            "Currently in-flight requests",
-        )
         self._gauges["kv_cache_blocks_used"] = _Gauge(
             "yunshu_kv_cache_blocks_used",
             "KV cache blocks currently in use",
@@ -664,6 +682,21 @@ class PrometheusMetrics:
             if name not in self._histograms:
                 raise KeyError(f"Unknown histogram: {name!r}")
             self._histograms[name].observe(value, labels)
+
+    # --- Label cleanup (stale gauge fix) ---
+
+    def clear_model_labels(self, model_id: str) -> None:
+        """Remove all gauge label series for a given model_id.
+
+        Called when a model is unloaded to prevent stale gauge values from
+        accumulating indefinitely.  Counters are NOT cleared because they
+        are cumulative and should persist across model load/unload cycles.
+        """
+        target_key = frozenset({"model_id": model_id}.items())
+        with self._lock:
+            for gauge in self._gauges.values():
+                with gauge._lock:
+                    gauge._values.pop(target_key, None)
 
     # --- Serialisation ---
 

@@ -473,7 +473,7 @@ class KVMigrationManager:
         with self._queue_lock:
             pending_queue_size = len(self._migration_queue)
         with self._lock:
-            return {
+            stats = {
                 "gpu_to_cpu_count": self._stats.gpu_to_cpu_count,
                 "cpu_to_ssd_count": self._stats.cpu_to_ssd_count,
                 "ssd_to_cpu_count": self._stats.ssd_to_cpu_count,
@@ -493,6 +493,21 @@ class KVMigrationManager:
                     for tier, blocks in self._tier_blocks.items()
                 },
             }
+            # Update Prometheus metrics for KV migration
+            self._update_prometheus_metrics(stats)
+            return stats
+
+    def _update_prometheus_metrics(self, stats: dict) -> None:
+        """Push KV migration stats to Prometheus gauges/counters."""
+        try:
+            from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            pm.set_counter("kv_migrations_total", stats.get("total_migrations", 0))
+            pm.set_counter("kv_migration_errors_total", stats.get("failed_migrations", 0))
+            pm.set_gauge("kv_migration_pending_queue", float(stats.get("pending_queue_size", 0)))
+            pm.set_gauge("kv_migration_tracked_blocks", float(stats.get("tracked_blocks", 0)))
+        except Exception:
+            pass
 
     # ── Internal ────────────────────────────────────────────────────
 

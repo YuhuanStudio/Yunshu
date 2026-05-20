@@ -648,10 +648,21 @@ def create_app() -> FastAPI:
         global _active_requests
         if request.url.path in _INFERENCE_PATHS:
             _active_requests += 1
+            # Update Prometheus gauge for active requests.
+            try:
+                from .middleware.prometheus_exporter import get_prometheus_metrics
+                get_prometheus_metrics().set_gauge("gateway_active_requests", float(_active_requests))
+            except Exception:
+                pass
             try:
                 return await call_next(request)
             finally:
                 _active_requests -= 1
+                try:
+                    from .middleware.prometheus_exporter import get_prometheus_metrics
+                    get_prometheus_metrics().set_gauge("gateway_active_requests", float(_active_requests))
+                except Exception:
+                    pass
                 if _active_requests == 0 and _drain_event is not None:
                     _drain_event.set()
         return await call_next(request)
