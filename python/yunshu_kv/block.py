@@ -11,6 +11,7 @@ Inspired by vLLM's BlockPool but adapted for Apple Silicon UMA:
 
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -172,6 +173,10 @@ class BlockPool:
         # COW statistics
         self._cow_clones: int = 0
 
+        # Thread safety: all block pool mutations are protected by a single lock.
+        # Using threading.Lock (not RLock) for minimal overhead on hot paths.
+        self._lock = threading.Lock()
+
     def get_free_block_count(self) -> int:
         return self.free_queue.num_free_blocks
 
@@ -183,28 +188,30 @@ class BlockPool:
 
     def allocate(self, n: int) -> list[KVBlock]:
         """Allocate n fresh blocks from the free pool."""
-        if n > self.get_free_block_count():
-            raise ValueError(
-                f"Cannot allocate {n} blocks, only {self.get_free_block_count()} free"
-            )
-        blocks = self.free_queue.popleft_n(n)
-        for block in blocks:
-            if self.enable_caching and block.block_hash is not None:
-                self._evict_cached_block(block)
-            block.ref_count = 1
-            block.cache_only = False
-        return blocks
+        with self._lock:
+            if n > self.get_free_block_count():
+                raise ValueError(
+                    f"Cannot allocate {n} blocks, only {self.get_free_block_count()} free"
+                )
+            blocks = self.free_queue.popleft_n(n)
+            for block in blocks:
+                if self.enable_caching and block.block_hash is not None:
+                    self._evict_cached_block_unlocked(block)
+                block.ref_count = 1
+                block.cache_only = False
+            return blocks
 
     def touch(self, block: KVBlock) -> None:
         """Increase ref count of a shared block (prefix cache hit)."""
-        import time
-        if block.is_null:
-            return
-        if block.ref_count == 0:
-            self.free_queue.remove(block)
-        block.ref_count += 1
-        block.cache_only = False
-        block.last_access_time = time.monotonic()
+        with self._lock:
+            import time
+            if block.is_null:
+                return
+            if block.ref_count == 0:
+                self.free_queue.remove(block)
+            block.ref_count += 1
+            block.cache_only = False
+            block.last_access_time = time.monotonic()
 
     def free(self, blocks: list[KVBlock]) -> None:
         """Decrease ref count; blocks reaching 0 go back to free list.
@@ -217,51 +224,61 @@ class BlockPool:
         ref_count from being decremented multiple times for the same block
         (a caller bug that would prematurely free blocks still in use).
         """
-        freed = []
-        seen_ids: set[int] = set()
-        for block in blocks:
-            if block.block_id in seen_ids:
-                continue
-            seen_ids.add(block.block_id)
-            if block.ref_count <= 0:
-                continue
-            block.ref_count -= 1
-            if block.ref_count == 0 and not block.is_null:
-                if block.block_hash is not None:
-                    block.cache_only = True
-                freed.append(block)
-        self.free_queue.append_n(freed)
+        with self._lock:
+            freed = []
+            seen_ids: set[int] = set()
+            for block in blocks:
+                if block.block_id in seen_ids:
+                    continue
+                seen_ids.add(block.block_id)
+                if block.ref_count <= 0:
+                    continue
+                block.ref_count -= 1
+                if block.ref_count == 0 and not block.is_null:
+                    if block.block_hash is not None:
+                        block.cache_only = True
+                    freed.append(block)
+            self.free_queue.append_n(freed)
 
     def cache_block(self, block: KVBlock, block_hash: int) -> None:
         """Register a full block in the prefix cache."""
         if not self.enable_caching:
             return
-        import time
-        # If a different block already owns this hash slot, clear its
-        # cache metadata so it doesn't linger in cache_only state.
-        old_block = self._hash_to_block.get(block_hash)
-        if old_block is not None and old_block is not block:
-            old_block.reset_hash()
-        block.block_hash = block_hash
-        block.last_access_time = time.monotonic()
-        self._hash_to_block[block_hash] = block
-        if self._event_bus is not None:
-            from .cache_events import CacheEvent
-            self._event_bus.publish(CacheEvent(
-                "block_cached",
-                block_hash=block_hash,
-                block_ids=[block.block_id],
-            ))
+        with self._lock:
+            import time
+            # If a different block already owns this hash slot, clear its
+            # cache metadata so it doesn't linger in cache_only state.
+            old_block = self._hash_to_block.get(block_hash)
+            if old_block is not None and old_block is not block:
+                old_block.reset_hash()
+            block.block_hash = block_hash
+            block.last_access_time = time.monotonic()
+            self._hash_to_block[block_hash] = block
+            if self._event_bus is not None:
+                from .cache_events import CacheEvent
+                self._event_bus.publish(CacheEvent(
+                    "block_cached",
+                    block_hash=block_hash,
+                    block_ids=[block.block_id],
+                ))
 
     def lookup_hash(self, block_hash: int) -> Optional[KVBlock]:
         """Find a cached block by hash."""
-        block = self._hash_to_block.get(block_hash)
-        if block is not None:
-            return block
-        return None
+        with self._lock:
+            block = self._hash_to_block.get(block_hash)
+            if block is not None:
+                return block
+            return None
 
     def _evict_cached_block(self, block: KVBlock) -> bool:
         """Remove a block from the prefix cache."""
+        if block.block_hash is None:
+            return False
+        with self._lock:
+            return self._evict_cached_block_unlocked(block)
+
+    def _evict_cached_block_unlocked(self, block: KVBlock) -> bool:
+        """Internal: remove a block from the prefix cache (caller holds lock)."""
         if block.block_hash is None:
             return False
         # Only pop from the hash map if this block is still the current
@@ -324,29 +341,30 @@ class BlockPool:
         if block.ref_count <= 1:
             return block
 
-        if self.free_queue.num_free_blocks == 0:
-            raise ValueError(
-                "COW failed: no free blocks available for cloning"
-            )
+        with self._lock:
+            if self.free_queue.num_free_blocks == 0:
+                raise ValueError(
+                    "COW failed: no free blocks available for cloning"
+                )
 
-        # Allocate a fresh block
-        new_block = self.free_queue.popleft()
-        # Clear any stale hash from a previous lifecycle to prevent
-        # _hash_to_block from returning this block for outdated lookups.
-        if new_block.block_hash is not None:
-            self._evict_cached_block(new_block)
-        new_block.ref_count = 1
+            # Allocate a fresh block
+            new_block = self.free_queue.popleft()
+            # Clear any stale hash from a previous lifecycle to prevent
+            # _hash_to_block from returning this block for outdated lookups.
+            if new_block.block_hash is not None:
+                self._evict_cached_block_unlocked(new_block)
+            new_block.ref_count = 1
 
-        # Decrement original's ref_count (we're detaching from it)
-        block.ref_count -= 1
-        if block.ref_count == 0 and not block.is_null:
-            # Block going to free queue — must clear its hash to prevent
-            # stale _hash_to_block lookups from returning a freed block
-            self._evict_cached_block(block)
-            self.free_queue.append(block)
+            # Decrement original's ref_count (we're detaching from it)
+            block.ref_count -= 1
+            if block.ref_count == 0 and not block.is_null:
+                # Block going to free queue — must clear its hash to prevent
+                # stale _hash_to_block lookups from returning a freed block
+                self._evict_cached_block_unlocked(block)
+                self.free_queue.append(block)
 
-        self._cow_clones += 1
-        return new_block
+            self._cow_clones += 1
+            return new_block
 
     def cow_block_in_table(
         self,

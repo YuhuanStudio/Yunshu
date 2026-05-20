@@ -754,6 +754,11 @@ class Scheduler:
         self._spec_total_accepted: int = 0
         self._spec_total_rejected: int = 0
 
+        # Pre-draft cache snapshots for spec decode rollback.
+        # Keyed by request_id. Snapshot is taken BEFORE draft generation
+        # so _verify_spec_drafts can restore to the correct state on rejection.
+        self._spec_draft_cache_snapshots: dict[str, list] = {}
+
         # Per-request thinking state tracking for segment store
         # Maps request_id → dict with:
         #   'in_thinking': bool — currently in reasoning state
@@ -3426,6 +3431,12 @@ class Scheduler:
             req._spec_draft_cache = make_prompt_cache(decoder.draft)
 
         cache = req._spec_draft_cache
+        # Snapshot cache BEFORE drafting so _verify_spec_drafts can rollback
+        # to the correct pre-draft state on rejection. Without this, the
+        # verify path snapshots the already-advanced cache and the restore
+        # is a no-op, causing the cache to double-advance by (draft+accepted)
+        # tokens instead of just (accepted) tokens.
+        self._spec_draft_cache_snapshots[req.request_id] = SpeculativeDecoder._snapshot_cache(cache)
         return decoder.generate_draft(input_ids, cache)
 
     def _verify_spec_drafts(self, outputs: list) -> None:
@@ -3513,8 +3524,18 @@ class Scheduler:
                 and req._spec_draft_cache is not None
             ):
                 try:
-                    snapshot = SpeculativeDecoder._snapshot_cache(req._spec_draft_cache)
-                    SpeculativeDecoder._restore_cache(req._spec_draft_cache, snapshot)
+                    # Use the pre-draft snapshot saved in _generate_draft_tokens.
+                    # The previous code took a snapshot here of the already-advanced
+                    # cache, making restore a no-op — the cache would then be
+                    # advanced by (total_draft + accepted) tokens instead of just
+                    # (accepted) tokens.
+                    pre_draft_snapshot = self._spec_draft_cache_snapshots.pop(rid, None)
+                    if pre_draft_snapshot is not None:
+                        SpeculativeDecoder._restore_cache(req._spec_draft_cache, pre_draft_snapshot)
+                    else:
+                        # Fallback: snapshot current state (better than nothing)
+                        snapshot = SpeculativeDecoder._snapshot_cache(req._spec_draft_cache)
+                        SpeculativeDecoder._restore_cache(req._spec_draft_cache, snapshot)
                     import mlx.core as mx
                     for tok in draft_ids[:accepted]:
                         self._spec_decoder.draft(
@@ -3535,6 +3556,7 @@ class Scheduler:
         for rid in verified_ids:
             self._spec_drafts.pop(rid, None)
             self._spec_draft_start_pos.pop(rid, None)
+            self._spec_draft_cache_snapshots.pop(rid, None)
 
     def _cleanup_spec_state(self, req_id: str) -> None:
         """Clean up spec decode state for a finished/aborted request.
@@ -3545,6 +3567,7 @@ class Scheduler:
         self._spec_drafts.pop(req_id, None)
         self._spec_draft_start_pos.pop(req_id, None)
         self._spec_stats.pop(req_id, None)
+        self._spec_draft_cache_snapshots.pop(req_id, None)
 
     # ── End speculative decoding batch-path methods ──
 

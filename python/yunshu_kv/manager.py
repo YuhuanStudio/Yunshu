@@ -10,6 +10,7 @@ Three-tier KV hierarchy (Phase 1 implements hot tier only):
 
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -116,6 +117,10 @@ class KVCacheManager:
         from .radix_attention import RadixTree
         self._radix_tree = RadixTree(block_size=config.block_size)
         self._request_nodes: dict[str, Any] = {}  # request_id → RadixNode
+        # Thread safety: protects all manager-level mutations involving
+        # block_pool, radix_tree, and internal state.
+        # Using threading.Lock (not RLock) for minimal overhead on hot paths.
+        self._lock = threading.Lock()
 
     @property
     def hit_rate(self) -> float:
@@ -169,6 +174,16 @@ class KVCacheManager:
         Returns:
             (BlockTable for the request, PrefixMatch describing cache hit)
         """
+        with self._lock:
+            return self._allocate_for_prefill_unlocked(token_ids, model_hash, request_id)
+
+    def _allocate_for_prefill_unlocked(
+        self,
+        token_ids: list[int],
+        model_hash: int = 0,
+        request_id: str | None = None,
+    ) -> tuple[BlockTable, PrefixMatch]:
+        """Internal: allocate blocks for a new request (caller holds lock)."""
         # 0. Try RadixTree prefix match (C8: O(k) tree traversal)
         if self.config.enable_caching and len(token_ids) >= self.config.block_size:
             matched_node, remaining = self._radix_tree.match(token_ids)
@@ -399,6 +414,16 @@ class KVCacheManager:
         if not self.config.enable_caching:
             return 0
 
+        with self._lock:
+            return self._cache_completed_blocks_unlocked(table, token_ids, model_hash)
+
+    def _cache_completed_blocks_unlocked(
+        self,
+        table: BlockTable,
+        token_ids: list[int],
+        model_hash: int = 0,
+    ) -> int:
+        """Internal: register newly completed blocks (caller holds lock)."""
         blocks = table.get_blocks()
         num_full = len(token_ids) // self.config.block_size
         cached = 0
@@ -477,22 +502,23 @@ class KVCacheManager:
             table: The request's block table to free.
             request_id: Optional request ID to release radix tree refs (Bug 2).
         """
-        # Bug 2: dec_ref radix tree nodes held by this request.
-        if request_id is not None and request_id in self._request_nodes:
-            node = self._request_nodes.pop(request_id)
-            self._radix_tree.dec_ref(node)
+        with self._lock:
+            # Bug 2: dec_ref radix tree nodes held by this request.
+            if request_id is not None and request_id in self._request_nodes:
+                node = self._request_nodes.pop(request_id)
+                self._radix_tree.dec_ref(node)
 
-        blocks = table.clear()
-        self.block_pool.free(blocks)
+            blocks = table.clear()
+            self.block_pool.free(blocks)
 
-        # Publish request_freed event for distributed cache coherency.
-        if request_id is not None:
-            block_ids = [b.block_id for b in blocks]
-            self._event_bus.publish(CacheEvent(
-                "request_freed",
-                block_ids=block_ids,
-                node_id=request_id,
-            ))
+            # Publish request_freed event for distributed cache coherency.
+            if request_id is not None:
+                block_ids = [b.block_id for b in blocks]
+                self._event_bus.publish(CacheEvent(
+                    "request_freed",
+                    block_ids=block_ids,
+                    node_id=request_id,
+                ))
 
     def evict_for_memory(self, needed_blocks: int) -> bool:
         """Try to evict cached blocks to free up space.
@@ -513,6 +539,11 @@ class KVCacheManager:
         Returns:
             True if enough blocks were freed.
         """
+        with self._lock:
+            return self._evict_for_memory_unlocked(needed_blocks)
+
+    def _evict_for_memory_unlocked(self, needed_blocks: int) -> bool:
+        """Internal: try to evict cached blocks to free up space (caller holds lock)."""
         initial_free = self.block_pool.get_free_block_count()
 
         cached = self.block_pool.get_cached_blocks()
@@ -599,6 +630,11 @@ class KVCacheManager:
         Returns:
             Number of blocks evicted.
         """
+        with self._lock:
+            return self._memory_pressure_evict_unlocked(pressure_threshold)
+
+    def _memory_pressure_evict_unlocked(self, pressure_threshold: float = 0.90) -> int:
+        """Internal: proactively evict cached blocks (caller holds lock)."""
         current_usage = self.usage
         if current_usage < pressure_threshold:
             return 0

@@ -80,6 +80,11 @@ class SSDCacheStore:
         # between load()'s index lookup and file read (TOCTOU race).
         self._lock = threading.Lock()
 
+        # Deferred I/O from _evict_lru_locked(): populated under _lock,
+        # flushed by _flush_pending_io() after lock release.
+        self._pending_index_write: tuple[Path, list[dict]] | None = None
+        self._pending_unlinks: list[Path] | None = None
+
         # Load existing index
         self._load_index()
 
@@ -115,9 +120,13 @@ class SSDCacheStore:
         except Exception as e:
             logger.warning(f"Failed to load SSD cache index: {e}")
 
-    def _save_index(self) -> None:
-        """Persist cache index to disk."""
-        entries = [
+    def _snapshot_index(self) -> list[dict]:
+        """Snapshot current index entries for async persistence.
+
+        Returns a serializable list of entry dicts.  Caller must hold
+        ``_lock`` to ensure a consistent snapshot.
+        """
+        return [
             {
                 "block_hash": e.block_hash,
                 "block_index": e.block_index,
@@ -128,9 +137,17 @@ class SSDCacheStore:
             }
             for e in self._index.values()
         ]
+
+    @staticmethod
+    def _write_index_to_disk(index_path: Path, entries: list[dict]) -> None:
+        """Write *entries* to *index_path* atomically via temp-file.
+
+        This performs synchronous file I/O (json.dump + os.replace) and
+        must **not** be called while holding ``_lock`` — the caller is
+        responsible for releasing the lock first.
+        """
         try:
             import tempfile
-            index_path = self._index_path()
             fd, tmp_path = tempfile.mkstemp(
                 dir=str(index_path.parent), suffix=".tmp"
             )
@@ -144,6 +161,18 @@ class SSDCacheStore:
         except Exception as e:
             logger.warning(f"Failed to save SSD cache index: {e}")
 
+    def _save_index(self) -> None:
+        """Persist cache index to disk (I/O outside lock).
+
+        Takes a snapshot of the index under ``_lock``, then releases the
+        lock before performing file I/O so that concurrent store / load /
+        contains operations are not blocked by disk writes.
+        """
+        index_path = self._index_path()
+        with self._lock:
+            entries = self._snapshot_index()
+        self._write_index_to_disk(index_path, entries)
+
     def _block_path(self, block_index: int) -> Path:
         return self.cache_dir / f"block_{block_index:08d}.bin"
 
@@ -152,53 +181,63 @@ class SSDCacheStore:
         with self._lock:
             if self._current_size_bytes >= self.max_size_bytes:
                 self._evict_lru_locked()
-                if self._current_size_bytes >= self.max_size_bytes:
-                    return False  # Cannot free enough space
 
             if block_hash in self._index:
                 # Already stored — just update access time
                 self._index[block_hash].last_access = time.time()
-                return True
+                result = True
+            else:
+                # Serialize KV data to bytes with shape metadata
+                result = self._store_new_block(block_hash, kv_data, num_tokens)
+        # File I/O from any eviction deferred until after lock release.
+        self._flush_pending_io()
+        return result
 
-            # Serialize KV data to bytes with shape metadata
-            try:
-                import numpy as np
-                data_mx = mx.array(kv_data).astype(mx.float16)
-                numpy_data = np.array(data_mx)
-                shape = numpy_data.shape
-                raw_bytes = numpy_data.tobytes()
-            except Exception as e:
-                logger.warning(f"Failed to serialize KV block: {e}")
-                return False
+    def _store_new_block(
+        self, block_hash: int, kv_data: mx.array, num_tokens: int
+    ) -> bool:
+        """Store a brand-new block.  Caller must hold ``_lock``."""
+        if self._current_size_bytes >= self.max_size_bytes:
+            return False  # Cannot free enough space
 
-            block_index = self._next_block_index
-            self._next_block_index += 1
+        try:
+            import numpy as np
+            data_mx = mx.array(kv_data).astype(mx.float16)
+            numpy_data = np.array(data_mx)
+            shape = numpy_data.shape
+            raw_bytes = numpy_data.tobytes()
+        except Exception as e:
+            logger.warning(f"Failed to serialize KV block: {e}")
+            return False
 
-            try:
-                import zlib
-                crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
-                with open(self._block_path(block_index), "wb") as f:
-                    # Header: ndim (4 bytes) + shape values (4 bytes each) + CRC32
-                    f.write(struct.pack("<I", len(shape)))
-                    for dim in shape:
-                        f.write(struct.pack("<I", dim))
-                    f.write(struct.pack("<I", crc))
-                    f.write(raw_bytes)
-            except OSError as e:
-                logger.warning(f"Failed to write SSD cache block: {e}")
-                return False
+        block_index = self._next_block_index
+        self._next_block_index += 1
 
-            header_size = 4 + 4 * len(shape) + 4  # ndim + shape dims + CRC32
-            entry = SSDCacheEntry(
-                block_hash=block_hash,
-                block_index=block_index,
-                num_tokens=num_tokens,
-                size_bytes=header_size + len(raw_bytes),
-                last_access=time.time(),
-            )
-            self._index[block_hash] = entry
-            self._current_size_bytes += entry.size_bytes
-            return True
+        try:
+            import zlib
+            crc = zlib.crc32(raw_bytes) & 0xFFFFFFFF
+            with open(self._block_path(block_index), "wb") as f:
+                # Header: ndim (4 bytes) + shape values (4 bytes each) + CRC32
+                f.write(struct.pack("<I", len(shape)))
+                for dim in shape:
+                    f.write(struct.pack("<I", dim))
+                f.write(struct.pack("<I", crc))
+                f.write(raw_bytes)
+        except OSError as e:
+            logger.warning(f"Failed to write SSD cache block: {e}")
+            return False
+
+        header_size = 4 + 4 * len(shape) + 4  # ndim + shape dims + CRC32
+        entry = SSDCacheEntry(
+            block_hash=block_hash,
+            block_index=block_index,
+            num_tokens=num_tokens,
+            size_bytes=header_size + len(raw_bytes),
+            last_access=time.time(),
+        )
+        self._index[block_hash] = entry
+        self._current_size_bytes += entry.size_bytes
+        return True
 
     def load(self, block_hash: int) -> Optional[mx.array]:
         """Load a KV block from SSD. Returns None if not found.
@@ -254,9 +293,16 @@ class SSDCacheStore:
         """Evict least recently used blocks to free space. Acquires _lock."""
         with self._lock:
             self._evict_lru_locked()
+        # File I/O (index persist + block file deletion) outside the lock.
+        self._flush_pending_io()
 
     def _evict_lru_locked(self) -> None:
-        """Evict least recently used blocks to free space. Caller must hold _lock."""
+        """Evict least recently used blocks to free space. Caller must hold _lock.
+
+        Updates the in-memory index under the lock, snapshots it, then
+        performs file I/O (index persist + block file deletion) after
+        releasing the lock so that concurrent operations are not blocked.
+        """
         if not self._index:
             return
 
@@ -267,8 +313,7 @@ class SSDCacheStore:
         )
         to_evict = max(1, len(sorted_entries) // 10)
 
-        # Collect entries to evict and update the in-memory index first,
-        # then persist the index, THEN unlink files on disk.
+        # Collect entries to evict and update the in-memory index first.
         # If the process crashes between index save and file deletion,
         # the orphaned files are harmless.  If we deleted files first and
         # crashed before saving the index, the index would reference
@@ -281,14 +326,38 @@ class SSDCacheStore:
             self._current_size_bytes -= entry.size_bytes
 
         self._current_size_bytes = max(0, self._current_size_bytes)
-        self._save_index()
+        # Snapshot the index while we still hold the lock, but defer I/O.
+        index_path = self._index_path()
+        entries_snapshot = self._snapshot_index()
 
-        # Index is safely persisted — now delete the block files.
-        for path in paths_to_unlink:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        # --- Lock released by caller after return ---
+        # The caller (_evict_lru or store) holds _lock around this method.
+        # We cannot release _lock inside this method because the caller
+        # acquired it.  Instead, we write the snapshot *after* the caller
+        # releases _lock by recording what needs to happen.
+        self._pending_index_write = (index_path, entries_snapshot)
+        self._pending_unlinks = paths_to_unlink
+
+    def _flush_pending_io(self) -> None:
+        """Perform deferred I/O (index write + block file deletion).
+
+        Must be called **after** releasing ``_lock``.  Safe to call even
+        when there is nothing pending (no-op).
+        """
+        pending_write = self._pending_index_write
+        pending_unlinks = self._pending_unlinks
+        self._pending_index_write = None
+        self._pending_unlinks = None
+
+        if pending_write is not None:
+            index_path, entries = pending_write
+            self._write_index_to_disk(index_path, entries)
+        if pending_unlinks:
+            for path in pending_unlinks:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def get_stats(self) -> dict:
         return {
@@ -371,48 +440,51 @@ class TieredKVCacheManager:
                 if len(chunk) < block_size:
                     break
                 h = compute_block_hash(parent_hash, chunk, (model_hash,))
-                if self.warm.contains(h):
-                    # Promote from warm tier back to hot
-                    kv_data = self.warm.promote(h)
-                    if kv_data is not None:
-                        # Allocate a hot block for the promoted data
-                        try:
-                            new_block = self.hot.block_pool.allocate(1)[0]
-                        except ValueError:
-                            logger.warning(
-                                "Warm tier promotion: no free blocks for hash 0x%x",
-                                h,
-                            )
-                            # promote() already popped from the warm store.
-                            # Re-insert to avoid data loss.
-                            self.warm.demote(h, kv_data)
-                            break
-                        # Write KV data into hot cache tensors.
-                        # Packed format: [2, num_heads, block_size, head_dim]
-                        # where dim 0 has key at [0] and value at [1].
-                        if self.hot._key_cache is not None:
-                            if kv_data.ndim == 4 and kv_data.shape[0] == 2:
-                                if isinstance(self.hot._key_cache, mx.array):
-                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
-                                    if self.hot._value_cache is not None:
-                                        self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
-                                else:
-                                    self.hot._key_cache[new_block.block_id] = kv_data[0]
-                                    if self.hot._value_cache is not None:
-                                        self.hot._value_cache[new_block.block_id] = kv_data[1]
-                            else:
-                                if isinstance(self.hot._key_cache, mx.array):
-                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
-                                else:
-                                    self.hot._key_cache[new_block.block_id] = kv_data
-                        # Register in prefix cache for future lookups
-                        self.hot.block_pool.cache_block(new_block, h)
-                        warm_promoted_blocks.append(new_block)
-                        warm_loaded += 1
-                        parent_hash = h  # chain: next block uses this as parent
-                    else:
+                # Direct promote() without preceding contains() to avoid
+                # TOCTOU race: a concurrent eviction between contains() and
+                # promote() would cause us to break instead of falling
+                # through to SSD.  promote() is atomic — it returns None
+                # if the entry has been evicted.
+                kv_data = self.warm.promote(h)
+                if kv_data is not None:
+                    # Allocate a hot block for the promoted data
+                    try:
+                        new_block = self.hot.block_pool.allocate(1)[0]
+                    except ValueError:
+                        logger.warning(
+                            "Warm tier promotion: no free blocks for hash 0x%x",
+                            h,
+                        )
+                        # promote() already popped from the warm store.
+                        # Re-insert to avoid data loss.
+                        self.warm.demote(h, kv_data)
                         break
+                    # Write KV data into hot cache tensors.
+                    # Packed format: [2, num_heads, block_size, head_dim]
+                    # where dim 0 has key at [0] and value at [1].
+                    if self.hot._key_cache is not None:
+                        if kv_data.ndim == 4 and kv_data.shape[0] == 2:
+                            if isinstance(self.hot._key_cache, mx.array):
+                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                if self.hot._value_cache is not None:
+                                    self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                            else:
+                                self.hot._key_cache[new_block.block_id] = kv_data[0]
+                                if self.hot._value_cache is not None:
+                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                        else:
+                            if isinstance(self.hot._key_cache, mx.array):
+                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                            else:
+                                self.hot._key_cache[new_block.block_id] = kv_data
+                    # Register in prefix cache for future lookups
+                    self.hot.block_pool.cache_block(new_block, h)
+                    warm_promoted_blocks.append(new_block)
+                    warm_loaded += 1
+                    parent_hash = h  # chain: next block uses this as parent
                 else:
+                    # Warm miss or entry evicted concurrently — fall through
+                    # to SSD lookup rather than breaking the chain entirely.
                     break
 
             if warm_loaded > 0:
@@ -436,44 +508,45 @@ class TieredKVCacheManager:
                 if len(chunk) < block_size:
                     break
                 h = compute_block_hash(parent_hash, chunk, (model_hash,))
-                if self.ssd.contains(h):
-                    # Load from SSD into hot cache
-                    kv_data = self.ssd.load(h)
-                    if kv_data is not None:
-                        # Allocate a hot block and write kv_data back into it
-                        try:
-                            new_block = self.hot.block_pool.allocate(1)[0]
-                        except ValueError:
-                            logger.warning(
-                                "SSD cache promotion: no free blocks for hash 0x%x",
-                                h,
-                            )
-                            break
-                        # Write KV data into hot cache tensors.
-                        # Packed format: [2, num_heads, block_size, head_dim]
-                        if self.hot._key_cache is not None:
-                            if kv_data.ndim == 4 and kv_data.shape[0] == 2:
-                                if isinstance(self.hot._key_cache, mx.array):
-                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
-                                    if self.hot._value_cache is not None:
-                                        self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
-                                else:
-                                    self.hot._key_cache[new_block.block_id] = kv_data[0]
-                                    if self.hot._value_cache is not None:
-                                        self.hot._value_cache[new_block.block_id] = kv_data[1]
-                            else:
-                                if isinstance(self.hot._key_cache, mx.array):
-                                    self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
-                                else:
-                                    self.hot._key_cache[new_block.block_id] = kv_data
-                        # Register in prefix cache for future lookups
-                        self.hot.block_pool.cache_block(new_block, h)
-                        ssd_promoted_blocks.append(new_block)
-                        ssd_loaded += 1
-                        parent_hash = h  # chain: next block uses this as parent
-                    else:
+                # Direct load() without preceding contains() to avoid TOCTOU
+                # race: a concurrent eviction between contains() and load()
+                # would return None and break the chain.  load() is atomic —
+                # it returns None if the entry was evicted or on disk error.
+                kv_data = self.ssd.load(h)
+                if kv_data is not None:
+                    # Allocate a hot block and write kv_data back into it
+                    try:
+                        new_block = self.hot.block_pool.allocate(1)[0]
+                    except ValueError:
+                        logger.warning(
+                            "SSD cache promotion: no free blocks for hash 0x%x",
+                            h,
+                        )
                         break
+                    # Write KV data into hot cache tensors.
+                    # Packed format: [2, num_heads, block_size, head_dim]
+                    if self.hot._key_cache is not None:
+                        if kv_data.ndim == 4 and kv_data.shape[0] == 2:
+                            if isinstance(self.hot._key_cache, mx.array):
+                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data[0])
+                                if self.hot._value_cache is not None:
+                                    self.hot._value_cache = self.hot._value_cache.at[new_block.block_id].set(kv_data[1])
+                            else:
+                                self.hot._key_cache[new_block.block_id] = kv_data[0]
+                                if self.hot._value_cache is not None:
+                                    self.hot._value_cache[new_block.block_id] = kv_data[1]
+                        else:
+                            if isinstance(self.hot._key_cache, mx.array):
+                                self.hot._key_cache = self.hot._key_cache.at[new_block.block_id].set(kv_data)
+                            else:
+                                self.hot._key_cache[new_block.block_id] = kv_data
+                    # Register in prefix cache for future lookups
+                    self.hot.block_pool.cache_block(new_block, h)
+                    ssd_promoted_blocks.append(new_block)
+                    ssd_loaded += 1
+                    parent_hash = h  # chain: next block uses this as parent
                 else:
+                    # SSD miss or entry evicted concurrently — stop chain.
                     break
 
             if ssd_loaded > 0:

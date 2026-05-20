@@ -10,6 +10,7 @@ that supports:
 """
 
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -99,6 +100,9 @@ class RadixTree:
         self._eviction_strategy = eviction_strategy  # lru, lfu, fifo
         self._block_size = block_size
         self._eviction_stats = {"lru": 0, "lfu": 0, "fifo": 0, "total_freed_blocks": 0}
+        # Thread safety: all tree mutations are protected by a single lock.
+        # Using threading.Lock (not RLock) for minimal overhead on hot paths.
+        self._lock = threading.Lock()
 
     @property
     def total_nodes(self) -> int:
@@ -118,37 +122,38 @@ class RadixTree:
             (matched_node, remaining_tokens) where remaining_tokens are
             the unmatched suffix that needs fresh prefill.
         """
-        node = self.root
-        pos = 0
+        with self._lock:
+            node = self.root
+            pos = 0
 
-        while pos < len(token_ids):
-            first_token = token_ids[pos]
-            child = node.children.get(first_token)
-            if child is None:
-                break
-
-            # Match child's token_ids against input
-            child_tokens = child.token_ids
-            match_len = 0
-            for i in range(min(len(child_tokens), len(token_ids) - pos)):
-                if child_tokens[i] != token_ids[pos + i]:
+            while pos < len(token_ids):
+                first_token = token_ids[pos]
+                child = node.children.get(first_token)
+                if child is None:
                     break
-                match_len += 1
 
-            if match_len == len(child_tokens):
-                # Full match of this child node
-                node = child
-                pos += match_len
-            elif match_len > 0:
-                # Partial match — split the child node
-                node = self._split_node(node, child, match_len)
-                pos += match_len
-                break
-            else:
-                break
+                # Match child's token_ids against input
+                child_tokens = child.token_ids
+                match_len = 0
+                for i in range(min(len(child_tokens), len(token_ids) - pos)):
+                    if child_tokens[i] != token_ids[pos + i]:
+                        break
+                    match_len += 1
 
-        remaining = token_ids[pos:]
-        return node, remaining
+                if match_len == len(child_tokens):
+                    # Full match of this child node
+                    node = child
+                    pos += match_len
+                elif match_len > 0:
+                    # Partial match — split the child node
+                    node = self._split_node_unlocked(node, child, match_len)
+                    pos += match_len
+                    break
+                else:
+                    break
+
+            remaining = token_ids[pos:]
+            return node, remaining
 
     def _split_node(
         self,
@@ -156,7 +161,17 @@ class RadixTree:
         child: RadixNode,
         split_pos: int,
     ) -> RadixNode:
-        """Split a child node at position split_pos.
+        """Split a child node at position split_pos (thread-safe)."""
+        with self._lock:
+            return self._split_node_unlocked(parent, child, split_pos)
+
+    def _split_node_unlocked(
+        self,
+        parent: RadixNode,
+        child: RadixNode,
+        split_pos: int,
+    ) -> RadixNode:
+        """Internal: split a child node (caller holds lock).
 
         Before: parent → child=[A,B,C]
         After:  parent → new_node=[A,B] → child=[C]
@@ -245,6 +260,17 @@ class RadixTree:
         Returns:
             The leaf node created.
         """
+        with self._lock:
+            return self._insert_unlocked(token_ids, blocks, block_hashes, start_node)
+
+    def _insert_unlocked(
+        self,
+        token_ids: list[int],
+        blocks: list[KVBlock],
+        block_hashes: list[int],
+        start_node: RadixNode | None = None,
+    ) -> RadixNode:
+        """Internal: insert a new prefix path (caller holds lock)."""
         node = start_node or self.root
 
         if not token_ids:
@@ -270,7 +296,7 @@ class RadixTree:
                 return existing
             elif match_len < len(existing.token_ids):
                 # Partial overlap: split existing child at match point
-                split_node = self._split_node(node, existing, match_len)
+                split_node = self._split_node_unlocked(node, existing, match_len)
                 # split_node now holds the shared prefix
                 # Recurse: insert remaining new tokens as child of split_node
                 remaining_new = token_ids[match_len:]
@@ -281,7 +307,7 @@ class RadixTree:
                 match_block_idx = match_len // self._block_size
                 remaining_blocks = blocks[match_block_idx:]
                 remaining_hashes = block_hashes[match_block_idx:]
-                return self.insert(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
+                return self._insert_unlocked(remaining_new, remaining_blocks, remaining_hashes, start_node=split_node)
             else:
                 # New tokens are a prefix of or equal to existing child
                 if len(token_ids) == len(existing.token_ids):
@@ -293,7 +319,7 @@ class RadixTree:
                     return existing
                 else:
                     # New is shorter — split existing at len(token_ids)
-                    split_node = self._split_node(node, existing, len(token_ids))
+                    split_node = self._split_node_unlocked(node, existing, len(token_ids))
                     return split_node
 
         # No existing child: create a new leaf node
@@ -312,14 +338,15 @@ class RadixTree:
 
     def inc_ref(self, node: RadixNode) -> None:
         """Increment reference count from node to root."""
-        now = _now()
-        current = node
-        while current is not None:
-            current.ref_count += 1
-            current.last_access_time = now
-            current.access_count += 1
-            current = current.parent
-        self._total_ref_count += 1
+        with self._lock:
+            now = _now()
+            current = node
+            while current is not None:
+                current.ref_count += 1
+                current.last_access_time = now
+                current.access_count += 1
+                current = current.parent
+            self._total_ref_count += 1
 
     def dec_ref(self, node: RadixNode) -> None:
         """Decrement reference count from node to root.
@@ -328,13 +355,14 @@ class RadixTree:
         it is not decremented further. This prevents corruption from
         double-decrement bugs.
         """
-        current = node
-        while current is not None:
-            if current.ref_count > 0:
-                current.ref_count -= 1
-            current = current.parent
-        if self._total_ref_count > 0:
-            self._total_ref_count -= 1
+        with self._lock:
+            current = node
+            while current is not None:
+                if current.ref_count > 0:
+                    current.ref_count -= 1
+                current = current.parent
+            if self._total_ref_count > 0:
+                self._total_ref_count -= 1
 
     def evict(self, n_nodes: int) -> list[KVBlock]:
         """Evict leaf nodes with ref_count == 0 using configured strategy.
@@ -353,74 +381,80 @@ class RadixTree:
         Returns:
             List of freed KV blocks.
         """
-        import heapq
+        with self._lock:
+            import heapq
 
-        freed_blocks: list[KVBlock] = []
-        evicted = 0
+            freed_blocks: list[KVBlock] = []
+            evicted = 0
 
-        # Collect only evictable leaves (ref_count == 0, leaf, not root)
-        leaves = self._collect_evictable_leaves()
+            # Collect only evictable leaves (ref_count == 0, leaf, not root)
+            leaves = self._collect_evictable_leaves()
 
-        # Early exit when nothing to evict
-        if not leaves:
+            # Early exit when nothing to evict
+            if not leaves:
+                return freed_blocks
+
+            # Build a min-heap keyed by the eviction strategy metric so we
+            # only pop as many entries as we actually need, avoiding a full sort
+            # of potentially thousands of leaves.
+            if self._eviction_strategy == "lfu":
+                heap = [(n.access_count, id(n), n) for n in leaves]
+            elif self._eviction_strategy == "fifo":
+                heap = [(n.creation_time, id(n), n) for n in leaves]
+            else:  # lru (default)
+                heap = [(n.last_access_time, id(n), n) for n in leaves]
+
+            heapq.heapify(heap)
+
+            while heap and evicted < n_nodes:
+                _key, _tid, leaf = heapq.heappop(heap)
+                # Re-check ref_count — it may have changed since collection
+                # (e.g., another inc_ref happened between collection and eviction).
+                if leaf.ref_count > 0:
+                    continue
+
+                # Double-check it's still a leaf (merge may have changed children).
+                if not leaf.is_leaf or leaf.is_root:
+                    continue
+
+                freed_blocks.extend(leaf.blocks)
+                # Remove from parent's children
+                if leaf.parent is not None:
+                    parent = leaf.parent
+                    first_tok = leaf.token_ids[0] if leaf.token_ids else None
+                    if first_tok is not None:
+                        parent.children.pop(first_tok, None)
+                    else:
+                        # Leaf has empty token_ids — find and remove by identity
+                        for key, child in list(parent.children.items()):
+                            if child is leaf:
+                                parent.children.pop(key)
+                                break
+
+                    # Compact: merge parent with single remaining child
+                    self._try_merge_unlocked(parent)
+
+                # Clear stale references from the evicted leaf so future
+                # path_blocks() / match() calls cannot return freed blocks.
+                leaf.blocks = []
+                leaf.block_hashes = []
+                leaf.token_ids = []
+                self._total_nodes -= 1
+                evicted += 1
+
+            if evicted > 0:
+                self._eviction_stats[self._eviction_strategy] += evicted
+                self._eviction_stats["total_freed_blocks"] += len(freed_blocks)
+
             return freed_blocks
 
-        # Build a min-heap keyed by the eviction strategy metric so we
-        # only pop as many entries as we actually need, avoiding a full sort
-        # of potentially thousands of leaves.
-        if self._eviction_strategy == "lfu":
-            heap = [(n.access_count, id(n), n) for n in leaves]
-        elif self._eviction_strategy == "fifo":
-            heap = [(n.creation_time, id(n), n) for n in leaves]
-        else:  # lru (default)
-            heap = [(n.last_access_time, id(n), n) for n in leaves]
-
-        heapq.heapify(heap)
-
-        while heap and evicted < n_nodes:
-            _key, _tid, leaf = heapq.heappop(heap)
-            # Re-check ref_count — it may have changed since collection
-            # (e.g., another inc_ref happened between collection and eviction).
-            if leaf.ref_count > 0:
-                continue
-
-            # Double-check it's still a leaf (merge may have changed children).
-            if not leaf.is_leaf or leaf.is_root:
-                continue
-
-            freed_blocks.extend(leaf.blocks)
-            # Remove from parent's children
-            if leaf.parent is not None:
-                parent = leaf.parent
-                first_tok = leaf.token_ids[0] if leaf.token_ids else None
-                if first_tok is not None:
-                    parent.children.pop(first_tok, None)
-                else:
-                    # Leaf has empty token_ids — find and remove by identity
-                    for key, child in list(parent.children.items()):
-                        if child is leaf:
-                            parent.children.pop(key)
-                            break
-
-                # Compact: merge parent with single remaining child
-                self._try_merge(parent)
-
-            # Clear stale references from the evicted leaf so future
-            # path_blocks() / match() calls cannot return freed blocks.
-            leaf.blocks = []
-            leaf.block_hashes = []
-            leaf.token_ids = []
-            self._total_nodes -= 1
-            evicted += 1
-
-        if evicted > 0:
-            self._eviction_stats[self._eviction_strategy] += evicted
-            self._eviction_stats["total_freed_blocks"] += len(freed_blocks)
-
-        return freed_blocks
-
     def _try_merge(self, node: RadixNode) -> None:
-        """Merge a node with its single child if the node has ref_count == 0.
+        """Merge a node with its single child if the node has ref_count == 0 (thread-safe)."""
+        with self._lock:
+            self._try_merge_unlocked(node)
+
+    def _try_merge_unlocked(self, node: RadixNode) -> None:
+        """Internal: merge a node with its single child (caller holds lock).
 
         After a child is evicted, the parent may end up with exactly one
         remaining child and no active references. In that case, we merge
@@ -477,7 +511,7 @@ class RadixTree:
 
         # Recursively merge parent if it now also has a single child + ref_count == 0
         if node.parent is not None:
-            self._try_merge(node.parent)
+            self._try_merge_unlocked(node.parent)
 
     def _collect_evictable_leaves(self) -> list[RadixNode]:
         """Collect leaf nodes eligible for eviction (no children, not root, ref_count == 0)."""

@@ -1106,8 +1106,14 @@ async def _stream_anthropic(
                                     for tc in tool_calls:
                                         tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                         yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tc['name'], 'input': {}}})}\n\n"
-                                        # Emit input_json_delta for streaming the arguments
-                                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
+                                        # Emit input_json_delta incrementally — Anthropic protocol
+                                        # expects partial JSON fragments, not the entire argument
+                                        # string in a single event.
+                                        _args_str = tc.get('arguments', '{}')
+                                        _chunk_size = 8
+                                        for _ci in range(0, len(_args_str), _chunk_size):
+                                            _chunk = _args_str[_ci:_ci + _chunk_size]
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _chunk}})}\n\n"
                                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                         block_index += 1
                                 # Signal engine to stop producing tokens
@@ -1226,7 +1232,14 @@ async def _stream_anthropic(
                                 for tc in tool_calls:
                                     tool_id = f"toolu_{uuid.uuid4().hex[:24]}"
                                     yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_id, 'name': tc['name'], 'input': {}}})}\n\n"
-                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': tc['arguments']}})}\n\n"
+                                    # Emit input_json_delta incrementally — Anthropic protocol
+                                    # expects partial JSON fragments, not the entire argument
+                                    # string in a single event.
+                                    _args_str = tc.get('arguments', '{}')
+                                    _chunk_size = 8
+                                    for _ci in range(0, len(_args_str), _chunk_size):
+                                        _chunk = _args_str[_ci:_ci + _chunk_size]
+                                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': block_index, 'delta': {'type': 'input_json_delta', 'partial_json': _chunk}})}\n\n"
                                     yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': block_index})}\n\n"
                                     block_index += 1
                                 # Signal engine to stop producing tokens
