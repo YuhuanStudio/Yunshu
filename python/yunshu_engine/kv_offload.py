@@ -1016,7 +1016,7 @@ class KVOffloadManager:
                     if ssd_store is not None:
                         kv_data = self._extract_hot_kv(hot_mgr, block_hash)
                         if kv_data is not None:
-                            if ssd_store.store(block_hash, kv_data, num_tokens=0):
+                            if ssd_store.store(block_hash, kv_data, num_tokens=self.config.block_size):
                                 self._free_hot_block(hot_mgr, block_hash)
                                 offloaded = True
 
@@ -1026,7 +1026,7 @@ class KVOffloadManager:
                     if warm_tier is not None and ssd_store is not None:
                         kv_data = warm_tier.promote(block_hash)
                         if kv_data is not None:
-                            if ssd_store.store(block_hash, kv_data, num_tokens=0):
+                            if ssd_store.store(block_hash, kv_data, num_tokens=self.config.block_size):
                                 offloaded = True
                             else:
                                 # SSD write failed — re-insert into warm tier
@@ -1142,12 +1142,13 @@ class KVOffloadManager:
         # Only free if block has no active request references
         if block.ref_count > 1:
             return
-        pool._evict_cached_block(block)
-        if block.ref_count == 1:
-            block.ref_count = 0
-            pool.free_queue.append(block)
-        elif block.ref_count == 0:
-            pool.free_queue.append(block)
+        with pool._lock:
+            pool._evict_cached_block_unlocked(block)
+            if block.ref_count == 1:
+                block.ref_count = 0
+                pool.free_queue.append(block)
+            elif block.ref_count == 0:
+                pool.free_queue.append(block)
 
     async def _wait_for_completion(self, request_id: str) -> OffloadResult:
         """Wait for an offload request to complete.

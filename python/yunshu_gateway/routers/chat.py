@@ -1712,9 +1712,6 @@ async def _stream_response_multi(
                         if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
                             logger.error("Choice streaming text buffer exceeded 1MB — truncating")
                             _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
-                        if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
-                            logger.error("Choice streaming text buffer exceeded 1MB — truncating")
-                            _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                     # Detect stop-sequence overcount on final output
                     if req.stop and choice_finish_reason == "stop" and output.finished:
                         for _seq in req.stop:

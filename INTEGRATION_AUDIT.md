@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–323: 38 waves, 763+ bugs fixed. Latest: Wave 323 — context window truncation (dual-path), disagg counter heuristic, TTS caching, model_manager fallback, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–324: 39 waves, 775+ bugs fixed. Latest: Wave 324 — 8-agent deep audit, 12+ HIGH fixes (kv_offload race condition, json_schema $ref cycle, paged_scheduler preempt leak, mesh node lifecycle, spec decode constraint race, VLM seed clobber, checkpoint stack leak, SSD token metadata), 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 
@@ -37,11 +37,23 @@
 
 > 以下為基於本報告發現所完成的修復，最新測試: **6744 passed, 16 skipped** (0 failures).
 
-### 已完成修復 (2026-05-21 Wave 322–323 — 8 agents, 18+ bugs: engine_core InvalidStateError, kv_transfer infinite retry, radix block_hashes desync, grammar checkpoint loss, context window truncation, disagg counter heuristic, TTS model caching)
+### 已完成修復 (2026-05-21 Wave 324 — 8 parallel agents, 60+ found, 12+ HIGH fixed: kv_offload race, json_schema $ref cycle, paged_scheduler preempt leak, mesh node lifecycle, spec decode constraint race, VLM seed, checkpoint leak)
 
 | 修復 | 描述 | 影響 |
 |------|------|------|
-| engine_core poll→done guard | _get_task.result() 在 task 未完成時呼叫 — continue + if-in-done guard | InvalidStateError (HIGH) |
+| kv_offload _free_hot_block race | ref_count/free_queue 在 pool._lock 外修改 → 同一 block 分配給兩個請求 | 數據損壞 (HIGH) |
+| json_schema _seen_refs sharing | properties/items 傳遞共享 _seen_refs → 兄弟 $ref 被誤判為循環 | JSON 約束失效 (HIGH) |
+| paged_scheduler preempt leak | _finalized_requests 未清除 → 重調度請求 block table 永久洩漏 | GPU 記憶體耗盡 (HIGH) |
+| paged_scheduler abort leak | waiting queue abort 未清理 block table | KV block 洩漏 (MEDIUM-HIGH) |
+| mesh node lifecycle incomplete | retries exhausted 僅從 disagg_router 移除 → topology/dp_router/rtt_router 殘留 | 路由失效 (HIGH) |
+| VLM mx.random.seed clobber | 全局 RNG seed 腐蝕併發請求的取樣狀態 | 輸出錯誤 (HIGH) |
+| spec decoder constraint race | 共享 instance attribute → 併發請求 JSON schema 混合 | 約束交叉 (HIGH) |
+| spec decoder checkpoint leak | all-accept 路徑從不 pop checkpoint → 記憶體線性增長 | 記憶體洩漏 (MEDIUM) |
+| SSD offload num_tokens=0 | 寫入 SSD 時 num_tokens 硬編碼 0 → 元數據無效 | 監控不准確 (MEDIUM) |
+| mesh heartbeat time.time() | 心跳使用 wall clock 而非 monotonic | NTP 跳變風險 (MEDIUM) |
+| gateway duplicate overflow check | 多選串流重複 1MB buffer 溢出檢查 | 死代碼 (LOW) |
+
+### 已完成修復 (2026-05-21 Wave 322–323 — 8 agents, 18+ bugs: engine_core InvalidStateError, kv_transfer infinite retry, radix block_hashes desync, grammar checkpoint loss, context window truncation, disagg counter heuristic, TTS model caching)
 | engine_core shadow dedup guard | _finalize_request 檢查 shadow 存在才 remove_finished_request | KeyError 崩潰 (HIGH) |
 | kv_transfer infinite retry | TimeoutError 連續計數器 (max 3) 替代無限 continue | 無限重試掛死 (HIGH) |
 | radix_attention block_hashes desync | _try_merge_unlocked 同時去重 blocks + block_hashes (zip) | KV 一致性損壞 (HIGH) |

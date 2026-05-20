@@ -852,7 +852,18 @@ class SpeculativeDecoder:
                 correction = generated_tokens[-1]
                 self.target(mx.array([[correction]]), cache=target_cache)
             else:
-                # All accepted: advance grammar constraint for all accepted + bonus
+                # All accepted: advance grammar constraint for all accepted + bonus.
+                # Pop the stale checkpoint without restoring (all-accept path
+                # never calls rollback, so without this the checkpoint stack
+                # grows unbounded over long generations).
+                if self.constraint is not None:
+                    try:
+                        if hasattr(self.constraint, '_snapshots') and self.constraint._snapshots:
+                            self.constraint._snapshots.pop()
+                        elif hasattr(self.constraint, '_checkpoint_stack') and self.constraint._checkpoint_stack:
+                            self.constraint._checkpoint_stack.pop()
+                    except Exception:
+                        pass
                 if self.constraint is not None and hasattr(self.constraint, 'advance'):
                     for tid in draft_tokens:
                         try:

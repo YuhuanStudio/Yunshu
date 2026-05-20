@@ -168,14 +168,14 @@ def _repair_json_schema(
     if "properties" in schema and isinstance(schema["properties"], dict):
         for key, value in schema["properties"].items():
             if isinstance(value, dict):
-                schema["properties"][key] = _repair_json_schema(value, _depth + 1, _root_defs, _seen_refs)
+                schema["properties"][key] = _repair_json_schema(value, _depth + 1, _root_defs, set(_seen_refs))
 
     if "items" in schema and isinstance(schema["items"], dict):
-        schema["items"] = _repair_json_schema(schema["items"], _depth + 1, _root_defs, _seen_refs)
+        schema["items"] = _repair_json_schema(schema["items"], _depth + 1, _root_defs, set(_seen_refs))
 
     if "additionalProperties" in schema and isinstance(schema["additionalProperties"], dict):
         schema["additionalProperties"] = _repair_json_schema(
-            schema["additionalProperties"], _depth + 1, _root_defs, _seen_refs
+            schema["additionalProperties"], _depth + 1, _root_defs, set(_seen_refs)
         )
 
     for key in ("anyOf", "oneOf", "allOf"):

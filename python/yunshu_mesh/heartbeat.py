@@ -103,7 +103,7 @@ class HeartbeatMonitor:
                 node_snapshot = self._local_node.to_dict()
                 msg = json.dumps({
                     "node_id": node_snapshot["node_id"],
-                    "timestamp": time.time(),
+                    "timestamp": time.monotonic(),
                     "state": node_snapshot["state"],
                     "active_requests": node_snapshot["active_requests"],
                 }).encode()

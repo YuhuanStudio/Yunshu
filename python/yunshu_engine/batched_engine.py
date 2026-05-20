@@ -4243,6 +4243,7 @@ class BatchedEngine:
                 await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
             except Exception:
                 pass
+            self._spec_decoder.constraint = _prev_constraint
             return GenerationOutput(
                 finished=True,
                 finish_reason="error",
@@ -4259,6 +4260,7 @@ class BatchedEngine:
                 await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
             except Exception:
                 pass
+            self._spec_decoder.constraint = _prev_constraint
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -4285,9 +4287,11 @@ class BatchedEngine:
                     ttft_ms=0.0,
                     cached_tokens=0,
                 )
+            self._spec_decoder.constraint = _prev_constraint
             raise
         except Exception as e:
             logger.error(f"Unexpected error during speculative generation: {e}", exc_info=True)
+            self._spec_decoder.constraint = _prev_constraint
             raise
         _spec_ttft_s = time.perf_counter() - _spec_gen_t0
         detokenizer.finalize()
@@ -4337,6 +4341,7 @@ class BatchedEngine:
             except Exception:
                 logger.debug("reasoning_parser failed in spec decode path", exc_info=True)
 
+        self._spec_decoder.constraint = _prev_constraint
         return GenerationOutput(
             text=text,
             new_text=text,
@@ -4456,7 +4461,9 @@ class BatchedEngine:
         target_cache = make_prompt_cache(self._spec_decoder.target)
         draft_cache = make_prompt_cache(self._spec_decoder.draft)
 
-        # Wire grammar constraint into spec decoder for streaming structured output
+        # Wire grammar constraint into spec decoder for streaming structured output.
+        # Save the previous constraint to restore after this request completes,
+        # preventing cross-request constraint mixing on the shared decoder instance.
         _spec_constraint = None
         if json_schema is not None:
             try:
@@ -4464,14 +4471,8 @@ class BatchedEngine:
                 _spec_constraint = JsonSchemaConstraint(json_schema, self._tokenizer)
             except Exception:
                 logger.warning("Grammar constraint setup failed for spec streaming", exc_info=True)
+        _prev_constraint = self._spec_decoder.constraint
         self._spec_decoder.constraint = _spec_constraint
-
-        generated_tokens = []
-        prompt_tokens = len(input_ids)
-
-        # Incremental detokenizer for correct multi-byte UTF-8
-        detokenizer = self._tokenizer.detokenizer
-        detokenizer.reset()
 
         # Thinking budget enforcement — detect <think/</think via single-token IDs
         _spec_think_start_token = None
@@ -4798,6 +4799,8 @@ class BatchedEngine:
         except Exception as e:
             logger.error(f"Spec decode streaming error: {e}", exc_info=True)
             raise
+        finally:
+            self._spec_decoder.constraint = _prev_constraint
 
     async def _generate_ngram_spec(
         self,

@@ -244,6 +244,9 @@ class PagedScheduler(Scheduler):
         # Release KV blocks BEFORE base class removes the request from
         # the batch generator (which invalidates the cache reference).
         self._finalize_request_blocks(request.request_id)
+        # Remove from finalized set so re-scheduled request's blocks can
+        # be cleaned up on its eventual second completion.
+        self._finalized_requests.discard(request.request_id)
         # Delegate to base class for the actual preemption logic
         # (save prefix cache, move to waiting queue, etc.)
         super()._preempt_request(request)
@@ -262,6 +265,14 @@ class PagedScheduler(Scheduler):
             rid for rid in self._finalized_requests
             if rid not in self.running and rid not in self.waiting
         }
+
+    def _process_aborts(self) -> None:
+        """Override to also free block tables for aborted requests."""
+        for req_id in list(self._pending_abort_ids):
+            if req_id in self._block_tables:
+                self._finalize_request_blocks(req_id)
+                self._finalized_requests.discard(req_id)
+        super()._process_aborts()
 
     def get_stats(self) -> dict:
         stats = super().get_stats()

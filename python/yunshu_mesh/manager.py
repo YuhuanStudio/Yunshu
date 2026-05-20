@@ -479,6 +479,12 @@ class MeshManager:
             self._retry_tasks.pop(node.node_id, None)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
+            if self._topology:
+                self._topology.remove_node(node.node_id)
+            if self._dp_router:
+                self._dp_router.remove_node(node.node_id)
+            if self._rtt_router:
+                self._rtt_router.remove_node(node.node_id)
         self._publish_event("node_leave", node.node_id, {"hostname": node.hostname})
 
     def _on_node_timeout(self, node: MeshNode) -> None:
@@ -526,6 +532,12 @@ class MeshManager:
             self._retry_tasks.pop(node.node_id, None)
             if self._disagg_router:
                 self._disagg_router.remove_node(node.node_id)
+            if self._topology:
+                self._topology.remove_node(node.node_id)
+            if self._dp_router:
+                self._dp_router.remove_node(node.node_id)
+            if self._rtt_router:
+                self._rtt_router.remove_node(node.node_id)
         self.handle_node_failure(node.node_id)
 
     def _on_node_recovered(self, node: MeshNode) -> None:

@@ -663,7 +663,10 @@ class VLMEngine:
 
             def _generate_sync():
                 if seed is not None:
-                    mx.random.seed(seed)
+                    try:
+                        mx.random.key(seed)
+                    except (AttributeError, TypeError):
+                        mx.random.seed(seed)
 
                 if (image_paths and self._has_vision and self._is_vlm) or (audio_paths and self._is_vlm):
                     return self._generate_vlm_vision(messages, image_paths, max_tokens, temperature, top_p, top_k, stop, audio_paths=audio_paths, enable_thinking=_enable_thinking, thinking_budget=thinking_budget)
@@ -960,7 +963,10 @@ class VLMEngine:
             detokenizer = None  # Initialize before try so error handler can safely check
             try:
                 if seed is not None:
-                    mx.random.seed(seed)
+                    try:
+                        mx.random.key(seed)
+                    except (AttributeError, TypeError):
+                        mx.random.seed(seed)
 
                 if has_images or has_audio:
                     # Resolve reasoning_effort -> thinking_budget for VLM vision streaming
