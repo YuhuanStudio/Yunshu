@@ -378,12 +378,20 @@ class EventLog:
         ns = self._node_states[nid]
 
         if event.event_type == EventType.NODE_JOIN.value:
+            # Reset all mutable state on rejoin — stale models /
+            # capabilities from a previous session must not persist.
             ns.state = "ready"
             ns.join_time = event.timestamp
+            ns.models = []
+            ns.capabilities = {}
+            ns.last_health_check = 0.0
+            ns.last_health_status = "unknown"
+            ns.leave_time = 0.0
 
         elif event.event_type == EventType.NODE_LEAVE.value:
             ns.state = "offline"
             ns.leave_time = event.timestamp
+            ns.models = []
 
         elif event.event_type == EventType.NODE_STATE_CHANGE.value:
             ns.state = event.payload.get("new_state", ns.state)
@@ -406,14 +414,17 @@ class EventLog:
             ns.capabilities = event.payload.get("capabilities", {})
 
     def get_node_state(self, node_id: str) -> NodeState | None:
-        """Get the current state of a node."""
+        """Get the current state of a node (returns a copy to prevent mutation)."""
         with self._lock:
-            return self._node_states.get(node_id)
+            ns = self._node_states.get(node_id)
+            if ns is None:
+                return None
+            return copy.deepcopy(ns)
 
     def get_all_states(self) -> dict[str, NodeState]:
-        """Get all node states."""
+        """Get all node states (returns deep copies to prevent mutation)."""
         with self._lock:
-            return dict(self._node_states)
+            return {nid: copy.deepcopy(ns) for nid, ns in self._node_states.items()}
 
     def query_events(
         self,

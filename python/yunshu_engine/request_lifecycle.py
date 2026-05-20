@@ -346,7 +346,7 @@ class RequestLifecycleOrchestrator:
         was_active = state.phase in (RequestPhase.PREFILLING, RequestPhase.DECODING)
         state.completion_tokens = completion_tokens
         state.transition(RequestPhase.FINISHED)
-        if was_active or self._active_count > 0:
+        if was_active:
             self._active_count = max(0, self._active_count - 1)
 
         # Only count genuine completions, not errors/aborts/timeouts
@@ -363,7 +363,11 @@ class RequestLifecycleOrchestrator:
             # the concurrency limit, causing continuous timeout storms.
             self._total_timeouts += 1
             self._concurrency.report_failure("timeout")
-        # "abort" is counted by on_request_aborted
+        elif finish_reason in ("abort",):
+            # Abort via on_request_finished (not on_request_aborted) —
+            # report failure so concurrency controller reacts.
+            self._total_rejected += 1
+            self._model_counts[state.model]["rejected"] += 1
 
         # Do NOT auto-promote pending requests here. Promotion via
         # on_prefill_start() increments _active_count, but the promoted

@@ -145,10 +145,14 @@ class RequestDeduplicator:
             if entry.fan_out >= self._max_fan_out:
                 return None
 
-            # Deduplicate: add to existing entry
-            entry.request_ids.append(request_id)
-            self._total_saved_requests += 1
-            self._total_deduplicated += 1
+            # Deduplicate: add to existing entry (guard against duplicate
+            # request_id — a buggy caller or retry loop may call check()
+            # twice for the same request, which would inflate fan-out and
+            # cause double-delivery on complete()).
+            if request_id not in entry.request_ids:
+                entry.request_ids.append(request_id)
+                self._total_saved_requests += 1
+                self._total_deduplicated += 1
             return entry
 
     def register(
@@ -236,7 +240,19 @@ class RequestDeduplicator:
             h for h, e in self._entries.items()
             if e.completed_at is None and (now - e.created_at) > self._ttl * 10
         ]
-        for h in expired + stuck:
+        for h in expired:
+            del self._entries[h]
+        for h in stuck:
+            entry = self._entries[h]
+            if entry.fan_out > 1:
+                # Shadow requests (fan_out - 1) are orphaned — they hold
+                # references to this entry and will never receive output.
+                logger.warning(
+                    "Pruning stuck dedup entry %s with %d shadow requests — "
+                    "shadows are orphaned (primary likely crashed)",
+                    h[:12], entry.fan_out - 1,
+                )
+            del self._entries[h]
             del self._entries[h]
 
     def _evict_oldest(self) -> None:
