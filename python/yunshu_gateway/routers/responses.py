@@ -770,6 +770,24 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                         seq=_next_seq(),
                     )
 
+        # ── Stop-sequence overcount correction ──
+        # The engine counts tokens up to and including the stop sequence, but
+        # OpenAI API convention excludes stop tokens from completion_tok.
+        if req.stop and last_finish_reason == "stop":
+            for _seq in req.stop:
+                if _seq and _seq in accumulated_text:
+                    _idx = accumulated_text.find(_seq)
+                    accumulated_text = accumulated_text[:_idx]
+                    _tok = getattr(engine, '_tokenizer', None)
+                    if _tok:
+                        try:
+                            _correct_count = len(_tok.encode(accumulated_text))
+                            if _correct_count < completion_tok:
+                                completion_tok = _correct_count
+                        except Exception:
+                            pass
+                    break
+
         # ── Check for tool calls in the accumulated text (before closing lifecycles) ──
         tool_calls = None
         clean_text = accumulated_text

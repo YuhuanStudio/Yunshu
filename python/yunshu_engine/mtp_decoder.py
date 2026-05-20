@@ -168,6 +168,11 @@ class MTPDecoder:
         # Cooldown state
         in_cooldown = False
         stats = self._stats
+        stats.accepts = 0
+        stats.rejects = 0
+        stats.cooldowns = 0
+        stats.tokens_generated = 0
+        stats.total_cycles = 0
 
         # Import rollback helpers if using n_confirmed
         if self.config.use_n_confirmed:

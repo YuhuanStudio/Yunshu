@@ -1485,6 +1485,11 @@ class ImageGenEngine:
         self._tokenizer = None
         self._running = False
         self._teacache = None
+        if self._lora_offloader is not None:
+            try:
+                self._lora_offloader.unload_all()
+            except Exception:
+                logger.debug("LoRA offloader unload failed during stop", exc_info=True)
         self._lora_offloader = None
         gc.collect()
         loop = asyncio.get_running_loop()

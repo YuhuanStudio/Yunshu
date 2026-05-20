@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–335: 50 waves, 990+ bugs fixed. Latest: Wave 335 — MTP json_schema fallback to fast path, context_window empty messages guard, video_engine _lora_loaded lock consistency, batch_inference max_tokens 131072 cap, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–336: 51 waves, 1020+ bugs fixed. Latest: Wave 336 — Responses streaming stop overcount correction, image engine LoRA cleanup in stop(), images+audio base64 size validation (8 endpoints), LoRA architecture mismatch validation, MTP stats per-request reset, priority guard boost cleanup on finalize, 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 

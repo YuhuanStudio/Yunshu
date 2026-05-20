@@ -2977,6 +2977,11 @@ class EngineCore:
                     lora_mgr.release_adapter(lora_id)
             except Exception:
                 logger.debug("LoRA cleanup failed", exc_info=True)
+        # Priority inversion guard: clear boost entry for completed request
+        try:
+            self._priority_guard.clear_boost(request_id)
+        except Exception:
+            logger.debug("priority boost cleanup failed", exc_info=True)
         # Lifecycle + budget + memory + KV lifecycle
         try:
             self._lifecycle_orchestrator.on_request_finished(request_id, completion_tokens=completion_tokens, finish_reason=finish_reason)

@@ -633,6 +633,17 @@ class LoRAAdapterManager:
         with open(config_path) as f:
             config = json.load(f)
 
+        # Architecture validation: prevent applying adapter trained on a
+        # different model type (produces garbage output silently).
+        adapter_model_type = config.get("model_type", "")
+        if adapter_model_type and hasattr(self._base_model, 'config'):
+            actual_type = getattr(self._base_model.config, 'model_type', '')
+            if actual_type and adapter_model_type != actual_type:
+                raise ValueError(
+                    f"LoRA adapter trained on model_type='{adapter_model_type}' "
+                    f"but base model is '{actual_type}'. Architecture mismatch."
+                )
+
         # Config can be in two formats:
         #  1. MLX-LM nested:  {"lora_parameters": {"rank": N, "scale": S}}
         #  2. HuggingFace flat: {"r": N, "lora_alpha": A}  where scale = alpha / rank

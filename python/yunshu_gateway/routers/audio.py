@@ -692,6 +692,8 @@ async def sts_enhance(req: STSEnhanceRequest, request: Request):
         from yunshu_engine.sts_engine import STSEngine
         engine = _get_sts_engine(request)
         audio_bytes = base64.b64decode(req.audio)
+        if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)")
         result = await engine.enhance(
             audio_bytes, method=req.method, noise_floor_db=req.noise_floor_db,
         )
@@ -715,6 +717,8 @@ async def sts_separate(req: STSSeparateRequest, request: Request):
         from yunshu_engine.sts_engine import STSEngine
         engine = _get_sts_engine(request)
         audio_bytes = base64.b64decode(req.audio)
+        if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)")
         result = await engine.separate(
             audio_bytes, source_text=req.source_text, method=req.method,
         )
@@ -738,6 +742,8 @@ async def sts_transform(req: STSTransformRequest, request: Request):
         from yunshu_engine.sts_engine import STSEngine
         engine = _get_sts_engine(request)
         audio_bytes = base64.b64decode(req.audio)
+        if len(audio_bytes) > MAX_AUDIO_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"Audio too large ({len(audio_bytes)} bytes)")
         result = await engine.transform(
             audio_bytes, pitch_shift=req.pitch_shift, formant_ratio=req.formant_ratio,
         )
