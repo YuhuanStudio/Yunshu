@@ -5168,6 +5168,7 @@ class BatchedEngine:
                             last_token_id=tokens[-1],
                             draft_ids=draft_ids[:n_draft],
                             prompt_cache=cache,
+                            sampler=sampler,
                         )
 
                         # Emit accepted tokens

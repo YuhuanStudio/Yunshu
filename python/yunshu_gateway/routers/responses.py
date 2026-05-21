@@ -702,11 +702,15 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
                 # ── Per-token: response.output_text.delta ──
                 if output.new_text and not _is_reasoning:
+                    _delta_lp = _format_chat_logprobs(
+                        getattr(output, 'logprobs', None),
+                    ) if req.logprobs else None
                     yield format_responses_text_delta(
                         delta=output.new_text,
                         item_id=msg_id,
                         output_index=0,
                         content_index=0,
+                        logprobs=_delta_lp.get("content", []) if _delta_lp else None,
                         seq=_next_seq(),
                     )
         else:
@@ -762,11 +766,15 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
                 # ── Per-token: response.output_text.delta ──
                 if token_text and not _is_reasoning:
+                    _delta_lp2 = _format_chat_logprobs(
+                        getattr(output, 'logprobs', None),
+                    ) if req.logprobs else None
                     yield format_responses_text_delta(
                         delta=token_text,
                         item_id=msg_id,
                         output_index=0,
                         content_index=0,
+                        logprobs=_delta_lp2.get("content", []) if _delta_lp2 else None,
                         seq=_next_seq(),
                     )
 

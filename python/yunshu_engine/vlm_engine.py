@@ -2199,6 +2199,15 @@ class VLMEngine:
                 token_text = detokenizer.last_segment
             else:
                 token_text = self._tokenizer.decode([token_id], skip_special_tokens=True)
+            # Check stop suffixes on first token
+            if stop_suffixes and token_text:
+                for s in stop_suffixes:
+                    if s and s in token_text:
+                        _idx = token_text.find(s)
+                        token_text = token_text[:_idx]
+                        finish_reason = "stop"
+                        is_eos = True
+                        break
         else:
             token_text = ""
 

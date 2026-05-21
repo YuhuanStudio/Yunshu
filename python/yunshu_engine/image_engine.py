@@ -1317,6 +1317,7 @@ class ImageGenEngine:
         # When set, LoRA adapters are swapped in/out per diffusion step based on
         # priority and assigned step ranges.
         self._lora_offloader = None
+        self._original_modules: dict[str, object] = {}  # name→original Linear before LoRA wrap
         lora_budget_mb = os.environ.get("YUNSHU_LORA_BUDGET_MB", "").strip()
         if lora_budget_mb:
             try:
@@ -2961,6 +2962,7 @@ class ImageGenEngine:
                     break
                 # Apply to Q and V projections (standard LoRA targets)
                 if any(k in name for k in ("q_proj", "v_proj", "qkv")):
+                    self._original_modules[name] = module
                     lora_layer = LoRALinear(
                         module.in_features,
                         module.out_features,
@@ -3000,4 +3002,24 @@ class ImageGenEngine:
             return True
         except Exception as e:
             logger.error(f"Failed to load LoRA adapter: {e}", exc_info=True)
+            return False
+
+    def unload_lora_adapter(self) -> bool:
+        """Restore original Linear modules, removing LoRA wrappers."""
+        if self._transformer is None or not self._original_modules:
+            return False
+        try:
+            for name, orig_module in self._original_modules.items():
+                parts = name.rsplit(".", 1)
+                if len(parts) == 2:
+                    parent = self._transformer
+                    for part in parts[0].split("."):
+                        parent = getattr(parent, part)
+                    setattr(parent, parts[1], orig_module)
+            self._original_modules.clear()
+            mx.eval(self._transformer.parameters())
+            logger.info("LoRA adapter unloaded, original modules restored")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to unload LoRA adapter: {e}", exc_info=True)
             return False
