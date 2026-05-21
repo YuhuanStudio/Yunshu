@@ -1172,61 +1172,56 @@ class VideoEngine:
             if self._lora_loaded:
                 logger.warning("LoRA adapter already loaded, unload first")
                 return False
-            self._lora_loaded = True
 
-        import json
+            import json
 
-        with open(config_path) as f:
-            config = json.load(f)
+            with open(config_path) as f:
+                config = json.load(f)
 
-        lora_params = config.get("lora_parameters", {})
-        self._lora_rank = lora_params.get("rank", rank)
-        self._lora_scale = lora_params.get("scale", scale)
-        num_layers = config.get("num_layers", 16)
+            lora_params = config.get("lora_parameters", {})
+            self._lora_rank = lora_params.get("rank", rank)
+            self._lora_scale = lora_params.get("scale", scale)
+            num_layers = config.get("num_layers", 16)
 
-        # Save base model weights for restoration on unload
-        if self._model is not None and self._base_model_weights is None:
+            # Save base model weights for restoration on unload
+            if self._model is not None and self._base_model_weights is None:
+                try:
+                    import mlx.core as mx
+                    self._base_model_weights = mx.tree_map(
+                        lambda x: mx.array(x), self._model.parameters()
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not save base model weights: {e}")
+
+            # If model not yet loaded, just record the adapter path for lazy loading.
+            if self._model is None:
+                self._lora_adapter_path = str(adapter_dir)
+                logger.info(f"LoRA adapter queued for lazy loading: {adapter_path}")
+                return True
+
+            # Apply LoRA to loaded model
             try:
-                import mlx.core as mx
-                self._base_model_weights = mx.tree_map(
-                    lambda x: mx.array(x), self._model.parameters()
+                self._apply_lora_to_model(num_layers)
+
+                # Load adapter weights
+                weights_path = adapter_dir / "adapters.safetensors"
+                if weights_path.exists():
+                    self._model.load_weights(str(weights_path), strict=False)
+
+                self._lora_adapter_path = str(adapter_dir)
+                self._lora_loaded = True
+                with self._stats_lock:
+                    self._stats.lora_adapter_id = adapter_dir.name
+                    self._stats.lora_loaded = True
+                logger.info(
+                    f"Video LoRA adapter loaded: {adapter_path} "
+                    f"(rank={self._lora_rank}, scale={self._lora_scale})"
                 )
+                return True
             except Exception as e:
-                logger.warning(f"Could not save base model weights: {e}")
-
-        # If model not yet loaded, just record the adapter path for lazy loading.
-        # Do NOT set _lora_loaded = True yet — start() checks it to decide
-        # whether to apply the adapter after the model loads.
-        if self._model is None:
-            with self._lora_lock:
+                logger.error(f"Failed to load video LoRA adapter: {e}", exc_info=True)
                 self._lora_loaded = False
-            self._lora_adapter_path = str(adapter_dir)
-            logger.info(f"LoRA adapter queued for lazy loading: {adapter_path}")
-            return True
-
-        # Apply LoRA to loaded model
-        try:
-            self._apply_lora_to_model(num_layers)
-
-            # Load adapter weights
-            weights_path = adapter_dir / "adapters.safetensors"
-            if weights_path.exists():
-                self._model.load_weights(str(weights_path), strict=False)
-
-            self._lora_adapter_path = str(adapter_dir)
-            with self._stats_lock:
-                self._stats.lora_adapter_id = adapter_dir.name
-                self._stats.lora_loaded = True
-            logger.info(
-                f"Video LoRA adapter loaded: {adapter_path} "
-                f"(rank={self._lora_rank}, scale={self._lora_scale})"
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Failed to load video LoRA adapter: {e}", exc_info=True)
-            with self._lora_lock:
-                self._lora_loaded = False
-            return False
+                return False
 
     def unload_lora_adapter(self) -> bool:
         """Unload the current LoRA adapter, restoring base model weights.
@@ -1242,23 +1237,22 @@ class VideoEngine:
                 logger.warning("Cannot unload merged LoRA adapter (weights are fused)")
                 return False
 
-        try:
-            if self._model is not None and self._base_model_weights is not None:
-                import mlx.core as mx
-                self._model.update(self._base_model_weights)
-                mx.eval(self._model.parameters())
-                self._base_model_weights = None
+            try:
+                if self._model is not None and self._base_model_weights is not None:
+                    import mlx.core as mx
+                    self._model.update(self._base_model_weights)
+                    mx.eval(self._model.parameters())
+                    self._base_model_weights = None
 
-            with self._lora_lock:
                 self._lora_loaded = False
                 self._lora_adapter_path = ""
-            with self._stats_lock:
-                self._stats.lora_loaded = False
-                self._stats.lora_adapter_id = ""
-            logger.info("Video LoRA adapter unloaded, base weights restored")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to unload video LoRA adapter: {e}", exc_info=True)
+                with self._stats_lock:
+                    self._stats.lora_loaded = False
+                    self._stats.lora_adapter_id = ""
+                logger.info("Video LoRA adapter unloaded, base weights restored")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to unload video LoRA adapter: {e}", exc_info=True)
             return False
 
     def merge_lora_adapter(self) -> bool:

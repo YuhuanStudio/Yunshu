@@ -693,11 +693,27 @@ class KVSynchronizationService:
 
     async def _broadcast_loop(self) -> None:
         """Periodically broadcast local hashes to peers."""
+        _TRANSFER_TIMEOUT = 120.0  # seconds before a pending transfer is considered stale
         while self._running:
             try:
                 self.broadcast_prefix_hashes()
             except Exception:
                 logger.debug("Broadcast failed", exc_info=True)
+            # Prune stale pending transfers
+            try:
+                now = time.monotonic()
+                with self._lock:
+                    stale = [
+                        rid for rid, req in self._pending_transfers.items()
+                        if now - req.timestamp > _TRANSFER_TIMEOUT
+                    ]
+                    for rid in stale:
+                        self._pending_transfers.pop(rid, None)
+                        self._stats.transfers_failed += 1
+                if stale:
+                    logger.debug(f"Pruned {len(stale)} stale pending transfers")
+            except Exception:
+                logger.debug("Pending transfer cleanup failed", exc_info=True)
             await asyncio.sleep(self._broadcast_interval)
 
     # ── Stats ────────────────────────────────────────────────────────

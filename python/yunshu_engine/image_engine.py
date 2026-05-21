@@ -1318,6 +1318,7 @@ class ImageGenEngine:
         # priority and assigned step ranges.
         self._lora_offloader = None
         self._original_modules: dict[str, object] = {}  # name→original Linear before LoRA wrap
+        self._lora_lock = threading.Lock()
         lora_budget_mb = os.environ.get("YUNSHU_LORA_BUDGET_MB", "").strip()
         if lora_budget_mb:
             try:
@@ -2931,7 +2932,17 @@ class ImageGenEngine:
         if self._transformer is None:
             logger.error("Cannot load LoRA: transformer not loaded")
             return False
+        if not getattr(self, '_lora_lock', threading.Lock()).acquire(timeout=30):
+            logger.error("Cannot load LoRA: lock contention")
+            return False
 
+        try:
+         return self._load_lora_adapter_locked(adapter_path, rank, scale)
+        finally:
+         getattr(self, "_lora_lock", threading.Lock()).release()
+
+    def _load_lora_adapter_locked(self, adapter_path: str, rank: int = 8, scale: float = 20.0) -> bool:
+        """Internal: load LoRA with lock already held."""
         import json
         from pathlib import Path
 
@@ -3008,6 +3019,9 @@ class ImageGenEngine:
         """Restore original Linear modules, removing LoRA wrappers."""
         if self._transformer is None or not self._original_modules:
             return False
+        if not getattr(self, '_lora_lock', threading.Lock()).acquire(timeout=30):
+            logger.error("Cannot unload LoRA: lock contention")
+            return False
         try:
             for name, orig_module in self._original_modules.items():
                 parts = name.rsplit(".", 1)
@@ -3023,3 +3037,5 @@ class ImageGenEngine:
         except Exception as e:
             logger.error(f"Failed to unload LoRA adapter: {e}", exc_info=True)
             return False
+        finally:
+            getattr(self, "_lora_lock", threading.Lock()).release()

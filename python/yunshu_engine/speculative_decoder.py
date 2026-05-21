@@ -771,7 +771,11 @@ class SpeculativeDecoder:
                 break
             verify_result = self.verify_draft(draft_result, last_tok_arr, target_cache, temperature=temperature)
 
-            # SP-PEN: Apply penalty/bias to bonus token via extra target forward pass
+            # SP-PEN: Apply penalty/bias to bonus token.
+            # verify_draft already populated target_cache with K+1 entries.
+            # We feed the last accepted token to get bonus logits with a fresh
+            # cache slot, then IMMEDIATELY roll back that slot so the cache
+            # stays aligned for the next iteration.
             _has_pen = (
                 repetition_penalty != 1.0
                 or frequency_penalty != 0.0
@@ -780,7 +784,10 @@ class SpeculativeDecoder:
             )
             if _has_pen and verify_result.bonus_token_id >= 0:
                 from .batched_engine import _apply_spec_bonus_penalties
-                _pen_input = mx.array([[generated_tokens[-1]]])
+                # Determine the token to feed: the last token before the bonus
+                # position (either last accepted draft or the alignment token).
+                _pen_last_tok = verify_result.accepted_ids[-1] if verify_result.accepted_ids else int(last_tok.item())
+                _pen_input = mx.array([[_pen_last_tok]])
                 _pen_out = self.target(_pen_input, cache=target_cache)
                 _pen_logits = _pen_out.logits[0, -1, :] if hasattr(_pen_out, 'logits') else _pen_out[0, -1, :]
                 _token_hist = list(input_ids.flatten()) + generated_tokens
@@ -792,6 +799,14 @@ class SpeculativeDecoder:
                     logit_bias=logit_bias,
                 )
                 _pen_bonus = int(mx.argmax(_pen_logits).item())
+                # Roll back the extra cache entry to prevent KV misalignment
+                try:
+                    from mlx_lm.models.cache import trim_prompt_cache
+                    trim_prompt_cache(target_cache, 1)
+                except Exception:
+                    for c in target_cache:
+                        if hasattr(c, "trim"):
+                            c.trim(1)
                 verify_result = VerifyResult(
                     accepted_count=verify_result.accepted_count,
                     accepted_ids=verify_result.accepted_ids,

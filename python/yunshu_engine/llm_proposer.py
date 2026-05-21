@@ -278,10 +278,18 @@ class LLMProposer:
             List of draft token IDs.
         """
         prev_len = getattr(self, '_cache_context_len', 0)
+        prev_ids = getattr(self, '_prev_context_ids', None)
 
         # Reuse KV cache from previous call — only process new tokens.
         # Reset if context shrank (new conversation) or cache missing.
-        if self._cache is None or len(context_ids) < prev_len:
+        # Also reset if prefix changed (same length but different content).
+        _prefix_changed = (
+            prev_ids is not None
+            and len(context_ids) >= prev_len
+            and prev_len > 0
+            and context_ids[:prev_len] != prev_ids[:prev_len]
+        )
+        if self._cache is None or len(context_ids) < prev_len or _prefix_changed:
             try:
                 from mlx_lm.models.cache import make_prompt_cache
                 self._cache = make_prompt_cache(self._model)
@@ -312,6 +320,7 @@ class LLMProposer:
             logits = output.logits[:, -1, :] if hasattr(output, 'logits') else output[:, -1, :]
 
         self._cache_context_len = len(context_ids)
+        self._prev_context_ids = list(context_ids)
         self._last_logits = logits
 
         # Generate n tokens autoregressively

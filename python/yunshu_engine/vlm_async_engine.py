@@ -390,6 +390,10 @@ class VLMAsyncEngineCore:
             if chunk is not None:
                 result = chunk
 
+        # If aborted before any output was produced, synthesize an abort chunk
+        if result is None and state.aborted:
+            result = VLMStreamChunk(finish_reason="abort")
+
         self._cleanup_request(req_id)
         return result
 

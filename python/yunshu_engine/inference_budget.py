@@ -147,6 +147,8 @@ class InferenceBudgetManager:
         priority: int = 0,
     ) -> InferenceBudget:
         """Register a budget for a new request."""
+        if self.is_rate_limited():
+            raise RuntimeError("Global token rate limit exceeded — cannot register new request")
         budget = InferenceBudget(
             request_id=request_id,
             max_tokens=self._default_max_tokens if max_tokens is None else max_tokens,

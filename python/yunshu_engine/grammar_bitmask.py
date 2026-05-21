@@ -465,6 +465,8 @@ class BitmaskConstrainedSampler:
         """Discard the most recent checkpoint without restoring."""
         if hasattr(self._engine, 'discard_checkpoint'):
             self._engine.discard_checkpoint()
+        if hasattr(self, '_checkpoint_ids_len'):
+            del self._checkpoint_ids_len
 
 
 # ── Factory ─────────────────────────────────────────────────────────────────

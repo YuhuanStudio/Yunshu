@@ -27,18 +27,23 @@ class FakeTransformer:
 
 
 def _make_engine():
+    import threading
     engine = ImageGenEngine.__new__(ImageGenEngine)
     engine._transformer = FakeTransformer()
     engine._model_path = "/fake"
     engine._running = True
+    engine._lora_lock = threading.Lock()
+    engine._original_modules = {}
     return engine
 
 
 class TestImageLoRA:
     def test_load_lora_no_transformer(self):
         """Should fail gracefully when transformer not loaded."""
+        import threading
         engine = ImageGenEngine.__new__(ImageGenEngine)
         engine._transformer = None
+        engine._lora_lock = threading.Lock()
         result = engine.load_lora_adapter("/fake/path")
         assert result is False
 
