@@ -1,6 +1,6 @@
 # Yunshu 全項目整合審計報告
 
-> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–337: 52 waves, 1024+ bugs fixed. Latest: Wave 337 — N-gram spec grammar constraint bypass fix (sampler passthrough to verify_with_last_token), Responses streaming logprobs extraction (2 call sites), image engine LoRA unload method with original module restoration, VLM first-token stop-suffix check, 6744 tests.)
+> 審計日期: 2026-05-12 (最後更新: 2026-05-21 — Waves 282–338: 53 waves, 1040+ bugs fixed. Latest: Wave 338 — CRITICAL: _seq variable collision in Responses streaming stop correction (TypeError crash), missing auth on 7 disaggregate+batch endpoints, _stream_generate_ngram_spec undefined (AttributeError crash). HIGH: LoRA acquire/release on all 6 spec decode paths (spec/ngram/MTP × gen/stream), spec_draft_verifier softmax-on-logprobs math fix, gateway monitoring FREE-tier bypass fix, disaggregate decode legacy engine attribute mismatch, chat.py output.finished safety. 6744 tests.)
 > 審計範圍: 全部 Python 引擎、Gateway、控制平面、KV 層、Mesh、SDK、CLI、WebUI
 > 審計方法: 逐文件 grep 搜索所有 import/caller，追蹤每個功能從 API 到 GPU 的完整調用鏈
 

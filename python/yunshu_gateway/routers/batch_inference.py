@@ -21,7 +21,7 @@ import time
 import uuid
 
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -86,7 +86,7 @@ class BatchResponse(BaseModel):
 
 
 @router.post("/batch", response_model=None)
-async def create_batch(req: BatchRequest):
+async def create_batch(req: BatchRequest, request: Request):
     """Execute a batch of inference requests concurrently.
 
     Supports configurable concurrency, batch timeout, and partial success.
@@ -95,6 +95,9 @@ async def create_batch(req: BatchRequest):
     """
     if not req.requests:
         raise HTTPException(status_code=400, detail="Batch cannot be empty")
+
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
 
     if len(req.requests) > _BATCH_MAX_ITEMS:
         raise HTTPException(
@@ -311,6 +314,7 @@ async def download_batch_csv(batch_id: str):
 
 @router.post("/batch/upload/csv", response_model=None)
 async def upload_batch_csv(
+    request: Request,
     file: UploadFile = File(...),
     model: str = "default",
     max_tokens: int = 512,
@@ -321,6 +325,8 @@ async def upload_batch_csv(
     Expected CSV columns: custom_id, prompt (or messages_json)
     Optional columns: max_tokens, temperature, system_prompt
     """
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
     if not model or not model.strip():
         raise HTTPException(status_code=400, detail="model parameter is required and cannot be empty")
 

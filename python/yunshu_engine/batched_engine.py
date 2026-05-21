@@ -2883,9 +2883,11 @@ class BatchedEngine:
             return
 
         # N-gram speculative decoding streaming (model-free)
+        # NOTE: _stream_generate_ngram_spec is not yet implemented; use
+        # non-streaming n-gram spec with chunked yield for now.
         if spec_decode and self._ngram_proposer is not None and not _use_engine_loop:
             try:
-                async for output in self._stream_generate_ngram_spec(
+                async for output in self._stream_generate_fast(
                     prompt=prompt, max_tokens=max_tokens, temperature=temperature,
                     top_p=top_p, top_k=top_k, min_p=min_p,
                     repetition_penalty=repetition_penalty,
@@ -4192,6 +4194,7 @@ class BatchedEngine:
                 cancel_event=cancel_event,
                 logits_processors=logits_processors,
                 timeout_seconds=timeout_seconds,
+                lora_adapter=lora_adapter,
             )
 
         from .mlx_executor import get_mlx_executor
@@ -4250,6 +4253,13 @@ class BatchedEngine:
         _prev_constraint = self._spec_decoder.constraint
         self._spec_decoder.constraint = _spec_constraint
 
+        _lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in spec decode path", exc_info=True)
+
         def _run_spec():
             token_ids = self._spec_decoder.generate(
                 input_ids=input_array,
@@ -4287,6 +4297,11 @@ class BatchedEngine:
             except Exception:
                 pass
             self._spec_decoder.constraint = _prev_constraint
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="error",
@@ -4304,6 +4319,11 @@ class BatchedEngine:
             except Exception:
                 pass
             self._spec_decoder.constraint = _prev_constraint
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -4322,6 +4342,11 @@ class BatchedEngine:
                 except Exception:
                     pass
                 self._spec_decoder.constraint = _prev_constraint
+                if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                    try:
+                        self._lora_manager.release_adapter(lora_adapter)
+                    except Exception:
+                        pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -4332,10 +4357,20 @@ class BatchedEngine:
                     cached_tokens=0,
                 )
             self._spec_decoder.constraint = _prev_constraint
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             raise
         except Exception as e:
             logger.error(f"Unexpected error during speculative generation: {e}", exc_info=True)
             self._spec_decoder.constraint = _prev_constraint
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             raise
         _spec_ttft_s = time.perf_counter() - _spec_gen_t0
         detokenizer.finalize()
@@ -4386,6 +4421,11 @@ class BatchedEngine:
                 logger.debug("reasoning_parser failed in spec decode path", exc_info=True)
 
         self._spec_decoder.constraint = _prev_constraint
+        if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                self._lora_manager.release_adapter(lora_adapter)
+            except Exception:
+                pass
         return GenerationOutput(
             text=text,
             new_text=text,
@@ -4449,6 +4489,7 @@ class BatchedEngine:
                 logprobs=bool(logprobs),
                 top_logprobs=top_logprobs,
                 logits_processors=logits_processors,
+                lora_adapter=lora_adapter,
             ):
                 yield output
             return
@@ -4518,6 +4559,13 @@ class BatchedEngine:
                 logger.warning("Grammar constraint setup failed for spec streaming", exc_info=True)
         _prev_constraint = self._spec_decoder.constraint
         self._spec_decoder.constraint = _spec_constraint
+
+        _lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in streaming spec decode path", exc_info=True)
 
         # Thinking budget enforcement — detect <think/</think via single-token IDs
         _spec_think_start_token = None
@@ -4883,6 +4931,11 @@ class BatchedEngine:
             raise
         finally:
             self._spec_decoder.constraint = _prev_constraint
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
 
     async def _generate_ngram_spec(
         self,
@@ -5270,6 +5323,12 @@ class BatchedEngine:
 
         executor = get_mlx_executor()
         loop = asyncio.get_running_loop()
+        _lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in n-gram spec path", exc_info=True)
         try:
             tokens, output_text, _, ttft_s, cached_tokens, _stopped_by_suffix, _stopped_by_stop_id = await loop.run_in_executor(executor, _run)
         except MemoryError:
@@ -5279,6 +5338,11 @@ class BatchedEngine:
                 await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
             except Exception:
                 pass
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -5296,6 +5360,11 @@ class BatchedEngine:
                     await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
                 except Exception:
                     pass
+                if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                    try:
+                        self._lora_manager.release_adapter(lora_adapter)
+                    except Exception:
+                        pass
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -5305,9 +5374,19 @@ class BatchedEngine:
                     ttft_ms=0.0,
                     cached_tokens=0,
                 )
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             raise
         except Exception as e:
             logger.error(f"Unexpected error during N-gram spec generation: {e}", exc_info=True)
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             raise
 
         # Determine finish_reason with cancel awareness.
@@ -5360,6 +5439,11 @@ class BatchedEngine:
             except Exception:
                 logger.debug("reasoning_parser failed in n-gram spec path", exc_info=True)
 
+        if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                self._lora_manager.release_adapter(lora_adapter)
+            except Exception:
+                pass
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -6244,6 +6328,20 @@ class BatchedEngine:
                 logit_bias=logit_bias,
             )
 
+        _lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in MTP path", exc_info=True)
+
+        def _lora_release():
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
+
         _mtp_gen_t0 = time.perf_counter()
         try:
             token_ids = await asyncio.wait_for(
@@ -6257,6 +6355,7 @@ class BatchedEngine:
                 await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
             except Exception:
                 pass
+            _lora_release()
             return GenerationOutput(
                 finished=True,
                 finish_reason="error",
@@ -6273,6 +6372,7 @@ class BatchedEngine:
                 await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
             except Exception:
                 pass
+            _lora_release()
             return GenerationOutput(
                 finished=True,
                 finish_reason="memory_limit",
@@ -6290,6 +6390,7 @@ class BatchedEngine:
                     await loop.run_in_executor(executor, lambda: (_mx.synchronize(), _mx.clear_cache()))
                 except Exception:
                     pass
+                _lora_release()
                 return GenerationOutput(
                     finished=True,
                     finish_reason="memory_limit",
@@ -6299,9 +6400,11 @@ class BatchedEngine:
                     ttft_ms=0.0,
                     cached_tokens=0,
                 )
+            _lora_release()
             raise
         except Exception as e:
             logger.error(f"Unexpected error during MTP generation: {e}", exc_info=True)
+            _lora_release()
             raise
         _mtp_ttft_s = time.perf_counter() - _mtp_gen_t0
 
@@ -6429,6 +6532,7 @@ class BatchedEngine:
             except Exception:
                 logger.debug("reasoning_parser failed in MTP path", exc_info=True)
 
+        _lora_release()
         return GenerationOutput(
             text=output_text,
             new_text=output_text,
@@ -6575,6 +6679,13 @@ class BatchedEngine:
                 get_inflight_tracker().unregister(_inflight_req_id)
             except Exception:
                 logger.debug("MTP inflight prefix unregister failed", exc_info=True)
+
+        _lora_applied = False
+        if lora_adapter and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+            try:
+                _lora_applied = self._lora_manager.acquire_adapter(lora_adapter)
+            except Exception:
+                logger.debug("LoRA acquire failed in streaming MTP path", exc_info=True)
 
         _sentinel = object()
         _q: asyncio.Queue = asyncio.Queue(maxsize=512)
@@ -7036,6 +7147,11 @@ class BatchedEngine:
                     break
         finally:
             _unregister_inflight()
+            if _lora_applied and hasattr(self, '_lora_manager') and self._lora_manager is not None:
+                try:
+                    self._lora_manager.release_adapter(lora_adapter)
+                except Exception:
+                    pass
             # Decrement active fast path count (prevents model eviction mid-generation)
             _mtp_fp_lock = getattr(self, '_fast_path_lock', None)
             if _mtp_fp_lock is not None:

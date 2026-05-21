@@ -255,6 +255,8 @@ async def prefill(req: PrefillRequest, request: Request):
     After prefill, if KV transfer is enabled (YUNSHU_KV_TRANSFER=1) and a
     remote decode node is selected, sends KV blocks to that node.
     """
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
     # Start GC task on first request
     _start_gc_task()
 
@@ -412,6 +414,8 @@ async def decode(req: DecodeRequest, request: Request):
     Looks up the cache handle (local or from remote prefill) and runs
     decode via the engine. The handle is consumed (deleted) after use.
     """
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
     _start_gc_task()
 
     engine = _resolve_engine(request)
@@ -470,18 +474,24 @@ async def decode(req: DecodeRequest, request: Request):
     with _cache_lock:
         _cache_handles.pop(req.cache_handle, None)
 
+    _gen_text = getattr(gen_output, 'text', None) or getattr(gen_output, 'generated_text', '')
+    _gen_comp = getattr(gen_output, 'completion_tokens', None) or getattr(gen_output, 'completion_token_count', 0)
+    _gen_finish = getattr(gen_output, 'finish_reason', 'stop')
+
     return DecodeResponse(
         id=f"dec-{uuid.uuid4().hex[:8]}",
-        text=gen_output.text,
+        text=_gen_text,
         prompt_tokens=prompt_tokens,
-        completion_tokens=gen_output.completion_tokens,
-        finish_reason=gen_output.finish_reason,
+        completion_tokens=_gen_comp,
+        finish_reason=_gen_finish,
     )
 
 
 @router.get("/cache-handles")
-async def list_cache_handles():
+async def list_cache_handles(request: Request):
     """List active cache handles (debug/monitoring)."""
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
     now = time.monotonic()
     with _cache_lock:
         handles_snapshot = list(_cache_handles.items())
@@ -503,8 +513,10 @@ async def list_cache_handles():
 
 
 @router.delete("/cache-handles/{handle_id}")
-async def delete_cache_handle(handle_id: str):
+async def delete_cache_handle(handle_id: str, request: Request):
     """Delete a cache handle to free GPU memory."""
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
     with _cache_lock:
         if handle_id not in _cache_handles:
             raise HTTPException(status_code=404, detail=f"Cache handle {handle_id} not found")
@@ -513,7 +525,9 @@ async def delete_cache_handle(handle_id: str):
 
 
 @router.get("/disagg-stats")
-async def disagg_stats():
+async def disagg_stats(request: Request):
+    from .models import _check_permission
+    _check_permission(request, "can_infer")
     """Return disaggregated serving statistics from DisaggRouter + KV transfer.
 
     Provides visibility into:

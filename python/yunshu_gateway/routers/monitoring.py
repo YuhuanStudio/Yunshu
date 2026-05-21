@@ -46,6 +46,9 @@ def _check_permission(request: Request) -> None:
     # Tenant set by TenantAuthMiddleware for static tokens.
     tenant = getattr(request.state, "tenant", None)
     if tenant is not None:
+        tenant_role = getattr(tenant, 'role', None) if hasattr(tenant, 'role') else None
+        if tenant_role not in ("admin", "system", "owner"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions for monitoring endpoints")
         return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:

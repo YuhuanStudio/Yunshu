@@ -597,12 +597,12 @@ def _sample_correction(
             When None (common for n-gram/MTP where only token-level probs are
             available), samples from the target distribution directly.
     """
-    # Convert target logprobs to probs
-    probs = mx.softmax(target_logprobs_row, axis=-1)
+    # Convert target logprobs to probs (input is already log-probabilities, use exp not softmax)
+    probs = mx.exp(target_logprobs_row)
 
     if draft_logprobs_row is not None:
         # Full draft distribution available: proper correction sampling
-        draft_probs = mx.softmax(draft_logprobs_row, axis=-1)
+        draft_probs = mx.exp(draft_logprobs_row)
         adjusted = mx.maximum(mx.zeros_like(probs), probs - draft_probs)
         total = adjusted.sum()
         if total > 0:

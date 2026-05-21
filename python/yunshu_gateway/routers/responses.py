@@ -782,9 +782,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         # The engine counts tokens up to and including the stop sequence, but
         # OpenAI API convention excludes stop tokens from completion_tok.
         if req.stop and last_finish_reason == "stop":
-            for _seq in req.stop:
-                if _seq and _seq in accumulated_text:
-                    _idx = accumulated_text.find(_seq)
+            for _stop_seq in req.stop:
+                if _stop_seq and _stop_seq in accumulated_text:
+                    _idx = accumulated_text.find(_stop_seq)
                     accumulated_text = accumulated_text[:_idx]
                     _tok = getattr(engine, '_tokenizer', None)
                     if _tok:

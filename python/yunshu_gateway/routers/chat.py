@@ -1725,7 +1725,7 @@ async def _stream_response_multi(
                             logger.error("Choice streaming text buffer exceeded 1MB — truncating")
                             _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                     # Detect stop-sequence overcount on final output
-                    if req.stop and choice_finish_reason == "stop" and output.finished:
+                    if req.stop and choice_finish_reason == "stop" and getattr(output, "finished", False):
                         for _seq in req.stop:
                             if _seq and _seq in _choice_streamed_text:
                                 _idx = _choice_streamed_text.find(_seq)
@@ -2204,7 +2204,7 @@ async def _stream_response(
                 # and the engine's finish_reason is "stop", the engine may have
                 # overcounted completion_tok when a multi-token stop suffix was
                 # matched (engine only decrements by 1 regardless of suffix length).
-                if req.stop and last_finish_reason == "stop" and output.finished:
+                if req.stop and last_finish_reason == "stop" and getattr(output, "finished", False):
                     for _seq in req.stop:
                         if _seq and _seq in _streamed_text:
                             _idx = _streamed_text.find(_seq)
