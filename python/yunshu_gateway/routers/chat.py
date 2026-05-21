@@ -1841,6 +1841,8 @@ async def _stream_response_multi(
                     # Track emitted text for stop-sequence correction
                     if token_text and not getattr(output, 'current_state', None) == "reasoning":
                         _choice_streamed_text += token_text
+                        if len(_choice_streamed_text) > _MAX_STREAMING_TEXT_BUFFER:
+                            _choice_streamed_text = _choice_streamed_text[-_TRUNCATE_KEEP:]
                     # Detect stop-sequence overcount on final output
                     if req.stop and choice_finish_reason == "stop" and getattr(output, 'finished', False):
                         for _seq in req.stop:

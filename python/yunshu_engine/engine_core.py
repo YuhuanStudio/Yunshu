@@ -3127,6 +3127,8 @@ class EngineCore:
         self._request_timestamps.pop(request_id, None)
         if hasattr(self, '_ttft_timestamps'):
             self._ttft_timestamps.pop(request_id, None)
+        if hasattr(self, '_ttft_done'):
+            self._ttft_done.discard(request_id)
         self._kv_prefix_hashes.pop(request_id, None)
         # Bug fix: do NOT discard from _finalized_ids here.  The idempotency
         # guard in _finalize_request relies on _finalized_ids persisting
