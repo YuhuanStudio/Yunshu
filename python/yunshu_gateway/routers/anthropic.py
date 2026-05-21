@@ -742,7 +742,7 @@ async def _non_stream_batched(engine, messages, req, stop, cancel_event=None, lo
             content={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
         )
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
-    _record_metrics(result.prompt_tokens, result.completion_tokens)
+    _record_metrics(result.prompt_tokens, result.completion_tokens + (getattr(result, 'reasoning_tokens', 0) or 0))
 
     content = []
     thinking_text = ""
@@ -902,9 +902,8 @@ async def _non_stream_legacy(engine, messages, req, stop, cancel_event=None, lor
     _fr = getattr(result, 'finish_reason', None)
     finish_reason = _fr if _fr is not None else getattr(result, 'finish_state', None)
     cached_toks = getattr(result, 'cached_tokens', 0) or 0
-    _record_metrics(prompt_toks, completion_toks)
-
-    # Extract thinking tokens if thinking mode enabled
+    _reasoning_tok_legacy = getattr(result, 'reasoning_tokens', 0) or 0
+    _record_metrics(prompt_toks, completion_toks + _reasoning_tok_legacy)
     content = []
     visible_text = text
     if enable_thinking:
@@ -1557,6 +1556,12 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
       {"type": "error", "error": {"type": "...", "message": "..."}}
     """
     _check_permission(request, "can_infer")
+    _rbac_key = getattr(request.state, "rbac_key", None)
+    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
+        return JSONResponse(
+            status_code=403,
+            content={"type": "error", "error": {"type": "permission_error", "message": f"Model '{req.model}' not accessible"}},
+        )
     try:
         engine, _ = await _resolve_engine(req.model)
     except HTTPException as e:

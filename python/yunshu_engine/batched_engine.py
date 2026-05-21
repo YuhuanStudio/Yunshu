@@ -3758,6 +3758,15 @@ class BatchedEngine:
                         "Streaming text buffer exceeded 1MB limit (%d bytes) — truncating",
                         len(accumulated),
                     )
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated),
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=tok_count,
+                        finished=True,
+                        finish_reason="length",
+                        error="Streaming text buffer exceeded 1MB limit",
+                    )
                     break
                 n_tok = tok_count
 
@@ -6127,6 +6136,15 @@ class BatchedEngine:
                         "Streaming text buffer exceeded 1MB limit (%d bytes) — truncating",
                         len(accumulated),
                     )
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated),
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=tok_count,
+                        finished=True,
+                        finish_reason="length",
+                        error="Streaming text buffer exceeded 1MB limit",
+                    )
                     break
                 n_tok = tok_count
                 # Consumer-side thinking state tracking for reasoning_tokens reporting
@@ -7086,6 +7104,15 @@ class BatchedEngine:
                     logger.error(
                         "Streaming text buffer exceeded 1MB limit (%d bytes) — truncating",
                         len(accumulated),
+                    )
+                    yield GenerationOutput(
+                        text=_clean_special_tokens(accumulated),
+                        new_text="",
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=tok_count,
+                        finished=True,
+                        finish_reason="length",
+                        error="Streaming text buffer exceeded 1MB limit",
                     )
                     break
                 n_tok = tok_count
