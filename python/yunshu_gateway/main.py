@@ -916,6 +916,7 @@ def create_app() -> FastAPI:
     from .routers import sleep as sleep_mod
     app.include_router(chat.router, prefix="/v1")
     from .routers import cached_contents as cached_contents_mod
+    from .routers import omni as omni_mod
     app.include_router(cached_contents_mod.router, prefix="/v1")
     app.include_router(completions.router, prefix="/v1")
     app.include_router(responses_mod.router, prefix="/v1")
