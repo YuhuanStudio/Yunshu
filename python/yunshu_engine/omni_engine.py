@@ -112,7 +112,36 @@ class OmniEngine:
                 f"{self.model_path} has no Talker — not a unified-omni model. "
                 "OmniEngine requires a Thinker+Talker model (e.g. Qwen3-Omni)."
             )
+        self._compile_kernels()
         logger.info("OmniEngine ready (talker present).")
+
+    def _compile_kernels(self) -> None:
+        """Pre-compile the Thinker's MoE kernels with a throwaway forward BEFORE
+        any ``generate_stream``.
+
+        On the 30B-A3B MoE, ``generate_step``'s *first* command buffer otherwise
+        JITs every kernel inline and overruns Metal's GPU watchdog
+        (``kIOGPUCommandBufferCallbackErrorHang``) — the cold generation simply
+        hangs. A plain parallel forward (one bounded command buffer) compiles
+        those kernels safely; subsequent generation buffers then stay under the
+        watchdog. Verified on M3 Max: cold ``generate_stream`` hangs; a single
+        forward first → full Thinker+Talker audio. Best-effort; ``load`` only
+        reaches here once."""
+        import mlx.core as mx
+
+        try:
+            conv = [{"role": "user", "content": _build_content("Hi.", None, None)}]
+            mi, _ = _prepare_inputs(self.processor, conv)
+            for _ in range(2):
+                out = self.model.thinker.language_model(mi["input_ids"])
+                mx.eval(out.logits)
+            logger.info("OmniEngine kernels pre-compiled (cold-start hang avoided).")
+        except Exception as exc:  # noqa: BLE001 — priming is best-effort
+            logger.warning(
+                "OmniEngine kernel pre-compile failed (%s); the first generation "
+                "may hang on large MoE models (Metal GPU watchdog).",
+                exc,
+            )
 
     async def warmup(self, rounds: int = 2) -> float:
         """Load + run throwaway generations so the user's FIRST real request is
