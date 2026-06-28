@@ -5,8 +5,6 @@ Qwen3-Omni ~22GB). These cover the routing/config surface so CI stays fast.
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
