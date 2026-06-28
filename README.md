@@ -78,6 +78,7 @@ If you need production multi-tenant serving or multi-node sharding on Apple Sili
 | Speech-to-text (ASR) | `/v1/audio/transcriptions` | `mlx-audio` / whisper | `audio` |
 | Text-to-speech | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | Realtime voice (bidirectional) | `WS /v1/realtime` | ASR + TTS pipeline | `audio` |
+| **Native omni voice** (speech-in → speech-out from one unified model, streaming SSE) | `POST /v1/omni/speech/stream` | `mlx-vlm` (Qwen3-Omni Thinker+Talker) | `vision` |
 | Image generation | `/v1/images/generations` | self-implemented diffusion | `generation` |
 | Embeddings | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
 

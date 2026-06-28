@@ -65,8 +65,8 @@ class OmniEngine:
         self.talker_max = talker_max_new_tokens
         self.talker_temp = talker_temperature
         self.chunk_size = chunk_size
-        self.model = None
-        self.processor = None
+        self.model: Any = None  # mlx-vlm omni model (dynamic)
+        self.processor: Any = None
         self._prev_text_ids: list[int] = []
         self._busy = asyncio.Lock()
 
@@ -157,12 +157,12 @@ class OmniEngine:
         if not new_ids:
             return ""
         try:
-            return self.processor.decode(new_ids)
+            return str(self.processor.decode(new_ids))
         except Exception:  # noqa: BLE001
             return ""
 
 
-def _prepare_inputs(processor, conv: list[dict]) -> tuple[dict, Any]:
+def _prepare_inputs(processor: Any, conv: list[dict]) -> Any:
     from mlx_vlm.models.qwen3_omni_moe.omni_utils import prepare_omni_inputs
 
     return prepare_omni_inputs(processor, conv)
