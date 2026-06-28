@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a new capability or an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please skim the README **"What this is NOT"** section — Yunshu is deliberately
+        a single-node, single-consumer, local engine. Requests for multi-node sharding, multi-tenant
+        scheduling, or beating mlx-lm on raw throughput are out of scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: The use-case, not the solution. "I want to do X but currently have to Y."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Yunshu to do?
+      description: A sketch of the API or behavior. An example `curl`/`python` call is the clearest spec.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: modality
+    attributes:
+      label: Modality this touches
+      options:
+        - Text
+        - Vision / OCR
+        - Speech-to-text / Text-to-speech
+        - Realtime voice
+        - Image / video generation
+        - Embeddings
+        - CLI / packaging / DX
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered

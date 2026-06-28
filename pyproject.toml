@@ -22,16 +22,19 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+# Core deps = the minimum for text serving to work out of the box:
+# `pip install yunshu && yunshu serve -m <model>` must boot a working
+# /v1/chat/completions endpoint. The heavy modality backends (mlx-vlm,
+# mlx-audio, mlx-embeddings, diffusers) are OPTIONAL EXTRAS so a base
+# install stays light on machines that only need text.
 dependencies = [
-    # ── Apple ML Stack ──
+    # ── Apple ML Stack (text path only) ──
     "mlx>=0.31.2",
     "mlx-lm>=0.31.3",
-    "mlx-vlm>=0.4.4",
-    "mlx-embeddings>=0.1.0",
-    "mlx-audio>=0.2.0",
     # ── Model / Tokenizer ──
     "transformers>=4.53.0",
     "tokenizers>=0.21.0",
@@ -62,13 +65,60 @@ dependencies = [
     # ── System ──
     "psutil>=5.9.0",
     "tqdm>=4.66.0",
-    "diffusers>=0.37.1",
     "python-multipart>=0.0.27",
     "openai>=2.33.0",
     "jsonschema>=4.26.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/YuhuanStudio/Yunshu"
+Source = "https://github.com/YuhuanStudio/Yunshu"
+Issues = "https://github.com/YuhuanStudio/Yunshu/issues"
+
 [project.optional-dependencies]
+# Vision / VLM / OCR (mlx-vlm) — needed for image inputs and vision-language models.
+vision = [
+    "mlx-vlm>=0.4.4",
+    "Pillow>=10.0.0",
+]
+# Audio: speech-to-text (ASR) + text-to-speech (TTS) via mlx-audio.
+# Also the backbone for the Realtime voice WebSocket.
+audio = [
+    "mlx-audio>=0.2.0",
+]
+# Embeddings endpoint (/v1/embeddings) via mlx-embeddings.
+embeddings = [
+    "mlx-embeddings>=0.1.0",
+]
+# Image / video generation pipelines. Absent → /v1/images/generations and
+# /v1/video/generations return an honest 503 instead of placeholder bytes.
+generation = [
+    "diffusers>=0.37.1",
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "Pillow>=10.0.0",
+]
+# Native video generation backend (yunshu_engine.video_engine). NOTE: the PyPI
+# `mlx-video` package is preprocessing-only; full t2v/i2v requires the native
+# MLX pipeline weights.
+video = [
+    "mlx-video>=0.1.0",
+]
+# KV-transfer wire compression (yunshu_engine.kv_transfer). Absent → transfers
+# fall back to uncompressed (the codec is now honestly recorded in the header).
+compression = [
+    "zstandard>=0.22.0",
+    "lz4>=4.3.0",
+]
+# Omni: every modality above. This is what `pip install "yunshu[all]"` installs
+# for users who want the full text+vision+audio+image+embeddings surface.
+all = [
+    "yunshu[vision]",
+    "yunshu[audio]",
+    "yunshu[embeddings]",
+    "yunshu[generation]",
+    "yunshu[compression]",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
@@ -81,24 +131,6 @@ dev = [
 bench = [
     "datasets>=3.0.0",
     "matplotlib>=3.9.0",
-]
-vision = [
-    "torch>=2.1.0",
-    "torchvision>=0.16.0",
-    "Pillow>=10.0.0",
-]
-# KV-transfer wire compression (yunshu_engine.kv_transfer). Absent → transfers
-# fall back to uncompressed (the codec is now honestly recorded in the header).
-compression = [
-    "zstandard>=0.22.0",
-    "lz4>=4.3.0",
-]
-# Native video generation backend (yunshu_engine.video_engine). Absent → the
-# /video/generations endpoint returns an honest 503 instead of placeholder
-# frames. NOTE: the PyPI `mlx-video` package is preprocessing-only; full t2v/i2v
-# requires the native MLX pipeline weights.
-video = [
-    "mlx-video>=0.1.0",
 ]
 
 [project.scripts]

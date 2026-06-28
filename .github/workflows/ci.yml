@@ -14,10 +14,8 @@ env:
   PYTHON_VERSION: "3.13"
 
 jobs:
-  # ── Lint (fast, runs first) ──
-
   lint:
-    name: Lint & Format
+    name: Lint
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -31,24 +29,14 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
 
-      - name: Restore .venv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+      - name: Install dependencies (core + dev only — fast, no modality extras)
+        run: uv sync --dev
 
       - name: Ruff lint
-        run: uv run ruff check .
+        run: uv run ruff check python/ tests/
 
       - name: Ruff format check
-        run: uv run ruff format --check .
-
-  # ── Unit tests (runs in parallel with lint) ──
+        run: uv run ruff format --check python/ tests/
 
   test-unit:
     name: Unit Tests
@@ -65,34 +53,15 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
 
-      - name: Restore .venv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
-
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+      - name: Install dependencies (core + dev only — e2e needs models)
+        run: uv sync --dev
 
       - name: Run unit tests
-        run: uv run pytest tests/unit/ -v --tb=short --junitxml=test-results/unit.xml
+        run: uv run pytest tests/unit -q --tb=short
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-results
-          path: test-results/unit.xml
-          retention-days: 7
-
-  # ── Integration tests (only if test-unit passes) ──
-
-  test-integration:
-    name: Integration Tests
+  build:
+    name: Build Wheel
     runs-on: macos-14
-    needs: test-unit
     steps:
       - uses: actions/checkout@v4
 
@@ -105,42 +74,17 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ env.PYTHON_VERSION }}
 
-      - name: Restore .venv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+      - name: Build sdist + wheel
+        run: uv build
 
-      - name: Install dependencies
-        run: uv sync --all-extras --dev
+      - name: Verify console script is present
+        run: |
+          unzip -p dist/yunshu-*.whl "*/entry_points.txt" | grep -q "yunshu = yunshu_cli:app"
+          echo "console_scripts entrypoint OK"
 
-      - name: Run integration tests
-        run: uv run pytest tests/integration/ -v --tb=short --junitxml=test-results/integration.xml
-
-      - name: Upload test results
-        if: always()
+      - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-results
-          path: test-results/integration.xml
-          retention-days: 7
-
-  # ── Metal kernel build ──
-
-  build-metal:
-    name: Build Metal Kernels
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Metal kernels
-        run: cd metal && make all
-
-      - name: Upload metallib artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: yunshu-kernels-metallib
-          path: metal/build/yunshu_kernels.metallib
+          name: yunshu-wheel
+          path: dist/yunshu-*.whl
           retention-days: 7

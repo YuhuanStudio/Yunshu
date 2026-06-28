@@ -2,16 +2,47 @@
 
 # Yunshu
 
-**A local, single-node, multimodal (omni) inference engine for Apple Silicon.**
+**A local, single-node, multimodal (omni) inference engine for Apple Silicon —
+one OpenAI-compatible endpoint for text + vision + speech-in + speech-out + images,
+with native omni voice (Qwen3-Omni speech-in / speech-out) as the forward direction.**
 
-One OpenAI/Anthropic-compatible endpoint for text · vision · OCR · speech-in · speech-out · images — running entirely on your Mac via MLX.
+Runs entirely on-device via `mlx-lm` / `mlx-vlm` / `mlx-audio`. Single-consumer: built to serve
+one local app (e.g. a digital being), not a multi-tenant fleet.
 
+[![PyPI](https://img.shields.io/pypi/v/yunshu.svg?label=PyPI)](https://pypi.org/project/yunshu/)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![CI](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml)
 
 </div>
 
 ---
+
+## Quickstart
+
+```bash
+# 1. Install (text serving works out of the box; add extras for other modalities)
+pip install yunshu                       # text only — light
+pip install "yunshu[all]"                # text + vision + audio + image + embeddings
+
+# 2. Start the server against any local MLX-quantized model
+yunshu serve -m mlx-community/Qwen2.5-0.5B-Instruct-4bit --port 8000
+
+# 3. First request (any OpenAI SDK — just change base_url)
+python -c "
+from openai import OpenAI
+c = OpenAI(base_url='http://localhost:8000/v1', api_key='local')
+print(c.chat.completions.create(
+    model='local',
+    messages=[{'role':'user','content':'Hello!'}],
+).choices[0].message.content)
+"
+```
+
+A full copy-paste-runnable example (text + streaming + commented vision/TTS/ASR) lives at
+[`examples/quickstart.py`](examples/quickstart.py).
+
+> **Dev checkout** instead of pip? Use `just setup` then `YUNSHU_MODEL=<model> just dev`.
 
 ## What this is
 
@@ -39,35 +70,20 @@ If you need production multi-tenant serving or multi-node sharding on Apple Sili
 
 ## Capabilities
 
-| Modality | Endpoint | Backend |
-|----------|----------|---------|
-| Text (tool-calling, JSON-schema constrained, streaming, logprobs) | `/v1/chat/completions`, `/v1/messages` | `mlx-lm` |
-| Vision (VLM) | `/v1/chat/completions` (image content) | `mlx-vlm` |
-| OCR | `/v1/chat/completions` (OCR models) | `mlx-vlm` |
-| Speech-to-text (ASR) | `/v1/audio/transcriptions` | `mlx-audio` / whisper |
-| Text-to-speech | `/v1/audio/speech` | `mlx-audio` |
-| Realtime voice (bidirectional) | `WS /v1/realtime` | ASR + TTS pipeline |
-| Image generation | `/v1/images/generations` | self-implemented diffusion |
+| Modality | Endpoint | Backend | Install extra |
+|----------|----------|---------|---------------|
+| Text (tool-calling, JSON-schema constrained, streaming, logprobs) | `/v1/chat/completions`, `/v1/messages` | `mlx-lm` | _(core)_ |
+| Vision (VLM) | `/v1/chat/completions` (image content) | `mlx-vlm` | `vision` |
+| OCR | `/v1/chat/completions` (OCR models) | `mlx-vlm` | `vision` |
+| Speech-to-text (ASR) | `/v1/audio/transcriptions` | `mlx-audio` / whisper | `audio` |
+| Text-to-speech | `/v1/audio/speech` | `mlx-audio` | `audio` |
+| Realtime voice (bidirectional) | `WS /v1/realtime` | ASR + TTS pipeline | `audio` |
+| Image generation | `/v1/images/generations` | self-implemented diffusion | `generation` |
+| Embeddings | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
 
 Plus: a single-node KV prefix cache (+ optional SSD persistence and per-request KV quantization),
 and MCP (server + client). The protocol surface is OpenAI- and Anthropic-compatible, so existing clients
 work by changing `base_url`.
-
-## Getting started
-
-```bash
-just setup                       # install Python deps via uv
-YUNSHU_MODEL=/path/to/mlx-model just dev   # start the server on :8000
-```
-
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")
-print(client.chat.completions.create(
-    model="local",
-    messages=[{"role": "user", "content": "Hello!"}],
-).choices[0].message.content)
-```
 
 ## Architecture
 

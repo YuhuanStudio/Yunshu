@@ -1,15 +1,20 @@
 # Contributing to Yunshu
 
-Thank you for your interest in contributing to Yunshu! This guide covers everything you need to get started.
+Thank you for your interest in contributing to Yunshu! This guide covers the minimum you need to get a
+working dev loop. Read the repo's `CLAUDE.md` for the full architectural picture (what's live, what's
+dead, what's being refactored).
 
 ## Prerequisites
 
-- macOS with Apple Silicon (M1/M2/M3/M4)
+- macOS with Apple Silicon (M1/M2/M3/M4) — Yunshu does not run on x86/Linux/GPU.
 - Python 3.13+
 - [uv](https://github.com/astral-sh/uv) package manager
 - [just](https://github.com/casey/just) command runner (`brew install just`)
-- [pnpm](https://pnpm.io/) (for WebUI development)
-- Xcode Command Line Tools (for Metal shader compilation)
+
+Optional, only if you touch those surfaces:
+
+- [pnpm](https://pnpm.io/) for the WebUI
+- Xcode Command Line Tools for Metal shader compilation
 
 ## Setup
 
@@ -19,166 +24,71 @@ cd Yunshu
 just setup
 ```
 
-This installs Python dependencies (via `uv sync`) and WebUI dependencies (via `pnpm install`).
-
-## Development Workflow
-
-### 1. Create a Branch
+This runs `uv sync` (core + dev deps). The heavy modality backends are **opt-in extras**:
 
 ```bash
-git checkout -b feat/your-feature-name
+uv sync --extra vision        # mlx-vlm (VLM / OCR)
+uv sync --extra audio         # mlx-audio (ASR / TTS / Realtime voice)
+uv sync --extra generation    # diffusers + torch (image / video generation)
+uv sync --extra embeddings    # mlx-embeddings (/v1/embeddings)
+uv sync --all-extras          # everything — what most contributors want
 ```
 
-Branch naming conventions:
-- `feat/` — new features
-- `fix/` — bug fixes
-- `refactor/` — code refactoring
-- `docs/` — documentation changes
-- `test/` — test additions or fixes
-- `bench/` — benchmark improvements
+## Development loop
 
-### 2. Make Changes
+```bash
+just lint              # ruff check
+just format            # ruff format
+just test-unit         # unit tests only (fast — no models needed)
+just test              # full suite (unit + integration)
+just test-single tests/unit/test_foo.py   # one file
+```
 
-The project follows a 5-layer architecture (L0–L5):
+Run `just dev` to start the gateway on `:8000` against a local model. CI runs
+`ruff check python/ tests/` + `pytest tests/unit -q` on every push — keep that green.
+
+## Where things live
+
+Yunshu is a flat monorepo (no `yunshu/` subdir):
 
 | Layer | Directory | Responsibility |
 |:-----:|-----------|----------------|
-| L1 | `python/yunshu_gateway/` | FastAPI HTTP server, 14 routers, 6 middleware |
-| L2 | `python/yunshu_control/`, `python/yunshu_api/` | RBAC, scheduling, admin API |
-| L3 | `python/yunshu_mesh/` | Compute mesh, mx.distributed |
-| L4 | `python/yunshu_engine/` | 5-modality inference engine |
-| L5 | `python/yunshu_kv/` | 4-tier KV cache hierarchy |
+| L1 | `python/yunshu_gateway/` | FastAPI HTTP server, OpenAI/Anthropic/MCP/Realtime routers |
+| L2 | `python/yunshu_control/` | Lightweight admin / usage accounting |
+| L4 | `python/yunshu_engine/` | Inference engine (text + vision + audio + image) |
+| L5 | `python/yunshu_kv/` | KV prefix cache |
+| CLI | `python/yunshu_cli/` | `yunshu serve / chat / model / ...` |
 
-Metal GPU kernels live in `metal/`, the Next.js dashboard in `webui/`.
+> **Note:** `python/yunshu_engine/` is being actively refactored by the owner. If your change is
+> engine-side, coordinate before opening a large PR. The dead `yunshu_mesh/` and `yunshu_api/` trees
+> are not shipped and should not be edited.
 
-### 3. Test
+Metal GPU kernels live in `metal/` (built via `just build-metal`). The Next.js dashboard is in `webui/`.
 
-```bash
-just test              # All tests (unit + integration)
-just test-unit         # Unit tests only
-just test-single tests/unit/test_foo.py  # Single file
-```
-
-All 2,162 tests must pass. Run the relevant subset for your changes — the full suite takes a few minutes.
-
-### 4. Lint & Format
-
-```bash
-just format            # Auto-format with ruff
-just lint              # Check with ruff + mypy
-```
-
-Fix any lint errors before submitting. We use `ruff` for formatting and linting, `mypy` for type checking.
-
-### 5. Benchmark (if relevant)
-
-If your change affects inference performance:
-
-```bash
-just bench-roofline    # Apple Silicon roofline
-PYTHONPATH=. uv run python scripts/bench_unified.py --quick
-```
-
-The benchmark must show no accuracy regression and no throughput regression below 95% of baseline.
-
-### 6. Commit
+## Commit & PR conventions
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat(engine): add speculative decoding with EAGLE-3
+feat(cli): add `yunshu model pull` subcommand
 fix(gateway): correct streaming SSE keepalive interval
-refactor(kv): simplify boundary snapshot serialization
-docs(readme): add benchmark results table
-test(engine): add logprobs extraction unit tests
-bench(metal): add GEMV tile size sweep
+docs(readme): clarify non-goals
 ```
 
-### 7. Push & PR
-
-```bash
-git push origin feat/your-feature-name
-```
-
-Open a pull request against `main`. Include:
+Open a PR against `main`. Include:
 
 - **What** changed and **why**
-- Test results (`just test` output)
-- Benchmark comparison (if performance-related)
+- `just test-unit` output (counts)
+- A benchmark comparison only if your change touches the hot path
 
-## Code Style
+## Code style
 
-- **Python**: ruff-formatted, 88-char line length, Python 3.13+
-- **Metal**: C++14 style, `[[function_constant]]` for compile-time parameters
-- **TypeScript/React**: Next.js 16 App Router, strict mode
-- **No comments** unless the WHY is non-obvious (hidden constraint, subtle invariant, workaround)
-- **No docstrings** unless the function is part of a public API
-
-## Project Conventions
-
-### Architecture Decisions
-- Single-language Python stack (L1–L5) — no Rust, no gRPC FFI
-- `uv` as sole Python package manager
-- `just` for build orchestration
-- `uvicorn` + FastAPI for HTTP serving
-- mlx-lm `BatchGenerator` for continuous batching
-
-### Engine API
-- Per-request sampler + `SequenceStateMachine` for stop/eos/reasoning state
-- Per-request detokenizer (never pool — `reset()` leaks byte buffers)
-- Single Metal thread via `ThreadPoolExecutor(max_workers=1)` for all GPU work
-
-### Testing
-- Tests in `tests/unit/` and `tests/integration/`
-- Async tests use `pytest-asyncio` with `asyncio_mode = "auto"`
-- No mocking of MLX or mlx-lm internals — test real behavior
-
-## Running the Server
-
-```bash
-# Single model
-just dev
-
-# Multi-model (auto-discovery)
-YUNSHU_MULTI_MODEL=1 just dev-multi
-
-# Specific model
-just dev-model Qwen3.5-9B-MLX-4bit
-```
-
-Place model weights in `./models/` — any HuggingFace-format MLX quantized model works.
-
-## Metal Kernel Development
-
-Metal shaders are in `metal/` and compiled with `make`:
-
-```bash
-just build-metal       # Build all kernels
-just metal-compile     # Clean rebuild
-just metal-profile paged_attention  # Profile a specific kernel
-```
-
-Kernels use Metal 3.1 features and `[[function_constant]]` for compile-time tile size specialization.
-
-## WebUI Development
-
-The dashboard is a Next.js 16 app in `webui/`:
-
-```bash
-just dev-webui         # Start dev server with hot reload
-just build-webui       # Production build
-```
-
-## Reporting Issues
-
-- **Bugs**: Open a GitHub issue with reproduction steps, macOS version, and hardware (M1/M2/M3/M4).
-- **Feature requests**: Open an issue describing the use case and expected behavior.
-- **Performance**: Include benchmark output from `scripts/bench_unified.py`.
+- **Python:** ruff-formatted, 88-char line, Python 3.13+. `just lint` is authoritative.
+- **Metal:** C++14, `[[function_constant]]` for compile-time tile specialization.
+- **TypeScript/React:** Next.js 16 App Router, strict mode.
+- Comments explain the **why** (hidden constraint, subtle invariant, workaround), not the what.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
-
-## Questions?
-
-Open a GitHub issue or start a discussion. We're happy to help you get oriented.
+By contributing, you agree that your contributions will be licensed under the
+[Apache License 2.0](LICENSE).

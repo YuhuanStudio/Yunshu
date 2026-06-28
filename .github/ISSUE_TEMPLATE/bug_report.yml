@@ -1,0 +1,75 @@
+name: Bug report
+description: Something in Yunshu is broken or behaves wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! A few things that help us triage faster:
+        - Yunshu is **single-node, single-consumer, Apple Silicon only**. Issues about multi-node
+          clustering or multi-tenant throughput are likely out of scope (see README "non-goals").
+        - The owner is actively refactoring `python/yunshu_engine/` — if your bug is in the omni
+          engine, mention the file so we can route it.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the unexpected behavior. Include the smallest reproduction.
+      placeholder: "I ran `yunshu serve -m <model>` and ... I expected ... but got ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands. A self-contained `curl`/`python` snippet is ideal.
+      placeholder: |
+        yunshu serve -m mlx-community/Qwen2.5-0.5B-Instruct-4bit --port 8000
+        curl http://localhost:8000/v1/chat/completions ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: modality
+    attributes:
+      label: Modality affected
+      options:
+        - Text (/v1/chat/completions, /v1/messages)
+        - Vision / VLM (/v1/chat/completions with image)
+        - Speech-to-text (/v1/audio/transcriptions)
+        - Text-to-speech (/v1/audio/speech)
+        - Realtime voice (WS /v1/realtime)
+        - Image generation (/v1/images/generations)
+        - Embeddings (/v1/embeddings)
+        - CLI (yunshu serve / chat / model)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: install
+    attributes:
+      label: How did you install?
+      placeholder: 'e.g. `pip install "yunshu[audio]"`  /  `uv sync` from git  /  editable'
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Run `yunshu diagnose` if it boots, otherwise fill these in by hand.
+      placeholder: |
+        - macOS / chip:    (e.g. macOS 15.2, M3 Max)
+        - Python:
+        - Yunshu version:  (`pip show yunshu` or git SHA)
+        - Model + quant:
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      description: Server logs around the failure, the full Python traceback, or the gateway's structured log line. No screenshots of text.
+      render: shell
