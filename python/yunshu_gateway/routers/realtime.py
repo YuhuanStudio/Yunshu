@@ -142,6 +142,40 @@ def _write_pcm16_wav(pcm: bytes, rate: int) -> str:
     return path
 
 
+# ── Optional neural VAD (Silero via mlx-audio) ──────────────────────────────
+# Default turn detection is the energy-RMS heuristic in _run_vad (zero deps). Set
+# YUNSHU_REALTIME_VAD=silero to use Silero instead: far fewer false triggers, and
+# it makes the OpenAI `threshold` config a real speech-probability (the RMS path
+# has to fudge it as threshold*0.05). Lazy-loaded once, shared across sessions.
+SILERO_VAD_RATE = 16000          # we resample input to 16 kHz for Silero
+_silero_vad = None               # the loaded model (or False if load failed)
+_SILERO_REPO = "mlx-community/silero-vad"
+
+
+def _silero_vad_enabled() -> bool:
+    import os
+    return os.environ.get("YUNSHU_REALTIME_VAD", "").strip().lower() == "silero"
+
+
+def _get_silero_vad():
+    """Lazy-load the Silero VAD model. Returns the model, or None if disabled or
+    the load fails (caller falls back to the energy heuristic)."""
+    global _silero_vad
+    if _silero_vad is None:
+        if not _silero_vad_enabled():
+            return None
+        try:
+            import os
+
+            import mlx_audio.vad as _vad
+            _silero_vad = _vad.load(os.environ.get("YUNSHU_REALTIME_VAD_MODEL", _SILERO_REPO))
+            logger.info("Realtime VAD: Silero loaded (%s).", _SILERO_REPO)
+        except Exception:
+            logger.warning("Silero VAD load failed — falling back to energy VAD", exc_info=True)
+            _silero_vad = False  # sentinel: don't retry every chunk
+    return _silero_vad or None
+
+
 def _strip_wav_header(data: bytes) -> bytes:
     """Return raw PCM, stripping a leading RIFF/WAVE header if present.
 
@@ -606,6 +640,11 @@ class RealtimeSession:
         self._vad_speaking = False
         self._vad_silence_bytes: int = 0  # silence window in AUDIO bytes, not wall-clock
         self._vad_speech_start_offset: int = 0
+        # Silero VAD streaming state (only used when YUNSHU_REALTIME_VAD=silero):
+        # LSTM/context state + a leftover buffer of resampled-16k float32 samples
+        # not yet forming a full Silero window. Reset on buffer clear/commit.
+        self._silero_state = None
+        self._silero_leftover = None  # np.ndarray | None
         # Track whether the active response includes audio modality
         self._active_modalities: list[str] = []
         # (self-audit): lifecycle bookkeeping for the active response.
@@ -1925,6 +1964,7 @@ class RealtimeSession:
             self._audio_buffer = bytearray()
             self._vad_speaking = False
             self._vad_silence_bytes = 0
+            self._reset_silero()
             return
 
         # Server-side VAD: energy-based detection
@@ -1932,39 +1972,74 @@ class RealtimeSession:
         if turn_detection and turn_detection.get("type") == "server_vad":
             await self._run_vad(chunk)
 
-    async def _run_vad(self, audio_chunk: bytes) -> None:
-        """Energy-based Voice Activity Detection on an audio chunk.
+    def _reset_silero(self) -> None:
+        """Drop Silero streaming state so the next utterance starts fresh."""
+        self._silero_state = None
+        self._silero_leftover = None
+        self._silero_lin_state = None
 
-        Computes RMS of the PCM audio chunk and compares against the VAD
-        threshold. Fires speech_started/speech_stopped events at transitions.
+    def _silero_speech_prob(self, audio_chunk: bytes) -> float | None:
+        """Speech probability [0,1] for this PCM16 chunk via Silero, or None when
+        the backend is disabled/unavailable or there isn't yet a full 32 ms window
+        to score. Maintains streaming state (resampler + LSTM + leftover) so windows
+        are continuous across the arbitrarily-sized append chunks."""
+        model = _get_silero_vad()
+        if model is None:
+            return None
+        try:
+            import numpy as np
+            _in_fmt = str(getattr(self.session, "input_audio_format", "pcm16") or "pcm16").lower()
+            in_rate = 8000 if "g711" in _in_fmt else 24000
+            pcm16_16k = self._resample_pcm16_linear(
+                audio_chunk, in_rate, SILERO_VAD_RATE, "_silero_lin_state")
+            if not pcm16_16k:
+                return None
+            samples = np.frombuffer(pcm16_16k, "<i2").astype(np.float32) / 32767.0
+            if self._silero_leftover is not None and len(self._silero_leftover):
+                samples = np.concatenate([self._silero_leftover, samples])
+            cs = model._branch(SILERO_VAD_RATE).config.chunk_size
+            max_prob: float | None = None
+            i = 0
+            while i + cs <= len(samples):
+                p, self._silero_state = model.feed(
+                    samples[i:i + cs], self._silero_state, SILERO_VAD_RATE)
+                prob = float(np.array(p).reshape(-1)[0])
+                max_prob = prob if max_prob is None else max(max_prob, prob)
+                i += cs
+            self._silero_leftover = samples[i:]  # carry the unscored remainder
+            return max_prob
+        except Exception:
+            logger.debug("Silero VAD scoring failed; falling back to energy", exc_info=True)
+            return None
+
+    async def _run_vad(self, audio_chunk: bytes) -> None:
+        """Voice Activity Detection on an audio chunk: Silero (neural) when
+        YUNSHU_REALTIME_VAD=silero, else an RMS-energy heuristic. Fires
+        speech_started/speech_stopped events at transitions.
 
         Args:
-            audio_chunk: Raw PCM bytes (16-bit signed, mono, 24kHz assumed).
+            audio_chunk: Raw PCM bytes (16-bit signed, mono, at the input rate).
         """
         turn_detection = self.session.turn_detection
         threshold = turn_detection.get("threshold", 0.5)
         silence_duration_ms = turn_detection.get("silence_duration_ms", 500)
-        # `threshold` is the OpenAI server_vad config on a [0,1] VAD-
-        # PROBABILITY scale (default 0.5), but we gate on normalized RMS ENERGY
-        # (rms/32768) where normal conversational speech sits ~0.03-0.1 and silence
-        # well below. Comparing 0.5 directly against RMS meant VAD NEVER fired (turns
-        # silently missed). Map the config to an RMS-energy gate so the default detects
-        # speech: 0.5 → 0.025 (above silence, below typical speech).
-        energy_threshold = threshold * 0.05
 
-        # Compute RMS of 16-bit PCM samples
-        import struct
         num_samples = len(audio_chunk) // 2
         if num_samples == 0:
             return
 
-        # Parse as signed 16-bit integers
-        samples = struct.unpack(f"<{num_samples}h", audio_chunk[:num_samples * 2])
-        sum_sq = sum(s * s for s in samples)
-        rms = (sum_sq / num_samples) ** 0.5
-
-        # Normalize to [0, 1] range (16-bit max = 32768)
-        rms_normalized = min(1.0, rms / 32768.0)
+        # Decide speech vs silence. Silero gives a real speech PROBABILITY, so the
+        # OpenAI `threshold` (default 0.5) is used directly. The energy fallback has
+        # to map it onto normalized RMS (speech ~0.03-0.1, silence below) — a 0.5
+        # direct compare against RMS would never fire, so gate at threshold*0.05.
+        _silero_prob = self._silero_speech_prob(audio_chunk)
+        if _silero_prob is not None:
+            speech = _silero_prob >= threshold
+        else:
+            import struct
+            samples = struct.unpack(f"<{num_samples}h", audio_chunk[:num_samples * 2])
+            rms = (sum(s * s for s in samples) / num_samples) ** 0.5
+            speech = min(1.0, rms / 32768.0) >= threshold * 0.05
 
         # Offset before this chunk was appended (buffer was extended in caller)
         _pre_offset = len(self._audio_buffer) - len(audio_chunk)
@@ -1975,7 +2050,7 @@ class RealtimeSession:
         _in_fmt = str(getattr(self.session, "input_audio_format", "pcm16") or "pcm16").lower()
         _bytes_per_ms = 16 if "g711" in _in_fmt else 48
 
-        if rms_normalized >= energy_threshold:
+        if speech:
             # Speech detected
             if not self._vad_speaking:
                 self._vad_speaking = True
@@ -2161,6 +2236,7 @@ class RealtimeSession:
         self._vad_speaking = False
         self._vad_silence_bytes = 0
         self._vad_speech_start_offset = 0
+        self._reset_silero()
         return _item_created
 
     async def _handle_input_audio_buffer_clear(self, event: dict) -> None:
@@ -2168,6 +2244,7 @@ class RealtimeSession:
         self._audio_buffer = bytearray()
         self._vad_speaking = False
         self._vad_silence_bytes = 0
+        self._reset_silero()
 
     async def _auto_commit_and_respond(self) -> None:
         """Auto-commit audio buffer and trigger response (server_vad mode).
