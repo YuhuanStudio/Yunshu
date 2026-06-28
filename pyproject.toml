@@ -157,6 +157,13 @@ dev = [
     "pytest-asyncio>=1.3.0",
 ]
 
+# Source mlx-vlm from our fork's branch, which is latest upstream main plus the
+# Qwen3-Omni thinker early-exit optimization (byte-identical, ~1.86x faster on the
+# redundant hidden-state forward). Tracking the branch means `uv sync --upgrade`
+# keeps pulling the latest. Revert to a plain release pin once the PR merges upstream.
+[tool.uv.sources]
+mlx-vlm = { git = "https://github.com/yuhuanowo/mlx-vlm.git", branch = "feat/qwen3-omni-thinker-early-exit" }
+
 [tool.ruff]
 line-length = 88
 target-version = "py313"
