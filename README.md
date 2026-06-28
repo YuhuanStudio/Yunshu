@@ -23,7 +23,8 @@ one local app (e.g. a digital being), not a multi-tenant fleet.
 ```bash
 # 1. Install (text serving works out of the box; add extras for other modalities)
 pip install yunshu                       # text only — light
-pip install "yunshu[all]"                # text + vision + audio + image + embeddings
+pip install "yunshu[omni]"               # native Qwen3-Omni voice (speech-in/out; pulls torch)
+pip install "yunshu[all]"                # everything: text + vision + audio + omni + image + embeddings
 
 # 2. Start the server against any local MLX-quantized model
 yunshu serve -m mlx-community/Qwen2.5-0.5B-Instruct-4bit --port 8000
@@ -78,7 +79,7 @@ If you need production multi-tenant serving or multi-node sharding on Apple Sili
 | Speech-to-text (ASR) | `/v1/audio/transcriptions` | `mlx-audio` / whisper | `audio` |
 | Text-to-speech | `/v1/audio/speech` | `mlx-audio` | `audio` |
 | Realtime voice (bidirectional) | `WS /v1/realtime` | ASR + TTS pipeline | `audio` |
-| **Native omni voice** (speech-in → speech-out from one unified model, streaming SSE) | `POST /v1/omni/speech/stream` | `mlx-vlm` (Qwen3-Omni Thinker+Talker) | `vision` |
+| **Native omni voice** (speech-in → speech-out from one unified model, streaming SSE) | `POST /v1/omni/speech/stream` | `mlx-vlm` (Qwen3-Omni Thinker+Talker) | `omni` |
 | Image generation | `/v1/images/generations` | self-implemented diffusion | `generation` |
 | Embeddings | `/v1/embeddings` | `mlx-embeddings` | `embeddings` |
 
