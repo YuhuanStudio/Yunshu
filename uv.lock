@@ -1382,7 +1382,7 @@ wheels = [
 [[package]]
 name = "mlx-vlm"
 version = "0.6.3"
-source = { git = "https://github.com/yuhuanowo/mlx-vlm.git?branch=feat%2Fqwen3-omni-thinker-early-exit#a1dff03a8e06d106f0e8b7f2afe95629d229d773" }
+source = { git = "https://github.com/yuhuanowo/mlx-vlm.git?branch=feat%2Fqwen3-omni-thinker-early-exit#69acca1d10c231123c0f75fdd29109ac453f1ed3" }
 dependencies = [
     { name = "datasets" },
     { name = "fastapi" },
