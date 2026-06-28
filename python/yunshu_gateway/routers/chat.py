@@ -918,6 +918,52 @@ def _inject_tool_system_prompt(
     return messages
 
 
+def _tool_choice_prefill(tool_choice: str | ToolChoiceFunction | None) -> str:
+    """Return the assistant-turn PREFILL that structurally commits the model to a
+    tool call for a forced tool_choice, or "" when no prefill applies.
+
+    `_inject_tool_system_prompt` only ADVISES the model ("You MUST call the tool…"),
+    which it can ignore by emitting plain text — and "required"/named-forced then can't
+    be honored post-hoc (we can't fabricate tool arguments). Prefilling the opening
+    tool-call marker onto the assistant turn (via continue_final_message in the engine's
+    chat template) makes the model CONTINUE a tool call at generation time instead.
+    Uses the documented `<tool_call>{"name": …, "arguments": …}</tool_call>` format that
+    `_inject_tool_system_prompt` already instructs the model to emit.
+
+    - "required"               → '<tool_call>\\n'  (model completes name + arguments)
+    - {"name": "X"} (forced)   → '<tool_call>\\n{"name": "X", "arguments": {'  (args only)
+    - "auto" / "none" / None    → ""  (no prefill — unchanged behavior)
+    """
+    if isinstance(tool_choice, ToolChoiceFunction):
+        # json.dumps the name so an exotic tool name can't break the JSON shape.
+        return '<tool_call>\n{"name": ' + json.dumps(tool_choice.function.name) + ', "arguments": {'
+    if tool_choice == "required":
+        return "<tool_call>\n"
+    return ""
+
+
+def _append_tool_prefill(messages: list[dict], prefill: str) -> list[dict]:
+    """Append the tool-call PREFILL onto a trailing assistant turn so the engine's
+    chat template keeps the assistant turn OPEN (continue_final_message) and the model
+    generates a continuation of the tool-call markup. No-op when prefill is empty.
+
+    If the last message is already an assistant string turn (e.g. a client-supplied
+    prefill), the marker is appended to it; otherwise a fresh assistant turn is added.
+    Returns a new list — the input is not mutated."""
+    if not prefill:
+        return messages
+    messages = list(messages)
+    last = messages[-1] if messages else None
+    if (last is not None and last.get("role") == "assistant"
+            and isinstance(last.get("content"), str)):
+        last = dict(last)
+        last["content"] = last["content"] + prefill
+        messages[-1] = last
+    else:
+        messages.append({"role": "assistant", "content": prefill})
+    return messages
+
+
 def _enforce_tool_choice(tool_calls, tool_choice, parallel_tool_calls):
     """Post-generation enforcement of the OpenAI tool_choice / parallel_tool_calls
     contract. The system-prompt injection (`_inject_tool_system_prompt`) only *advises*
@@ -1082,8 +1128,13 @@ async def _build_multi_choice(
     engine, req, messages, completion_id, is_batched, json_schema,
     cancel_event=None,
     lora_adapter=None,
+    tool_prefill: str = "",
 ):
-    """Build n > 1 completions by running parallel generation calls."""
+    """Build n > 1 completions by running parallel generation calls.
+
+    ``tool_prefill`` is the prefill-forced tool_choice marker that was prepended to
+    the prompt's assistant turn; each choice prepends it back onto its generated text
+    before tool-call parsing (see the n=1 path)."""
 
     prompt_tok = 0
     completion_tok = 0
@@ -1195,6 +1246,11 @@ async def _build_multi_choice(
                             pass
                     break
 
+        # Prefill-forced tool_choice: prepend the prefilled marker back (see n=1 path)
+        # so the parser sees complete `<tool_call>…` markup.
+        if tool_prefill:
+            text = tool_prefill + text
+
         thinking_content, regular_content = extract_thinking(text, req.model)
         cleaned = regular_content.strip()
 
@@ -1203,8 +1259,9 @@ async def _build_multi_choice(
             _raw_calls = extract_tool_calls_model_aware(regular_content, req.model)
             tool_calls = _enforce_tool_choice(_raw_calls, req.tool_choice, req.parallel_tool_calls)
             # Clean markup whenever any was parsed (see n=1 path) — a suppressed
-            # wrong-named tool's raw markup must not leak into content.
-            if _raw_calls:
+            # wrong-named tool's raw markup must not leak into content. Also clean when a
+            # prefill was applied so the prefilled marker never leaks into content.
+            if _raw_calls or tool_prefill:
                 cleaned = clean_tool_call_markup(regular_content)
             if tool_calls:
                 fr = "tool_calls"
@@ -1273,8 +1330,8 @@ async def _build_multi_choice(
         cached_tok = max(cached_tok, _ct_cached)
 
     if not choices and errors:
-        exc = errors[0][1]
-        if isinstance(exc, MemoryError):
+        first_exc = errors[0][1]
+        if isinstance(first_exc, MemoryError):
             return JSONResponse(
                 status_code=507,
                 content={"error": {"message": "Out of GPU memory", "type": "memory_error"}},
@@ -1288,7 +1345,7 @@ async def _build_multi_choice(
     if prompt_tok > 0 or completion_tok > 0 or reasoning_tok > 0:
         _record_metrics(prompt_tok, completion_tok)  # completion_tok already incl. reasoning
 
-    usage = {
+    usage: dict[str, Any] = {
         "prompt_tokens": prompt_tok,
         # completion_tok (engine n_tok) ALREADY includes reasoning tokens;
         # reasoning_tok is the detail subset, not an addend (was double-counting).
@@ -1528,6 +1585,21 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     from yunshu_engine.batched_engine import BatchedEngine
     is_batched = isinstance(engine, BatchedEngine)
 
+    # Prefill-forced tool_choice: for "required" / named-forced choices, prefill the
+    # assistant turn with the opening tool-call marker so the model is STRUCTURALLY
+    # committed to emitting a tool call (vs. the advisory-only system prompt, which a
+    # model can ignore). Only the BatchedEngine chat template honors a trailing-assistant
+    # prefill (continue_final_message); the legacy Engine always opens a fresh turn, so the
+    # prefill wouldn't take — gate on is_batched and fall back to advise-only there. The
+    # marker lives in the PROMPT, so the engine's generated text is only the continuation;
+    # each path below prepends `_tool_prefill` back (or seeds the streamer with it) before
+    # tool-call parsing so the parser sees complete `<tool_call>…` markup.
+    _tool_prefill = ""
+    if req.tools and is_batched:
+        _tool_prefill = _tool_choice_prefill(req.tool_choice)
+        if _tool_prefill:
+            messages = _append_tool_prefill(messages, _tool_prefill)
+
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
     if req.stream:
@@ -1536,6 +1608,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 _stream_response_multi(
                     engine, messages, req, completion_id, request,
                     is_batched=is_batched, json_schema=json_schema,
+                    tool_prefill=_tool_prefill,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -1547,6 +1620,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
             _stream_response(
                 engine, messages, req, completion_id, request,
                 is_batched=is_batched, json_schema=json_schema,
+                tool_prefill=_tool_prefill,
             ),
             media_type="text/event-stream",
             headers={
@@ -1576,6 +1650,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                     engine, req, messages, completion_id, is_batched, json_schema,
                     cancel_event=_ns_cancel_event,
                     lora_adapter=loaded_adapter,
+                    tool_prefill=_tool_prefill,
                 )
 
             try:
@@ -1696,6 +1771,12 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                                 pass
                         break
 
+            # Prefill-forced tool_choice: the opening tool-call marker was prefilled into
+            # the PROMPT (continue_final_message), so raw_text is only the CONTINUATION.
+            # Prepend the marker back so the parser sees complete `<tool_call>…` markup.
+            if _tool_prefill:
+                raw_text = _tool_prefill + raw_text
+
             # Extract thinking ()
             thinking_content, regular_content = extract_thinking(raw_text, req.model)
 
@@ -1723,7 +1804,10 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
                 # emit markup for a DIFFERENT (suppressed) tool; gating cleanup on the
                 # post-enforcement count left that raw <tool_call> markup in user-visible
                 # content — a leak vs the streaming path, which drops suppressed calls.
-                if _raw_calls:
+                # Also clean when a prefill was applied (the prefilled <tool_call> marker
+                # must not leak into content even if the model went off-script and no call
+                # parsed).
+                if _raw_calls or _tool_prefill:
                     cleaned_content = clean_tool_call_markup(regular_content)
 
             finish_reason = "tool_calls" if tool_calls else finish
@@ -2420,6 +2504,7 @@ async def _stream_response_multi(
     request: Request,
     is_batched: bool = False,
     json_schema: dict | str | None = None,
+    tool_prefill: str = "",
 ) -> AsyncIterator[bytes]:
     """n>1 streaming: generate each choice sequentially, emit with correct index.
 
@@ -2474,6 +2559,9 @@ async def _stream_response_multi(
             _choice_tc_args_streamed = False  # args delta emitted for current tool call?
             _choice_tc_start_emitted = False  # start chunk (id+name) emitted?
             _choice_streamed_text = ""  # track emitted text for stop-sequence correction
+            # Prefill-forced tool_choice marker, re-seeded for each choice (every choice
+            # generates fresh from the prefilled prompt). Fed onto the first streamer token.
+            _choice_pending_prefill = tool_prefill
 
             if is_batched:
                 stream = engine.stream_chat(
@@ -2573,6 +2661,10 @@ async def _stream_response_multi(
                             )
                             first_chunk_for_choice = False
                     elif use_tool_streamer and choice_tool_streamer and token_text:
+                        # Seed the prefill-forced tool-call marker onto the first token.
+                        if _choice_pending_prefill:
+                            token_text = _choice_pending_prefill + token_text
+                            _choice_pending_prefill = ""
                         # Process through per-choice tool call streamer
                         for out in choice_tool_streamer.process_token(token_text):
                             if out.text:
@@ -2741,6 +2833,10 @@ async def _stream_response_multi(
                             )
                             first_chunk_for_choice = False
                     elif use_tool_streamer and choice_tool_streamer and token_text:
+                        # Seed the prefill-forced tool-call marker onto the first token.
+                        if _choice_pending_prefill:
+                            token_text = _choice_pending_prefill + token_text
+                            _choice_pending_prefill = ""
                         # Process through per-choice tool call streamer
                         for out in choice_tool_streamer.process_token(token_text):
                             if out.text:
@@ -3013,6 +3109,7 @@ async def _stream_response(
     request: Request,
     is_batched: bool = False,
     json_schema: dict | str | None = None,
+    tool_prefill: str = "",
 ) -> AsyncIterator[bytes]:
     """SSE streaming response with keepalive and disconnect detection.
 
@@ -3094,6 +3191,11 @@ async def _stream_response(
         first_chunk = True
         last_finish_reason = None  # track actual finish_reason from engine
         _streamed_text = ""  # track text emitted to client for stop-sequence correction
+        # Prefill-forced tool_choice: the opening <tool_call> marker lives in the PROMPT
+        # (continue_final_message), so the streamer must see it BEFORE the model's
+        # continuation or it never enters tool-call state. Seed it onto the first token
+        # fed to the streamer.
+        _pending_tool_prefill = tool_prefill
 
         if is_batched:
             async for output in engine.stream_chat(
@@ -3193,6 +3295,10 @@ async def _stream_response(
                         )
                         first_chunk = False
                 elif use_tool_streamer and tool_streamer and token_text:
+                    # Seed the prefill-forced tool-call marker onto the first token.
+                    if _pending_tool_prefill:
+                        token_text = _pending_tool_prefill + token_text
+                        _pending_tool_prefill = ""
                     # Run through tool call streamer
                     outputs = tool_streamer.process_token(token_text)
                     for out in outputs:
@@ -3343,6 +3449,10 @@ async def _stream_response(
                 else:
                     token_text = output.token_text
                     if use_tool_streamer and tool_streamer and token_text:
+                        # Seed the prefill-forced tool-call marker onto the first token.
+                        if _pending_tool_prefill:
+                            token_text = _pending_tool_prefill + token_text
+                            _pending_tool_prefill = ""
                         outputs = tool_streamer.process_token(token_text)
                         for out in outputs:
                             if out.text:
