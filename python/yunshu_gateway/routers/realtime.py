@@ -84,6 +84,42 @@ def _event(event_type: str, **kwargs) -> dict:
     return {"type": event_type, "event_id": f"evt_{uuid.uuid4().hex[:16]}", **kwargs}
 
 
+def _omni_realtime_enabled() -> bool:
+    """True iff the native-omni realtime path is opted in. Requires a configured
+    omni model (YUNSHU_OMNI_MODEL) AND an explicit YUNSHU_REALTIME_OMNI flag, so
+    the default realtime behaviour (ASR→LLM→TTS cascade) is never changed silently."""
+    import os
+    if not os.environ.get("YUNSHU_OMNI_MODEL"):
+        return False
+    return os.environ.get("YUNSHU_REALTIME_OMNI", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _messages_to_omni_prompt(messages: list[dict]) -> str:
+    """Flatten the chat-message list into a single prompt for the omni model.
+
+    OmniEngine.stream takes one user turn (+ optional media), so we prepend any
+    system instruction (the being's persona) to the latest user text. Full
+    multi-turn omni context is a follow-up — this preserves persona + last turn,
+    which is what a voice reply needs most."""
+    sys_parts = [m["content"] for m in messages
+                 if m.get("role") == "system" and m.get("content")]
+    user_parts = [m["content"] for m in messages
+                  if m.get("role") == "user" and m.get("content")]
+    if not user_parts:
+        return ""
+    last_user = user_parts[-1]
+    if sys_parts:
+        return f"{' '.join(sys_parts)}\n\n{last_user}".strip()
+    return last_user
+
+
+def _f32_to_pcm16_bytes(wav_f32) -> bytes:
+    """float32 [-1,1] mono ndarray → int16 little-endian PCM bytes (24 kHz)."""
+    import numpy as np
+    arr = np.asarray(wav_f32, dtype=np.float32).reshape(-1)
+    return (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
 def _strip_wav_header(data: bytes) -> bytes:
     """Return raw PCM, stripping a leading RIFF/WAVE header if present.
 
@@ -863,6 +899,13 @@ class RealtimeSession:
         config: dict,
     ) -> None:
         """Generate a response and stream deltas back."""
+        # Native-omni path: one unified Qwen3-Omni model produces the reply text
+        # AND its speech in a single shared-context pass (Thinker+Talker), instead
+        # of the LLM→(separate)TTS cascade below. Opt-in via YUNSHU_REALTIME_OMNI;
+        # off by default so the cascade behaviour is untouched.
+        if _omni_realtime_enabled():
+            await self._generate_response_omni(response_id, item_id, modalities, config)
+            return
         # Create cancel_event so engine can check for cancellation
         self._cancel_event = asyncio.Event()
         # (self-audit R2): fresh response → no terminal response.done yet.
@@ -1371,6 +1414,182 @@ class RealtimeSession:
         finally:
             # Only clear if this task is still the active response.
             # Prevents race: cancel → new response.create → old finally wipes new task ref.
+            if self._active_response is asyncio.current_task():
+                self._active_response = None
+                self._active_modalities = []
+                self._cancel_event = None
+
+    async def _generate_response_omni(
+        self,
+        response_id: str,
+        item_id: str,
+        modalities: list[str],
+        config: dict,
+    ) -> None:
+        """Native-omni realtime response: ONE unified model (Qwen3-Omni
+        Thinker+Talker) produces the reply text AND its speech in a single
+        shared-context pass, replacing the LLM→(separate)TTS cascade. The audio
+        carries the model's own Talker voice, not a downstream TTS voice.
+
+        Emits the same OpenAI-Realtime event chain as the cascade path
+        (output_item.added → content_part.added → text/transcript+audio deltas →
+        transcript.done → audio.done → content_part.done → output_item.done →
+        response.done) so SDK clients see no protocol difference. Mirrors the
+        cascade's cancel contract: swallow CancelledError with `pass` and never
+        double-emit response.done (the cancel handler owns terminal teardown)."""
+        import base64
+
+        self._cancel_event = asyncio.Event()
+        self._response_done_emitted = False
+        try:
+            _instr_override = config.get("instructions")
+            prompt = _messages_to_omni_prompt(
+                self._build_messages(instructions_override=_instr_override))
+            if not prompt:
+                await self.send_event(_event(
+                    RealtimeEvent.ERROR,
+                    error={"message": "No messages in conversation", "type": "server_error"},
+                ))
+                await self._close_response_item(response_id, item_id, status="incomplete")
+                await self.send_event(_event(
+                    RealtimeEvent.RESPONSE_DONE,
+                    response={"id": response_id, "object": "realtime.response",
+                              "status": "failed", "error": "No messages in conversation"},
+                ))
+                self._response_done_emitted = True
+                return
+
+            _snap_voice = config.get("voice") or self.session.voice
+            _snap_out_fmt = config.get("output_audio_format")
+            if _snap_out_fmt not in self.session.SUPPORTED_AUDIO_FORMATS:
+                _snap_out_fmt = self.session.output_audio_format
+            _oob = config.get("conversation") == "none"
+
+            from .omni import _get_omni_engine
+            eng = _get_omni_engine()
+
+            # Lifecycle open (flag set BEFORE the awaits so a cancel landing mid-send
+            # still balances via _close_response_item — mirrors the cascade's R1 fix).
+            self._response_item_open = True
+            await self.send_event(_event(
+                "response.output_item.added",
+                response_id=response_id, output_index=0,
+                item={"id": item_id, "type": "message", "role": "assistant",
+                      "content": [], "status": "in_progress"},
+            ))
+            await self.send_event(_event(
+                "response.content_part.added",
+                response_id=response_id, item_id=item_id,
+                output_index=0, content_index=0,
+                part={"type": "text", "text": ""},
+            ))
+
+            full_text = ""
+            self._pcm16_lin_state = None
+            self._g711_lin_state = None
+            self._g711_resample_remainder = b""
+            async for ch in eng.stream(prompt, speaker=_snap_voice or None):
+                if ch.kind == "text":
+                    if not ch.data:
+                        continue
+                    full_text += ch.data
+                    if "text" in modalities:
+                        await self.send_event(_event(
+                            RealtimeEvent.RESPONSE_TEXT_DELTA,
+                            response_id=response_id, item_id=item_id,
+                            output_index=0, content_index=0, delta=ch.data,
+                        ))
+                    if "audio" in modalities:
+                        await self.send_event(_event(
+                            RealtimeEvent.RESPONSE_AUDIO_TRANSCRIPT_DELTA,
+                            response_id=response_id, item_id=item_id,
+                            output_index=0, content_index=0, delta=ch.data,
+                        ))
+                elif ch.kind == "audio" and "audio" in modalities:
+                    pcm = _f32_to_pcm16_bytes(ch.data)  # Talker outputs 24 kHz f32
+                    out, _csz = self._encode_output_audio(pcm, 24000, fmt=_snap_out_fmt)
+                    offset = 0
+                    while offset < len(out):
+                        sub = out[offset:offset + _csz]
+                        await self.send_event(_event(
+                            RealtimeEvent.RESPONSE_AUDIO_DELTA,
+                            response_id=response_id, item_id=item_id,
+                            output_index=0, content_index=0,
+                            delta=base64.b64encode(sub).decode(),
+                        ))
+                        offset += _csz
+
+            if "audio" in modalities:
+                await self.send_event(_event(
+                    RealtimeEvent.RESPONSE_AUDIO_TRANSCRIPT_DONE,
+                    response_id=response_id, item_id=item_id,
+                    output_index=0, content_index=0, transcript=full_text,
+                ))
+                await self.send_event(_event(
+                    RealtimeEvent.RESPONSE_AUDIO_DONE,
+                    response_id=response_id, item_id=item_id,
+                    output_index=0, content_index=0,
+                ))
+            await self.send_event(_event(
+                "response.content_part.done",
+                response_id=response_id, item_id=item_id,
+                output_index=0, content_index=0,
+                part={"type": "text", "text": full_text},
+            ))
+
+            # Store the reply as an audio part (transcript + duration estimate) when
+            # audio was produced, so conversation.item.truncate can trim it on barge-in
+            # — same rationale as the cascade path.
+            if "audio" in modalities and full_text:
+                content_parts: list[dict] = [{
+                    "type": "audio", "transcript": full_text,
+                    "duration_ms": max(1, len(full_text) * 70),
+                }]
+            else:
+                content_parts = [{"type": "text", "text": full_text}]
+            assistant_item = ConversationItem(
+                item_id=item_id, item_type="message",
+                role="assistant", content=content_parts,
+            )
+            assistant_item.status = "completed"
+            if not _oob:
+                self.conversation.add_item(assistant_item)
+                await self.send_event(_event(
+                    "conversation.item.created", item=assistant_item.to_dict(),
+                ))
+            await self.send_event(_event(
+                "response.output_item.done",
+                response_id=response_id, output_index=0,
+                item=assistant_item.to_dict(),
+            ))
+            self._response_item_open = False
+            await self.send_event(_event(
+                RealtimeEvent.RESPONSE_DONE,
+                response={
+                    "id": response_id, "object": "realtime.response",
+                    "status": "completed",
+                    "output": [assistant_item.to_dict()],
+                    "usage": {"total_tokens": 0, "input_tokens": 0, "output_tokens": 0},
+                },
+            ))
+            self._response_done_emitted = True
+        except asyncio.CancelledError:
+            # Cancel handler owns the terminal teardown (audio.done → response.done).
+            pass
+        except Exception as e:
+            logger.error(f"Realtime omni generation error: {e}", exc_info=True)
+            await self.send_event(_event(
+                RealtimeEvent.ERROR,
+                error={"message": "Internal server error", "type": "server_error"},
+            ))
+            await self._close_response_item(response_id, item_id, status="incomplete")
+            await self.send_event(_event(
+                RealtimeEvent.RESPONSE_DONE,
+                response={"id": response_id, "object": "realtime.response",
+                          "status": "failed", "error": "Generation failed"},
+            ))
+            self._response_done_emitted = True
+        finally:
             if self._active_response is asyncio.current_task():
                 self._active_response = None
                 self._active_modalities = []
