@@ -120,6 +120,28 @@ def _f32_to_pcm16_bytes(wav_f32) -> bytes:
     return (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
+def _omni_system_text(messages: list[dict]) -> str:
+    """The system instruction (persona) only — used as the text turn when the
+    user's RAW audio is the actual query (native speech-in)."""
+    return " ".join(m["content"] for m in messages
+                    if m.get("role") == "system" and m.get("content")).strip()
+
+
+def _write_pcm16_wav(pcm: bytes, rate: int) -> str:
+    """Write mono int16 PCM bytes to a temp WAV file; return its path."""
+    import tempfile
+    import wave
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    import os as _os
+    _os.close(fd)
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(pcm)
+    return path
+
+
 def _strip_wav_header(data: bytes) -> bytes:
     """Return raw PCM, stripping a leading RIFF/WAVE header if present.
 
@@ -574,6 +596,10 @@ class RealtimeSession:
         self._active_response: asyncio.Task | None = None
         self._cancel_event: asyncio.Event | None = None
         self._audio_buffer = bytearray()
+        # Native-omni speech-in: (pcm16_bytes, sample_rate) of the last committed
+        # user audio, stashed so the omni response can use it directly. None when
+        # absent/consumed. Only populated when the omni realtime path is enabled.
+        self._last_user_audio: tuple[bytes, int] | None = None
         # per-response leftover for the continuous 24k→8k g711 resampler.
         self._g711_resample_remainder = b""
         # VAD state
@@ -1441,10 +1467,24 @@ class RealtimeSession:
 
         self._cancel_event = asyncio.Event()
         self._response_done_emitted = False
+        # Native speech-in: prefer the user's RAW committed audio over the ASR
+        # transcript (consume it so it can't bleed into the next turn). When present,
+        # the audio IS the query and the text turn carries only the persona.
+        _audio_in = self._last_user_audio
+        self._last_user_audio = None
+        _tmp_audio_path: str | None = None
         try:
             _instr_override = config.get("instructions")
-            prompt = _messages_to_omni_prompt(
-                self._build_messages(instructions_override=_instr_override))
+            _messages = self._build_messages(instructions_override=_instr_override)
+            _audio_path: str | None = None
+            if _audio_in and _audio_in[0]:
+                pcm_bytes, in_rate = _audio_in
+                _tmp_audio_path = _write_pcm16_wav(pcm_bytes, in_rate)
+                _audio_path = _tmp_audio_path
+                # persona-only text; the spoken audio is the user's actual turn
+                prompt = _omni_system_text(_messages) or "Respond to the user's speech."
+            else:
+                prompt = _messages_to_omni_prompt(_messages)
             if not prompt:
                 await self.send_event(_event(
                     RealtimeEvent.ERROR,
@@ -1488,7 +1528,7 @@ class RealtimeSession:
             self._pcm16_lin_state = None
             self._g711_lin_state = None
             self._g711_resample_remainder = b""
-            async for ch in eng.stream(prompt, speaker=_snap_voice or None):
+            async for ch in eng.stream(prompt, audio_path=_audio_path, speaker=_snap_voice or None):
                 if ch.kind == "text":
                     if not ch.data:
                         continue
@@ -1590,6 +1630,10 @@ class RealtimeSession:
             ))
             self._response_done_emitted = True
         finally:
+            if _tmp_audio_path:
+                import os
+                with contextlib.suppress(OSError):
+                    os.unlink(_tmp_audio_path)
             if self._active_response is asyncio.current_task():
                 self._active_response = None
                 self._active_modalities = []
@@ -2028,6 +2072,15 @@ class RealtimeSession:
         await self.send_event(_event(
             RealtimeEvent.INPUT_AUDIO_BUFFER_COMMITTED,
         ))
+
+        # Native-omni realtime feeds the user's RAW PCM straight to the omni model
+        # (true speech-in, no ASR cascade). Stash the committed audio (post VAD-trim)
+        # + its sample rate; _generate_response_omni consumes it. ASR below still runs
+        # for the displayed transcript / history. Only stash when omni is enabled so the
+        # cascade path never holds extra audio refs.
+        if _omni_realtime_enabled():
+            _omni_in_fmt = str(getattr(self.session, "input_audio_format", "pcm16") or "pcm16").lower()
+            self._last_user_audio = (audio_data, 8000 if "g711" in _omni_in_fmt else 24000)
 
         # Transcribe via ASR engine
         tmp_path = None

@@ -57,3 +57,13 @@ steady-state thinker latency (~1.6–2.7s) is already fine for voice without it.
 A real win would require an **upstream mlx-vlm change** making the hidden-state
 extraction reuse a cache. If pursued, that's a PR to `Blaizzy/mlx-vlm`, not a hack
 in this repo.
+
+## Version check (2026-06-28)
+
+Confirmed against **mlx-vlm v0.6.3** (latest on PyPI; we run 0.5.0). The upstream
+`qwen3_omni_moe.py` still calls `self.thinker.language_model(input_ids, …,
+output_hidden_states=True)` with no `prompt_cache`, and `generate_stream` still
+invokes `extract_thinker_hidden_states` the same way (file 716 vs our 713 lines —
+structurally unchanged). So the limitation is present in main, not a stale-version
+artifact — and upgrading does not fix it. A PR remains the only real path, but it's
+optional: steady-state thinker latency is already fine for voice.

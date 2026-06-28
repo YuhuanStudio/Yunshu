@@ -26,10 +26,14 @@ class _Chunk:
 
 class _FakeOmniEngine:
     """Yields two text fragments then one audio chunk then done — like the real
-    OmniEngine.stream, but with no model."""
+    OmniEngine.stream, but with no model. Records the call args it was given."""
+
+    def __init__(self):
+        self.calls = []
 
     async def stream(self, text, image_path=None, audio_path=None,
                      speaker=None, thinker_max_new_tokens=None):
+        self.calls.append({"text": text, "audio_path": audio_path, "speaker": speaker})
         yield _Chunk("text", "Hi ")
         yield _Chunk("text", "there")
         yield _Chunk("audio", np.linspace(-0.3, 0.3, 2400, dtype=np.float32))
@@ -112,6 +116,41 @@ async def test_omni_response_stores_assistant_audio_turn(monkeypatch):
     part = assistant[0].content[0]
     assert part["type"] == "audio"  # stored as audio so barge-in truncate works
     assert part["transcript"] == "Hi there"
+
+
+@pytest.mark.asyncio
+async def test_omni_uses_raw_audio_for_native_speech_in(monkeypatch):
+    """When raw user audio is stashed, omni gets audio_path (native speech-in),
+    the temp WAV is cleaned up, and the stash is consumed (not reused next turn)."""
+    import os
+
+    fake = _FakeOmniEngine()
+    monkeypatch.setattr(omni, "_get_omni_engine", lambda: fake)
+    session, _ = _session_with_user_turn()
+    # simulate a committed user-audio buffer (pcm16 @ 24k)
+    pcm = (np.zeros(4800, dtype="<i2")).tobytes()
+    session._last_user_audio = (pcm, 24000)
+
+    await session._generate_response_omni("resp_1", "item_1", ["text", "audio"], {})
+
+    assert len(fake.calls) == 1
+    audio_path = fake.calls[0]["audio_path"]
+    assert audio_path is not None  # native speech-in path taken
+    assert not os.path.exists(audio_path)  # temp WAV cleaned up in finally
+    assert session._last_user_audio is None  # consumed
+
+
+@pytest.mark.asyncio
+async def test_omni_falls_back_to_text_without_audio(monkeypatch):
+    fake = _FakeOmniEngine()
+    monkeypatch.setattr(omni, "_get_omni_engine", lambda: fake)
+    session, _ = _session_with_user_turn()
+    assert session._last_user_audio is None
+
+    await session._generate_response_omni("resp_1", "item_1", ["text", "audio"], {})
+
+    assert fake.calls[0]["audio_path"] is None  # text path
+    assert "hello" in fake.calls[0]["text"]    # the user's transcript/text
 
 
 @pytest.mark.asyncio
