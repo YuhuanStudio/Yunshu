@@ -342,6 +342,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("MCP client initialization failed", exc_info=True)
 
+    # Preload + warm the native-omni model so the first voice request is warm
+    # (~4s) instead of cold (~30s). Opt out with YUNSHU_OMNI_PRELOAD=0.
+    try:
+        from .routers.omni import preload_and_warmup
+        await preload_and_warmup()
+    except Exception:
+        logger.warning("Omni preload hook failed", exc_info=True)
+
     yield
 
     # ═══ Graceful shutdown ═══

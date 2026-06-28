@@ -49,6 +49,22 @@ def _get_omni_engine():
     return _omni_engine
 
 
+async def preload_and_warmup() -> None:
+    """Boot-time hook: if YUNSHU_OMNI_MODEL is set (and YUNSHU_OMNI_PRELOAD != "0"),
+    load the omni model and compile its kernels now so the first request is warm
+    (~4s) instead of cold (~30s). Best-effort — failures are logged, not fatal."""
+    if not os.environ.get("YUNSHU_OMNI_MODEL"):
+        return
+    if os.environ.get("YUNSHU_OMNI_PRELOAD", "1") == "0":
+        return
+    try:
+        eng = _get_omni_engine()
+        logger.info("Preloading omni model (warmup at boot)…")
+        await eng.warmup()
+    except Exception:  # noqa: BLE001
+        logger.warning("Omni preload/warmup failed (first request will be cold)", exc_info=True)
+
+
 class OmniSpeechRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=8000)
     speaker: str | None = None  # Ethan | Chelsie | Aiden | ...

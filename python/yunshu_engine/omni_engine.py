@@ -88,6 +88,18 @@ class OmniEngine:
             )
         logger.info("OmniEngine ready (talker present).")
 
+    async def warmup(self) -> float:
+        """Load + run one tiny throwaway generation to compile Metal kernels,
+        so the FIRST real request gets the warm (~4s) latency instead of the
+        ~30s cold path (model load + first-kernel JIT). Returns seconds taken."""
+        start = asyncio.get_running_loop().time()
+        self.load()
+        async for _ in self.stream("hi", thinker_max_new_tokens=1):
+            pass  # discard — we only want the kernels compiled and resident
+        elapsed = asyncio.get_running_loop().time() - start
+        logger.info("OmniEngine warmup done in %.1fs (first request now warm).", elapsed)
+        return elapsed
+
     async def stream(
         self,
         text: str,

@@ -39,6 +39,25 @@ def test_request_validation_rejects_empty_text():
     assert r.status_code == 422  # min_length=1
 
 
+def test_preload_noop_without_model(monkeypatch):
+    """No YUNSHU_OMNI_MODEL → preload must return without constructing an engine."""
+    import asyncio
+
+    monkeypatch.delenv("YUNSHU_OMNI_MODEL", raising=False)
+    asyncio.run(omni.preload_and_warmup())
+    assert omni._omni_engine is None  # never touched the 22GB load path
+
+
+def test_preload_respects_optout(monkeypatch):
+    """YUNSHU_OMNI_PRELOAD=0 → preload must skip even when a model is configured."""
+    import asyncio
+
+    monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/nonexistent/model")
+    monkeypatch.setenv("YUNSHU_OMNI_PRELOAD", "0")
+    asyncio.run(omni.preload_and_warmup())
+    assert omni._omni_engine is None  # opt-out honored before any load attempt
+
+
 def test_pcm16_b64_roundtrip_is_real_audio():
     import base64
 
