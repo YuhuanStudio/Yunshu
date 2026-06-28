@@ -1,0 +1,28 @@
+{
+  "timestamp": "20260607T085951Z",
+  "git_sha": "ac69fb8",
+  "tier": "bench_serve",
+  "go": true,
+  "n_kpis": 16,
+  "has_perf": true,
+  "kpis": {
+    "gpu_tflops": 9.6,
+    "serve/Qwen2.5-3B-Instruct-bf16/yunshu/ttft_ms": 56.9,
+    "serve/Qwen2.5-3B-Instruct-bf16/yunshu/decode_tps": 41.5,
+    "serve/Qwen2.5-3B-Instruct-bf16/yunshu/sys8": 165.9,
+    "serve/Qwen2.5-3B-Instruct-bf16/yunshu/sys16": 100.9,
+    "serve/Qwen2.5-3B-Instruct-bf16/yunshu/sys32": 181.8,
+    "serve/Qwen2.5-3B-Instruct-bf16/mlx-lm/ttft_ms": 117.4,
+    "serve/Qwen2.5-3B-Instruct-bf16/mlx-lm/decode_tps": 36.9,
+    "serve/Qwen2.5-3B-Instruct-bf16/mlx-lm/sys8": 141.3,
+    "serve/Qwen2.5-3B-Instruct-bf16/mlx-lm/sys16": 173.3,
+    "serve/Qwen2.5-3B-Instruct-bf16/mlx-lm/sys32": 179.0,
+    "serve/Qwen2.5-3B-Instruct-bf16/oMLX/ttft_ms": 256.7,
+    "serve/Qwen2.5-3B-Instruct-bf16/oMLX/decode_tps": 42.2,
+    "serve/Qwen2.5-3B-Instruct-bf16/oMLX/sys8": 97.1,
+    "serve/Qwen2.5-3B-Instruct-bf16/oMLX/sys16": 97.9,
+    "serve/Qwen2.5-3B-Instruct-bf16/oMLX/sys32": 99.7
+  },
+  "gpu_tflops_start": 9.7,
+  "gpu_tflops_end": 9.6
+}

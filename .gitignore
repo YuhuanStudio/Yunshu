@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.venv/
+
+# uv
+.python-version
+
+# Node / Next.js
+node_modules/
+webui/.next/
+webui/out/
+
+# Metal
+metal/build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Benchmarks (local results only)
+bench/**/results/
+bench/**/*.json
+bench/**/*.csv
+
+# Environment
+.env
+.envrc
+
+# Logs
+*.log
+
+# Models (too large for git)
+models/
+
+# Internal / development
+.claude/
+reference/
+PROGRESS_GUIDE.md
+CLAUDE.md
+reports/
+
+models
+.build/
+testresource/
+# Auxiliary tool venvs (oMLX comparison env, etc.) — large, never committed
+.venvs/
+
+# The broad `reports/` rule above also catches docs/reports/, but that dir IS the
+# deliverable (unified report + trend charts) — track it, except the unbounded
+# local version-history snapshots.
+!docs/reports/
+!docs/reports/**
+docs/reports/history/

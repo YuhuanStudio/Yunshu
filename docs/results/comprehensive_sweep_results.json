@@ -1,0 +1,650 @@
+[
+  {
+    "model": "Qwen3.5-0.8B-MLX-bf16",
+    "engine": "lm",
+    "length_sweep": [
+      {
+        "target": 128,
+        "prompt_tok": 184,
+        "ttft_ms": 194.6,
+        "prefill_tps": 946,
+        "decode_tps": 107.5
+      },
+      {
+        "target": 512,
+        "prompt_tok": 646,
+        "ttft_ms": 322.7,
+        "prefill_tps": 2002,
+        "decode_tps": 106.8
+      },
+      {
+        "target": 1024,
+        "prompt_tok": 1274,
+        "ttft_ms": 451.3,
+        "prefill_tps": 2823,
+        "decode_tps": 100.3
+      },
+      {
+        "target": 2048,
+        "prompt_tok": 2528,
+        "ttft_ms": 767.6,
+        "prefill_tps": 3293,
+        "decode_tps": 95.2
+      },
+      {
+        "target": 4096,
+        "prompt_tok": 5036,
+        "ttft_ms": 1422.4,
+        "prefill_tps": 3541,
+        "decode_tps": 85.0
+      }
+    ],
+    "hit_ratio_sweep": [
+      {
+        "suffix_words": 4,
+        "prompt_tok": 1273,
+        "cached": 1152,
+        "hit_ratio": 0.905,
+        "ttft_ms": 203.4,
+        "speedup_vs_cold_base": 2.16
+      },
+      {
+        "suffix_words": 60,
+        "prompt_tok": 1385,
+        "cached": 1152,
+        "hit_ratio": 0.832,
+        "ttft_ms": 249.3,
+        "speedup_vs_cold_base": 1.76
+      },
+      {
+        "suffix_words": 250,
+        "prompt_tok": 1765,
+        "cached": 1152,
+        "hit_ratio": 0.653,
+        "ttft_ms": 356.2,
+        "speedup_vs_cold_base": 1.23
+      },
+      {
+        "suffix_words": 1100,
+        "prompt_tok": 3465,
+        "cached": 1152,
+        "hit_ratio": 0.332,
+        "ttft_ms": 756.2,
+        "speedup_vs_cold_base": 0.58
+      }
+    ],
+    "cold_base_tok": 1271,
+    "cold_base_ttft_ms": 438.9,
+    "concurrency_sweep": [
+      {
+        "N": 1,
+        "agg_tps": 35.9,
+        "mean_ttft_ms": 306.3,
+        "total_tok": 11,
+        "wall_s": 0.31
+      },
+      {
+        "N": 8,
+        "agg_tps": 61.7,
+        "mean_ttft_ms": 1733.0,
+        "total_tok": 202,
+        "wall_s": 3.28
+      },
+      {
+        "N": 16,
+        "agg_tps": 64.8,
+        "mean_ttft_ms": 3492.2,
+        "total_tok": 442,
+        "wall_s": 6.83
+      },
+      {
+        "N": 32,
+        "agg_tps": 61.9,
+        "mean_ttft_ms": 7373.5,
+        "total_tok": 903,
+        "wall_s": 14.58
+      }
+    ],
+    "_path": "./models/Qwen3.5-0.8B-MLX-bf16"
+  },
+  {
+    "model": "Qwen3.5-2B-MLX-bf16",
+    "engine": "lm",
+    "length_sweep": [
+      {
+        "target": 128,
+        "prompt_tok": 184,
+        "ttft_ms": 268.4,
+        "prefill_tps": 686,
+        "decode_tps": 56.1
+      },
+      {
+        "target": 512,
+        "prompt_tok": 646,
+        "ttft_ms": 482.7,
+        "prefill_tps": 1338,
+        "decode_tps": 55.3
+      },
+      {
+        "target": 1024,
+        "prompt_tok": 1274,
+        "ttft_ms": 756.4,
+        "prefill_tps": 1684,
+        "decode_tps": 55.2
+      },
+      {
+        "target": 2048,
+        "prompt_tok": 2528,
+        "ttft_ms": 1343.9,
+        "prefill_tps": 1881,
+        "decode_tps": 53.0
+      },
+      {
+        "target": 4096,
+        "prompt_tok": 5036,
+        "ttft_ms": 2577.9,
+        "prefill_tps": 1954,
+        "decode_tps": 50.6
+      }
+    ],
+    "hit_ratio_sweep": [
+      {
+        "suffix_words": 4,
+        "prompt_tok": 1273,
+        "cached": 1152,
+        "hit_ratio": 0.905,
+        "ttft_ms": 266.1,
+        "speedup_vs_cold_base": 2.84
+      },
+      {
+        "suffix_words": 60,
+        "prompt_tok": 1385,
+        "cached": 1152,
+        "hit_ratio": 0.832,
+        "ttft_ms": 306.8,
+        "speedup_vs_cold_base": 2.46
+      },
+      {
+        "suffix_words": 250,
+        "prompt_tok": 1765,
+        "cached": 1152,
+        "hit_ratio": 0.653,
+        "ttft_ms": 496.8,
+        "speedup_vs_cold_base": 1.52
+      },
+      {
+        "suffix_words": 1100,
+        "prompt_tok": 3465,
+        "cached": 1152,
+        "hit_ratio": 0.332,
+        "ttft_ms": 1294.8,
+        "speedup_vs_cold_base": 0.58
+      }
+    ],
+    "cold_base_tok": 1271,
+    "cold_base_ttft_ms": 754.7,
+    "concurrency_sweep": [
+      {
+        "N": 1,
+        "agg_tps": 18.2,
+        "mean_ttft_ms": 438.6,
+        "total_tok": 8,
+        "wall_s": 0.44
+      },
+      {
+        "N": 8,
+        "agg_tps": 25.8,
+        "mean_ttft_ms": 2476.5,
+        "total_tok": 113,
+        "wall_s": 4.39
+      },
+      {
+        "N": 16,
+        "agg_tps": 24.7,
+        "mean_ttft_ms": 4555.9,
+        "total_tok": 216,
+        "wall_s": 8.74
+      },
+      {
+        "N": 32,
+        "agg_tps": 23.2,
+        "mean_ttft_ms": 9250.9,
+        "total_tok": 416,
+        "wall_s": 17.89
+      }
+    ],
+    "_path": "./models/Qwen3.5-2B-MLX-bf16"
+  },
+  {
+    "model": "Qwen3.5-9B-MLX-4bit",
+    "engine": "lm",
+    "length_sweep": [
+      {
+        "target": 128,
+        "prompt_tok": 184,
+        "ttft_ms": 529.0,
+        "prefill_tps": 348,
+        "decode_tps": 45.8
+      },
+      {
+        "target": 512,
+        "prompt_tok": 646,
+        "ttft_ms": 1397.8,
+        "prefill_tps": 462,
+        "decode_tps": 46.0
+      },
+      {
+        "target": 1024,
+        "prompt_tok": 1274,
+        "ttft_ms": 2733.9,
+        "prefill_tps": 466,
+        "decode_tps": 44.8
+      },
+      {
+        "target": 2048,
+        "prompt_tok": 2528,
+        "ttft_ms": 5575.1,
+        "prefill_tps": 453,
+        "decode_tps": 43.4
+      },
+      {
+        "target": 4096,
+        "prompt_tok": 5036,
+        "ttft_ms": 11316.2,
+        "prefill_tps": 445,
+        "decode_tps": 40.0
+      }
+    ],
+    "hit_ratio_sweep": [
+      {
+        "suffix_words": 4,
+        "prompt_tok": 1273,
+        "cached": 1152,
+        "hit_ratio": 0.905,
+        "ttft_ms": 484.2,
+        "speedup_vs_cold_base": 6.11
+      },
+      {
+        "suffix_words": 60,
+        "prompt_tok": 1385,
+        "cached": 1152,
+        "hit_ratio": 0.832,
+        "ttft_ms": 742.4,
+        "speedup_vs_cold_base": 3.99
+      },
+      {
+        "suffix_words": 250,
+        "prompt_tok": 1765,
+        "cached": 1152,
+        "hit_ratio": 0.653,
+        "ttft_ms": 1590.6,
+        "speedup_vs_cold_base": 1.86
+      },
+      {
+        "suffix_words": 1100,
+        "prompt_tok": 3465,
+        "cached": 1152,
+        "hit_ratio": 0.332,
+        "ttft_ms": 5408.7,
+        "speedup_vs_cold_base": 0.55
+      }
+    ],
+    "cold_base_tok": 1271,
+    "cold_base_ttft_ms": 2960.0,
+    "concurrency_sweep": [
+      {
+        "N": 1,
+        "agg_tps": 16.5,
+        "mean_ttft_ms": 1393.0,
+        "total_tok": 23,
+        "wall_s": 1.39
+      },
+      {
+        "N": 8,
+        "agg_tps": 18.1,
+        "mean_ttft_ms": 6502.1,
+        "total_tok": 209,
+        "wall_s": 11.58
+      },
+      {
+        "N": 16,
+        "agg_tps": 17.6,
+        "mean_ttft_ms": 12763.2,
+        "total_tok": 425,
+        "wall_s": 24.21
+      },
+      {
+        "N": 32,
+        "agg_tps": 16.1,
+        "mean_ttft_ms": 26827.4,
+        "total_tok": 861,
+        "wall_s": 53.45
+      }
+    ],
+    "_path": "./models/Qwen3.5-9B-MLX-4bit"
+  },
+  {
+    "model": "Qwen2.5-3B-Instruct-bf16",
+    "engine": "lm",
+    "length_sweep": [
+      {
+        "target": 128,
+        "prompt_tok": 181,
+        "ttft_ms": 294.1,
+        "prefill_tps": 615,
+        "decode_tps": 30.8
+      },
+      {
+        "target": 512,
+        "prompt_tok": 643,
+        "ttft_ms": 814.3,
+        "prefill_tps": 790,
+        "decode_tps": 31.2
+      },
+      {
+        "target": 1024,
+        "prompt_tok": 1271,
+        "ttft_ms": 1340.1,
+        "prefill_tps": 948,
+        "decode_tps": 28.7
+      },
+      {
+        "target": 2048,
+        "prompt_tok": 2525,
+        "ttft_ms": 2997.8,
+        "prefill_tps": 842,
+        "decode_tps": 27.0
+      },
+      {
+        "target": 4096,
+        "prompt_tok": 5033,
+        "ttft_ms": 5932.5,
+        "prefill_tps": 848,
+        "decode_tps": 24.2
+      }
+    ],
+    "hit_ratio_sweep": [
+      {
+        "suffix_words": 4,
+        "prompt_tok": 1271,
+        "cached": 1216,
+        "hit_ratio": 0.957,
+        "ttft_ms": 296.8,
+        "speedup_vs_cold_base": 5.05
+      },
+      {
+        "suffix_words": 60,
+        "prompt_tok": 1383,
+        "cached": 1216,
+        "hit_ratio": 0.879,
+        "ttft_ms": 324.6,
+        "speedup_vs_cold_base": 4.61
+      },
+      {
+        "suffix_words": 250,
+        "prompt_tok": 1763,
+        "cached": 1216,
+        "hit_ratio": 0.69,
+        "ttft_ms": 870.4,
+        "speedup_vs_cold_base": 1.72
+      },
+      {
+        "suffix_words": 1100,
+        "prompt_tok": 3463,
+        "cached": 1216,
+        "hit_ratio": 0.351,
+        "ttft_ms": 2888.6,
+        "speedup_vs_cold_base": 0.52
+      }
+    ],
+    "cold_base_tok": 1268,
+    "cold_base_ttft_ms": 1497.5,
+    "concurrency_sweep": [
+      {
+        "N": 1,
+        "agg_tps": 16.8,
+        "mean_ttft_ms": 1188.5,
+        "total_tok": 20,
+        "wall_s": 1.19
+      },
+      {
+        "N": 8,
+        "agg_tps": 16.4,
+        "mean_ttft_ms": 5430.1,
+        "total_tok": 158,
+        "wall_s": 9.66
+      },
+      {
+        "N": 16,
+        "agg_tps": 16.2,
+        "mean_ttft_ms": 10309.2,
+        "total_tok": 313,
+        "wall_s": 19.36
+      },
+      {
+        "N": 32,
+        "agg_tps": 17.3,
+        "mean_ttft_ms": 19063.1,
+        "total_tok": 633,
+        "wall_s": 36.69
+      }
+    ],
+    "_path": "./models/Qwen2.5-3B-Instruct-bf16"
+  },
+  {
+    "model": "gemma-4-e4b-it-bf16",
+    "engine": "lm",
+    "length_sweep": [
+      {
+        "target": 128,
+        "prompt_tok": 177,
+        "ttft_ms": 375.3,
+        "prefill_tps": 472,
+        "decode_tps": 21.3
+      },
+      {
+        "target": 512,
+        "prompt_tok": 639,
+        "ttft_ms": 754.5,
+        "prefill_tps": 847,
+        "decode_tps": 21.6
+      },
+      {
+        "target": 1024,
+        "prompt_tok": 1267,
+        "ttft_ms": 1196.3,
+        "prefill_tps": 1059,
+        "decode_tps": 20.5
+      },
+      {
+        "target": 2048,
+        "prompt_tok": 2521,
+        "ttft_ms": 2264.1,
+        "prefill_tps": 1113,
+        "decode_tps": 20.2
+      },
+      {
+        "target": 4096,
+        "prompt_tok": 5029,
+        "ttft_ms": 4418.8,
+        "prefill_tps": 1138,
+        "decode_tps": 20.2
+      }
+    ],
+    "hit_ratio_sweep": [
+      {
+        "suffix_words": 4,
+        "prompt_tok": 1267,
+        "cached": 1216,
+        "hit_ratio": 0.96,
+        "ttft_ms": 357.4,
+        "speedup_vs_cold_base": 3.27
+      },
+      {
+        "suffix_words": 60,
+        "prompt_tok": 1379,
+        "cached": 1216,
+        "hit_ratio": 0.882,
+        "ttft_ms": 396.6,
+        "speedup_vs_cold_base": 2.94
+      },
+      {
+        "suffix_words": 250,
+        "prompt_tok": 1759,
+        "cached": 1216,
+        "hit_ratio": 0.691,
+        "ttft_ms": 637.4,
+        "speedup_vs_cold_base": 1.83
+      },
+      {
+        "suffix_words": 1100,
+        "prompt_tok": 3459,
+        "cached": 1216,
+        "hit_ratio": 0.352,
+        "ttft_ms": 2016.4,
+        "speedup_vs_cold_base": 0.58
+      }
+    ],
+    "cold_base_tok": 1265,
+    "cold_base_ttft_ms": 1167.7,
+    "concurrency_sweep": [
+      {
+        "N": 1,
+        "agg_tps": 17.5,
+        "mean_ttft_ms": 1710.2,
+        "total_tok": 30,
+        "wall_s": 1.71
+      },
+      {
+        "N": 8,
+        "agg_tps": 17.2,
+        "mean_ttft_ms": 7878.8,
+        "total_tok": 240,
+        "wall_s": 13.95
+      },
+      {
+        "N": 16,
+        "agg_tps": 17.5,
+        "mean_ttft_ms": 14619.1,
+        "total_tok": 480,
+        "wall_s": 27.45
+      },
+      {
+        "N": 32,
+        "agg_tps": 17.9,
+        "mean_ttft_ms": 27762.8,
+        "total_tok": 960,
+        "wall_s": 53.63
+      }
+    ],
+    "_path": "./models/gemma-4-e4b-it-bf16"
+  },
+  {
+    "model": "GLM-OCR-bf16",
+    "engine": "vlm",
+    "length_sweep": [
+      {
+        "target": 128,
+        "prompt_tok": 219,
+        "ttft_ms": 55.4,
+        "prefill_tps": 3951,
+        "decode_tps": 143.0
+      },
+      {
+        "target": 512,
+        "prompt_tok": 807,
+        "ttft_ms": 127.7,
+        "prefill_tps": 6320,
+        "decode_tps": 120.0
+      },
+      {
+        "target": 1024,
+        "prompt_tok": 1606,
+        "ttft_ms": 293.5,
+        "prefill_tps": 5471,
+        "decode_tps": 87.9
+      },
+      {
+        "target": 2048,
+        "prompt_tok": 3202,
+        "ttft_ms": 602.9,
+        "prefill_tps": 5311,
+        "decode_tps": 59.0
+      },
+      {
+        "target": 4096,
+        "prompt_tok": 6394,
+        "ttft_ms": 1344.2,
+        "prefill_tps": 4757,
+        "decode_tps": 34.9
+      }
+    ],
+    "hit_ratio_sweep": [
+      {
+        "suffix_words": 4,
+        "prompt_tok": 1606,
+        "cached": 1536,
+        "hit_ratio": 0.956,
+        "ttft_ms": 33.4,
+        "speedup_vs_cold_base": 7.97
+      },
+      {
+        "suffix_words": 60,
+        "prompt_tok": 1718,
+        "cached": 1536,
+        "hit_ratio": 0.894,
+        "ttft_ms": 48.2,
+        "speedup_vs_cold_base": 5.52
+      },
+      {
+        "suffix_words": 250,
+        "prompt_tok": 2098,
+        "cached": 1536,
+        "hit_ratio": 0.732,
+        "ttft_ms": 112.9,
+        "speedup_vs_cold_base": 2.36
+      },
+      {
+        "suffix_words": 1100,
+        "prompt_tok": 3798,
+        "cached": 1536,
+        "hit_ratio": 0.404,
+        "ttft_ms": 435.2,
+        "speedup_vs_cold_base": 0.61
+      }
+    ],
+    "cold_base_tok": 1603,
+    "cold_base_ttft_ms": 265.9,
+    "concurrency_sweep": [
+      {
+        "N": 1,
+        "agg_tps": 115.8,
+        "mean_ttft_ms": 258.9,
+        "total_tok": 30,
+        "wall_s": 0.26
+      },
+      {
+        "N": 8,
+        "agg_tps": 117.5,
+        "mean_ttft_ms": 1152.5,
+        "total_tok": 240,
+        "wall_s": 2.04
+      },
+      {
+        "N": 16,
+        "agg_tps": 115.8,
+        "mean_ttft_ms": 2197.3,
+        "total_tok": 480,
+        "wall_s": 4.14
+      },
+      {
+        "N": 32,
+        "agg_tps": 113.3,
+        "mean_ttft_ms": 4353.5,
+        "total_tok": 960,
+        "wall_s": 8.47
+      }
+    ],
+    "_path": "./models/GLM-OCR-bf16"
+  }
+]

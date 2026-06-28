@@ -1,0 +1,228 @@
+[
+  {
+    "model": "Qwen3.5-0.8B-MLX-bf16",
+    "rows": [
+      {
+        "fw": "yunshu-fast",
+        "model": "Qwen3.5-0.8B-MLX-bf16",
+        "ttft_ms": 173.9,
+        "decode_tps": 138.3,
+        "batch": {
+          "8": 94.6,
+          "16": 94.7,
+          "32": 96.9
+        }
+      },
+      {
+        "fw": "yunshu-loop",
+        "model": "Qwen3.5-0.8B-MLX-bf16",
+        "ttft_ms": 85.0,
+        "decode_tps": 142.2,
+        "batch": {
+          "8": 346.6,
+          "16": 490.6,
+          "32": 578.0
+        }
+      },
+      {
+        "fw": "mlx-lm",
+        "model": "Qwen3.5-0.8B-MLX-bf16",
+        "ttft_ms": 186.5,
+        "decode_tps": 145.7,
+        "batch": {
+          "8": 349.0,
+          "16": 505.2,
+          "32": 627.7
+        }
+      },
+      {
+        "fw": "vllm-mlx",
+        "model": "Qwen3.5-0.8B-MLX-bf16",
+        "ttft_ms": 239.2,
+        "decode_tps": 154.0,
+        "batch": {
+          "8": 97.9,
+          "16": 96.2,
+          "32": 95.1
+        }
+      },
+      {
+        "fw": "oMLX",
+        "model": "Qwen3.5-0.8B-MLX-bf16",
+        "ttft_ms": 324.5,
+        "decode_tps": 147.9,
+        "batch": {
+          "8": 133.3,
+          "16": 150.6,
+          "32": 146.3
+        }
+      }
+    ]
+  },
+  {
+    "model": "Qwen3.5-2B-MLX-bf16",
+    "rows": [
+      {
+        "fw": "yunshu-fast",
+        "model": "Qwen3.5-2B-MLX-bf16",
+        "ttft_ms": 215.2,
+        "decode_tps": 64.7,
+        "batch": {
+          "8": 50.6,
+          "16": 52.2,
+          "32": 51.8
+        }
+      },
+      {
+        "fw": "yunshu-loop",
+        "model": "Qwen3.5-2B-MLX-bf16",
+        "ttft_ms": 175.9,
+        "decode_tps": 65.3,
+        "batch": {
+          "8": 174.6,
+          "16": 216.8,
+          "32": 266.3
+        }
+      },
+      {
+        "fw": "mlx-lm",
+        "model": "Qwen3.5-2B-MLX-bf16",
+        "ttft_ms": 291.9,
+        "decode_tps": 64.8,
+        "batch": {
+          "8": 155.7,
+          "16": 219.5,
+          "32": 266.7
+        }
+      },
+      {
+        "fw": "vllm-mlx",
+        "model": "Qwen3.5-2B-MLX-bf16",
+        "ttft_ms": 332.4,
+        "decode_tps": 67.8,
+        "batch": {
+          "8": 48.2,
+          "16": 45.9,
+          "32": 47.4
+        }
+      },
+      {
+        "fw": "oMLX",
+        "model": "Qwen3.5-2B-MLX-bf16",
+        "ttft_ms": 383.3,
+        "decode_tps": 61.8,
+        "batch": {
+          "8": 90.2,
+          "16": 108.0,
+          "32": 123.6
+        }
+      }
+    ]
+  },
+  {
+    "model": "Qwen2.5-3B-Instruct-bf16",
+    "rows": [
+      {
+        "fw": "yunshu-fast",
+        "model": "Qwen2.5-3B-Instruct-bf16",
+        "ttft_ms": 123.4,
+        "decode_tps": 41.3,
+        "batch": {
+          "8": 33.6,
+          "16": 35.8,
+          "32": 36.0
+        }
+      },
+      {
+        "fw": "yunshu-loop",
+        "model": "Qwen2.5-3B-Instruct-bf16",
+        "ttft_ms": 328.9,
+        "decode_tps": 41.5,
+        "batch": {
+          "8": 106.7,
+          "16": 147.4,
+          "32": 180.4
+        }
+      },
+      {
+        "fw": "mlx-lm",
+        "model": "Qwen2.5-3B-Instruct-bf16",
+        "ttft_ms": 363.3,
+        "decode_tps": 41.7,
+        "batch": {
+          "8": 107.1,
+          "16": 147.0,
+          "32": 180.1
+        }
+      },
+      {
+        "fw": "vllm-mlx",
+        "model": "Qwen2.5-3B-Instruct-bf16",
+        "ttft_ms": 365.2,
+        "decode_tps": 42.1,
+        "batch": {
+          "8": 33.6,
+          "16": 32.8,
+          "32": 32.9
+        }
+      },
+      {
+        "fw": "oMLX",
+        "model": "Qwen2.5-3B-Instruct-bf16",
+        "ttft_ms": 436.4,
+        "decode_tps": 40.9,
+        "batch": {
+          "8": 72.3,
+          "16": 92.8,
+          "32": 101.6
+        }
+      }
+    ]
+  },
+  {
+    "model": "gemma-4-e4b-it-bf16",
+    "rows": [
+      {
+        "fw": "yunshu-fast",
+        "model": "gemma-4-e4b-it-bf16",
+        "ttft_ms": 223.5,
+        "decode_tps": 25.1,
+        "batch": {
+          "8": 21.5,
+          "16": 22.5,
+          "32": 23.1
+        }
+      },
+      {
+        "fw": "yunshu-loop",
+        "model": "gemma-4-e4b-it-bf16",
+        "ttft_ms": 269.6,
+        "decode_tps": 26.0,
+        "batch": {
+          "8": 81.6,
+          "16": 126.1,
+          "32": 133.9
+        }
+      },
+      {
+        "status": "NO RESULT"
+      },
+      {
+        "fw": "vllm-mlx",
+        "model": "gemma-4-e4b-it-bf16",
+        "ttft_ms": 397.8,
+        "decode_tps": 26.0,
+        "batch": {
+          "8": 22.5,
+          "16": 22.7,
+          "32": 22.9
+        }
+      },
+      {
+        "fw": "oMLX",
+        "model": "gemma-4-e4b-it-bf16",
+        "status": "LOAD FAIL: Received 54 parameters not in model: \nlanguage_mod"
+      }
+    ]
+  }
+]

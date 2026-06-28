@@ -1,0 +1,427 @@
+"""Server metrics — thread-safe request tracking with per-model breakdown.
+
+session + all-time scopes,
+per-model counters, periodic JSON persistence.
+"""
+
+
+import json
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+_SAVE_INTERVAL = 300  # seconds
+
+
+class ServerMetrics:
+    """Thread-safe server-level metrics aggregator.
+
+    Scopes:
+    - session: resets on server restart
+    - alltime: persisted across restarts via stats_path JSON
+    """
+
+    def __init__(self, stats_path: Path | None = None):
+        self._lock = threading.Lock()
+        self._stats_path = stats_path
+
+        # Session totals
+        self.total_prompt_tokens: int = 0
+        self.total_completion_tokens: int = 0
+        self.total_cached_tokens: int = 0
+        self.total_requests: int = 0
+        self.total_prefill_duration: float = 0.0
+        self.total_generation_duration: float = 0.0
+        self._per_model: dict[str, dict[str, Any]] = {}
+
+        # All-time totals
+        self._alltime_prompt_tokens: int = 0
+        self._alltime_completion_tokens: int = 0
+        self._alltime_cached_tokens: int = 0
+        self._alltime_requests: int = 0
+        self._alltime_prefill_duration: float = 0.0
+        self._alltime_generation_duration: float = 0.0
+        self._alltime_per_model: dict[str, dict[str, Any]] = {}
+
+        # ITL histogram (ITL-1: inter-token latency tracking)
+        self._itl_samples: list[float] = []
+        self._itl_p50: float = 0.0
+        self._itl_p99: float = 0.0
+
+        # Batch size distribution tracking (MON-2)
+        self._batch_size_samples: list[int] = []
+        self._batch_size_p50: int = 0
+        self._batch_size_p99: int = 0
+
+        # Compute utilization tracking (GPU active / wall time)
+        self._total_compute_time_ms: float = 0.0
+        self._util_start_time: float = time.monotonic()
+
+        self._start_time = time.monotonic()
+        self._last_save_time = time.monotonic()
+
+        if stats_path:
+            self._load_alltime()
+
+    @staticmethod
+    def _new_model_counters() -> dict[str, Any]:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cached_tokens": 0,
+            "requests": 0,
+            "prefill_duration": 0.0,
+            "generation_duration": 0.0,
+        }
+
+    def _load_alltime(self) -> None:
+        if not self._stats_path or not self._stats_path.exists():
+            return
+        try:
+            with open(self._stats_path) as f:
+                data = json.load(f)
+            self._alltime_prompt_tokens = int(data.get("total_prompt_tokens", 0))
+            self._alltime_completion_tokens = int(data.get("total_completion_tokens", 0))
+            self._alltime_cached_tokens = int(data.get("total_cached_tokens", 0))
+            self._alltime_requests = int(data.get("total_requests", 0))
+            self._alltime_prefill_duration = float(data.get("total_prefill_duration", 0.0))
+            self._alltime_generation_duration = float(data.get("total_generation_duration", 0.0))
+            for model_id, counters in data.get("per_model", {}).items():
+                self._alltime_per_model[model_id] = {
+                    k: float(v) if "duration" in k else int(v)
+                    for k, v in counters.items()
+                }
+            logger.info("Loaded all-time stats from %s", self._stats_path)
+        except Exception as e:
+            logger.warning("Failed to load all-time stats: %s", e)
+
+    def save_alltime(self) -> None:
+        if not self._stats_path:
+            return
+        with self._lock:
+            data = {
+                "total_prompt_tokens": self._alltime_prompt_tokens,
+                "total_completion_tokens": self._alltime_completion_tokens,
+                "total_cached_tokens": self._alltime_cached_tokens,
+                "total_requests": self._alltime_requests,
+                "total_prefill_duration": self._alltime_prefill_duration,
+                "total_generation_duration": self._alltime_generation_duration,
+                "per_model": dict(self._alltime_per_model),
+            }
+            self._last_save_time = time.monotonic()
+        try:
+            self._stats_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._stats_path.with_suffix(".json.tmp")
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2)
+            tmp.replace(self._stats_path)
+        except OSError as e:
+            logger.warning("Failed to save all-time stats: %s", e)
+
+    def record_request_complete(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cached_tokens: int = 0,
+        prefill_duration: float = 0.0,
+        generation_duration: float = 0.0,
+        model_id: str = "",
+    ) -> None:
+        with self._lock:
+            # Session
+            self.total_prompt_tokens += prompt_tokens
+            self.total_completion_tokens += completion_tokens
+            self.total_cached_tokens += cached_tokens
+            self.total_requests += 1
+            self.total_prefill_duration += prefill_duration
+            self.total_generation_duration += generation_duration
+
+            # All-time
+            self._alltime_prompt_tokens += prompt_tokens
+            self._alltime_completion_tokens += completion_tokens
+            self._alltime_cached_tokens += cached_tokens
+            self._alltime_requests += 1
+            self._alltime_prefill_duration += prefill_duration
+            self._alltime_generation_duration += generation_duration
+
+            # Per-model
+            if model_id:
+                for store in (self._per_model, self._alltime_per_model):
+                    if model_id not in store:
+                        store[model_id] = self._new_model_counters()
+                    m = store[model_id]
+                    m["prompt_tokens"] += prompt_tokens
+                    m["completion_tokens"] += completion_tokens
+                    m["cached_tokens"] += cached_tokens
+                    m["requests"] += 1
+                    m["prefill_duration"] += prefill_duration
+                    m["generation_duration"] += generation_duration
+
+            # Periodic save (flag-based to avoid lock reentrance)
+            needs_save = (
+                self._stats_path
+                and time.monotonic() - self._last_save_time >= _SAVE_INTERVAL
+            )
+
+        if needs_save:
+            self.save_alltime()
+
+    def record_itl(self, itl_seconds: float) -> None:
+        """Record an inter-token latency sample (ITL-1).
+
+        Called from Scheduler._process_responses for each generated token.
+        Maintains a bounded buffer and computes percentiles on flush.
+        Thread-safe: acquires self._lock for all mutable state access.
+        """
+        with self._lock:
+            self._itl_samples.append(itl_seconds)
+            # Keep buffer bounded (flush and compute percentiles every 1000 samples)
+            if len(self._itl_samples) >= 1000:
+                self._compute_itl_percentiles_unlocked()
+
+    def _compute_itl_percentiles_unlocked(self) -> None:
+        """Compute ITL percentiles from collected samples. Caller must hold self._lock."""
+        if not self._itl_samples:
+            return
+        # Snapshot the most recent samples BEFORE sorting, so we preserve
+        # recency for the next cycle.  Sorting destroys chronological order.
+        recent = self._itl_samples[-100:]
+        samples = sorted(self._itl_samples)
+        n = len(samples)
+        self._itl_p50 = samples[n // 2]
+        self._itl_p99 = samples[min(int(n * 0.99), n - 1)]
+        # Keep the 100 most recent samples (chronological order).
+        self._itl_samples = recent
+
+    def get_itl_stats(self) -> dict[str, Any]:
+        """Return ITL statistics (read-only — does not mutate sample buffer)."""
+        with self._lock:
+            if self._itl_samples:
+                # Compute percentiles from a snapshot without discarding samples.
+                samples = sorted(self._itl_samples)
+                n = len(samples)
+                p50 = samples[n // 2]
+                p99 = samples[min(int(n * 0.99), n - 1)]
+                return {
+                    "itl_p50_ms": round(p50 * 1000, 2),
+                    "itl_p99_ms": round(p99 * 1000, 2),
+                    "itl_samples_buffered": n,
+                }
+            return {
+                "itl_p50_ms": round(self._itl_p50 * 1000, 2),
+                "itl_p99_ms": round(self._itl_p99 * 1000, 2),
+                "itl_samples_buffered": 0,
+            }
+
+    def record_batch_size(self, batch_size: int) -> None:
+        """Record a scheduler batch size sample (MON-2).
+
+        Called from engine_core._engine_loop after each scheduler step.
+        Maintains a bounded buffer and computes percentiles on flush.
+        Thread-safe: acquires self._lock for all mutable state access.
+        """
+        with self._lock:
+            self._batch_size_samples.append(batch_size)
+            if len(self._batch_size_samples) >= 1000:
+                self._compute_batch_size_percentiles_unlocked()
+
+    def _compute_batch_size_percentiles_unlocked(self) -> None:
+        """Compute batch size percentiles from collected samples. Caller must hold self._lock."""
+        if not self._batch_size_samples:
+            return
+        # Snapshot the most recent samples BEFORE sorting, so we preserve
+        # recency for the next cycle.  Sorting destroys chronological order.
+        recent = self._batch_size_samples[-100:]
+        samples = sorted(self._batch_size_samples)
+        n = len(samples)
+        self._batch_size_p50 = samples[n // 2]
+        self._batch_size_p99 = samples[min(int(n * 0.99), n - 1)]
+        # Keep the 100 most recent samples (chronological order, not sorted).
+        self._batch_size_samples = recent
+
+    def get_batch_size_stats(self) -> dict[str, Any]:
+        """Return batch size distribution statistics (read-only — does not mutate sample buffer)."""
+        with self._lock:
+            if self._batch_size_samples:
+                samples = sorted(self._batch_size_samples)
+                n = len(samples)
+                p50 = samples[n // 2]
+                p99 = samples[min(int(n * 0.99), n - 1)]
+                return {
+                    "batch_size_p50": p50,
+                    "batch_size_p99": p99,
+                    "batch_size_samples_buffered": n,
+                }
+            return {
+                "batch_size_p50": self._batch_size_p50,
+                "batch_size_p99": self._batch_size_p99,
+                "batch_size_samples_buffered": 0,
+            }
+
+    def record_compute_step(self, step_duration_ms: float, idle: bool = False) -> None:
+        """Record a scheduler step duration for compute utilization tracking.
+
+        Called from engine_core._engine_loop after each step.
+        Step time = GPU active time; idle time = time spent waiting for requests.
+
+        Wall time is tracked via ``_util_start_time`` (set at init) and
+        ``time.monotonic()`` in ``get_compute_utilization``, so only the
+        compute (non-idle) time needs to be accumulated here.
+
+        Args:
+            step_duration_ms: Duration of this step in milliseconds.
+            idle: If True, this was an idle poll (no active requests processed).
+        """
+        with self._lock:
+            if not idle:
+                self._total_compute_time_ms += step_duration_ms
+
+    def get_compute_utilization(self) -> float:
+        """Return compute utilization percentage (GPU active / total wall time).
+
+        Wall time is the actual elapsed monotonic time since the first
+        ``record_compute_step`` call, not the sum of individual step
+        durations.  This avoids the bias where short step durations make
+        utilisation appear artificially high while idle gaps between steps
+        go unaccounted for.
+
+        Returns 0.0 when no steps have been recorded. Value is 0–100.
+        Thread-safe.
+        """
+        with self._lock:
+            wall_ms = (time.monotonic() - self._util_start_time) * 1000.0
+            if wall_ms <= 0:
+                return 0.0
+            return min(
+                self._total_compute_time_ms / wall_ms * 100.0,
+                100.0,
+            )
+
+    def _build_snapshot(
+        self,
+        prompt: int,
+        completion: int,
+        cached: int,
+        requests: int,
+        prefill_dur: float,
+        gen_dur: float,
+        uptime: float,
+    ) -> dict[str, Any]:
+        actual = max(0, prompt - cached)
+        avg_prefill_tps = actual / prefill_dur if prefill_dur > 0 else 0.0
+        avg_gen_tps = completion / gen_dur if gen_dur > 0 else 0.0
+        cache_eff = min(100.0, cached / prompt * 100) if prompt > 0 else 0.0
+
+        wall_ms = (time.monotonic() - self._util_start_time) * 1000.0
+        compute_util = (
+            min(self._total_compute_time_ms / wall_ms * 100.0, 100.0)
+            if wall_ms > 0
+            else 0.0
+        )
+        return {
+            "total_tokens_served": prompt + completion,
+            "total_cached_tokens": cached,
+            "cache_efficiency_pct": round(cache_eff, 1),
+            "total_prompt_tokens": prompt,
+            "total_completion_tokens": completion,
+            "total_requests": requests,
+            "avg_prefill_tps": round(avg_prefill_tps, 1),
+            "avg_generation_tps": round(avg_gen_tps, 1),
+            "compute_utilization_pct": round(compute_util, 2),
+            "uptime_seconds": round(uptime, 1),
+        }
+
+    def get_snapshot(
+        self, model_id: str = "", scope: str = "session"
+    ) -> dict[str, Any]:
+        with self._lock:
+            uptime = time.monotonic() - self._start_time
+
+            if scope == "alltime":
+                if model_id:
+                    if model_id not in self._alltime_per_model:
+                        return self._build_snapshot(0, 0, 0, 0, 0, 0, uptime)
+                    src = self._alltime_per_model[model_id]
+                else:
+                    src = {
+                        "prompt_tokens": self._alltime_prompt_tokens,
+                        "completion_tokens": self._alltime_completion_tokens,
+                        "cached_tokens": self._alltime_cached_tokens,
+                        "requests": self._alltime_requests,
+                        "prefill_duration": self._alltime_prefill_duration,
+                        "generation_duration": self._alltime_generation_duration,
+                    }
+            else:
+                if model_id:
+                    if model_id not in self._per_model:
+                        return self._build_snapshot(0, 0, 0, 0, 0, 0, uptime)
+                    src = self._per_model[model_id]
+                else:
+                    src = {
+                        "prompt_tokens": self.total_prompt_tokens,
+                        "completion_tokens": self.total_completion_tokens,
+                        "cached_tokens": self.total_cached_tokens,
+                        "requests": self.total_requests,
+                        "prefill_duration": self.total_prefill_duration,
+                        "generation_duration": self.total_generation_duration,
+                    }
+
+            return self._build_snapshot(
+                src.get("prompt_tokens", 0),
+                src.get("completion_tokens", 0),
+                src.get("cached_tokens", 0),
+                src.get("requests", 0),
+                src.get("prefill_duration", 0),
+                src.get("generation_duration", 0),
+                uptime,
+            )
+
+    def clear_session(self) -> None:
+        with self._lock:
+            self.total_prompt_tokens = 0
+            self.total_completion_tokens = 0
+            self.total_cached_tokens = 0
+            self.total_requests = 0
+            self.total_prefill_duration = 0.0
+            self.total_generation_duration = 0.0
+            self._per_model.clear()
+            self._itl_samples.clear()
+            self._itl_p50 = 0.0
+            self._itl_p99 = 0.0
+            self._batch_size_samples.clear()
+            self._batch_size_p50 = 0
+            self._batch_size_p99 = 0
+            self._total_compute_time_ms = 0.0
+            self._util_start_time = time.monotonic()
+
+    def get_model_ids(self) -> list[str]:
+        """Return list of model IDs that have session metrics (thread-safe)."""
+        with self._lock:
+            return list(self._per_model.keys())
+
+
+# Global singleton (thread-safe)
+_server_metrics: ServerMetrics | None = None
+_server_metrics_lock = threading.Lock()
+
+
+def get_server_metrics() -> ServerMetrics:
+    global _server_metrics
+    if _server_metrics is None:
+        with _server_metrics_lock:
+            # Double-checked locking after acquiring the lock
+            if _server_metrics is None:
+                _server_metrics = ServerMetrics()
+    return _server_metrics
+
+
+def reset_server_metrics(stats_path: Path | None = None) -> None:
+    global _server_metrics
+    with _server_metrics_lock:
+        if _server_metrics is not None:
+            _server_metrics.save_alltime()
+        _server_metrics = ServerMetrics(stats_path=stats_path)

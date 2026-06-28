@@ -1,0 +1,15 @@
+{
+  "timestamp": "20260602T133950Z",
+  "git_sha": "cbcf6fe",
+  "tier": "wave657-cool-baseline-verified",
+  "go": true,
+  "n_kpis": 4,
+  "has_perf": true,
+  "kpis": {
+    "gpu_tflops": 9.5,
+    "cool/Qwen2.5-3B-bf16/raw-mlx-lm/decode_tps": 41.3,
+    "cool/Qwen2.5-3B-bf16/raw-mlx-lm/prefill_tps": 1160.0,
+    "cool/Qwen2.5-3B-bf16/sustained_decode_decay_pct": 0.0
+  },
+  "note": "8 back-to-back iters FLAT (no throttle); raw mlx-lm decode==yunshu serve 41.8; 30-core M3 Max fp16 ceiling ~9.5 TFLOP/s is the TRUE peak, not a throttle"
+}

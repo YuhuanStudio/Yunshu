@@ -1,0 +1,462 @@
+from __future__ import annotations
+
+"""Yunshu Gateway — Prometheus-compatible metrics middleware.
+
+Tracks request counts, latencies, token throughput, and error rates.
+Exposes /metrics endpoint for Prometheus scraping.
+
+Metrics:
+  - yunshu_request_count{method,endpoint,status}
+  - yunshu_request_latency_seconds{endpoint}
+  - yunshu_tokens_total{type}  (prompt/completion)
+  - yunshu_inference_count
+"""
+
+
+import logging
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from threading import Lock
+
+from fastapi import HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+logger = logging.getLogger(__name__)
+
+# Known API prefixes — anything beyond the first two segments is collapsed
+# to prevent unbounded label cardinality (unique request IDs, model names, etc.)
+_MAX_LABEL_SEGMENTS = 3
+# hard cap on the number of DISTINCT endpoint labels the in-memory metrics
+# store will track (the middleware runs before auth, so the path is attacker-controlled).
+_MAX_DISTINCT_ENDPOINTS = 256
+
+
+def _normalize_endpoint(path: str) -> str:
+    """Collapse path beyond the first few segments to bound label cardinality.
+
+    E.g. /v1/chat/completions/req-abc123 -> /v1/chat/completions/{id}
+        /health -> /health
+        /v1/models -> /v1/models
+    """
+    parts = path.strip("/").split("/")
+    if len(parts) <= _MAX_LABEL_SEGMENTS:
+        return path
+    return "/" + "/".join(parts[:_MAX_LABEL_SEGMENTS]) + "/{id}"
+
+
+def _esc_prom(v: str) -> str:
+    """Escape a Prometheus label value."""
+    # also escape \r — a bare carriage return corrupts parsing in strict
+    # OpenMetrics scrapers (only \\, " and \n were escaped before).
+    return (v.replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n").replace("\r", "\\r"))
+
+
+@dataclass
+class _Metrics:
+    """Thread-safe metrics store."""
+
+    request_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    request_latency: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    # True total observation count and sum per endpoint (not affected by truncation).
+    latency_total_count: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    latency_total_sum: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    inference_count: int = 0
+    error_count: int = 0
+    start_time: float = field(default_factory=time.time)
+    _lock: Lock = field(default_factory=Lock)
+
+    def record_request(self, endpoint: str, method: str, status: int, latency: float) -> None:
+        with self._lock:
+            # bound distinct-endpoint cardinality. MetricsMiddleware is the
+            # OUTERMOST middleware (runs BEFORE auth rejects a request), and
+            # _normalize_endpoint passes short unknown paths (≤3 segments) through raw —
+            # so an unauthenticated attacker looping GET /a, /b, /c… would grow these
+            # per-endpoint dicts without limit → OOM. Once we hold _MAX_DISTINCT_ENDPOINTS
+            # distinct endpoints, bucket any NEW one under a single overflow label.
+            if (endpoint not in self.latency_total_count
+                    and len(self.latency_total_count) >= _MAX_DISTINCT_ENDPOINTS):
+                endpoint = "/{other}"
+            key = f"{method}:{endpoint}:{status}"
+            self.request_count[key] += 1
+            if status >= 400:
+                self.error_count += 1
+            self.request_latency[endpoint].append(latency)
+            # Track true totals (immune to truncation) for Prometheus summary.
+            self.latency_total_count[endpoint] += 1
+            self.latency_total_sum[endpoint] += latency
+            if len(self.request_latency[endpoint]) > 1000:
+                self.request_latency[endpoint] = self.request_latency[endpoint][-500:]
+        # return the (possibly /{other}-bucketed) endpoint so the caller can feed
+        # the SAME bounded label to the Prometheus exporter + aggregator. Previously those
+        # received the raw normalized path, so an endpoint flood (reachable on auth-disabled
+        # deployments) churned the exporter's 256-series cap → evicted series reset to 0 →
+        # spurious counter-resets corrupting rate(yunshu_request_total).
+        return endpoint
+
+    def record_tokens(self, prompt: int, completion: int) -> None:
+        with self._lock:
+            self.prompt_tokens += prompt
+            self.completion_tokens += completion
+        # Forward to the rolling-window aggregator. The aggregator's
+        # request points carry no token counts (recorded at HTTP-middleware scope
+        # before generation), so without this its token throughput is a permanent
+        # 0. This path covers both streaming and non-streaming requests.
+        try:
+            from .metrics_aggregator import get_metrics_aggregator
+            get_metrics_aggregator().record_tokens(prompt, completion)
+        except Exception:
+            pass
+
+    def record_inference(self) -> None:
+        with self._lock:
+            self.inference_count += 1
+
+    def to_prometheus(self) -> str:
+        """Format metrics in Prometheus exposition format."""
+        lines: list[str] = []
+
+        # Snapshot ALL mutable state under a single lock acquisition to
+        # guarantee a consistent view (no torn reads between sections).
+        with self._lock:
+            uptime = time.time() - self.start_time
+            req_counts = dict(self.request_count)
+            latency_snapshot = {
+                ep: list(lats) for ep, lats in self.request_latency.items()
+            }
+            latency_counts = dict(self.latency_total_count)
+            latency_sums = dict(self.latency_total_sum)
+            prompt_tok = self.prompt_tokens
+            completion_tok = self.completion_tokens
+            inf_count = self.inference_count
+            err_count = self.error_count
+
+        lines.append("# HELP yunshu_uptime_seconds Server uptime in seconds")
+        lines.append("# TYPE yunshu_uptime_seconds gauge")
+        lines.append(f"yunshu_uptime_seconds {uptime:.1f}")
+
+        lines.append("")
+        lines.append("# HELP yunshu_request_count Total requests")
+        lines.append("# TYPE yunshu_request_count counter")
+        for key, count in sorted(req_counts.items()):
+            parts = key.split(":", 2)
+            if len(parts) == 3:
+                lines.append(
+                    f'yunshu_request_count{{method="{_esc_prom(parts[0])}",endpoint="{_esc_prom(parts[1])}",status="{_esc_prom(parts[2])}"}} {count}'
+                )
+
+        lines.append("")
+        lines.append("# HELP yunshu_request_latency_seconds Request latency")
+        lines.append("# TYPE yunshu_request_latency_seconds summary")
+        for endpoint, latencies in sorted(latency_snapshot.items()):
+            if latencies:
+                sorted_lat = sorted(latencies)
+                n = len(sorted_lat)
+                # Nearest-rank percentile: p-th percentile is at index
+                # ceil(p/100 * n) - 1, clamped to [0, n-1].
+                p50_idx = min(max(int(0.5 * n + 0.5) - 1, 0), n - 1)
+                p99_idx = min(max(int(0.99 * n + 0.5) - 1, 0), n - 1)
+                p50 = sorted_lat[p50_idx]
+                p99 = sorted_lat[p99_idx]
+                esc_ep = _esc_prom(endpoint)
+                # Use true total count and sum (immune to list truncation)
+                # so PromQL rate()/increase() compute correct values.
+                true_count = latency_counts.get(endpoint, n)
+                true_sum = latency_sums.get(endpoint, sum(latencies))
+                lines.append(
+                    f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.5"}} {p50:.4f}'
+                )
+                lines.append(
+                    f'yunshu_request_latency_seconds{{endpoint="{esc_ep}",quantile="0.99"}} {p99:.4f}'
+                )
+                # Prometheus summary requires _sum and _count fields.
+                lines.append(
+                    f'yunshu_request_latency_seconds_sum{{endpoint="{esc_ep}"}} {true_sum:.4f}'
+                )
+                lines.append(
+                    f'yunshu_request_latency_seconds_count{{endpoint="{esc_ep}"}} {true_count}'
+                )
+
+        lines.append("")
+        lines.append("# HELP yunshu_tokens_total Token counts")
+        lines.append("# TYPE yunshu_tokens_total counter")
+        lines.append(f'yunshu_tokens_total{{type="prompt"}} {prompt_tok}')
+        lines.append(f'yunshu_tokens_total{{type="completion"}} {completion_tok}')
+
+        lines.append("")
+        lines.append("# HELP yunshu_inference_count Total inference operations")
+        lines.append("# TYPE yunshu_inference_count counter")
+        lines.append(f"yunshu_inference_count {inf_count}")
+
+        lines.append("")
+        lines.append("# HELP yunshu_error_count Total errors")
+        lines.append("# TYPE yunshu_error_count counter")
+        lines.append(f"yunshu_error_count {err_count}")
+
+        # GPU memory gauges
+        try:
+            import mlx.core as mx
+            active = mx.get_active_memory()
+            peak = mx.get_peak_memory()
+            cache = mx.get_cache_memory()
+            lines.append("")
+            lines.append("# HELP yunshu_gpu_memory_bytes GPU memory usage")
+            lines.append("# TYPE yunshu_gpu_memory_bytes gauge")
+            lines.append(f'yunshu_gpu_memory_bytes{{type="active"}} {active}')
+            lines.append(f'yunshu_gpu_memory_bytes{{type="peak"}} {peak}')
+            lines.append(f'yunshu_gpu_memory_bytes{{type="cache"}} {cache}')
+        except Exception:
+            logger.debug("GPU memory stats unavailable", exc_info=True)
+
+        # Engine stats (if available)
+        try:
+            from yunshu_gateway.engine import get_engine, get_model_manager
+            manager = get_model_manager()
+            total_active = 0
+            total_waiting = 0
+            total_running = 0
+            total_registered = 0
+            if manager is not None:
+                for entry in manager.list_entries():
+                    total_registered += 1
+                    # Re-check is_loaded under a snapshot — the engine may be
+                    # unloaded concurrently between the outer check and get_stats().
+                    if entry.is_loaded and entry.engine is not None:
+                        total_running += 1
+                        if hasattr(entry.engine, "get_stats"):
+                            try:
+                                s = entry.engine.get_stats()
+                            except Exception:
+                                logger.debug(
+                                    "engine.get_stats() failed for %s (concurrent unload?)",
+                                    getattr(entry, "model_id", "?"),
+                                    exc_info=True,
+                                )
+                                continue
+                            total_active += s.get("active_collectors",
+                                                  s.get("scheduler_running",
+                                                        s.get("active", 0)))
+                            total_waiting += s.get("scheduler_waiting",
+                                                   s.get("waiting", 0))
+            else:
+                engine = get_engine()
+                if engine and hasattr(engine, 'is_loaded') and engine.is_loaded and hasattr(engine, "get_stats"):
+                    s = engine.get_stats()
+                    total_active = s.get("active_collectors",
+                                        s.get("scheduler_running",
+                                              s.get("active", 0)))
+                    total_waiting = s.get("scheduler_waiting",
+                                          s.get("waiting", 0))
+                    if s.get("loaded"):
+                        total_running = 1
+
+            lines.append("")
+            lines.append("# HELP yunshu_engine_requests Engine request gauges")
+            lines.append("# TYPE yunshu_engine_requests gauge")
+            lines.append(f'yunshu_engine_requests{{state="active"}} {total_active}')
+            lines.append(f'yunshu_engine_requests{{state="waiting"}} {total_waiting}')
+            lines.append(f'yunshu_engine_models{{state="running"}} {total_running}')
+            lines.append(f'yunshu_engine_models{{state="registered"}} {total_registered}')
+        except Exception:
+            logger.debug("engine stats unavailable", exc_info=True)
+
+        return "\n".join(lines) + "\n"
+
+
+# Module-level metrics singleton
+_metrics = _Metrics()
+
+
+def get_metrics() -> _Metrics:
+    return _metrics
+
+
+def _check_metrics_auth(request: Request) -> None:
+    """Validate auth on the /metrics endpoint.
+
+    SECURITY : MetricsMiddleware is the OUTERMOST middleware and
+    short-circuits /metrics by returning a Response WITHOUT calling call_next,
+    so TenantAuthMiddleware (innermost) never runs for this path. Therefore
+    validate the static bearer token independently here.
+
+    Single-consumer model: only the static ``YUNSHU_AUTH_TOKEN`` gate is
+    honored; the RBAC / legacy-tenant paths have been removed.
+    """
+    import hmac
+    import os
+
+    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
+        return
+
+    static_token = os.environ.get("YUNSHU_AUTH_TOKEN") or ""
+
+    # Honor an upstream-authenticated request if one exists (defensive — for
+    # paths/orderings where TenantAuthMiddleware did run first). The simplified
+    # middleware stamps request.state.role="owner" on every authenticated request.
+    if hasattr(request, "state"):
+        _role = str(getattr(request.state, "role", "") or "").lower()
+        if _role in ("admin", "system", "owner"):
+            return
+
+    # No auth configured at all → allow for Prometheus scraper compatibility.
+    if not static_token:
+        return
+
+    # Auth IS configured but the per-request state was never set (see docstring) —
+    # validate the Authorization header ourselves.
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = auth_header[7:]
+
+    # Static token (constant-time compare).
+    if hmac.compare_digest(token, static_token):
+        return
+
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """Collect request metrics for Prometheus."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Serve metrics endpoint
+        if request.url.path == "/metrics":
+            _check_metrics_auth(request)
+            parts = [_metrics.to_prometheus()]
+            # Append Prometheus exporter gauges (engine-level metrics)
+            try:
+                from .prometheus_exporter import get_prometheus_metrics
+                pm = get_prometheus_metrics()
+                # Collect RadixTree eviction metrics from loaded engines
+                try:
+                    from yunshu_engine.batched_engine import BatchedEngine
+
+                    from ..engine import get_engine, get_model_manager
+                    engines = []
+                    engine = get_engine()
+                    if engine and hasattr(engine, 'is_loaded') and engine.is_loaded:
+                        engines.append(("default", engine))
+                    manager = get_model_manager()
+                    if manager:
+                        for entry in manager.list_entries():
+                            if entry.is_loaded and entry.engine:
+                                engines.append((entry.model_id, entry.engine))
+                    for mid, eng in engines:
+                        ml = {"model_id": mid}
+                        if isinstance(eng, BatchedEngine):
+                            radix_stats = eng.get_radix_tree_stats()
+                            ev = radix_stats.get("eviction_stats", {})
+                            pm.set_counter("radix_evictions_lru", ev.get("lru", 0), labels=ml)
+                            pm.set_counter("radix_evictions_lfu", ev.get("lfu", 0), labels=ml)
+                            pm.set_counter("radix_evictions_fifo", ev.get("fifo", 0), labels=ml)
+                            pm.set_counter("radix_evictions_freed_blocks", ev.get("total_freed_blocks", 0), labels=ml)
+                            pm.set_gauge("radix_total_nodes", radix_stats.get("total_nodes", 0), labels=ml)
+                            pm.set_gauge("radix_total_tokens", radix_stats.get("total_tokens", 0), labels=ml)
+                            # RadixTree blocks and match rate
+                            pm.set_gauge("radix_tree_blocks", radix_stats.get("total_blocks", 0), labels=ml)
+                            pm.set_gauge("radix_tree_match_rate", radix_stats.get("match_rate", 0.0), labels=ml)
+                            pm.set_counter("radix_tree_match_total", radix_stats.get("match_total", 0), labels=ml)
+                            pm.set_counter("radix_tree_match_hits", radix_stats.get("match_hits", 0), labels=ml)
+                            # Scheduler monitoring gauges from engine_core
+                            try:
+                                core = getattr(eng, '_engine_core', None)
+                                if core is not None:
+                                    pm.set_gauge("scheduler_waiting_queue_depth", getattr(core, '_last_queue_depth', 0), labels=ml)
+                                    pm.set_gauge("scheduler_batch_size", getattr(core, '_last_batch_size', 0), labels=ml)
+                                    pm.set_gauge("compute_utilization_pct",
+                                        core.get_compute_utilization() if hasattr(core, 'get_compute_utilization') else 0, labels=ml)
+                                    pm.set_gauge("step_duration_ms", getattr(core, '_last_step_wall_ms', 0.0), labels=ml)
+                            except Exception:
+                                logger.debug("scheduler monitoring gauge population failed", exc_info=True)
+                            # Response cache and KV migration Prometheus gauges
+                            try:
+                                core = getattr(eng, '_engine_core', None)
+                                if core is not None and hasattr(core, '_kv_migration') and core._kv_migration is not None:
+                                    mig_stats = core._kv_migration.get_stats()
+                                    pm.set_counter("kv_migrations_total", mig_stats.get("total_migrations", 0), labels=ml)
+                                    pm.set_counter("kv_migration_errors_total", mig_stats.get("failed_migrations", 0), labels=ml)
+                                    pm.set_gauge("kv_migration_pending_queue", float(mig_stats.get("pending_queue_size", 0)), labels=ml)
+                                    pm.set_gauge("kv_migration_tracked_blocks", float(mig_stats.get("tracked_blocks", 0)), labels=ml)
+                            except Exception:
+                                logger.debug("KV migration gauge population failed", exc_info=True)
+                            # Response cache
+                            try:
+                                s = eng.get_stats() if hasattr(eng, 'get_stats') else {}
+                                rc = s.get("response_cache")
+                                if rc:
+                                    pm.set_counter("response_cache_hits_total", rc.get("hits", 0), labels=ml)
+                                    pm.set_counter("response_cache_misses_total", rc.get("misses", 0), labels=ml)
+                            except Exception:
+                                logger.debug("response cache gauge population failed", exc_info=True)
+                except Exception:
+                    logger.debug("operation failed", exc_info=True)
+                pm_text = pm.generate()
+                if pm_text:
+                    parts.append(pm_text)
+            except Exception:
+                logger.debug("operation failed", exc_info=True)
+            return Response(
+                content="\n".join(parts),
+                media_type="text/plain; version=0.0.4; charset=utf-8",
+            )
+
+        t0 = time.monotonic()
+        response = await call_next(request)
+        latency = time.monotonic() - t0
+
+        # Normalize endpoint for label cardinality bounding — raw paths like
+        # /v1/chat/completions/req-abc123 would create unbounded label series.
+        normalized_ep = _normalize_endpoint(request.url.path)
+
+        # use the bucketed endpoint (/{other} past the distinct-endpoint cap) for
+        # the exporter + aggregator too, so an endpoint flood can't churn their label-series
+        # caps and corrupt rate() with counter-resets.
+        bucketed_ep = _metrics.record_request(
+            endpoint=normalized_ep,
+            method=request.method,
+            status=response.status_code,
+            latency=latency,
+        ) or normalized_ep
+
+        # Also record into the time-windowed aggregator and the
+        # Prometheus exporter for richer observability.
+        try:
+            from .metrics_aggregator import get_metrics_aggregator
+            get_metrics_aggregator().record_request(
+                method=request.method,
+                path=bucketed_ep,
+                status=response.status_code,
+                duration_ms=latency * 1000,
+            )
+        except Exception:
+            logger.debug("metrics aggregator recording failed", exc_info=True)
+
+        try:
+            from .prometheus_exporter import get_prometheus_metrics
+            pm = get_prometheus_metrics()
+            pm.inc_counter("request_total", {
+                "method": request.method,
+                "status": str(response.status_code),
+                "endpoint": bucketed_ep,
+            })
+            pm.observe_histogram("request_duration_seconds", latency, {
+                "endpoint": bucketed_ep,
+            })
+        except Exception:
+            logger.debug("prometheus recording failed", exc_info=True)
+
+        return response

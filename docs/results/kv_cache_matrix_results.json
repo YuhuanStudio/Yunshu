@@ -1,0 +1,440 @@
+[
+  {
+    "name": "Qwen3.5-0.8B-MLX-bf16",
+    "arch": "hybrid",
+    "ft": {
+      "model": "Qwen3.5-0.8B-MLX-bf16",
+      "prompt_tok": 1242,
+      "prefill_tps": 2895,
+      "decode_tps": 141.9,
+      "cold_ms": 428.9,
+      "hot_entry_mb": 3.15,
+      "warm_entry_mb": 0.88,
+      "ssd_disk_mb": 548.5,
+      "engine": "lm",
+      "probe_lossless": null,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 428.9,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1242,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 196.7,
+          "speedup": 2.18,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 186.9,
+          "speedup": 2.3,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "warm_entries=17 4bit=True"
+        },
+        "SSD": {
+          "ttft_ms": 228.4,
+          "speedup": 1.88,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "ram=4/4 disk=549MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "model": "Qwen3.5-0.8B-MLX-bf16",
+      "cold_ms": 230.1,
+      "reuse_ms": 43.0,
+      "speedup": 5.34,
+      "cached": 1216,
+      "lossless": true
+    },
+    "omlx": {
+      "model": "Qwen3.5-0.8B-MLX-bf16",
+      "cold_ms": 482.8,
+      "reuse_ms": 455.2,
+      "speedup": 1.06,
+      "lossless": true,
+      "status": "ok"
+    }
+  },
+  {
+    "name": "Qwen3.5-2B-MLX-bf16",
+    "arch": "hybrid",
+    "ft": {
+      "model": "Qwen3.5-2B-MLX-bf16",
+      "prompt_tok": 1242,
+      "prefill_tps": 1714,
+      "decode_tps": 66.6,
+      "cold_ms": 724.6,
+      "hot_entry_mb": 3.15,
+      "warm_entry_mb": 0.88,
+      "ssd_disk_mb": 548.5,
+      "engine": "lm",
+      "probe_lossless": null,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 724.6,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1242,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 230.8,
+          "speedup": 3.14,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 243.2,
+          "speedup": 2.98,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "warm_entries=17 4bit=True"
+        },
+        "SSD": {
+          "ttft_ms": 274.0,
+          "speedup": 2.64,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "ram=4/4 disk=549MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "model": "Qwen3.5-2B-MLX-bf16",
+      "cold_ms": 472.4,
+      "reuse_ms": 67.0,
+      "speedup": 7.05,
+      "cached": 1216,
+      "lossless": true
+    },
+    "omlx": {
+      "model": "Qwen3.5-2B-MLX-bf16",
+      "cold_ms": 716.5,
+      "reuse_ms": 730.0,
+      "speedup": 0.98,
+      "lossless": true,
+      "status": "ok"
+    }
+  },
+  {
+    "name": "Qwen3.5-9B-MLX-4bit",
+    "arch": "hybrid",
+    "ft": {
+      "model": "Qwen3.5-9B-MLX-4bit",
+      "prompt_tok": 1242,
+      "prefill_tps": 505,
+      "decode_tps": 54.0,
+      "cold_ms": 2460.4,
+      "hot_entry_mb": 8.39,
+      "warm_entry_mb": 2.36,
+      "ssd_disk_mb": 1444.7,
+      "engine": "lm",
+      "probe_lossless": null,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 2460.4,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1242,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 384.7,
+          "speedup": 6.4,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 402.6,
+          "speedup": 6.11,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "warm_entries=17 4bit=True"
+        },
+        "SSD": {
+          "ttft_ms": 409.0,
+          "speedup": 6.02,
+          "cached": 1152,
+          "prefilled": 90,
+          "lossless": true,
+          "note": "ram=4/4 disk=1445MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "model": "Qwen3.5-9B-MLX-4bit",
+      "cold_ms": 2275.8,
+      "reuse_ms": 122.7,
+      "speedup": 18.54,
+      "cached": 1216,
+      "lossless": true
+    },
+    "omlx": {
+      "model": "Qwen3.5-9B-MLX-4bit",
+      "cold_ms": 2511.9,
+      "reuse_ms": 2757.0,
+      "speedup": 0.91,
+      "lossless": true,
+      "status": "ok"
+    }
+  },
+  {
+    "name": "Qwen2.5-3B-Instruct-bf16",
+    "arch": "standard",
+    "ft": {
+      "model": "Qwen2.5-3B-Instruct-bf16",
+      "prompt_tok": 1239,
+      "prefill_tps": 1253,
+      "decode_tps": 41.9,
+      "cold_ms": 989.0,
+      "hot_entry_mb": 45.53,
+      "warm_entry_mb": 12.8,
+      "ssd_disk_mb": 70.2,
+      "engine": "lm",
+      "probe_lossless": null,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 989.0,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1239,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 156.2,
+          "speedup": 6.33,
+          "cached": 1238,
+          "prefilled": 1,
+          "lossless": true,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 162.7,
+          "speedup": 6.08,
+          "cached": 1238,
+          "prefilled": 1,
+          "lossless": true,
+          "note": "warm_entries=1 4bit=True"
+        },
+        "SSD": {
+          "ttft_ms": 459.2,
+          "speedup": 2.15,
+          "cached": 1238,
+          "prefilled": 1,
+          "lossless": true,
+          "note": "ram=4/4 disk=70MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "model": "Qwen2.5-3B-Instruct-bf16",
+      "cold_ms": 1069.4,
+      "reuse_ms": 130.7,
+      "speedup": 8.18,
+      "cached": 1216,
+      "lossless": true
+    },
+    "omlx": {
+      "model": "Qwen2.5-3B-Instruct-bf16",
+      "cold_ms": 1179.7,
+      "reuse_ms": 304.1,
+      "speedup": 3.88,
+      "lossless": true,
+      "status": "ok"
+    }
+  },
+  {
+    "name": "gemma-4-e4b-it-bf16",
+    "arch": "gemma4",
+    "ft": {
+      "model": "gemma-4-e4b-it-bf16",
+      "prompt_tok": 1236,
+      "prefill_tps": 801,
+      "decode_tps": 22.2,
+      "cold_ms": 1542.3,
+      "hot_entry_mb": 41.16,
+      "warm_entry_mb": 41.16,
+      "ssd_disk_mb": 44.7,
+      "engine": "lm",
+      "probe_lossless": null,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 1542.3,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1236,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 284.2,
+          "speedup": 5.43,
+          "cached": 1235,
+          "prefilled": 1,
+          "lossless": true,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 277.0,
+          "speedup": 5.57,
+          "cached": 1235,
+          "prefilled": 1,
+          "lossless": true,
+          "note": "warm_entries=1 4bit=False"
+        },
+        "SSD": {
+          "ttft_ms": 446.8,
+          "speedup": 3.45,
+          "cached": 1235,
+          "prefilled": 1,
+          "lossless": true,
+          "note": "ram=4/4 disk=45MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "model": "gemma-4-e4b-it-bf16",
+      "cold_ms": 900.3,
+      "reuse_ms": 139.4,
+      "speedup": 6.46,
+      "cached": 1216,
+      "lossless": true
+    },
+    "omlx": {
+      "model": "gemma-4-e4b-it-bf16",
+      "status": "LOAD FAILED: ValueError: Received 54 parameters not in model: \nlanguage_model.model.layers.24.self_attn.k_norm.weig"
+    }
+  },
+  {
+    "name": "GLM-OCR-bf16",
+    "arch": "vlm-mrope",
+    "ft": {
+      "model": "GLM-OCR-bf16",
+      "prompt_tok": 1565,
+      "prefill_tps": 5596,
+      "decode_tps": 169.2,
+      "cold_ms": 279.7,
+      "hot_entry_mb": 117.44,
+      "warm_entry_mb": 33.03,
+      "ssd_disk_mb": 161.0,
+      "engine": "vlm",
+      "probe_lossless": true,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 279.7,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1565,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 22.2,
+          "speedup": 12.59,
+          "cached": 1441,
+          "prefilled": 124,
+          "lossless": false,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 33.2,
+          "speedup": 8.44,
+          "cached": 1441,
+          "prefilled": 124,
+          "lossless": true,
+          "note": "warm_entries=1 4bit=True"
+        },
+        "SSD": {
+          "ttft_ms": 243.3,
+          "speedup": 1.15,
+          "cached": 1441,
+          "prefilled": 124,
+          "lossless": true,
+          "note": "ram=4/4 disk=161MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "status": "n/a (VLM)"
+    },
+    "omlx": {
+      "status": "n/a (VLM)"
+    }
+  },
+  {
+    "name": "Qwen3-Omni-30B-A3B-Instruct-4bit",
+    "arch": "vlm-imrope",
+    "ft": {
+      "model": "Qwen3-Omni-30B-A3B-Instruct-4bit",
+      "prompt_tok": 1239,
+      "prefill_tps": 866,
+      "decode_tps": 59.7,
+      "cold_ms": 1431.1,
+      "hot_entry_mb": 125.83,
+      "warm_entry_mb": 35.39,
+      "ssd_disk_mb": 193.7,
+      "engine": "vlm",
+      "probe_lossless": true,
+      "tiers": {
+        "COLD": {
+          "ttft_ms": 1431.1,
+          "speedup": 1.0,
+          "cached": 0,
+          "prefilled": 1239,
+          "lossless": true,
+          "note": "full prefill baseline"
+        },
+        "HOT": {
+          "ttft_ms": 107.8,
+          "speedup": 13.27,
+          "cached": 1115,
+          "prefilled": 124,
+          "lossless": true,
+          "note": "GPU-resident full precision"
+        },
+        "WARM": {
+          "ttft_ms": 115.9,
+          "speedup": 12.35,
+          "cached": 1115,
+          "prefilled": 124,
+          "lossless": true,
+          "note": "warm_entries=1 4bit=True"
+        },
+        "SSD": {
+          "ttft_ms": 699.5,
+          "speedup": 2.05,
+          "cached": 1115,
+          "prefilled": 124,
+          "lossless": true,
+          "note": "ram=4/4 disk=194MB restored=True"
+        }
+      }
+    },
+    "el": {
+      "status": "n/a (VLM)"
+    },
+    "omlx": {
+      "status": "n/a (VLM)"
+    }
+  }
+]

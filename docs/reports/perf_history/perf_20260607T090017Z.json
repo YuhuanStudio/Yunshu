@@ -1,0 +1,12 @@
+{
+  "timestamp": "20260607T090017Z",
+  "git_sha": "ac69fb8",
+  "tier": "bench_sustained_decode",
+  "go": true,
+  "n_kpis": 2,
+  "has_perf": true,
+  "kpis": {
+    "cool/Qwen2.5-3B-bf16/decode_tps": 43.1,
+    "cool/Qwen2.5-3B-bf16/sustained_decode_decay_pct": 1.5
+  }
+}
