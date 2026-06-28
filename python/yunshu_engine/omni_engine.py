@@ -29,6 +29,32 @@ logger = logging.getLogger(__name__)
 AUDIO_SAMPLE_RATE = 24000  # Qwen3-Omni Talker output
 SpeakerName = str  # "Ethan" | "Chelsie" | "Aiden" | ... (model-defined)
 
+# Qwen3-Omni Talker speakers (lowercased; the model raises NotImplementedError
+# for anything else). Keep in sync with the model's talker_config.speaker_id.
+_OMNI_SPEAKERS = {"ethan", "chelsie", "aiden"}
+# Friendly aliases so an OpenAI-Realtime voice name (the default is "alloy")
+# selects a real Talker speaker instead of crashing — rough gender match, else
+# the engine default. This is a convenience map, not a fidelity claim.
+_VOICE_ALIASES = {
+    "alloy": "ethan", "echo": "ethan", "onyx": "ethan", "ash": "ethan",
+    "ballad": "ethan", "sage": "ethan", "verse": "ethan", "fable": "ethan",
+    "nova": "chelsie", "shimmer": "chelsie", "coral": "chelsie",
+}
+
+
+def _resolve_speaker(requested: str | None, default: str) -> str:
+    """Map a requested voice/speaker to a valid Talker speaker, falling back to
+    ``default`` (never raising) so a stray voice name can't crash generation."""
+    if not requested:
+        return default
+    key = requested.strip().lower()
+    if key in _OMNI_SPEAKERS:
+        return key.capitalize()
+    if key in _VOICE_ALIASES:
+        return _VOICE_ALIASES[key].capitalize()
+    logger.debug("Unknown omni speaker %r — using default %s", requested, default)
+    return default
+
 
 @dataclass
 class OmniChunk:
@@ -124,7 +150,7 @@ class OmniEngine:
         """
         self.load()
         async with self._busy:  # one generation at a time
-            spk = speaker or self.speaker
+            spk = _resolve_speaker(speaker or self.speaker, self.speaker)
             tmax = thinker_max_new_tokens if thinker_max_new_tokens is not None else self.thinker_max
             conv = [{"role": "user", "content": _build_content(text, image_path, audio_path)}]
             mi, _ = _prepare_inputs(self.processor, conv)
@@ -178,7 +204,15 @@ class OmniEngine:
         if not new_ids:
             return ""
         try:
-            return str(self.processor.decode(new_ids))
+            # skip_special_tokens so control tokens (<|im_end|>, etc.) don't leak
+            # into the transcript / text stream.
+            return str(self.processor.decode(new_ids, skip_special_tokens=True))
+        except TypeError:
+            # Some processors don't accept the kwarg — fall back to plain decode.
+            try:
+                return str(self.processor.decode(new_ids))
+            except Exception:  # noqa: BLE001
+                return ""
         except Exception:  # noqa: BLE001
             return ""
 
