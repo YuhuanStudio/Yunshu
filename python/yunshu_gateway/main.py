@@ -932,6 +932,7 @@ def create_app() -> FastAPI:
     app.include_router(ocr_mod.router)
     app.include_router(profiling.router, prefix="/v1")
     app.include_router(realtime.router)
+    app.include_router(omni_mod.router)
     app.include_router(bench.router)
 
     from .routers import video as video_mod
