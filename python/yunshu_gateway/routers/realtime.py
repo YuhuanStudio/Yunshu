@@ -640,6 +640,12 @@ class RealtimeSession:
         self._vad_speaking = False
         self._vad_silence_bytes: int = 0  # silence window in AUDIO bytes, not wall-clock
         self._vad_speech_start_offset: int = 0
+        # Barge-in debounce: accumulated speech (audio bytes) since the utterance
+        # started, and whether the barge-in cancel already fired for it. We interrupt
+        # an active response only after SUSTAINED speech (barge_in_min_ms) so a single
+        # noise blip / cough that crosses threshold for one window can't kill a reply.
+        self._vad_speech_bytes: int = 0
+        self._barge_in_fired: bool = False
         # Silero VAD streaming state (only used when YUNSHU_REALTIME_VAD=silero):
         # LSTM/context state + a leftover buffer of resampled-16k float32 samples
         # not yet forming a full Silero window. Reset on buffer clear/commit.
@@ -2056,17 +2062,27 @@ class RealtimeSession:
                 self._vad_speaking = True
                 self._vad_speech_start_offset = _pre_offset
                 self._vad_silence_bytes = 0
+                self._vad_speech_bytes = 0
+                self._barge_in_fired = False
                 await self.send_event(_event(
                     RealtimeEvent.INPUT_AUDIO_BUFFER_SPEECH_STARTED,
                     audio_start_ms=_pre_offset // _bytes_per_ms,
                 ))
-                # barge-in. If the assistant is mid-response when the user starts
-                # speaking, INTERRUPT it (cancel + response.done status=cancelled) so the
-                # user isn't talked over AND _auto_commit_and_respond (fired on the following
-                # speech_stopped) actually generates a reply — it bails out while a response
-                # is still active, which previously dropped the barged-in turn entirely.
-                if self._active_response is not None and not self._active_response.done():
-                    await self._handle_response_cancel({})
+            # Barge-in. If the assistant is mid-response when the user speaks, INTERRUPT
+            # it (cancel + response.done status=cancelled) so the user isn't talked over,
+            # AND _auto_commit_and_respond (fired on the following speech_stopped) then
+            # actually generates a reply — it bails out while a response is still active,
+            # which previously dropped the barged-in turn entirely. Debounced on SUSTAINED
+            # speech (barge_in_min_ms, default 120 ms) so a one-window noise blip / cough
+            # can't kill a reply; fired at most once per utterance.
+            self._vad_speech_bytes += len(audio_chunk)
+            _barge_in_min_ms = turn_detection.get("barge_in_min_ms", 120)
+            if (not self._barge_in_fired
+                    and self._vad_speech_bytes / _bytes_per_ms >= _barge_in_min_ms
+                    and self._active_response is not None
+                    and not self._active_response.done()):
+                self._barge_in_fired = True
+                await self._handle_response_cancel({})
         else:
             # Silence detected
             if self._vad_speaking:

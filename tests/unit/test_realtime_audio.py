@@ -427,8 +427,9 @@ class TestBuildMessages:
 
     @pytest.mark.asyncio
     async def test_vad_speech_started_interrupts_active_response(self):
-        """barge-in: a VAD speech_started while a response is in flight must cancel
-        it (so the user isn't talked over and the new turn isn't dropped)."""
+        """barge-in: SUSTAINED VAD speech while a response is in flight must cancel
+        it (so the user isn't talked over and the new turn isn't dropped). Debounced
+        on barge_in_min_ms so a one-window blip can't kill a reply — so feed >=120ms."""
         import struct
         from unittest.mock import AsyncMock, MagicMock
         session = _make_session()
@@ -438,8 +439,8 @@ class TestBuildMessages:
         active = MagicMock()
         active.done = MagicMock(return_value=False)
         session._active_response = active
-        # A loud PCM chunk (high RMS) → speech_started transition.
-        loud = struct.pack("<64h", *([12000] * 64))
+        # A loud, SUSTAINED PCM chunk (>=120ms @24k = >=2880 samples) → barge-in.
+        loud = struct.pack("<3120h", *([12000] * 3120))
         session._audio_buffer = bytearray(loud)
         await session._run_vad(loud)
         assert session._vad_speaking is True
