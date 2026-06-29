@@ -171,6 +171,27 @@ class TestAudioBufferCommit:
         ws: MockWebSocket = session.ws  # type: ignore[assignment]
         assert not [e for e in ws.sent if e.get("type") == "conversation.item.created"]
 
+    @pytest.mark.asyncio
+    async def test_omni_realtime_commit_without_asr_emits_no_error(self, monkeypatch):
+        """With native-omni realtime ON, a missing ASR engine is NORMAL: the model
+        consumes the raw audio (stashed as speech-in) and answers natively. The
+        commit must NOT emit a no_asr_engine error in that mode."""
+        monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/fake/omni")
+        monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "1")
+        session = _make_session()
+        session._audio_buffer = bytearray(b"\x00\x01\x02\x03\x04\x05")
+        await session._handle_input_audio_buffer_commit({}, vad_trim=True)
+        ws: MockWebSocket = session.ws  # type: ignore[assignment]
+        errors = [
+            e
+            for e in ws.sent
+            if e.get("type") == "error"
+            and e.get("error", {}).get("code") == "no_asr_engine"
+        ]
+        assert not errors, "native-omni realtime must not error on absent ASR"
+        # the raw audio was stashed for the omni model to consume as speech-in
+        assert session._last_user_audio is not None
+
 
 # ── TestSynthesizeAudio ──
 

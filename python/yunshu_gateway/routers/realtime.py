@@ -2634,7 +2634,7 @@ class RealtimeSession:
                                 )
                             )
                         break
-            if not asr_found:
+            if not asr_found and not _omni_realtime_enabled():
                 # No transcribe-capable engine loaded — emit an error event so
                 # the client knows the audio buffer was committed but cannot be
                 # transcribed.
@@ -2647,6 +2647,16 @@ class RealtimeSession:
                             "message": "No ASR engine available — load an ASR-capable model first",
                         },
                     )
+                )
+            elif not asr_found:
+                # Native-omni realtime: the unified model consumes the RAW user
+                # audio (already stashed above) and produces its own transcript in
+                # the response. A separate ASR engine is OPTIONAL here — its absence
+                # is normal, not an error. The user turn just won't carry a
+                # pre-transcribed text item (the omni reply still answers the speech).
+                logger.debug(
+                    "No ASR engine, but native-omni realtime is on — using raw "
+                    "audio as the speech-in (no input transcript)."
                 )
         except Exception as e:
             logger.error(f"ASR error in realtime session: {e}", exc_info=True)
