@@ -1,6 +1,6 @@
 """the NON-streaming image routes (edit/variation/inpaint/...) never received the
-W758/W859/W860 client-disconnect cancel keystone — only the streaming generate path did,
-despite W860's commit note claiming images were covered. An abandoned n>1 request ran all n
+client-disconnect cancel keystone — only the streaming generate path did,
+despite commit note claiming images were covered. An abandoned n>1 request ran all n
 diffusions to completion on the serial GPU executor, head-of-line-blocking other work.
 
 variation + edit (which call the engine's generate(), the method that honors cancel_event

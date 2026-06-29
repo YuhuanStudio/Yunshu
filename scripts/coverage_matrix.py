@@ -69,18 +69,18 @@ TECHNIQUES = [
      ["Qwen3.5"], "Boundary-snapshot reuse; opt-in YUNSHU_HYBRID_PREFIX=1."),
     ("gemma-4 assistant-drafter spec decode", "GATED", "spec-decode lossless (gemma-4)",
      ["gemma-4-assistant"], "THE production spec win — an EAGLE-style ASSISTANT DRAFTER "
-     "(NOT MTP), 2.13x lossless greedy measured live (W969). Note: 'MTP' proper (home-grown "
+     "(NOT MTP), 2.13x lossless greedy measured live. Note: 'MTP' proper (home-grown "
      "+ mlx-vlm) is measured SLOWER / proof-script-only — do not conflate the two."),
-    ("n-gram spec decode", "GATED", "n-gram spec (W686: hybrid guard==greedy + dense non-degenerate)",
-     ["Qwen2.5-3B (W686)", "Qwen3.5 (W686 guarded→fast)"],
-     "W686 fix gated: Qwen3.5 non-trimmable guard → bit-identical to greedy; Qwen2.5 "
+    ("n-gram spec decode", "GATED", "n-gram spec (hybrid guard==greedy + dense non-degenerate)",
+     ["Qwen2.5-3B", "Qwen3.5 (guarded→fast)"],
+     "fix gated: Qwen3.5 non-trimmable guard → bit-identical to greedy; Qwen2.5 "
      "spec non-degenerate. SLOW on Apple Silicon (0.61-0.83x) so stays opt-in."),
     ("cross-model spec decode", "GATED", "unit-tests",
      ["model-free"], "Logic gated via test_speculative_decoder (unit suite). Gated to "
-     "greedy (W678) + slower on Apple Silicon, so opt-in; no live section needed."),
+     "greedy + slower on Apple Silicon, so opt-in; no live section needed."),
     ("MTP (mlx-vlm / Qwen3.6-27B)", "GATED", "MTP spec decode (Qwen3.6-27B production path, coherent)",
      ["Qwen3.6-27B-MTP-4bit"], "Gated (full tier): the 27B-4bit MTP backend loads in 36GB "
-     "(single ~14GB load) + produces coherent output. HONESTY (W969): the '1.82x' figure is "
+     "(single ~14GB load) + produces coherent output. HONESTY: the '1.82x' figure is "
      "from a standalone PROOF script self-marked 'INTEGRATION TODO' — NOT a served, "
      "regression-gated number; the wired mlx-vlm MTP path is single-backend + drops "
      "top_p/json_schema/penalties + non-streaming. NOT a shipped prod win. The real spec win "
@@ -91,16 +91,16 @@ TECHNIQUES = [
      "This is Yunshu's actual LoRA use case."),
     ("LoRA serving (text adapters) — secondary", "OPT-IN", None,
      [], "lora_manager.py is a secondary text-LLM path (NOT the product — image LoRA is). "
-     "W687 fixed a real crash there: mx.array(x, stream=mx.cpu) is invalid API → broke "
+     "fixed a real crash there: mx.array(x, stream=mx.cpu) is invalid API → broke "
      "base-model snapshot on every real model (unit tests use mocks). Left ungated by intent."),
     ("KV-quant (KIVI 2-bit/4-bit)", "GATED", "KV-cache quant round-trip (4/8-bit bounded + compression)",
      ["model-free"], "mx-based KVQuantizer round-trip gated: 4-bit 3.6% err, 8-bit 0.23%, "
-     "compression 32/bits. (The Metal kivi kernel was deleted W685.)"),
-    ("priority / FAIR scheduling", "GATED", "priority/FAIR scheduling (W683: policy plumbed + ordering)",
-     ["model-free"], "W683 gated: config→policy plumbing (priority/fair/bogus→fcfs) + "
+     "compression 32/bits. (The Metal kivi kernel was deleted.)"),
+    ("priority / FAIR scheduling", "GATED", "priority/FAIR scheduling (policy plumbed + ordering)",
+     ["model-free"], "gated: config→policy plumbing (priority/fair/bogus→fcfs) + "
      "PRIORITY queue pops high-first while FCFS keeps arrival order. Deterministic."),
-    ("VLM vision-feature cache", "GATED", "VLM vision/image-reuse cache (W682: wrapper + ~6x repeat-image)",
-     ["gemma-4-e4b (W682)"], "W682 gated: vision-tower wrapper installs + the existing "
+    ("VLM vision-feature cache", "GATED", "VLM vision/image-reuse cache (wrapper + ~6x repeat-image)",
+     ["gemma-4-e4b"], "gated: vision-tower wrapper installs + the existing "
      "image-reuse is ~6x on a repeat image (measured 2.74s→0.45s). Output stays correct."),
     ("grammar / constrained decode", "GATED", "grammar constraints (choice + regex)",
      ["Qwen2.5-3B"], "choice + regex gated."),
@@ -108,14 +108,14 @@ TECHNIQUES = [
      ["Qwen2.5-3B"], "Enforced-schema gated."),
     ("Anthropic prompt caching", "GATED", "unit-tests",
      ["model-free"], "cache_control breakpoints + cached_tokens covered by unit tests "
-     "(6+; many W666 fixes). Logic-level; no real model needed."),
+     "(6+; many fixes). Logic-level; no real model needed."),
     ("inflight prefix sharing", "GATED", "unit-tests",
      ["model-free"], "InflightPrefixTracker covered by 22 unit tests. A LIVE trigger is "
      "timing-dependent on the serialized (max_workers=1) fast path, so logic-gated only."),
     ("chunked prefill", "REMOVED", None,
      [], "Manual version corrupted KV; mlx-lm native prefill_step_size supersedes it."),
     ("Metal kernels", "REMOVED", None,
-     [], "W685: all 5 benchmarked slower than mx.fast or broken. Deleted."),
+     [], "all 5 benchmarked slower than mx.fast or broken. Deleted."),
     ("Medusa / spec factory", "BLOCKED", None,
      [], "Needs trained Medusa heads Yunshu doesn't ship. Kept, bannered NOT-WIRED."),
     ("batch-path spec (engine-loop)", "BLOCKED", None,

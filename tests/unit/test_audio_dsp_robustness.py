@@ -69,7 +69,7 @@ def test_vad_uses_32767_not_32768():
     assert "* 32768.0).astype(np.int16)" not in src
 
 
-def test_w1009_streaming_tts_encoder_guards_nan():
+def test_streaming_tts_encoder_guards_nan():
     # the streaming TTS inline encoder (synthesize_stream) is the third
     # encode site; it clips result.audio → must nan_to_num FIRST (it's deep inside a
     # model-driven generator loop, so source-guard the ordering).

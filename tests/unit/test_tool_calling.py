@@ -173,7 +173,7 @@ class TestCleanToolCallMarkup:
 
     def test_removes_deepseek_block_markers(self):
         """DeepSeek-V3/R1 block-form markers leaked into content after
-        extraction (the W690 PARSE fix wasn't propagated to the CLEAN side)."""
+        extraction (the PARSE fix wasn't propagated to the CLEAN side)."""
         text = 'Sure.<｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{"city":"Tokyo"}<｜tool▁call▁end｜>'
         cleaned = clean_tool_call_markup(text)
         assert cleaned == "Sure."

@@ -10,7 +10,7 @@ those markers → [] → the call is DROPPED and, because the chat assembly's `i
 gate is empty, clean_tool_call_markup is SKIPPED and the raw markup leaks into
 message.content (finish_reason stuck at "stop").
 
-W1040 adds a last-resort sweep through the OTHER distinctive-marker parsers (NOT the generic
+adds a last-resort sweep through the OTHER distinctive-marker parsers (NOT the generic
 bare-JSON parser) without touching the fragile detection precedence — so correctly-routed
 names (incl. DeepSeek-R1-Distill-Qwen, which genuinely IS Qwen-format) are unaffected.
 """

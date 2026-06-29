@@ -1,4 +1,4 @@
-"""the W902 image cancel fix (img2img/variations) was never swept to the
+"""the image cancel fix (img2img/variations) was never swept to the
 controlnet / inpaint / depth-guided pipelines or the /generations control-image branch — a
 client disconnect there ran all n diffusions to completion, head-of-line-blocking the serial
 MLX executor. Thread cancel_event through each async wrapper → _run_cancellable (thread-safe

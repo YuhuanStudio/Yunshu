@@ -80,7 +80,7 @@ async def test_unload_fail_safe_when_activity_unknown():
     assert forced is True and eng.stopped is True
 
 
-# ── the W761 fail-safe created a livelock — _find_lru_victim nominated
+# ── the fail-safe created a livelock — _find_lru_victim nominated
 # non-LLM engines (no has_active_requests) that _unload_model_locked then REFUSED,
 # and the eviction loops spun forever holding _lock. ──
 

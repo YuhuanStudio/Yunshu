@@ -9,7 +9,7 @@ from a successful short clip (worst when the LAST segment errored → no done/[D
 Fix: the engine enqueues an ERROR-tagged terminal chunk (is_final=True, error=...) instead of
 None; the route detects chunk.get("error") and emits a proper error event + [DONE] (checked
 before is_final, since the error chunk carries both). The realtime consumer is unaffected
-(empty-audio + is_final → clean turn end via its finally, W962).
+(empty-audio + is_final → clean turn end via its finally).
 """
 from __future__ import annotations
 

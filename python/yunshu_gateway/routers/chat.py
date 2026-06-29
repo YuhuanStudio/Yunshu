@@ -1936,7 +1936,7 @@ async def _handle_vlm_chat(
     # guards entirely (dispatched here before the text-path validation block),
     # yet multimodal prompts (long video/image token expansions) are the most
     # likely to be huge. Enforce the same guards; VLM context now resolves via
-    # the engine _config dict path added in W759. Safe no-op if context can't be
+    # the engine _config dict path. Safe no-op if context can't be
     # resolved (won't false-reject) — only catches egregiously over-window prompts.
     try:
         from yunshu_control.token_counter import (
@@ -2087,7 +2087,7 @@ async def _handle_vlm_chat(
     # path previously had NO tracker entry, NO cancel_event, and NO disconnect guard, so
     # POST /v1/cancel 404'd for an in-flight image/video generation and a client disconnect
     # let the GPU run to max_tokens — the most expensive path to leave uncancellable. A
-    # fresh sibling of the W798/W806 cancel keystone (the streaming + text non-stream paths
+    # fresh sibling of the cancel keystone (the streaming + text non-stream paths
     # already do this). vlm_engine.generate reads cancel_event from kwargs and honors it.
     _vlm_tracker = None
     _vlm_cancel = None
@@ -2703,7 +2703,7 @@ async def _stream_response_multi(
                                 # tool call) so arguments isn't empty client-side.
                                 # a single-shot complete tool_call with NO preceding
                                 # tool_call_start (GLM-4.x: the name is bare text so the streamer
-                                # never emits a start — W961 fixed the streamer half, this is the
+                                # never emits a start — fixed the streamer half, this is the
                                 # gateway half) must STILL send the id+name first, or an OpenAI
                                 # streaming client can't key the call → drops it.
                                 if not _choice_tc_start_emitted:
@@ -2875,7 +2875,7 @@ async def _stream_response_multi(
                                 # tool call) so arguments isn't empty client-side.
                                 # a single-shot complete tool_call with NO preceding
                                 # tool_call_start (GLM-4.x: the name is bare text so the streamer
-                                # never emits a start — W961 fixed the streamer half, this is the
+                                # never emits a start — fixed the streamer half, this is the
                                 # gateway half) must STILL send the id+name first, or an OpenAI
                                 # streaming client can't key the call → drops it.
                                 if not _choice_tc_start_emitted:
@@ -3336,7 +3336,7 @@ async def _stream_response(
                             # (forced-grammar / single-token), NO tool_call_args_delta was
                             # ever streamed → the client got name with arguments="". Emit
                             # the full args once here if none streamed (mirrors the
-                            # Anthropic path's Wave-412 fix). Guard avoids duplicating args.
+                            # Anthropic path's fix). Guard avoids duplicating args.
                             if not _tc_args_streamed:
                                 _full_args = (out.tool_call.arguments or "").strip()
                                 if _full_args and _full_args != "{}":

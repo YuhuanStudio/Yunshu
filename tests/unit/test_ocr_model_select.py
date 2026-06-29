@@ -1,4 +1,4 @@
-"""the /v1/ocr endpoint had the W801/W818 wrong-model keystone, unswept.
+"""the /v1/ocr endpoint had the wrong-model keystone, unswept.
 
 (1) It grabbed the FIRST loaded OCREngine (and first loaded VLM fallback), ignoring the
     requested `model` — with two OCR models loaded, a request for B was served by A.

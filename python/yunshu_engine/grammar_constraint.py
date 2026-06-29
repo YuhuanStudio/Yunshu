@@ -747,7 +747,7 @@ class RegexConstraint:
         # leaves `_done` False (the model MAY keep going). But without EOS in the
         # allow-set at such a state the model is FORCED to keep emitting matching
         # characters until max_tokens — a runaway (same class as the JSON-number
-        # W831/W912 bug). When the current buffer already fully matches, EOS is a
+        # bug). When the current buffer already fully matches, EOS is a
         # legitimate stop, so add it alongside the continuation tokens. (The
         # `valid_chars is None` permissive branch above already returns the whole
         # vocab incl. EOS, so it is unaffected.)

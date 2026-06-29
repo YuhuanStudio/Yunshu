@@ -1,7 +1,7 @@
-"""Wave 750 real-model smoke: on-the-fly MXFP4 weight quantization at load
+"""real-model smoke: on-the-fly MXFP4 weight quantization at load
 (YUNSHU_QUANT_MODE=mxfp4). Loads a bf16 model, quantizes in-memory to MXFP4,
 confirms it generates coherently and uses less memory than bf16.
-Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_mxfp4_w750.py
+Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_mxfp4.py
 """
 import asyncio, os
 MODEL = "models/Qwen2.5-3B-Instruct-bf16"

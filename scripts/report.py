@@ -519,7 +519,7 @@ def _render(snaps: list[dict], analysis: dict, gates: list, ts: str) -> str:
 
     # ── per-family interleaved sections ──
     # PRIMARY comparison = all-external (real HTTP). Only real servers are a fair,
-    # production-truthful measure of each framework's true performance (Wave 688).
+    # production-truthful measure of each framework's true performance.
     _render_comparison(
         L, snaps, "serve", "Framework comparison — real OpenAI HTTP (PRIMARY, all-external)",
         "Each framework's REAL HTTP server, one at a time at a matched thermal state — "
@@ -540,7 +540,7 @@ def _render(snaps: list[dict], analysis: dict, gates: list, ts: str) -> str:
         "Per-model fast-path cache behaviour over time (HOT/WARM/SSD reuse TTFT + "
         "on-disk/RAM footprint). Lower TTFT / smaller MB = better.",
         {"ssd_disk_mb": "_gemma-4 dropped to ~0 once sliding-window (RotatingKVCache) "
-         "models stopped spilling the unrestorable whole-snapshot to disk (W688). "
+         "models stopped spilling the unrestorable whole-snapshot to disk. "
          "Qwen3.5 hybrid keeps its (large) recurrent whole-snapshot by design._",
          "tier_SSD_ttft_ms": "_Qwen3.5 hybrid SSD restore TTFT is high and rising "
          "(large whole-snapshot deserialize); SSD is auto-gated for fast-prefill models._"})

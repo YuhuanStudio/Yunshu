@@ -3,8 +3,8 @@
 The KVTransferServer held no engine reference and the KVCacheManager had no load_kv_blocks /
 _kv_layers target, so received cross-node KV was discarded (hollow consumer → "loaded 0 of N",
 decode re-prefilled). set_block_consumer(fn) lets the decode engine register a callback that
-reconstructs the KV into its reusable cache (load_kv_blocks_into_cache, W970-proven), keeping
-the server engine-agnostic. Real-socket end-to-end proof: scripts/verify/verify_kv_sync_consumer_w975.py.
+reconstructs the KV into its reusable cache (load_kv_blocks_into_cache, proven), keeping
+the server engine-agnostic. Real-socket end-to-end proof: scripts/verify/verify_kv_sync_consumer.py.
 """
 from __future__ import annotations
 

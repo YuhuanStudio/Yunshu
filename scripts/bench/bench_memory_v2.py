@@ -114,7 +114,7 @@ for name, script in SCRIPTS.items():
         cwd="/Users/yuhuan/Documents/Yunshu",
     )
     try:
-        output = proc.stdout.strip().split("\n")[-1]  # Wave 449: was literal \n
+        output = proc.stdout.strip().split("\n")[-1]  # was literal \n
         data = json.loads(output)
         results[name] = data
         print(f"{data.get('rss_gen','?')}MB | {data.get('tok_s','?')} tok/s")

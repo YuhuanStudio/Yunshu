@@ -790,7 +790,7 @@ class TestAnthropicStreamingEndpoint:
 
 class TestToolUseStreamingOrder:
     """lock in the fix that ensures content_block_stop
-    for tool_use blocks fires BEFORE message_delta. Pre-Wave-436 the
+    for tool_use blocks fires BEFORE message_delta. previously the
     safety-close path emitted content_block_stop AFTER message_delta,
     violating Anthropic streaming spec.
 

@@ -1,10 +1,10 @@
-"""Wave 739 real-model smoke: distributed model load via mlx-lm native
+"""real-model smoke: distributed model load via mlx-lm native
 sharded_load (TENSOR_PARALLEL). On one Mac the group is world_size=1 → trivial
 size-1 shard = full model, so this validates the integration seam (the engine
 loading a SHARDED model and serving from it). A real 2-Mac cluster shards across
 both nodes via the same path.
 
-Run: YUNSHU_TENSOR_PARALLEL=1 PYTHONPATH=. uv run python scripts/realmodel/smoke_distributed_load_w739.py
+Run: YUNSHU_TENSOR_PARALLEL=1 PYTHONPATH=. uv run python scripts/realmodel/smoke_distributed_load.py
 """
 import asyncio
 import os

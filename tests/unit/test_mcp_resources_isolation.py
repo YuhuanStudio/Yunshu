@@ -1,5 +1,5 @@
 """(HIGH): the MCP resources surface (resources/list + resources/read) leaked
-per-model metadata to a model-scoped RBAC key — the W801 per-key isolation that /v1/models
+per-model metadata to a model-scoped RBAC key — the per-key isolation that /v1/models
 applies was never propagated to MCP. resources/list enumerated every model's id/type/size;
 resources/read returned full status/size/load-error for an arbitrary yunshu://models/<id>.
 Both reached their handler behind only can_infer (the _check_model_access gate covered

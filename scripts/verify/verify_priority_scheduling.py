@@ -1,6 +1,6 @@
-"""Priority/FAIR scheduling gate (Wave 683) — model-free, deterministic.
+"""Priority/FAIR scheduling gate — model-free, deterministic.
 
-W683 plumbed the scheduling policy from EngineCoreConfig → SchedulerConfig (it was
+plumbed the scheduling policy from EngineCoreConfig → SchedulerConfig (it was
 hardwired FCFS, so PRIORITY/FAIR preemption + aging were unreachable). This gates
 the END-TO-END path deterministically (no model, no timing flakiness):
 
@@ -8,7 +8,7 @@ the END-TO-END path deterministically (no model, no timing flakiness):
      to the right SchedulingPolicy on the live scheduler (bogus → FCFS fallback).
  (2) ORDERING: the policy actually changes selection — a PRIORITY waiting queue
      pops the highest-priority request first even though it arrived last, while an
-     FCFS queue preserves arrival order. This is the behaviour W683 unlocked.
+     FCFS queue preserves arrival order. This is the behaviour unlocked.
 
 Run: PYTHONPATH=. uv run python scripts/verify_priority_scheduling.py
 """

@@ -2,7 +2,7 @@
 
 _decode_from_kv_sync loops range(max_tokens) with the prompt already prefilled at offset
 len(token_ids). The normal/streaming generate paths clamp max_tokens to the model's context
-window (W764), but this reuse path bypassed it — a near-context-length prefilled prompt + a
+window, but this reuse path bypassed it — a near-context-length prefilled prompt + a
 large max_tokens would decode past max_position_embeddings into RoPE-extrapolation garbage.
 Now clamped to max(0, max_ctx - len(token_ids)).
 """

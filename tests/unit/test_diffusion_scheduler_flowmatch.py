@@ -3,7 +3,7 @@ scheduler (DiffusionScheduler, sigmas sqrt((1-abar)/abar) in range ~[0.03, 14.6]
 image_engine's FLOW-MATCHING Euler loop (x_t = (1-s)*x0 + s*eps, s in [0,1], timestep =
 1 - s). Raw Karras sigmas made timestep = 1 - 14.6 = -13.6 (garbage embedding) and s=14.6
 wildly off-manifold for the Z-Image transformer → noise output. The opt-in path silently
-produced garbage (a 'fake success' opt-in path, the W843/W846 class).
+produced garbage (a 'fake success' opt-in path, the class).
 
 Fix: _resolve_sigmas converts via SNR matching — flow-matching noise/signal ratio is
 s/(1-s), Karras is sigma_k, so s = sigma_k/(1+sigma_k) maps [0,inf)->[0,1) preserving the

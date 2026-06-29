@@ -2,11 +2,11 @@
 logprobs.
 
 The non-streaming /v1/completions path prepends the prompt tokens' logprobs when echo=true
-(W866/W1042), but the streaming path emitted the echoed prompt as a bare text chunk with NO
+, but the streaming path emitted the echoed prompt as a bare text chunk with NO
 logprobs and never requested prompt_logprobs — so an identical request returned prompt-token
-logprobs non-streaming but not streaming. W1043 computes prompt_logprobs up front and emits
+logprobs non-streaming but not streaming. computes prompt_logprobs up front and emits
 them in the echo chunk through the SAME shared helper (_format_prompt_logprob_entries) the
-non-streaming path uses, so the W866 prepend + W1042 BOS-collapse logic can't drift between
+non-streaming path uses, so the prepend + BOS-collapse logic can't drift between
 the two paths.
 """
 from __future__ import annotations

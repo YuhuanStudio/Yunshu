@@ -1,4 +1,4 @@
-"""the legacy-tenant privesc keystone (W730/W451/W691) was unswept in three
+"""the legacy-tenant privesc keystone was unswept in three
 _check_permission copies — models.py (load/unload), sleep.py (sleep/wake), bench.py
 (benchmarks). Each had `if tenant is not None: return`, granting a low-privilege legacy
 tenant EVERY permission — so a legacy tenant could load/unload models and run GPU

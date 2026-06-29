@@ -1,10 +1,10 @@
-"""Waves 923-924: MCP stdio client concurrency + initialize handshake.
+"""MCP stdio client concurrency + initialize handshake.
 
-W923 (HIGH): the stdio transport shared one stdin/stdout pair with no lock and returned the
+(HIGH): the stdio transport shared one stdin/stdout pair with no lock and returned the
   first response carrying ANY id (no req_id match), so concurrent tool calls interleaved
   writes and raced reads → the WRONG result returned to the wrong caller. Serialize each
   round trip + match the response id.
-W924: connect() jumped straight to tools/list with no `initialize` handshake, so a
+connect() jumped straight to tools/list with no `initialize` handshake, so a
   spec-conformant server rejected it → tools never discovered → call_tool silently failed.
   Send initialize + notifications/initialized first.
 """
@@ -17,18 +17,18 @@ import inspect
 from yunshu_engine.mcp_client import MCPServerConnection
 
 
-def test_w923_stdio_has_lock_and_id_match():
+def test_stdio_has_lock_and_id_match():
     src = inspect.getsource(MCPServerConnection._send_stdio)
     assert "async with self._stdio_lock:" in src
     assert 'response.get("id") != req_id' in src
 
 
-def test_w923_connection_constructs_lock():
+def test_connection_constructs_lock():
     src = inspect.getsource(MCPServerConnection.__init__)
     assert "self._stdio_lock = asyncio.Lock()" in src
 
 
-def test_w924_connect_does_initialize_before_discover():
+def test_connect_does_initialize_before_discover():
     stdio = inspect.getsource(MCPServerConnection._connect_stdio)
     http = inspect.getsource(MCPServerConnection._connect_http)
     for src in (stdio, http):
@@ -40,7 +40,7 @@ def test_w924_connect_does_initialize_before_discover():
     assert "notifications/initialized" in init
 
 
-def test_w923_concurrent_calls_get_their_own_responses():
+def test_concurrent_calls_get_their_own_responses():
     """Behavioral: two concurrent _send_stdio calls must each receive the response matching
     their own request id, even if the server replies out of order."""
 

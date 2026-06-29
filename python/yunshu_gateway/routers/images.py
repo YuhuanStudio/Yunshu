@@ -54,7 +54,7 @@ def _select_image_engine(manager, model):
     case (b) restores single-model deployments. req.model defaults to a hardcoded
     "Z-Image-Turbo-MLX-4bit" on every image route, so an operator who loaded their image
     model under any other id (a custom alias, or a different model) and a client that omits
-    `model` would 404 under the strict W824 match even though exactly one image model is
+    `model` would 404 under the strict match even though exactly one image model is
     loaded and unambiguous. The wrong-model protection only matters when ≥2 are loaded
     (where a sole-fallback can't apply); the per-route can_access_model(req.model) gate still
     runs first, so scoped keys are unaffected.
@@ -465,9 +465,9 @@ async def create_image_variation(req: ImageVariationsRequest, request: Request) 
             detail=f"Image dimensions must be multiples of 64, got {width}x{height}",
         )
 
-    # client-disconnect cancellation (the W859/W860 cancel keystone — the
+    # client-disconnect cancellation (the cancel keystone — the
     # NON-streaming image routes never got it; only the streaming generate path did,
-    # despite W860's commit note). An abandoned n>1 request otherwise runs all n diffusions
+    # despite commit note). An abandoned n>1 request otherwise runs all n diffusions
     # to completion on the serial GPU executor, head-of-line-blocking other work. The
     # engine's generate() honors cancel_event mid-diffusion, so wrapping each call in the
     # disconnect guard aborts the in-flight image and (via the persisted event) skips the

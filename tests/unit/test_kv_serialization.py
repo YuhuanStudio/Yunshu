@@ -434,7 +434,7 @@ class TestEdgeCases:
         assert rb.ref_count == 7
 
     def test_bfloat16_block_roundtrip(self):
-        """W753: an MLX bfloat16 KV block round-trips losslessly and restores its
+        """an MLX bfloat16 KV block round-trips losslessly and restores its
         bf16 dtype. numpy has no bf16, so np.array() on a bf16 MLX array raised —
         save_prefix/export crashed for every bf16 model before the fix."""
         mx = pytest.importorskip("mlx.core")

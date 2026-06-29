@@ -3,7 +3,7 @@
 Verifies the image engine parses and APPLIES emphasis weighting: emphasizing vs
 de-emphasizing a color must (a) change the image meaningfully and (b) move it in
 the RIGHT direction (more weight on "red" → objectively redder). Z-Image RMSNorms
-the caption, so this uses direction-based weighting (Wave 613ai); a regression to
+the caption, so this uses direction-based weighting; a regression to
 magnitude-scaling would silently make weighting a no-op and fail this gate.
 
 Run: PYTHONPATH=. uv run python scripts/verify_prompt_weighting.py

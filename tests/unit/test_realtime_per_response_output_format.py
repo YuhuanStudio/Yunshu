@@ -1,9 +1,9 @@
-"""(MED, W935 sibling): a per-response output_audio_format override was ignored.
+"""(MED, sibling): a per-response output_audio_format override was ignored.
 
 OpenAI Realtime lets response.create carry an output_audio_format that overrides the session
 default for that one response. _encode_output_audio read self.session.output_audio_format LIVE,
 so a session negotiated as pcm16 + a response.create with output_audio_format="g711_ulaw"
-silently encoded the audio as pcm16 (24 kHz) instead of 8 kHz μ-law — the exact W935 wrong-
+silently encoded the audio as pcm16 (24 kHz) instead of 8 kHz μ-law — the exact wrong-
 format/rate failure class, on the per-response sibling of the field.
 
 Fix: snapshot the per-response format at response-create time (_snap_out_fmt, validated against

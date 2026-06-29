@@ -2,7 +2,7 @@
 a stored response/conversation could never be explicitly deleted (only LRU-evicted), so
 clients got 405 and a stored conversation lingered until eviction (a privacy gap). Added an
 OpenAI-compatible delete handler, ownership-gated exactly like GET (cross-tenant delete
-denied as not-found, the W714 IDOR class).
+denied as not-found, the IDOR class).
 """
 from __future__ import annotations
 

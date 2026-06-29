@@ -1,13 +1,13 @@
-"""Waves 962 + 963: realtime audio.done guarantee + conversation-history bound.
+"""+ 963: realtime audio.done guarantee + conversation-history bound.
 
-W962: response.audio.done was emitted ONLY inside the synthesis loop (before break) and in
+response.audio.done was emitted ONLY inside the synthesis loop (before break) and in
   the except handler. When manager is None, no entry has synthesize, or every candidate is
   skipped by _key_allows, the loop fell through with NO audio.done → an OpenAI-SDK client
   waited forever for the terminal audio event. Also, when audio was requested but the turn
   produced no visible text, _synthesize_audio_response was never called → no audio.done.
   Now: _synthesize_audio_response guarantees exactly one audio.done (finally), and the
   empty-text branch emits a bare audio.done.
-W963: conversation.items was unbounded (W799 capped only the input-audio buffer). Every turn
+conversation.items was unbounded (capped only the input-audio buffer). Every turn
   appends items and _build_messages replays the whole history → a conversation.item.create
   flood / long session grows RSS + prompt cost without limit. Cap to the most recent N
   (FIFO eviction), and bound a single item's content size.
@@ -22,7 +22,7 @@ import yunshu_gateway.routers.realtime as rt
 
 
 @pytest.mark.asyncio
-async def test_w962_audio_done_emitted_when_no_manager(monkeypatch):
+async def test_audio_done_emitted_when_no_manager(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
     ws = MagicMock()
@@ -35,7 +35,7 @@ async def test_w962_audio_done_emitted_when_no_manager(monkeypatch):
     assert types.count("response.audio.done") == 1
 
 
-def test_w963_conversation_history_capped(monkeypatch):
+def test_conversation_history_capped(monkeypatch):
     monkeypatch.setenv("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "5")
     conv = rt.Conversation("c1")
     for i in range(50):
@@ -48,7 +48,7 @@ def test_w963_conversation_history_capped(monkeypatch):
     assert [it.item_id for it in conv.items] == [f"i{i}" for i in range(45, 50)]
 
 
-def test_w963_default_cap_is_positive():
+def test_default_cap_is_positive():
     os.environ.pop("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", None)
     assert rt._max_conversation_items() == 1000
     # malformed env → default, never 0/negative
@@ -59,7 +59,7 @@ def test_w963_default_cap_is_positive():
     os.environ.pop("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", None)
 
 
-def test_w963_trim_preserves_previous_item_insert(monkeypatch):
+def test_trim_preserves_previous_item_insert(monkeypatch):
     # inserting after a ref id still trims, and ordering stays correct
     monkeypatch.setenv("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "3")
     conv = rt.Conversation("c2")

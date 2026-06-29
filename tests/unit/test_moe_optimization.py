@@ -74,7 +74,7 @@ class TestApplyMoETopK:
         assert g1.top_k == 4 and g2.top_k == 4
 
     def test_switchglu_container_is_not_matched(self):
-        # the W1023 bug: the old code matched SwitchGLU (which has NO top_k) → patched 0.
+        # the bug: the old code matched SwitchGLU (which has NO top_k) → patched 0.
         from yunshu_engine.moe_optimization import apply_moe_top_k
         model = FakeModel({"layer.0.mlp.switch_mlp": FakeSwitchGLU()})
         result = apply_moe_top_k(model, target_top_k=4)

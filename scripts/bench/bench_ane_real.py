@@ -6,10 +6,10 @@ should not take 1.3 s; those 87-97x "speedups" were measurement artifacts).
 This builds the SAME small embedding model (token-embed + linear + tanh + mean-pool,
 BGE-small dims by default) in BOTH torch→CoreML(ANE) and MLX, warms each, and reports
 the median of N. Also attempts a real transformers (BERT-class) torch→CoreML conversion
-to surface the coremltools⇄torch version compatibility (Wave 697 finding: coremltools 9.0
+to surface the coremltools⇄torch version compatibility (finding: coremltools 9.0
 fails on torch 2.12's int-cast op; it needs torch ~2.7).
 
-Verified on a 30-core M3 Max (Wave 697): CoreML(ANE) ~0.062 ms vs MLX-GPU ~0.298 ms = 4.8x.
+Verified on a 30-core M3 Max: CoreML(ANE) ~0.062 ms vs MLX-GPU ~0.298 ms = 4.8x.
 
 Usage:
   PYTHONPATH=python .venv/bin/python scripts/bench/bench_ane_real.py

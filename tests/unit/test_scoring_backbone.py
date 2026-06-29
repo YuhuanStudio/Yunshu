@@ -1,7 +1,7 @@
 """the scoring/pooling embedding FALLBACK resolved model.language_model as the
 backbone, but for mlx-vlm models that wrapper applies lm_head and returns vocab-space
 LOGITS, not hidden states — so it pooled logits silently → wrong-dimensioned, meaningless
-embeddings (the W614 logits→backbone bug, never propagated to this fallback). Now it
+embeddings (the logits→backbone bug, never propagated to this fallback). Now it
 descends to language_model.model (the real text backbone), mirroring the engine's
 _get_backbone, and warns loudly if it ever still gets logits."""
 from __future__ import annotations

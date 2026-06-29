@@ -85,7 +85,7 @@ async def create_video(req: VideoGenerateRequest, request: Request):
                 logger.debug(f"Failed to load video engine for {req.model}", exc_info=True)
 
         if video_engine is None:
-            # the W818/W823/W824 wrong-model keystone, unswept for video. The
+            # the wrong-model keystone, unswept for video. The
             # old fallback grabbed the FIRST loaded VideoEngine, ignoring req.model — and
             # since _check_model_access(req.model) was verified above, that served a model
             # the key may NOT be authorized for. With ≥2 video models loaded and none
@@ -99,7 +99,7 @@ async def create_video(req: VideoGenerateRequest, request: Request):
                 # single-model deployments are unambiguous — req.model defaults to
                 # the hardcoded "wan-2.2-t2v", so an operator who loaded a video model under
                 # another id (with a client that omits model) would 404 even though exactly
-                # one video model is loaded. Serve it (mirrors _select_image_engine W835).
+                # one video model is loaded. Serve it (mirrors _select_image_engine).
                 video_engine = _loaded_video[0]
             elif len(_loaded_video) >= 2:
                 raise HTTPException(
@@ -111,8 +111,8 @@ async def create_video(req: VideoGenerateRequest, request: Request):
     if video_engine is None:
         video_engine = VideoEngine()
 
-    # client-disconnect cancellation (the W758/W845 cancel keystone,
-    # un-propagated to video — images/audio already had it; OCR closed in W859, video was
+    # client-disconnect cancellation (the cancel keystone,
+    # un-propagated to video — images/audio already had it; OCR closed, video was
     # the last single-shot-media sibling). Register with the request tracker for accounting.
     _vid_id = f"vid-{uuid.uuid4().hex[:24]}"
     _vid_tracker = None

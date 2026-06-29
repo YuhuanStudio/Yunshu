@@ -1,6 +1,6 @@
 """middleware-level denials (rate-limit, per-key concurrency/TPM cap, auth
 lockout) returned the OpenAI HTTP error envelope even for the JSON-RPC /v1/mcp endpoint —
-a JSON-RPC client can't parse {"error":{...}}. W805 had made only the auth-error path
+a JSON-RPC client can't parse {"error":{...}}. had made only the auth-error path
 MCP-aware. Centralize the path-aware envelope (OpenAI / Anthropic / JSON-RPC) in
 format_error_response and route rate_limit.py's 429s + tenant_auth's lockout/concurrency/
 TPM 429s through it."""

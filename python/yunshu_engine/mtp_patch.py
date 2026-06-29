@@ -1,5 +1,5 @@
 # DEPRECATED : home-grown Qwen3.5 MTP — superseded by mlx-vlm's
-# native MTP (see mlxvlm_mtp.py + YUNSHU_MTP=1; ~1.82x in a proof script, not served/gated — experimental, W973).
+# native MTP (see mlxvlm_mtp.py + YUNSHU_MTP=1; ~1.82x in a proof script, not served/gated — experimental).
 # This lacked mlx-vlm's GatedDeltaNet intermediate-state capture (garbage on 27B,
 # ~0.9x on 9B). Kept only as a legacy escape hatch under YUNSHU_LEGACY_MTP=1.
 """MTP (Multi-Token Prediction) monkey-patch for mlx-lm's Qwen3.5 model.

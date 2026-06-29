@@ -1,12 +1,12 @@
-"""Waves 947-949: Responses cancel-during-queued, Gemma-4 system turn boundary, explicit
+"""Responses cancel-during-queued, Gemma-4 system turn boundary, explicit
 cache per-owner eviction.
 
-W947 (HIGH): a cancel for a BACKGROUND Responses generation arriving during the `queued`
+(HIGH): a cancel for a BACKGROUND Responses generation arriving during the `queued`
   window (before _runner registered with the request tracker) was silently dropped — the
   request ran to completion. Persist a cancel marker + have _runner bail before generating.
-W948: the Gemma-4 adapter left prev_role unchanged after a system message, so
+the Gemma-4 adapter left prev_role unchanged after a system message, so
   [user, system, user] merged the two user turns into one (silent structure loss).
-W949: the explicit context cache enforced max_entries GLOBALLY, so one tenant could evict
+the explicit context cache enforced max_entries GLOBALLY, so one tenant could evict
   another tenant's still-valid handles. Enforce the cap per-owner.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import inspect
 
 
-def test_w947_cancel_persists_and_runner_bails():
+def test_cancel_persists_and_runner_bails():
     from yunshu_gateway.routers import responses
     src = inspect.getsource(responses)
     # cancel endpoint persists status=cancelled when the tracker had no entry
@@ -26,7 +26,7 @@ def test_w947_cancel_persists_and_runner_bails():
     assert "return" in runner_region
 
 
-def test_w948_gemma4_system_is_turn_boundary():
+def test_gemma4_system_is_turn_boundary():
     from yunshu_engine.message_adapter import Gemma4MessageAdapter
     out = Gemma4MessageAdapter().adapt([
         {"role": "user", "content": "first"},
@@ -39,7 +39,7 @@ def test_w948_gemma4_system_is_turn_boundary():
     assert any(m["content"] == "second" for m in out)
 
 
-def test_w949_explicit_cache_per_owner_eviction():
+def test_explicit_cache_per_owner_eviction():
     from yunshu_gateway.explicit_cache import ExplicitContextCache
     c = ExplicitContextCache(max_entries=3)
     for _ in range(3):

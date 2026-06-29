@@ -1,4 +1,4 @@
-"""the image routes had the W801/W818/W823 wrong-model keystone. The
+"""the image routes had the wrong-model keystone. The
 img2img-family routes (variation/edit/inpaint/controlnet/depth) and the t2i fallbacks
 grabbed the FIRST loaded ImageGenEngine, ignoring req.model. With ≥2 image models loaded
 that served the WRONG model — and since every image route gates can_access_model(req.model)

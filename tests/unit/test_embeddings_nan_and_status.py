@@ -2,7 +2,7 @@
 (input polymorphism, base64 little-endian float32, Matryoshka truncate-then-renormalize-
 before-base64, batch indexing, usage, isolation all verified). Two robustness gaps fixed:
 
-1. NaN/Inf guard (the W812 keystone, un-propagated to embeddings): a non-finite component
+1. NaN/Inf guard (the keystone, un-propagated to embeddings): a non-finite component
    serialized as a bare NaN/Infinity literal in float mode → INVALID JSON (RFC 8259, strict
    parsers reject the whole response) and garbage in base64. Now sanitized → 0.0.
 2. token-id input + missing model returned 400 "tokenizer unavailable" where string input
@@ -76,7 +76,7 @@ def test_base64_path_also_sanitized(monkeypatch):
     assert vals == [0.0, 1.0]  # NaN packed as 0.0, not a garbage float
 
 
-def test_w1038_nan_with_dimensions_still_renormalizes_to_unit(monkeypatch):
+def test_nan_with_dimensions_still_renormalizes_to_unit(monkeypatch):
     """a NaN component must be sanitized BEFORE the Matryoshka truncation+renorm.
     With the old order norm=sqrt(...+NaN)=NaN → `norm>0` False → renorm SKIPPED → the NaN was
     zeroed last, leaving a NON-UNIT truncated vector ([3,4,NaN]→[3,4,0], L2=5). The NaN test

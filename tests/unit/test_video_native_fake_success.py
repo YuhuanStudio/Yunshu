@@ -1,17 +1,17 @@
-"""(HIGH): the NON-streaming native video pipeline re-opened W939 — it
+"""(HIGH): the NON-streaming native video pipeline re-opened — it
 returned HTTP 200 with placeholder garbage.
 
-W939 fixed the streaming path + tagged the pipeline's placeholder method as
+fixed the streaming path + tagged the pipeline's placeholder method as
 "..._placeholder_fallback" so the router's `"fallback" in method` 503 guard trips. But:
 - BUG 1 (HIGH): _run_generation rebuilt VideoGenOutput with a HARDCODED
   method="native_mlx", DISCARDING the pipeline's fallback tag → router 200 with garbage.
 - BUG 2 (MED): _generate_with_native_pipeline never refused a non-callable model (it only
   nulled on load failure), so it generated placeholder frames AND left the pipeline set;
   a later streaming request then found self._native_pipeline is not None and SKIPPED the
-  W939 callability guard (nested in `if is None`) → streamed garbage as 200.
+  callability guard (nested in `if is None`) → streamed garbage as 200.
 
-Fix (W1010): refuse a non-callable transformer in _generate_with_native_pipeline (mirror
-the streaming W939 guard) so the non-streaming caller falls through to the honest fallback
+Fix: refuse a non-callable transformer in _generate_with_native_pipeline (mirror
+the streaming guard) so the non-streaming caller falls through to the honest fallback
 (router 503); re-check callability on EVERY call in BOTH paths (not just on creation); and
 propagate result.method as a router-level safety net.
 """
@@ -27,7 +27,7 @@ def test_generate_native_refuses_noncallable_model_and_nulls_pipeline():
     eng = VideoEngine.__new__(VideoEngine)
     eng._teacache_config = None
     eng._running = True
-    # a non-callable _model (the W939 weights-dict shape) on an already-set pipeline
+    # a non-callable _model (the weights-dict shape) on an already-set pipeline
     fake = types.SimpleNamespace(_model={"w": 1}, cleanup=lambda: None)
     eng._native_pipeline = fake
     out = eng._generate_with_native_pipeline(

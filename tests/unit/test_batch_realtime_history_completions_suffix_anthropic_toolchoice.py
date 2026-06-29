@@ -1,13 +1,13 @@
-"""Waves 942-946: realtime tool-call/think history, completions suffix, Anthropic tool_choice.
+"""realtime tool-call/think history, completions suffix, Anthropic tool_choice.
 
-W942 (HIGH): realtime stored raw full_text (with <tool_call> markup) as the assistant message
+(HIGH): realtime stored raw full_text (with <tool_call> markup) as the assistant message
   on a tool-calling turn → markup leaked into the next turn's prompt + duplicate assistant
   turn. Store the markup-stripped text (empty → _build_messages skips the message).
-W943 (HIGH): completions appended req.suffix to choices[].text — but `suffix` is FIM context,
+(HIGH): completions appended req.suffix to choices[].text — but `suffix` is FIM context,
   never returned. Stop appending (no FIM engine support).
-W945: Anthropic forced tool_choice {"type":"tool","name":X} was never enforced post-generation
+Anthropic forced tool_choice {"type":"tool","name":X} was never enforced post-generation
   (parity gap with chat's _enforce_tool_choice). Drop wrong-named/surplus calls.
-W946: realtime streaming never separated reasoning → <think> leaked into stored history.
+realtime streaming never separated reasoning → <think> leaked into stored history.
   Strip it.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import inspect
 
 
-def test_w942_realtime_stores_cleaned_text():
+def test_realtime_stores_cleaned_text():
     from yunshu_gateway.routers import realtime
     src = inspect.getsource(realtime)
     assert "_visible_text = clean_tool_call_markup(_visible_text).strip()" in src
@@ -24,13 +24,13 @@ def test_w942_realtime_stores_cleaned_text():
     assert "self._synthesize_audio_response(_visible_text" in src
 
 
-def test_w946_realtime_strips_think():
+def test_realtime_strips_think():
     from yunshu_gateway.routers import realtime
     src = inspect.getsource(realtime)
     assert '_, _visible_text = extract_thinking(full_text, _snap_model)' in src
 
 
-def test_w943_completions_no_suffix_append():
+def test_completions_no_suffix_append():
     from yunshu_gateway.routers import completions
     src = inspect.getsource(completions)
     # the wrong appends are gone
@@ -38,7 +38,7 @@ def test_w943_completions_no_suffix_append():
     assert "text=req.suffix," not in src
 
 
-def test_w945_anthropic_enforces_forced_tool():
+def test_anthropic_enforces_forced_tool():
     from yunshu_gateway.routers.anthropic import _enforce_anthropic_tool_choice
 
     class _TC:
@@ -57,7 +57,7 @@ def test_w945_anthropic_enforces_forced_tool():
     assert len(out2) == 1
 
 
-def test_w945_anthropic_streamer_threads_forced_name_and_none_cleanup():
+def test_anthropic_streamer_threads_forced_name_and_none_cleanup():
     from yunshu_gateway.routers import anthropic
     src = inspect.getsource(anthropic)
     assert "forced_tool_name=_forced_name" in src

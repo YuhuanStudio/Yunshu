@@ -245,7 +245,7 @@ class TestGPUStochasticVerification:
         assert result.accepted_count <= 2
         assert result.verification_method == "gpu_batch"
 
-    def test_w1005_resample_drawn_from_target_distribution(self):
+    def test_resample_drawn_from_target_distribution(self):
         """on rejection the correction token is sampled from the TARGET
         distribution (the documented fallback when only token-level draft logprobs
         exist), not the old broadcast-scalar 'residual'. A target distribution
@@ -265,7 +265,7 @@ class TestGPUStochasticVerification:
         # The correction must come from the (peaked) target, i.e. token A — never B.
         assert result.resampled_token_id == A
 
-    def test_w1005_no_broadcast_scalar_residual(self):
+    def test_no_broadcast_scalar_residual(self):
         """The mathematically meaningless scalar-broadcast residual is gone."""
         import inspect
 

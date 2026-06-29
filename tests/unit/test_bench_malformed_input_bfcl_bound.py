@@ -1,6 +1,6 @@
 """bench malformed-input → clean 422 + bfcl max_samples upper bound.
 
-Final batch of the W965 endpoint-closure effort. The bench + cached_contents PATCH audit
+Final batch of the endpoint-closure effort. The bench + cached_contents PATCH audit
 found no HIGH/IDOR — both are hardened (can_benchmark/can_infer gating, ownership, SSRF
 defense, benchmark serialization lock). Two LOW in bench:
   - a gemm_sizes sublist of length != 3 raised ValueError at the `for m, n, k in ...` unpack

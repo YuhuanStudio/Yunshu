@@ -1,19 +1,19 @@
-"""W975 — verify the mesh KV-transfer receiver delivers blocks to a decode-side consumer.
+"""— verify the mesh KV-transfer receiver delivers blocks to a decode-side consumer.
 
 The audit found the KVTransferServer receiver was a "hollow consumer": it held no engine
 reference and the KVCacheManager had no load_kv_blocks / _kv_layers target, so received
 cross-node KV blocks were discarded ("loaded 0 of N blocks") and the decode node re-prefilled.
-W975 adds set_block_consumer(fn) — the decode engine registers a callback that reconstructs
-the received KV into ITS reusable cache (via load_kv_blocks_into_cache, the W970-proven
+adds set_block_consumer(fn) — the decode engine registers a callback that reconstructs
+the received KV into ITS reusable cache (via load_kv_blocks_into_cache, the proven
 primitive), keeping the mesh server engine-agnostic.
 
 This drives the REAL client→server network path over a loopback socket and proves: the
 consumer fires with the received blocks (layer_data intact), and the transfer reports the
 consumer's REAL loaded count honestly (COMPLETED when >0, FAILED when the consumer loads 0).
-Combined with W970 (received blocks → reconstructed cache → generate_with_kv == greedy), this
+Combined with (received blocks → reconstructed cache → generate_with_kv == greedy), this
 closes the cross-node KV-reuse path at the transport level. Synthetic blocks (no model) — fast.
 
-Run:  PYTHONPATH=. uv run python scripts/verify/verify_kv_sync_consumer_w975.py
+Run:  PYTHONPATH=. uv run python scripts/verify/verify_kv_sync_consumer.py
 """
 import asyncio
 import socket
@@ -81,14 +81,14 @@ async def main():
 
     # ── 2. a consumer that loads 0 is reported HONESTLY as FAILED (no silent re-prefill) ──
     # The server NAKs (ack=0) because nothing loaded, so the client sees a rejected transfer
-    # rather than a false success — exactly the W846/W975 honesty contract (no silent
+    # rather than a false success — exactly the honesty contract (no silent
     # re-prefill while stats over-report success).
     res0 = await _round_trip(lambda blocks, model_name: 0)
     assert res0.status == TransferStatus.FAILED, f"loaded-0 must FAIL, got {res0.status}"
     assert res0.error, "a failed transfer must carry an error"
     print(f"loaded-0 honestly reported FAILED: {res0.error!r}")
 
-    # ── 3. NO consumer = pure relay (wire OK, reported as transferred — pre-W975 behavior) ──
+    # ── 3. NO consumer = pure relay (wire OK, reported as transferred — pre-behavior) ──
     res_relay = await _round_trip(None)
     assert res_relay.status == TransferStatus.COMPLETED, res_relay.status
     print(f"no-consumer relay still COMPLETED ({res_relay.blocks_transferred} blocks)")

@@ -2181,8 +2181,7 @@ class VLMEngine:
                     # finally can't interrupt the executor thread running _stream_sync;
                     # the VLM decode loops (_stream_vlm_text/_stream_vlm_vision) only stop
                     # when they observe cancel_event. Without this the executor kept
-                    # decoding to max_tokens, pinning the single VLM executor (W758/W798
-                    # class — the BatchedEngine text path sets _timeout_cancel here).
+                    # decoding to max_tokens, pinning the single VLM executor (                    # class — the BatchedEngine text path sets _timeout_cancel here).
                     try:
                         if cancel_event is not None:
                             cancel_event.set()
@@ -3973,8 +3972,8 @@ class VLMEngine:
 
     def _format_prompt(self, messages: list[dict], enable_thinking: bool | None = None) -> str:
         # this text-only-chat path (a VLM model serving a non-image chat
-        # turn) was a stale clone missing three BatchedEngine fixes — W666 role
-        # normalization, W848 family adapter, and the W821/W848 assistant-prefill gate
+        # turn) was a stale clone missing three BatchedEngine fixes — role
+        # normalization, family adapter, and the assistant-prefill gate
         # — so a `developer`/`function` role or a mid-conversation system message
         # raised in the template and collapsed to the lossy plaintext fallback, and an
         # assistant prefill restarted the answer. Mirror BatchedEngine._apply_chat_template.
@@ -4018,11 +4017,11 @@ class VLMEngine:
                     if msg.get("reasoning_content"):
                         _c["reasoning_content"] = msg["reasoning_content"]
                     clean.append(_c)
-                # W821/W848 assistant-prefill gate — a trailing assistant
+                # assistant-prefill gate — a trailing assistant
                 # message with non-empty STRING content means "continue THIS turn"
                 # (Anthropic/OpenAI prefill); add_generation_prompt=True would close the
                 # prefill and restart the answer. Use continue_final_message instead,
-                # with the W848 retry when the template rejects it (null/tool_calls-only
+                # with the retry when the template rejects it (null/tool_calls-only
                 # trailing assistant → normal add_generation_prompt).
                 _last = clean[-1] if clean else None
                 _is_prefill = (
@@ -4333,7 +4332,7 @@ class VLMEngine:
                             header, data = url.split(",", 1)
                             # a subtype-less data:audio URL (data:audio;base64,… or
                             # data:audio,…) has no '/' in the header, so header.split("/")[1]
-                            # raised IndexError → opaque 500. Default the format (W894 fixed
+                            # raised IndexError → opaque 500. Default the format (fixed
                             # this on the image sibling but not here). Mirror that.
                             _hp = header.split("/", 1)
                             fmt = _hp[1].split(";")[0] if len(_hp) > 1 else "wav"
@@ -4354,7 +4353,7 @@ class VLMEngine:
                         else:
                             # http(s):// audio download is not supported and an
                             # empty/unknown-scheme audio_url must not be silently dropped
-                            # (the W724 desync the file:// branch above guards against —
+                            # (the desync the file:// branch above guards against —
                             # but only for file://). Fail loud for the sibling schemes.
                             raise ValueError(f"unsupported or unloadable audio_url: {url!r}")
         return paths
@@ -4557,7 +4556,7 @@ class VLMEngine:
                     # be silently dropped. Silently dropping it (the old behaviour for http
                     # video_url, and for rejected/nonexistent file://, bare-path, and
                     # file_id) made the model answer about a video it never saw — the exact
-                    # W724/W792 hallucinate-on-silent-media-drop class that image+audio
+                    # hallucinate-on-silent-media-drop class that image+audio
                     # already guard against; video was the lone un-propagated sibling.
                     if part.get("type") == "video_url":
                         url = part.get("video_url", {}).get("url", "")
@@ -4568,7 +4567,7 @@ class VLMEngine:
                             # unlike the image/audio paths this becomes an UNCAUGHT
                             # IndexError (not a ValueError) at the gateway → opaque 500
                             # instead of a clean 400. Guard the comma + subtype split
-                            # the same way W894/W938 fixed the image/audio siblings.
+                            # the same way fixed the image/audio siblings.
                             if "," not in url:
                                 raise ValueError("malformed data:video URL (no payload separator)")
                             header, data = url.split(",", 1)

@@ -1,7 +1,7 @@
 """(HIGH): STS enhance/separate/transform truncated the trailing audio to silence.
 
 All three STFT/iSTFT frame loops iterated `range(0, max(1, len-fft+1), hop)`, emitting only
-frames that fully fit inside the signal. The W931 `+1` recovers the tail ONLY when (len-fft)
+frames that fully fit inside the signal. The `+1` recovers the tail ONLY when (len-fft)
 is an exact multiple of hop; in the general case the last ~hop samples got no frame →
 window_sum stayed at its 1e-8 floor → that tail reconstructed as pure SILENCE (a clipped end
 on every separate/transform and every long-enough enhance). Fixed by iterating to len(arr)

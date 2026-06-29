@@ -1,19 +1,19 @@
-"""Waves 904-909: realtime protocol-completeness + middleware/admin hardening.
+"""realtime protocol-completeness + middleware/admin hardening.
 
-W904: realtime function_call output items are now announced via response.output_item.added
+realtime function_call output items are now announced via response.output_item.added
   at distinct output_index 1+i with their OWN item id (deltas/done reference that id, not the
   assistant message item at index 0), and appear in response.done's output array.
-W906: prometheus_exporter._format_labels now escapes \\r (W876 keystone propagation).
-W907: admin unload_model honors the bool return ("already_unloaded" when refused/no-op).
-W908: realtime response.cancel with no active response emits an error (was a silent no-op).
-W909: session.update validates modalities (list drawn from {text,audio}).
+prometheus_exporter._format_labels now escapes \\r (keystone propagation).
+admin unload_model honors the bool return ("already_unloaded" when refused/no-op).
+realtime response.cancel with no active response emits an error (was a silent no-op).
+session.update validates modalities (list drawn from {text,audio}).
 """
 from __future__ import annotations
 
 import inspect
 
 
-def test_w904_function_call_emits_output_item_added_with_own_id():
+def test_function_call_emits_output_item_added_with_own_id():
     from yunshu_gateway.routers import realtime
     src = inspect.getsource(realtime.RealtimeSession._generate_response)
     # each function call is its own output item at output_index 1+i
@@ -27,7 +27,7 @@ def test_w904_function_call_emits_output_item_added_with_own_id():
     assert "item_id=item_id,\n                        output_index=0,\n                        call_id" not in src
 
 
-def test_w905_metrics_middleware_is_outermost():
+def test_metrics_middleware_is_outermost():
     """MetricsMiddleware must wrap auth/rate-limit so it records their rejections
     (401/429/413/503) — it was innermost and saw none of them."""
     from yunshu_gateway.main import create_app
@@ -39,7 +39,7 @@ def test_w905_metrics_middleware_is_outermost():
     assert names.index("MetricsMiddleware") < names.index("RateLimitMiddleware")
 
 
-def test_w906_prometheus_exporter_escapes_carriage_return():
+def test_prometheus_exporter_escapes_carriage_return():
     from yunshu_gateway.middleware import prometheus_exporter as pe
     # build a label set with an embedded CR and confirm it's escaped
     out = pe._format_labels(frozenset({("endpoint", "a\rb")}))
@@ -47,7 +47,7 @@ def test_w906_prometheus_exporter_escapes_carriage_return():
     assert "\r" not in out
 
 
-def test_w908_realtime_cancel_no_active_emits_error():
+def test_realtime_cancel_no_active_emits_error():
     from yunshu_gateway.routers import realtime
     src = inspect.getsource(realtime.RealtimeSession._handle_response_cancel)
     assert "response_cancel_not_active" in src
@@ -55,7 +55,7 @@ def test_w908_realtime_cancel_no_active_emits_error():
     assert "if not (task and not task.done()):" in src
 
 
-def test_w909_session_update_validates_modalities():
+def test_session_update_validates_modalities():
     # find the SessionConfig class (has update() + SUPPORTED_AUDIO_FORMATS) and drive it
     from yunshu_gateway.routers import realtime as _rt
     cfg_cls = None

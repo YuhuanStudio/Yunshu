@@ -1,7 +1,7 @@
-"""Wave 735 real-model smoke: min_tokens / ignore_eos / suppress_tokens on the
+"""real-model smoke: min_tokens / ignore_eos / suppress_tokens on the
 default fast path (Qwen2.5-0.5B-4bit).
 
-Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_sampler_features_w735.py
+Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_sampler_features.py
 """
 import asyncio
 

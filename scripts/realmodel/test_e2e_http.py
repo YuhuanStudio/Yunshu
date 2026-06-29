@@ -51,7 +51,7 @@ def _make_wav_silence(duration=1.0, sample_rate=16000) -> bytes:
 async def wait_for_server(client, timeout=120):
     """Wait until the server is ready.
 
-    Wave 436: bumped from 30s to 120s — multi-model mode scans the entire
+    bumped from 30s to 120s — multi-model mode scans the entire
     models/ directory (can hold 9+ models totaling 60+ GB of metadata),
     which exceeds 30s on cold-cache disks.
     """
@@ -205,12 +205,12 @@ async def main():
     env["YUNSHU_MODELS_DIR"] = os.path.abspath("models")
     env["YUNSHU_PORT"] = "8901"
     env["YUNSHU_AUTH_DISABLED"] = "true"
-    # Wave 436: permit on-demand model loading so TTS/ASR tests can hit
+    # permit on-demand model loading so TTS/ASR tests can hit
     # endpoints without a manual /v1/models/load step.
     env["YUNSHU_ALLOW_AUTO_LOAD"] = "1"
     env["NO_PROXY"] = "localhost,127.0.0.1"
 
-    # Wave 436: uvicorn target was "python.yunshu_gateway.main:app" — a path
+    # uvicorn target was "python.yunshu_gateway.main:app" — a path
     # import that fails unless PYTHONPATH wiring is set up just right. Use
     # the installed module path "yunshu_gateway.main:app" instead, and set
     # PYTHONPATH so the subprocess can find it.

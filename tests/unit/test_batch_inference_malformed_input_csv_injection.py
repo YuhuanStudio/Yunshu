@@ -1,6 +1,6 @@
 """batch_inference malformed-input → clean 4xx + CSV-injection hardening.
 
-A focused audit of the batch_inference router (part of the W965 endpoint-closure effort)
+A focused audit of the batch_inference router (part of the endpoint-closure effort)
 found no HIGH/IDOR/isolation bugs — the security-critical paths are all correctly gated.
 Three LOW issues remained:
   - max_concurrent form value > 64 passed the handler's own check but raised a Pydantic

@@ -233,7 +233,7 @@ def test_vlm():
             for y in range(80, 176):
                 for x in range(80, 176):
                     img.putpixel((x, y), (255, 0, 0))
-            # Wave 687: pass the image as a base64 data URL, NOT a temp-file path.
+            # pass the image as a base64 data URL, NOT a temp-file path.
             # A temp file under /var/folders/.../T/ is outside YUNSHU_MEDIA_DIR, so
             # the local-file-access security guard (correctly) blocked it → the VLM
             # gate FAILed for a test-harness reason, not a modality reason. A data
@@ -391,7 +391,7 @@ def main():
     args = parser.parse_args()
 
     tests = {
-        # Wave 687: ORDER MATTERS. The 30B-Omni VLM leaves the Metal driver in a
+        # ORDER MATTERS. The 30B-Omni VLM leaves the Metal driver in a
         # state whose hang persists across processes (see regression.py), so any
         # heavy modality run RIGHT AFTER it can spuriously fail — Z-Image (4-bit,
         # 6GB, passes cleanly in isolation) was failing only because it ran
@@ -423,7 +423,7 @@ def main():
             _cmd = [sys.executable, os.path.abspath(__file__), "--only", name, "--_child"]
             _env = {**os.environ, "PYTHONPATH": os.environ.get("PYTHONPATH", ".")}
             rc = subprocess.run(_cmd, env=_env).returncode
-            # Wave 687/688: a NATIVE-SIGNAL death (rc < 0, e.g. signal-6 from a Metal
+            # a NATIVE-SIGNAL death (rc < 0, e.g. signal-6 from a Metal
             # "Caused GPU Hang" command-buffer failure) is NOT a logic failure — it's a
             # macOS Metal driver hang the 30B-Omni VLM triggers after back-to-back heavy
             # loads (verified: VLM crashes signal-6, then PASSES after a GPU cooldown).

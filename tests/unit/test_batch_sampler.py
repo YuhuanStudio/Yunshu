@@ -907,7 +907,7 @@ class TestBatchSamplerIntegration:
 
 
 class TestBatchSamplerTempPosition:
-    """(sibling of W721): the batch sampler must filter top_p/min_p on
+    """The batch sampler must filter top_p/min_p on
     the UN-tempered distribution and apply temperature last, matching mlx-lm and
     the non-streaming fast path. Otherwise temp!=1 + a filter selects a different
     nucleus depending on which sampling path served the request."""

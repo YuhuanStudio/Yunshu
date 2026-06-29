@@ -2,7 +2,7 @@
 stream_generate() forces spec_decode=False at the top (fast-path spec routes are not
 lossless / no speedup on Apple Silicon), so _stream_generate_speculative and
 _stream_generate_ngram_spec are unreachable in the streaming flow; the live path
-(_stream_generate_fast) already routes deltas through StopHoldbackBuffer (W667/W669).
+(_stream_generate_fast) already routes deltas through StopHoldbackBuffer.
 
 This test pins the unreachability INVARIANT: if someone re-enables spec streaming (removes
 the forced spec_decode=False) without first wrapping the spec emit in a hold-back buffer,

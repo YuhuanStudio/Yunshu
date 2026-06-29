@@ -4,7 +4,7 @@ Single model, single stream, ONE long generation (no servers, no co-loaded
 models — safe on the 36GB Mac). Measures whether decode tok/s DECAYS over a
 sustained run: splits the generated tokens into a first vs last window and
 reports the decay %. On this 30-core M3 Max raw decode is bandwidth-bound and
-holds flat (Wave 657: ~0% decay across 8 back-to-back iters) — a large positive
+holds flat (~0% decay across 8 back-to-back iters) — a large positive
 decay flags thermal throttling during pure decode, which the gpu_tflops matmul
 tag (a compute-bound signal) does NOT capture.
 
@@ -76,7 +76,7 @@ def main() -> int:
     # Feed the cool/ trend (same append-only history as the rest of PERF_TREND).
     try:
         import sys
-        # scripts/bench/ → perf_history is one level up at scripts/ (Wave 688 reorg).
+        # scripts/bench/ → perf_history is one level up at scripts/ (reorg).
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from perf_history import snapshot_from_kpis
         kpis = {

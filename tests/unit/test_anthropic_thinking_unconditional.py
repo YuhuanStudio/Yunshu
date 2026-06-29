@@ -1,6 +1,6 @@
 """(HIGH): anthropic.py gated thinking handling on a falsy `enable_thinking` that
 the engine no longer respects — native-thinking models (Qwen3/DeepSeek-R1/GLM-Z1) emit CoT
-by DEFAULT (W832) regardless of the request's thinking config. Result: NON-stream leaked
+by DEFAULT regardless of the request's thinking config. Result: NON-stream leaked
 the raw <think>…</think> + entire CoT into the visible text block; streaming dropped the
 reasoning tokens entirely (hit neither branch). chat.py/responses.py route reasoning
 unconditionally — Anthropic was the lone outlier. Now both Anthropic paths separate/route

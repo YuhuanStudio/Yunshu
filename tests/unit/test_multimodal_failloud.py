@@ -1,4 +1,4 @@
-"""the W724 fail-loud invariant (a media content part routed to the VLM
+"""the fail-loud invariant (a media content part routed to the VLM
 must resolve to a path or RAISE — never silently drop, which desyncs the unconditional
 placeholder → masked_scatter crash, hallucination, or image-order shift) only covered
 the file:// branches. Extend it to the sibling branches: audio with no data / http url,

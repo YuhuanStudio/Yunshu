@@ -1,6 +1,6 @@
-"""/v1/ocr had NO client-disconnect cancellation — the W758/W845 cancel
+"""/v1/ocr had NO client-disconnect cancellation — the cancel
 keystone (task.cancel can't stop a running generate on the max_workers=1 executor; the
-engine must see its cancel_event) was propagated to VLM chat (W845) and audio/images, but
+engine must see its cancel_event) was propagated to VLM chat and audio/images, but
 OCR + video were the missed single-shot-media siblings (grep: ocr.py had 0 cancel refs vs
 audio 9 / images 6). Now OCR registers with the request tracker, runs both engine calls
 under run_with_disconnect_guard, passes cancel_event to the VLM fallback (which honors it

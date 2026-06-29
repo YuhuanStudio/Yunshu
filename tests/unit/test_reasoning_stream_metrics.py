@@ -4,7 +4,7 @@ HIGH (streaming CoT leak): the streaming fast path (_stream_generate_fast) only 
 the <think>/</think> token ids when `thinking_budget is not None or enable_thinking`. But
 enable_thinking defaults to None end-to-end while Qwen3/Qwen3.5/DeepSeek-R1 chat templates
 are default-ON (they inject the opening <think> into the PROMPT). So a plain default-param
-streaming request had think_end_token=None → the W758 pre-seed was skipped → _in_thinking
+streaming request had think_end_token=None → the pre-seed was skipped → _in_thinking
 never flipped → the ENTIRE chain-of-thought leaked into visible delta.content and
 reasoning_tokens stayed 0 (non-stream was correct via the post-hoc parser). Now the think
 tokens resolve unconditionally; the pre-seed remains gated on the prompt actually ending
@@ -24,7 +24,7 @@ from yunshu_gateway.routers import anthropic
 
 def test_stream_fast_resolves_think_tokens_unconditionally():
     src = inspect.getsource(batched_engine.BatchedEngine._stream_generate_fast)
-    # the W758 pre-seed must be present and reachable without the enable_thinking gate
+    # the pre-seed must be present and reachable without the enable_thinking gate
     assert "detect_needs_think_prefix" in src
     # think-token resolution now goes through _resolve_think_token_ids (bracketed
     # form) instead of the buggy bare encode("<think"). It must still be UNCONDITIONAL.

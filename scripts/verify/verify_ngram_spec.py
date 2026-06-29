@@ -1,12 +1,12 @@
-"""N-gram speculative-decoding gate (Wave 686) — small LLMs.
+"""N-gram speculative-decoding gate — small LLMs.
 
-Locks in the W686 fixes so they cannot silently regress:
+Locks in the fixes so they cannot silently regress:
 
  (1) NON-TRIMMABLE GUARD (the keystone): Qwen3.5's hybrid attention uses
      non-trimmable ArraysCache, so `_generate_ngram_spec` MUST detect this
      (can_trim_prompt_cache → False) and delegate the whole request to the plain
      fast path. The output must therefore be BIT-IDENTICAL to plain greedy decode
-     — i.e. no ".txt.txt…" degeneration. This is the bug W686 fixed.
+     — i.e. no ".txt.txt…" degeneration. This is the bug fixed.
 
  (2) TRIMMABLE CORRECTNESS: on a trimmable-cache model (Qwen2.5-3B) the spec path
      runs its real multi-token verify and must NOT degenerate — it shares a real
@@ -42,7 +42,7 @@ def _text(r):
 
 
 def _degenerate(s: str) -> bool:
-    """True if the text collapsed into one repeated unit (the W686 failure mode)."""
+    """True if the text collapsed into one repeated unit (the failure mode)."""
     words = s.split()
     if len(words) < 8:
         return False

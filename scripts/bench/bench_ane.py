@@ -9,7 +9,7 @@ Usage:
     PYTHONPATH=. uv run python scripts/bench_ane.py --output bench_ane_report.json
     PYTHONPATH=. uv run python scripts/bench_ane.py --warmup 5 --iters 100
 
-This script is part of Phase 0 (W0-W2) platform validation. It measures:
+This script is part of Phase 0 platform validation. It measures:
   1. Embedding inference: small model forward pass on GPU vs estimated ANE
   2. Linear layer: matmul performance at various dimensions
   3. Transformer layer: attention + FFN block performance

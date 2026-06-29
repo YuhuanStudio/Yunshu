@@ -1,4 +1,4 @@
-"""video input was the un-propagated sibling of the W724/W792 fail-loud
+"""video input was the un-propagated sibling of the fail-loud
 invariant. An http(s) video_url had NO handling branch → silently dropped; a rejected /
 nonexistent file://, bare-path, or video_file.file_id was log-and-continue. So the model
 answered about a video it never saw (hallucination), while image+audio raise ValueError on
@@ -40,7 +40,7 @@ def test_no_video_parts_returns_empty_not_raise():
 
 
 def test_subtypeless_data_video_url_is_clean_valueerror_not_indexerror():
-    """W938 video sibling: data:video;base64,… (subtype-less) had no '/' in the
+    """video sibling: data:video;base64,… (subtype-less) had no '/' in the
     header → header.split('/')[1] raised IndexError, which is NOT a ValueError, so
     the gateway returned an opaque 500 instead of a clean 400. After the fix the
     header is split defensively (default ext mp4); the only way to fail here is the

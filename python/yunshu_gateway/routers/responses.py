@@ -89,7 +89,7 @@ def _is_admin(request) -> bool:
 def _owns_stored(request, payload: dict) -> bool:
     """True if the caller may read/cancel this stored response.
 
-    Unowned (legacy) entries stay readable to avoid breaking pre-Wave-714
+    Unowned (legacy) entries stay readable to avoid breaking older
     stores; admins bypass. Cross-tenant access to an owned entry is denied.
     """
     owner = payload.get("_owner")
@@ -373,7 +373,7 @@ class ResponsesRequest(BaseModel):
     top_logprobs: int | None = Field(default=None, ge=0, le=20)
     spec_decode: bool = False
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
-    xtc_threshold: float = Field(default=0.0, ge=0.0, le=0.5)  # W868: engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
+    xtc_threshold: float = Field(default=0.0, ge=0.0, le=0.5)  # engine requires [0,0.5]; le=1.0 made out-of-range 500 not 422
     # Extended sampling controls. These were honored on
     # /v1/chat/completions + /v1/completions but were never declared or plumbed here,
     # so a Responses request setting them got them SILENTLY ignored (suppress_tokens →
@@ -807,7 +807,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found") from None
 
     # Reject prompts over the context window (400) or too large to prefill (413),
-    # before generation (see chat.py / Waves 634-636).
+    # before generation (see chat.py).
     try:
         from yunshu_control.token_counter import count_message_tokens
 
@@ -1206,7 +1206,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         # reports finish_reason="stop" on cancel (not a distinct reason), so the map below
         # never matched → a CANCELLED background response was stored + polled as "completed".
         # The cancel_event is the authoritative signal; check it FIRST. This propagates the
-        # W776 streaming-path fix to the non-stream/background path (the cancel_response
+        # streaming-path fix to the non-stream/background path (the cancel_response
         # docstring promises cancelled→incomplete; the non-stream path never delivered it).
         if _ns_cancel_event is not None and _ns_cancel_event.is_set():
             _response_status = "incomplete"
@@ -1356,7 +1356,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
         # non-stream create_response does, but the engine's logit_bias processor does
         # NOT guard the bias VALUE — a streaming Responses request with
         # logit_bias={"50256": NaN}/1e9 made that logit NaN/Inf → softmax all-NaN →
-        # garbage output instead of a clean 422. Same class W452/W666 fixed elsewhere.
+        # garbage output instead of a clean 422. Same class fixed elsewhere.
         import math
         for _bk, _bv in _logit_bias.items():
             if math.isnan(_bv) or math.isinf(_bv):
@@ -1781,9 +1781,9 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
                     call_id=fc_call_id,
                     # tc is a dict ({"name","arguments"} from
                     # extract_tool_calls_model_aware), NOT an object — getattr() on a
-                    # dict returns the default, so the W941 fix silently emitted EMPTY
+                    # dict returns the default, so the fix silently emitted EMPTY
                     # name/arguments on the streaming output_item.added (re-breaking
-                    # W941 on the sibling path). Use subscript like the .done events
+                    # on the sibling path). Use subscript like the .done events
                     # below and the non-streaming path do.
                     name=tc["name"],
                     arguments=tc["arguments"],
@@ -1847,7 +1847,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
             # distinct reason), so the _interrupt_reasons map below never matched →
             # a CANCELLED stream was stored + emitted as "completed". The
             # cancel_event is the authoritative signal; check it first. (Restores
-            # the W689/W754 cancelled→incomplete behavior on the streaming path,
+            # the cancelled→incomplete behavior on the streaming path,
             # which the cancel_response docstring promises but never delivered.)
             _terminal_status = "incomplete"
             yield format_responses_incomplete(
@@ -1944,7 +1944,7 @@ async def _stream_response(engine, req, messages, response_id, json_schema, load
 
         # completion_tok already includes reasoning tokens on the
         # batched path (reasoning_tok is a subset detail); adding it double-counted
-        # the server-side completion metric (W666/W754 reasoning-double-count class,
+        # the server-side completion metric (reasoning-double-count class,
         # un-fixed sibling). The non-streaming path + chat/anthropic already use
         # completion_tok alone.
         _record_metrics(prompt_tok, completion_tok)

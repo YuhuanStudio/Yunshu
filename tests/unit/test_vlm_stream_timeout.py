@@ -2,7 +2,7 @@
 (1) it read kwargs.get('timeout') but the gateway passes timeout_seconds=req.timeout —
     so a user timeout was silently ignored (hardcoded 300s).
 (2) the timeout branch did NOT set cancel_event, so the executor thread kept decoding to
-    max_tokens (stream_task.cancel() can't stop the executor) — the W758/W798 class."""
+    max_tokens (stream_task.cancel() can't stop the executor) — the class."""
 from __future__ import annotations
 
 import asyncio

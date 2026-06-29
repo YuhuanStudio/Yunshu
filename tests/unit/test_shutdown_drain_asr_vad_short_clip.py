@@ -1,10 +1,10 @@
-"""Waves 950 + 952: gateway shutdown-drain reliability + ASR VAD short-clip gate.
+"""+ 952: gateway shutdown-drain reliability + ASR VAD short-clip gate.
 
-W950 (HIGH): the shutdown drain awaited a one-shot asyncio.Event that, once .set() (the
+(HIGH): the shutdown drain awaited a one-shot asyncio.Event that, once .set() (the
   active-request count touched 0 at ANY point in the server's life), stayed set forever — so
   _drain_event.wait() returned IMMEDIATELY even with a request in-flight at shutdown, letting
   engine.stop() tear the model out from under a running generation. Poll the LIVE counter.
-W952: the ASR VAD pre-gate required ~3 consecutive loud frames (streaming turn-detection
+the ASR VAD pre-gate required ~3 consecutive loud frames (streaming turn-detection
   latch), so a short utterance (<~90ms) never latched → the file returned an empty transcript
   on real speech. For a one-shot file gate, any single clearly-loud frame proceeds.
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 import inspect
 
 
-def test_w950_shutdown_polls_live_counter():
+def test_shutdown_polls_live_counter():
     from yunshu_gateway import main
     src = inspect.getsource(main)
     # the one-shot event wait (the actual await call) is gone; a live-counter poll loop is used
@@ -21,14 +21,14 @@ def test_w950_shutdown_polls_live_counter():
     assert "while _active_requests > 0 and time.monotonic() < _drain_deadline:" in src
 
 
-def test_w952_vad_energy_fallback_in_source():
+def test_vad_energy_fallback_in_source():
     from yunshu_engine import audio_engine
     src = inspect.getsource(audio_engine.ASREngine.transcribe)
     assert "vad_result.energy > self._vad.threshold" in src
 
 
-def test_w952_short_loud_frame_has_energy_above_threshold():
-    # a single loud frame must register energy above the base threshold (so the W952 gate
+def test_short_loud_frame_has_energy_above_threshold():
+    # a single loud frame must register energy above the base threshold (so the gate
     # proceeds even though the 3-frame latch hasn't engaged).
     import numpy as np
 

@@ -32,7 +32,7 @@ MODEL = os.environ.get("YUNSHU_BENCH_MODEL", "./models/Qwen2.5-3B-Instruct-bf16"
 # SSD tier. Per-tier hot_limit/max_entries are set programmatically below.
 os.environ.setdefault("YUNSHU_SSD_CACHE", "1")
 os.environ.setdefault("YUNSHU_SSD_CACHE_DIR", "/tmp/yunshu_ssd_4tier")
-os.environ.setdefault("YUNSHU_VLM_KV_PREFIX", "1")  # VLM text-path 4-tier (Wave 613)
+os.environ.setdefault("YUNSHU_VLM_KV_PREFIX", "1")  # VLM text-path 4-tier
 
 QUERY = "List the first 6 even numbers, comma separated."
 
@@ -160,7 +160,7 @@ async def main():
     if _IS_VLM:
         from yunshu_engine.types import EngineConfig
         from yunshu_engine.vlm_engine import VLMEngine
-        print("║ path: VLMEngine text path | _text_kv_prefix_cache 4-tier | ssd=1 (Wave 613)")
+        print("║ path: VLMEngine text path | _text_kv_prefix_cache 4-tier | ssd=1")
         engine = VLMEngine(MODEL, EngineConfig())
     else:
         from yunshu_engine.batched_engine import BatchedEngine

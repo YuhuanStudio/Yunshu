@@ -1,14 +1,14 @@
-"""Waves 911-913: cancel-identity stamping + json-schema nullable-number termination
+"""cancel-identity stamping + json-schema nullable-number termination
 + completions sampling-param parity.
 
-W911 (HIGH, rescopeded to single-consumer): the auth middleware now stamps the
+(HIGH, rescopeded to single-consumer): the auth middleware now stamps the
   single-owner identity on current_actor for every request (the multi-tenant
   TenantManager/RBAC stack has been removed). This keeps request_tracker ownership
   and engine_core dedup working in the single-consumer model.
-W912 (HIGH): a top-level nullable/union scalar number (Pydantic Optional[int] →
+(HIGH): a top-level nullable/union scalar number (Pydantic Optional[int] →
   oneOf:[{number},{null}] → _top_level_type is a LIST) never reached a terminable state, so
   generation ran away to max_tokens. can_terminate now accepts an all-scalar list root.
-W913: completions dropped min_tokens/ignore_eos/suppress_tokens on the non-batched +
+completions dropped min_tokens/ignore_eos/suppress_tokens on the non-batched +
   streaming paths (chat parity gap).
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 import inspect
 
 
-def test_w911_simplified_middleware_stamps_owner_identity():
+def test_simplified_middleware_stamps_owner_identity():
     """Single-consumer model: the simplified auth middleware stamps the
     same owner identity on current_actor for every request (no per-tenant
     branch). This keeps request_tracker ownership / engine_core dedup working."""
@@ -27,7 +27,7 @@ def test_w911_simplified_middleware_stamps_owner_identity():
     assert 'request.state.role = "owner"' in src
 
 
-def test_w911_resolve_actor_tenant_compat_branch_kept():
+def test_resolve_actor_tenant_compat_branch_kept():
     # resolve_actor still honors a request.state.tenant attribute (kept for
     # backward compat with test stubs that set it), so existing call sites
     # that attach a tenant-like object keep returning a stable identity.
@@ -47,7 +47,7 @@ def test_w911_resolve_actor_tenant_compat_branch_kept():
     assert resolve_actor(_Req()) == "tenant:acme"
 
 
-def test_w912_nullable_number_terminates_but_nested_does_not():
+def test_nullable_number_terminates_but_nested_does_not():
     from yunshu_engine.json_schema import JsonSchemaConstraint
 
     def can_term(schema, s):
@@ -69,7 +69,7 @@ def test_w912_nullable_number_terminates_but_nested_does_not():
     assert can_term({"type": "string"}, '"hi') is False
 
 
-def test_w913_completions_passes_sampling_params_all_paths():
+def test_completions_passes_sampling_params_all_paths():
     from yunshu_gateway.routers import completions
     src = inspect.getsource(completions)
     # min_tokens/ignore_eos/suppress_tokens forwarded on all 4 engine calls now

@@ -1,5 +1,5 @@
 """(KV radix/prefix-cache hunt): the radix tree was verified CLEAN (longest-prefix
-match, node split, ref-counting, eviction safety, W689 ordering fix all hold; no KV
+match, node split, ref-counting, eviction safety, ordering fix all hold; no KV
 corruption). One real efficiency bug: _save_one_prefix gated the KVPrefixCache save on
 req.cached_tokens, but paged_scheduler sets cached_tokens from the RADIX accounting match
 (num_matched_tokens). The radix tree and the KVPrefixCache are independent — when radix

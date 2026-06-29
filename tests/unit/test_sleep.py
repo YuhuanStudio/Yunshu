@@ -146,7 +146,7 @@ class TestSleepPostBoundary:
     """Validate the pydantic level boundary added on SleepRequest."""
 
     def test_level_3_rejected_422(self, monkeypatch):
-        """Wave note: level >= 3 must hit pydantic validation, not silent clamp."""
+        """Note: level >= 3 must hit pydantic validation, not silent clamp."""
         monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "true")
         app = _make_app_with_sleep_router()
         client = TestClient(app)

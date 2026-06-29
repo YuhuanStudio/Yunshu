@@ -1,5 +1,5 @@
 """MCP is JSON-RPC, so EVERY error on /v1/mcp must return a JSON-RPC 2.0 error
-object — not the OpenAI HTTP envelope a JSON-RPC client can't parse. W785b fixed only the
+object — not the OpenAI HTTP envelope a JSON-RPC client can't parse. fixed only the
 in-router body-parse paths; this covers the auth/permission/model-access denials (router
 + middleware) and stops the internal-error info leak."""
 from __future__ import annotations

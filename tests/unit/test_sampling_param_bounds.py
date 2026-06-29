@@ -9,7 +9,7 @@ well-hardened, with two cross-layer/cross-endpoint inconsistencies fixed here:
   overflow the downstream numpy/Gumbel PRNG. Added parity bound.
 
 (The /batch raw-dict path HIGH and image-cancel MEDIUM from the same hunt round are
-separate waves.)
+separate passes.)
 """
 from __future__ import annotations
 

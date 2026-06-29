@@ -1,14 +1,13 @@
-"""VLM vision / image-reuse cache gate (Wave 682) — small VLM.
+"""VLM vision / image-reuse cache gate — small VLM.
 
 Locks in two things:
 
- (1) WRAPPER INSTALLED (W682): _CachingVisionTower is installed on the model's
+ (1) WRAPPER INSTALLED: _CachingVisionTower is installed on the model's
      vision tower(s) at load — get_stats().vision_tower_cache.towers_wrapped >= 1
      — and inference stays correct (the wrapper doesn't break the VLM).
  (2) IMAGE REUSE WORKS (the "VLM KV cache" that actually matters): sending the
      SAME image again (with different text) is substantially faster than the first
-     time, because the engine already skips re-encoding the image. The W682
-     investigation measured ~6x (0.4s vs 2.4s), so a lenient < 0.7x threshold is
+     time, because the engine already skips re-encoding the image. The      investigation measured ~6x (0.4s vs 2.4s), so a lenient < 0.7x threshold is
      robust to CI/thermal noise.
 
 Uses a self-generated tiny image (no external asset). Run:
@@ -76,7 +75,7 @@ async def main() -> int:
         await eng.stop()
 
     t1, t2 = _text(r1).lower(), _text(r2).lower()
-    # Wave 687: the gate now verifies the REAL production image-reuse — the
+    # the gate now verifies the REAL production image-reuse — the
     # KV-prefix path — which works with the tower cache OFF (its default after the
     # tower cache proved a redundant landmine; see vlm_engine). Repeat-image is
     # still ~6x because the KV path skips re-encoding. We no longer require the

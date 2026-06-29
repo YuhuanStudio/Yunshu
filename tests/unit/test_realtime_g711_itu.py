@@ -1,5 +1,5 @@
 """(HIGH): the realtime g711 codec tables were self-consistent but NON-compliant
-with ITU-T G.711, so they passed loopback + the W703 "37 dB" self-test yet produced garbled
+with ITU-T G.711, so they passed loopback + the "37 dB" self-test yet produced garbled
 audio for any real telephony/SIP client.
   - μ-law: every nonzero sample's polarity was INVERTED (negate-when-sign-clear) → interop
     SNR ~-6 dB (full-scale inversion).

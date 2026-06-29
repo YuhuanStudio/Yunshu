@@ -1,4 +1,4 @@
-"""the W841 cache_creation_input_tokens fix was DEAD on both Anthropic paths.
+"""the cache_creation_input_tokens fix was DEAD on both Anthropic paths.
 create_message collapses req.system to a joined STRING (so a canonical system message
 reaches the engine), but _cacheable_prefix_token_count returns 0 unless system is a LIST —
 so cache_creation_input_tokens was always 0 (non-stream) or capped at 1 (streaming passed

@@ -1096,7 +1096,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         )
 
     # Reject prompts over the context window (400) or too large to prefill (413),
-    # before we attempt generation (chat.py / Waves 634-636). Covers stream +
+    # before we attempt generation (chat.py). Covers stream +
     # non-stream (before the stream branch below).
     try:
         from yunshu_control.token_counter import count_message_tokens

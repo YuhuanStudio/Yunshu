@@ -4,8 +4,8 @@ The inpaint initial latent blended the KEPT region (1-mask) using the CLEAN (sig
 encoding while the masked region was noised to sigma_start. But the first denoise step
 (t=start_step) feeds the transformer at timestep 1-sigma_start (high sigma), so the clean kept
 context was OFF-MANIFOLD for that timestep → boundary seams at the worst (highest-sigma) step.
-The in-loop RePaint composite (W705) re-noises the kept region to sigma_{t+1} but only AFTER
-the Euler step — i.e. for every step except the first. W989 extends it to step 0 by noising
+The in-loop RePaint composite re-noises the kept region to sigma_{t+1} but only AFTER
+the Euler step — i.e. for every step except the first. extends it to step 0 by noising
 the kept-region init to sigma_start too: known_init = (1-sigma_start)*known + sigma_start*noise.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ def test_inpaint_init_noises_kept_region_to_sigma_start():
 
 
 def test_init_is_on_manifold_flow_matching():
-    # the W989 init must equal the flow-matching interpolation at sigma_start (same formula the
+    # the init must equal the flow-matching interpolation at sigma_start (same formula the
     # in-loop RePaint uses), so step 0's context matches the timestep it's told.
     known = mx.array([0.5, -1.0, 2.0])
     noise = mx.array([2.0, 0.3, -0.7])

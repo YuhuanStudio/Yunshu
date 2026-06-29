@@ -2,7 +2,7 @@
 when echo=True (batched path) → the wrong completion was selected.
 
 best_of generates >n candidates and keeps the top-n by average per-token logprob. With
-echo, _format_logprobs (W866) PREPENDS the prompt tokens' logprobs into token_logprobs.
+echo, _format_logprobs PREPENDS the prompt tokens' logprobs into token_logprobs.
 The prompt forward is IDENTICAL across all candidates (deterministic), so averaging the
 constant prompt-logprob sum over each candidate's (prompt+completion) length dilutes more
 for longer completions — flipping the ranking so a worse, longer completion can win. The
@@ -16,7 +16,7 @@ from yunshu_gateway.routers import completions
 
 
 def _avg_completion_only(lp, prompt_len, echo):
-    """Faithful mirror of completions.py _avg_logprob (W1013) ranking logic."""
+    """Faithful mirror of completions.py _avg_logprob ranking logic."""
     probs = lp["token_logprobs"]
     if echo and isinstance(lp.get("text_offset"), list):
         offs = lp["text_offset"]
@@ -55,7 +55,7 @@ def test_no_echo_unchanged():
 def test_production_avg_logprob_slices_by_text_offset():
     src = inspect.getsource(completions)
     code = "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())
-    # the W1013 fix: echo ranking slices completion entries by text_offset vs prompt len
+    # the fix: echo ranking slices completion entries by text_offset vs prompt len
     assert "o >= _plen" in code
     assert 'lp.get("text_offset")' in code
     assert "isinstance(_prompts[0], str)" in code

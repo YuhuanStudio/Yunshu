@@ -78,7 +78,7 @@ def test_get_model_out_of_scope_is_404(monkeypatch):
 
 
 def test_discover_dir_containment_uses_relative_to(monkeypatch):
-    # The W801 fix replaced str.startswith with relative_to — verify the sibling-prefix
+    # The fix replaced str.startswith with relative_to — verify the sibling-prefix
     # case is rejected by the helper logic.
     from pathlib import Path
 

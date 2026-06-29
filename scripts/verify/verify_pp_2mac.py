@@ -1,12 +1,12 @@
-"""Turnkey Pipeline-Parallel correctness validation (W980) — the final 2-Mac step for PP.
+"""Turnkey Pipeline-Parallel correctness validation — the final 2-Mac step for PP.
 
-CORRECTNESS TRUTH (W980): the ONLY correct pipeline parallelism is mlx-lm NATIVE
+CORRECTNESS TRUTH: the ONLY correct pipeline parallelism is mlx-lm NATIVE
 (sharded_load(pipeline_group=group) → model.pipeline() + the model's pipeline-aware forward
 that does recv→layers→send→all_gather→norm so EVERY rank produces identical logits). This
 exists ONLY for models with PipelineMixin — deepseek_v3 / deepseek_v2 / deepseek_v32 /
 glm4_moe / glm4_moe_lite / ministral3. For any other model (Qwen, Llama, …) mlx-lm REFUSES
 ("model does not support pipelining"), and Yunshu's old custom layer-wrapper (PipelineLastLayer)
-produced WRONG logits on non-last ranks → W972 made it fail-loud. So PP is: native-correct
+produced WRONG logits on non-last ranks → made it fail-loud. So PP is: native-correct
 where supported, safely refused otherwise. This script validates the native path.
 
 Two-step (works on ONE machine for self-test + on 2 Macs for the real test), TP-style:

@@ -1,7 +1,7 @@
-"""Wave 772 — verify the ANE (CoreML) embeddings path actually runs on-device and
+"""— verify the ANE (CoreML) embeddings path actually runs on-device and
 matches the HF mask-weighted-mean reference. Run from repo root:
 
-    PYTHONPATH=. uv run python scripts/realmodel/verify_ane_embeddings_w772.py
+    PYTHONPATH=. uv run python scripts/realmodel/verify_ane_embeddings.py
 
 Requires coremltools + Apple Silicon (is_ane_available()). Uses the locally-cached
 sentence-transformers/all-MiniLM-L6-v2 (a mean-pooled model).
@@ -48,7 +48,7 @@ def main() -> int:
         print(f"text {i}: cosine(ANE, HF mask-mean) = {cos:.4f}", flush=True)
         ok = ok and cos > 0.99
     passed = proc.is_compiled() and ok
-    print("ANE W772 VERIFY:", "PASS (ANE ran on-device, matches reference)" if passed else "FAIL",
+    print("ANE VERIFY:", "PASS (ANE ran on-device, matches reference)" if passed else "FAIL",
           flush=True)
     return 0 if passed else 1
 

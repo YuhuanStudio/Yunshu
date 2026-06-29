@@ -31,6 +31,6 @@ def test_vtt_uses_dot_separator():
 
 
 def test_none_and_negative_tolerated():
-    assert _seconds_to_srt_timestamp(None) == "00:00:00,000"   # W807 tolerance preserved
+    assert _seconds_to_srt_timestamp(None) == "00:00:00,000"   # tolerance preserved
     assert _seconds_to_srt_timestamp(-1.0) == "00:00:00,000"   # clamped at 0
     assert _seconds_to_vtt_timestamp("bad") == "00:00:00.000"

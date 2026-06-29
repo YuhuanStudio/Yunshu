@@ -1,4 +1,4 @@
-# Prompt-caching APIs — the three vendor paradigms (Wave 613m)
+# Prompt-caching APIs — the three vendor paradigms
 
 There are three distinct ways the major API vendors expose prompt caching. Yunshu
 now implements all three on top of the same underlying KV machinery (the 4-tier
@@ -55,7 +55,7 @@ Response usage splits the prompt into written-vs-read:
 - **Verified live:** `cache_read_input_tokens` populated on a repeat with the same
   `cache_control` block.
 
-## 3. Google Gemini — explicit named context cache (NEW, Wave 613m)
+## 3. Google Gemini — explicit named context cache (NEW)
 
 The client explicitly **WRITES** a cache object and **READS** it by reference.
 

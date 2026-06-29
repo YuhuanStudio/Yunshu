@@ -1,9 +1,9 @@
 """47 fix verification tests — 24 tests, no GPU needed.
 
-W44: AutoTuner profiler, Scheduler shutdown, MemoryAwareScheduler lifecycle, StepMetrics, Any import
-W45: TTS params, audio format, Anthropic top_k/thinking_budget, Responses API, MCP signature, Models timestamp
-W46: output_parser, model optimization, KV lifecycle admit/release, MemoryAwareScheduler model config
-W47: TieredKV _extract_kv_for_block, Anthropic cache_creation_input_tokens
+AutoTuner profiler, Scheduler shutdown, MemoryAwareScheduler lifecycle, StepMetrics, Any import
+TTS params, audio format, Anthropic top_k/thinking_budget, Responses API, MCP signature, Models timestamp
+output_parser, model optimization, KV lifecycle admit/release, MemoryAwareScheduler model config
+TieredKV _extract_kv_for_block, Anthropic cache_creation_input_tokens
 """
 from unittest.mock import MagicMock, patch
 

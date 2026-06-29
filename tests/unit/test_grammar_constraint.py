@@ -116,7 +116,7 @@ class TestRegexConstraint:
         # COMPLETE valid match that is still extendable, so is_done stays False.
         # EOS MUST be in the allow-set at such a state, otherwise the model is
         # forced to keep emitting matching chars until max_tokens (runaway, the
-        # same class as the JSON-number W831/W912 bug).
+        # same class as the JSON-number bug).
         tok = FakeTokenizer()  # eos id == 0
         c = RegexConstraint(r"\d+")
         c.advance("5")  # "5" fully matches \d+ but can be extended

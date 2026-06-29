@@ -2,7 +2,7 @@
 EngineCoreConfig.completion_batch_size, but the scheduler reads its OWN
 SchedulerConfig copy (copied by value at init). So a tuned value never reached the
 scheduler's admission cap (_effective_max_seqs) or spec-slot — adaptive batching
-(incl. the W928 ratchet) was a no-op for admission, and the token/spec budgets (which
+(incl. the ratchet) was a no-op for admission, and the token/spec budgets (which
 DO read EngineCoreConfig) silently drifted away from the frozen admission width.
 
 _set_completion_batch_size now writes BOTH configs so they stay consistent.
@@ -46,9 +46,8 @@ def test_missing_scheduler_is_safe():
     assert e.config.completion_batch_size == 5
 
 
-def test_w1028_spec_aware_scheduler_max_num_seqs_synced():
-    # the spec-aware scheduler snapshots its max_num_seqs at init as the W853
-    # effective cap; a tuned completion_batch_size must re-sync it too, or the spec slot
+def test_spec_aware_scheduler_max_num_seqs_synced():
+    # the spec-aware scheduler snapshots its max_num_seqs at init as the     # effective cap; a tuned completion_batch_size must re-sync it too, or the spec slot
     # budget drifts from the real decode width.
     e = _engine()
     e.scheduler.config.max_num_seqs = 256
@@ -57,7 +56,7 @@ def test_w1028_spec_aware_scheduler_max_num_seqs_synced():
     assert e.scheduler._spec_aware_scheduler.max_num_seqs == 8   # min(256, 8)
 
 
-def test_w1028_no_spec_scheduler_is_safe():
+def test_no_spec_scheduler_is_safe():
     e = _engine()
     e.scheduler._spec_aware_scheduler = None     # n-gram-only / spec disabled
     e._set_completion_batch_size(4)              # must not raise

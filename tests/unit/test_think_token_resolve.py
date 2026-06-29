@@ -5,7 +5,7 @@ Qwen3/Qwen3.5/DeepSeek-R1 the bare form tokenizes to TWO tokens (e.g. Qwen3.5 `<
 [510, 26003]) while the model emits the SINGLE special token `</think>` (with bracket, e.g.
 248069). So the `len == 1` guard failed → think_end_token=None → the streaming reasoning
 state machine never engaged → the ENTIRE chain-of-thought (plus literal markup) leaked into
-delta.content with reasoning_tokens=0, defeating the W758/W832 streaming fixes on the
+delta.content with reasoning_tokens=0, defeating the streaming fixes on the
 DEFAULT path. _resolve_think_token_ids encodes the BRACKETED form with
 add_special_tokens=False, and the fix is swept to all 8 think-token call sites.
 """

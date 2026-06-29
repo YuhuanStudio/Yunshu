@@ -55,7 +55,7 @@ def test_spec_aware_scheduler_uses_effective_cap():
 
 def test_spec_aware_scheduler_keeps_effective_cap_after_deep_reset():
     # deep_reset re-created the spec scheduler with the BARE max_num_seqs
-    # (256), dropping the W853 effective cap → compute_spec_budget over-admitted up to
+    # (256), dropping the effective cap → compute_spec_budget over-admitted up to
     # 256 after any fail-recovery / model-reload reset while the BatchGenerator only
     # decodes completion_batch_size. The cap must survive a deep_reset.
     s = _make_scheduler(max_num_seqs=256, completion_batch_size=32)

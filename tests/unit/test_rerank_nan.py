@@ -10,7 +10,7 @@ import pathlib
 
 
 def test_nan_coerced_doc_sorts_last_not_corrupt():
-    # Reproduce the rerank scored-list sort with the W812 sanitization.
+    # Reproduce the rerank scored-list sort with the sanitization.
     raw = [(0, float("nan")), (1, 0.9), (2, 0.7), (3, float("inf")), (4, 0.5)]
     scored = [(i, (0.0 if not math.isfinite(r) else r)) for i, r in raw]
     scored.sort(key=lambda x: x[1], reverse=True)

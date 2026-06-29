@@ -37,7 +37,7 @@ async def extract_text_from_image(
     suffix = raw_suffix if raw_suffix in _IMAGE_EXTENSIONS else ".png"
 
     # wire request-tracker registration + client-disconnect cancellation
-    # (the W758/W845 cancel keystone, un-propagated to OCR — audio/images already had it;
+    # (the cancel keystone, un-propagated to OCR — audio/images already had it;
     # OCR + video were the missed single-shot-media siblings). The native OCR path uses a
     # blocking mlx_vlm.generate (bounded by max_tokens, not interruptible mid-decode), but
     # registering frees the tracker slot and returns the handler promptly on disconnect
@@ -71,7 +71,7 @@ async def extract_text_from_image(
             raise HTTPException(status_code=503, detail="Model manager not initialized")
 
         # select by model_id (was: first loaded OCREngine, ignoring `model` —
-        # the W801/W818 wrong-model keystone, unswept for OCR). Fall back to first-of-type
+        # the wrong-model keystone, unswept for OCR). Fall back to first-of-type
         # only when `model` is empty (legacy default).
         ocr_engine = None
         ocr_model_id = None
@@ -103,7 +103,7 @@ async def extract_text_from_image(
             # SECURITY: re-check the RESOLVED model against the key's scope.
             # _check_model_access(model) above is a no-op when model is empty (the
             # default), so without this a model-scoped key could OCR through a model it
-            # cannot access simply by omitting `model`. Mirror W801/W818 isolation.
+            # cannot access simply by omitting `model`. Mirror isolation.
             _check_model_access(request, ocr_model_id)
             # disconnect guard frees the handler promptly on client disconnect
             # (the native blocking generate still runs to completion on the executor, but
@@ -268,7 +268,7 @@ async def extract_text_from_image(
             "text": text.strip(),
             # a VLM emits no confidence score — the hardcoded 1.0 was a
             # fabricated "measurement". Report None (honest), matching the native
-            # OCR-engine path's W678 fix (ocr_engine.py:201).
+            # OCR-engine path's fix (ocr_engine.py:201).
             "confidence": None,
             "language": language,
             "task": task,

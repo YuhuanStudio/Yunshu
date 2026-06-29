@@ -34,7 +34,7 @@ DRAFTER = "/Volumes/P5Plus/models/gemma-4-E4B-it-assistant-bf16"
 def _greedy(tm, lm, prompt_ids, n):
     """Sequential greedy. Returns (tokens, top2_logprob_gaps) — the gap lets us
     machine-check that any spec divergence is a benign near-tie, not a real
-    acceptance bug (Wave 658)."""
+    acceptance bug."""
     cache = make_prompt_cache_for(tm)
     h = tm(mx.array(prompt_ids)[None], cache=cache)
     out, margins = [], []
@@ -108,7 +108,7 @@ def main() -> int:
     print(f"spec(k={k}): {len(spec_out)} tok in {t_spec:.2f}s  ({len(spec_out) / t_spec:.1f} tok/s)")
     print(f"speedup: {speedup:.2f}x")
     print(f"greedy-prefix match: {prefix}/{n} tokens exact before first divergence")
-    # Correctness invariant (Wave 658) — MACHINE-CHECKED, not asserted as "noise":
+    # Correctness invariant — MACHINE-CHECKED, not asserted as "noise":
     # spec output is self-consistent with the verify pass by construction (each token
     # is the target's argmax there). A divergence from SEQUENTIAL greedy is allowed
     # ONLY at a near-tie — the verify forward batches 1+k positions, and fp

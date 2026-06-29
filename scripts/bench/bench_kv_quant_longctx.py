@@ -1,4 +1,4 @@
-"""Wave 746 — quantify the W740 length-gated KV-quant decode speedup at long
+"""— quantify the length-gated KV-quant decode speedup at long
 context (Qwen2.5-0.5B-4bit). Compares decode tok/s with the auto-gate ON vs OFF
 for a long prompt that exceeds the threshold.
 
@@ -16,7 +16,7 @@ GEN_TOKENS = 128
 
 async def _run(auto_quant: str) -> dict:
     os.environ["YUNSHU_KV_QUANT_AUTO"] = auto_quant
-    # W747: gate is KV-BYTES based; force ON by min_bytes=0 (quantize regardless of size).
+    # gate is KV-BYTES based; force ON by min_bytes=0 (quantize regardless of size).
     os.environ["YUNSHU_KV_QUANT_AUTO_MIN_BYTES"] = "0" if auto_quant == "1" else str(10**18)
     from yunshu_engine.batched_engine import BatchedEngine
     eng = BatchedEngine(MODEL)

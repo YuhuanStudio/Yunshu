@@ -1,4 +1,4 @@
-"""/747: KV-quant auto-gate. W747 corrected the gate from token-count
+"""/747: KV-quant auto-gate. corrected the gate from token-count
 to estimated KV BYTES after a real-model benchmark showed token-count was
 net-negative for small models (small KV doesn't dominate bandwidth)."""
 from __future__ import annotations
@@ -39,7 +39,7 @@ def test_opt_out(monkeypatch):
 
 
 def test_small_model_long_ctx_NOT_quantized(monkeypatch):
-    """W747: a 0.5B-like model (24L, 2 kv-heads, 64 head_dim) at 9k tokens has
+    """a 0.5B-like model (24L, 2 kv-heads, 64 head_dim) at 9k tokens has
     ~108MB KV << 2GB → must NOT quantize (benchmark showed net-negative)."""
     monkeypatch.delenv("YUNSHU_KV_QUANT_AUTO", raising=False)
     monkeypatch.delenv("YUNSHU_KV_QUANT_AUTO_MIN_BYTES", raising=False)

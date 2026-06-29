@@ -5,7 +5,7 @@ The OpenAI Responses store (`store: true`) keeps responses for retrieval via
 GET /v1/responses/{id}, cancellation, and previous_response_id chaining. Before
 the store recorded NO owner, so any authenticated tenant could read,
 cancel, or chain off another tenant's stored response by id (the SSE stream
-leaks the resp- id). Every other per-handle router enforces ownership (W675);
+leaks the resp- id). Every other per-handle router enforces ownership;
 Responses was missed.
 """
 from __future__ import annotations
@@ -57,7 +57,7 @@ def test_owns_stored_admin_bypass():
 
 
 def test_owns_stored_unowned_is_permissive():
-    # Legacy entries with no _owner stay readable (don't break pre-W714 stores).
+    # Legacy entries with no _owner stay readable (don't break pre-stores).
     assert R._owns_stored(_req(actor="bob"), {"id": "x"}) is True
 
 

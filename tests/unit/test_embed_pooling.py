@@ -4,7 +4,7 @@ _resolve_embedding_pooling() looked for sentence-transformers' 1_Pooling/config.
 it onto the RAW model_name. For the common HF-repo-id deployment (e.g. "BAAI/bge-base-en-v1.5")
 that produced "BAAI/bge-base-en-v1.5/1_Pooling/config.json" — a relative path that never exists
 on disk → isfile False → every repo-id-served model fell through to MEAN. CLS-trained BGE models
-were silently MEAN-pooled (wrong embedding space, degraded retrieval) — the exact bug W666 wrote
+were silently MEAN-pooled (wrong embedding space, degraded retrieval) — the exact bug wrote
 the function to fix, defeated for anything but an explicit local dir. Fix: resolve the repo id to
 its local snapshot (hf_repo_to_path) before the join, mirroring the engine's own load path.
 """

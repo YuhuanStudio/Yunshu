@@ -1,7 +1,7 @@
 """Structured-output (json_schema) correctness gate.
 
 Verifies the engine actually ENFORCES a json_schema response_format — guards the
-Wave 586 CRITICAL regression where json_schema was unenforced (it only matched the
+CRITICAL regression where json_schema was unenforced (it only matched the
 first token, so free-form prose slipped through). PASS iff every constrained
 generation parses as JSON and satisfies the required keys AND their types, across
 several prompts (including adversarial ones that invite prose).
@@ -75,8 +75,7 @@ async def main() -> int:
             if not ok:
                 fails += 1
         # Strict mode (additionalProperties:false): a prompt that strongly invites
-        # extra keys must still yield ONLY the declared keys. Guards the Wave 613at
-        # fix (inside-string tokens slipping a comma + extra key past strict masking).
+        # extra keys must still yield ONLY the declared keys. Guards the         # fix (inside-string tokens slipping a comma + extra key past strict masking).
         strict = dict(SCHEMA, additionalProperties=False)
         for j, prompt in enumerate([
             "Make a software engineer record in Berlin with a job title and salary.",
@@ -96,7 +95,7 @@ async def main() -> int:
             if not ok:
                 fails += 1
         # enum/const: the value must be one of the declared options (guards the
-        # Wave 613au fix — first-char-only enforcement let off-option strings through).
+        # fix — first-char-only enforcement let off-option strings through).
         enum_schema = {"type": "object",
                        "properties": {"status": {"enum": ["active", "inactive", "pending"]}},
                        "required": ["status"]}

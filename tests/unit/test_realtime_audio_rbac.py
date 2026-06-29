@@ -1,9 +1,9 @@
 """(realtime hunt): RBAC model-access was enforced for the TEXT engine in
-_resolve_engine (W762) but BYPASSED on the realtime ASR/TTS audio paths — both
+_resolve_engine but BYPASSED on the realtime ASR/TTS audio paths — both
 _synthesize_audio_response and _handle_input_audio_buffer_commit iterated
 manager.list_entries() and grabbed the first synthesize/transcribe engine with NO key
 check. A key scoped away from an audio model could still drive it over the socket (the
-W762/W785/W801 model-isolation keystone, un-propagated to audio).
+model-isolation keystone, un-propagated to audio).
 
 Fix: a shared _key_allows(model_id) gate, applied at all three engine-selection sites.
 """

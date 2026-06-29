@@ -205,7 +205,7 @@ def _sections():
          [PY, "scripts/verify/verify_sampling_constraints.py"], {}, _p_passfail_skip),
         ("concurrent requests (serialization, no cross-talk)", "smoke", True,
          [PY, "scripts/verify/verify_concurrent.py"], {}, _p_passfail_skip),
-        ("priority/FAIR scheduling (W683: policy plumbed + ordering)", "smoke", True,
+        ("priority/FAIR scheduling (policy plumbed + ordering)", "smoke", True,
          [PY, "scripts/verify/verify_priority_scheduling.py"], {}, _p_passfail_skip),
         ("KV-cache quant round-trip (4/8-bit bounded + compression)", "smoke", True,
          [PY, "scripts/verify/verify_kv_quant.py"], {}, _p_passfail_skip),
@@ -226,7 +226,7 @@ def _sections():
           "models/Qwen2.5-3B-Instruct-bf16"], {}, _p_quality),
         ("spec-decode lossless (gemma-4)", "standard", True,
          [PY, "scripts/validate/validate_gemma4_spec_decode.py"], {"PYTHONPATH": "python"}, _p_passfail_skip),
-        ("n-gram spec (W686: hybrid guard==greedy + dense non-degenerate)", "smoke", True,
+        ("n-gram spec (hybrid guard==greedy + dense non-degenerate)", "smoke", True,
          [PY, "scripts/verify/verify_ngram_spec.py"], {}, _p_passfail_skip),
         ("ASR transcription quality", "standard", True,
          [PY, "scripts/verify/verify_asr_quality.py"], {}, _p_passfail_skip),
@@ -236,7 +236,7 @@ def _sections():
          [PY, "scripts/verify/verify_tts_asr_roundtrip.py"], {}, _p_passfail_skip),
         ("VLM OCR (discriminative image reading)", "standard", True,
          [PY, "scripts/verify/verify_vlm_ocr.py"], {}, _p_passfail_skip),
-        ("VLM vision/image-reuse cache (W682: wrapper + ~6x repeat-image)", "standard", True,
+        ("VLM vision/image-reuse cache (wrapper + ~6x repeat-image)", "standard", True,
          [PY, "scripts/verify/verify_vlm_vision_cache.py"], {"PYTHONPATH": VLM_PP}, _p_passfail_skip),
         ("image t2i (prompt drives pixels, discriminative)", "standard", True,
          [PY, "scripts/verify/verify_image_t2i.py"], {}, _p_passfail_skip),
@@ -261,7 +261,7 @@ def _sections():
           "YUNSHU_BENCH_MODEL": "./models/Qwen2.5-3B-Instruct-bf16"}, _p_metrics("REALISTIC")),
         ("MTP spec decode (Qwen3.6-27B production path, coherent)", "full", True,
          [PY, "scripts/verify/verify_mtp_spec.py"], {"YUNSHU_MTP": "1", "PYTHONPATH": VLM_PP}, _p_passfail_skip),
-        # Wave 688 (methodology): the PRIMARY cross-framework comparison is ALL-EXTERNAL
+        # (methodology): the PRIMARY cross-framework comparison is ALL-EXTERNAL
         # (server bench below) — only real HTTP servers are a fair, production-truthful
         # measure. This in-process bench is the OTHER half: EVERY framework measured
         # internally too, so the report computes each one's internal-vs-external parity
@@ -350,7 +350,7 @@ def main():
         # the 30B Omni), so a single short cooldown isn't always enough — retry up to
         # twice with an ESCALATING cooldown (30s, then 75s) before flipping GO/NO-GO.
         _COOLDOWNS = [30, 75]
-        # Wave 687: bound each section's wall time so one pathological metric bench
+        # bound each section's wall time so one pathological metric bench
         # can't make `--tier full` run for hours. GATE sections (correctness) get a
         # generous budget; METRIC benches (gate=False, e.g. framework-speed which
         # launches each framework's server across a config matrix) get a tight one
@@ -375,7 +375,7 @@ def main():
         _sec_timeout = 9000 if gate else (7200 if _heavy_metric else 1200)
         while True:
             attempts += 1
-            # Wave 687: run the section in its OWN process group and, on timeout,
+            # run the section in its OWN process group and, on timeout,
             # kill the WHOLE TREE. The bench sections (framework-speed,
             # comprehensive) spawn grandchildren (_fw_*, _bench_*); plain
             # subprocess.run(timeout=) only SIGKILLs the direct child, so the
@@ -480,7 +480,7 @@ full-precision KV is large on disk — still positive, just not gated.
 have no `to_quantized`, so WARM stores them unquantized — same speed as HOT, no 3.56×
 RAM saving. WARM is only worth it for full-attention models.
 
-**Sliding-window models (gemma-4) write NOTHING to the SSD tier (by design, Wave 688).**
+**Sliding-window models (gemma-4) write NOTHING to the SSD tier (by design).**
 gemma-4 is sliding-window (RotatingKVCache on 35/42 layers) so it's non-trimmable →
 `_no_trim_mode`. Previously it fell into the whole-snapshot *hybrid* SSD path (built
 for Qwen3.5 linear-attn), spilling its entire 42-layer cache per entry — 923 MB that
@@ -506,7 +506,7 @@ GPU thermal state — is `scripts/bench/bench_serve.py`, tracked in the `serve/`
 `docs/reports/PERF_TREND.md`. Fair-state finding: yunshu leads concurrent throughput at all N
 (3B sys@32 137 > mlx-lm 126 > oMLX 96); oMLX does not scale concurrency.
 
-**Absolute-throughput thermal note (corrected Wave 657).** This is a **30-core M3 Max
+**Absolute-throughput thermal note (corrected).** This is a **30-core M3 Max
 (36GB)**, whose real MLX fp16 ceiling is ~9.5 TFLOP/s (8192³, plateaus N=4096→8192 — the
 genuine peak, NOT the ~21 theoretical and certainly not the 40-core's ~28). Verified
 cold: raw mlx-lm decode is FLAT at ~41 tok/s across 8 back-to-back iterations (0% decay)
@@ -642,7 +642,7 @@ def _write_report(tier, results, go):
 
     lines += ["", "## Known limitations & how to read the numbers", "", _KNOWN_LIMITATIONS.strip()]
 
-    # Wave 688 docs reorg: machine-generated reports live under docs/reports/.
+    # docs reorg: machine-generated reports live under docs/reports/.
     _rep_dir = os.path.join(REPO, "docs", "reports")
     os.makedirs(_rep_dir, exist_ok=True)
     path = os.path.join(_rep_dir, "REGRESSION_REPORT.md")

@@ -1335,7 +1335,7 @@ class KVTransferServer:
         # method nor a usable _kv_layers target), so received blocks landed in a hollow
         # consumer → "loaded 0 of N blocks" → the cross-node KV was discarded. The engine
         # registers a consumer (blocks, model_name) -> loaded_count that reconstructs the KV
-        # into ITS prompt-cache store (using load_kv_blocks_into_cache, the W970-proven
+        # into ITS prompt-cache store (using load_kv_blocks_into_cache, the proven
         # primitive), keeping this server engine-agnostic.
         self._block_consumer: Any | None = None
 
@@ -1506,7 +1506,7 @@ class KVTransferServer:
             blocks_loaded = 0
             _load_attempted = False
             # prefer the decode-side consumer (reconstructs into the engine's
-            # reusable cache via the W970-proven load primitive) — the mesh server itself
+            # reusable cache via the proven load primitive) — the mesh server itself
             # holds no engine reference.
             if self._block_consumer is not None:
                 _load_attempted = True

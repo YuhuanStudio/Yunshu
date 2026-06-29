@@ -1,4 +1,4 @@
-"""the W833 KV-prefix-cache LoRA bypass (the cache is keyed on token ids + model
+"""the KV-prefix-cache LoRA bypass (the cache is keyed on token ids + model
 name but NOT the active adapter, so reusing/storing KV under a different adapter serves the
 wrong adapter's KV) was wired into the two LIVE fast paths (_generate_fast / _stream_fast)
 but NOT into _generate_ngram_spec — the un-propagated keystone sibling found by a

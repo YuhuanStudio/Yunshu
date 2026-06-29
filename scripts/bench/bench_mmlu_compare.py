@@ -13,7 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path("/Users/yuhuan/Documents/Yunshu")
-REF_DIR = ROOT / "reference"  # Wave 449 fix: was ROOT.parent (wrong dir)
+REF_DIR = ROOT / "reference"  # fix: was ROOT.parent (wrong dir)
 MODEL_PATH = str(ROOT / "models" / "Qwen3.5-9B-MLX-bf16")
 LOG = ROOT / "bench" / "results" / "framework_compare.log"
 

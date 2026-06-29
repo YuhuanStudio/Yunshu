@@ -5,11 +5,11 @@ For a raw /v1/completions string, _encode_prompt uses add_special_tokens=True, s
 encodes the prompt as input_ids=[BOS, t1, t2, ...]. _compute_prompt_logprobs_sync then returns
 a vLLM-shaped list aligned to input_ids: [None(BOS slot), entry(t1|BOS), entry(t2), ...] —
 position 0 is the BOS (null, no context) and the first REAL token t1 already carries a logprob
-(given BOS). The W866 echo-prepend mapped position 0 to a "" head token, so it emitted
+(given BOS). The echo-prepend mapped position 0 to a "" head token, so it emitted
 tokens=["", "Hello", ...] with token_logprobs=[null, <real>, ...]: a phantom empty token
 carrying the null, and the first real token exposing a logprob OpenAI assigns null.
 
-The default Qwen2.5 model has no BOS, so the W866 test never saw this. W1042 collapses the BOS
+The default Qwen2.5 model has no BOS, so the test never saw this. collapses the BOS
 slot when _head=="" (tail already covers the whole prompt → position 0 has no visible text),
 listing only real tokens and nulling the first real token's logprob — matching OpenAI and the
 no-BOS path exactly.

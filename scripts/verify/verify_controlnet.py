@@ -4,7 +4,7 @@ Discriminative test (a similar control+prompt pair can pass by luck — this one
 can't): make a control map from the edges of a TALL BOTTLE, then generate with the
 prompt "a red apple". If ControlNet imposes structure, the output follows the bottle
 silhouette (tall), and its edges correlate with the control map MORE than a free
-"red apple" (round) does. Guards the Wave 613an fix (refiner-hint injection + pre-
+"red apple" (round) does. Guards the fix (refiner-hint injection + pre-
 noise_refiner ordering) — a regression makes control a no-op and fails this.
 
 Run: PYTHONPATH=. uv run python scripts/verify_controlnet.py

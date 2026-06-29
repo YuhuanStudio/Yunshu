@@ -4,8 +4,7 @@ with register_model's existing is_loading guard.
 Deleting an entry mid-load orphans the in-flight loader's local `entry` reference:
 the load completes outside `_entries`, so the memory counter is credited for a model
 that no longer exists (permanent drift → eventually blocks all loads), the loaded
-engine is never reachable by shutdown()/eviction (engine.stop() never runs, the W957
-leak class), and the finally's `_loading_events.pop` can pop a re-registered model's
+engine is never reachable by shutdown()/eviction (engine.stop() never runs, the leak class), and the finally's `_loading_events.pop` can pop a re-registered model's
 NEW event so its fresh waiters hang. The is_loaded guard alone left this window open.
 """
 from __future__ import annotations

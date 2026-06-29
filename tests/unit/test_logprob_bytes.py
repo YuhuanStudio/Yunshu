@@ -10,7 +10,7 @@ from yunshu_engine.text_utils import _GPT2_BYTE_DECODER, token_id_to_bytes
 class _ByteLevelBackend:
     """Minimal stand-in for a fast tokenizer's backend whose decoder is ByteLevel —
     this is what real byte-level BPE tokenizers (Qwen/Llama-3/GPT) expose and what
-    _is_byte_level_tokenizer (W1004) keys on to enable raw-byte recovery."""
+    _is_byte_level_tokenizer keys on to enable raw-byte recovery."""
     class _Decoder:
         def __repr__(self):
             return "ByteLevel(add_prefix_space=False, trim_offsets=True, use_regex=True)"
@@ -22,7 +22,7 @@ class _FakeGPT2Tokenizer:
     """Mimics a byte-level BPE tokenizer: convert_ids_to_tokens returns GPT-2 surface
     forms (raw bytes mapped through bytes_to_unicode); decode([fragment]) returns U+FFFD
     for an incomplete multi-byte sequence (like real HF tokenizers). It exposes a
-    ByteLevel backend_tokenizer so _is_byte_level_tokenizer (W1004) recognises it as
+    ByteLevel backend_tokenizer so _is_byte_level_tokenizer recognises it as
     byte-level — exactly as a real Qwen/GPT fast tokenizer does."""
     backend_tokenizer = _ByteLevelBackend()
 

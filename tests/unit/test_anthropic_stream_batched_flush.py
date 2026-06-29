@@ -1,7 +1,7 @@
 """(HIGH): the Anthropic /v1/messages STREAMING batched path
 (is_batched=True, opt-in YUNSHU_ENGINE_LOOP=1) never called ToolCallStreamer.flush().
 
-In BUFFER_ALL mode (W920 — Mistral [TOOL_CALLS], Qwen, GLM block-form) and for tool calls
+In BUFFER_ALL mode (— Mistral [TOOL_CALLS], Qwen, GLM block-form) and for tool calls
 truncated at max_tokens, the streamer HOLDS the whole tool-call buffer during process_token
 (yields nothing) and only parses + emits the calls at flush(). The flush loop was nested
 inside the non-batched `else:` branch (indent 12), so the batched branch fell straight
@@ -10,7 +10,7 @@ all, _has_tool_calls stayed False, and stop_reason was end_turn instead of tool_
 agent loop breaks). Fix: dedent the flush block to run after BOTH branches.
 
 The streaming generator is a deeply nested closure, so this is verified structurally
-(indent of the flush guard) plus the existing W896 non-batched test still passing.
+(indent of the flush guard) plus the existing non-batched test still passing.
 """
 from __future__ import annotations
 

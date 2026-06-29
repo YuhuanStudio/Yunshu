@@ -52,7 +52,7 @@ class TestSessionConfig:
         assert "modalities" in d
         assert "temperature" in d
 
-    def test_w1015_non_dict_turn_detection_rejected(self):
+    def test_non_dict_turn_detection_rejected(self):
         # a non-dict turn_detection (bare string / list) must be REJECTED,
         # not stored verbatim — otherwise the next input_audio_buffer.append does
         # turn_detection.get("type") on a str → AttributeError → 500 on every append.
@@ -64,14 +64,14 @@ class TestSessionConfig:
             assert config.turn_detection == _default          # unchanged
             assert isinstance(config.turn_detection, dict)     # never a str/list
 
-    def test_w1015_null_turn_detection_disables_vad(self):
+    def test_null_turn_detection_disables_vad(self):
         # null is the documented way to disable VAD — must be accepted.
         config = SessionConfig()
         changed = config.update({"turn_detection": None})
         assert "turn_detection" in changed
         assert config.turn_detection is None
 
-    def test_w1015_valid_dict_turn_detection_accepted(self):
+    def test_valid_dict_turn_detection_accepted(self):
         config = SessionConfig()
         changed = config.update({"turn_detection": {"type": "server_vad", "threshold": 0.7}})
         assert "turn_detection" in changed

@@ -4,7 +4,7 @@ The kept latents end at the clean VAE encoding (final sigma_next=0), so decode(l
 returns decode(encode(source)) in the kept region — a LOSSY VAE round-trip that softens /
 colour-shifts / detail-degrades the WHOLE untouched area on EVERY inpaint, contradicting the
 router + _load_mask "unmasked region preserved from the original" contract. Real inpainting
-composites final = generated*mask + source*(1-mask) in PIXEL space after decode. W1048 adds
+composites final = generated*mask + source*(1-mask) in PIXEL space after decode. adds
 that paste-back via _composite_inpaint, threaded with a pixel-resolution mask.
 """
 from __future__ import annotations

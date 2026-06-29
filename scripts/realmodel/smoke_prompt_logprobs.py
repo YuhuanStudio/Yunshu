@@ -1,8 +1,8 @@
-"""Wave 737 real-model smoke: prompt_logprobs (eval/perplexity) on Qwen2.5-0.5B.
+"""real-model smoke: prompt_logprobs (eval/perplexity) on Qwen2.5-0.5B.
 
 Verifies coherent text scores a higher (less negative) avg logprob than
 gibberish, element 0 is None, and top_logprobs is populated.
-Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_prompt_logprobs_w737.py
+Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_prompt_logprobs.py
 """
 import asyncio
 MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"

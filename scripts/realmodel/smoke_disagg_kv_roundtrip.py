@@ -1,4 +1,4 @@
-"""W970 — prove disaggregated KV reuse survives SERIALIZATION (the cross-node primitive).
+"""— prove disaggregated KV reuse survives SERIALIZATION (the cross-node primitive).
 
 The disagg /prefill→/decode split only delivers value if the prefilled KV cache can cross a
 network and still be reused on the decode node WITHOUT re-prefilling. The audit found the HTTP
@@ -11,7 +11,7 @@ If this holds, serialized KV is genuinely reusable and lossless (the cross-node 
 real; the rest is plumbing). If it diverges, THAT is the real bug. Runs single-process with a
 tiny real model — loopback, no second machine needed.
 
-Run:  PYTHONPATH=. uv run python scripts/realmodel/smoke_disagg_kv_roundtrip_w970.py
+Run:  PYTHONPATH=. uv run python scripts/realmodel/smoke_disagg_kv_roundtrip.py
 """
 import asyncio
 
@@ -74,7 +74,7 @@ async def main():
 
     # ── END-TO-END through the ACTUAL prefill WIRE (_serialize/_deserialize_prefill_result) ──
     # This is exactly what crosses the network between a remote prefill node and the decode
-    # node. Prove the wire carries reusable KV (the W970 disagg fix), not the old no-op.
+    # node. Prove the wire carries reusable KV (the disagg fix), not the old no-op.
     from yunshu_engine.external_prefill import (
         PrefillResult, _serialize_prefill_result, _deserialize_prefill_result,
     )

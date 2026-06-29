@@ -1,4 +1,4 @@
-"""engine-level response cache (batched_engine) missed the W666 hardening.
+"""engine-level response cache (batched_engine) missed the hardening.
 
 The HTTP middleware cache was hardened (auth-namespaced + skips non-deterministic), but
 the SEPARATE engine-level cache inside BatchedEngine.generate() — consulted on every middleware

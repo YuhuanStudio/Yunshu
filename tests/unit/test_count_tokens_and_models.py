@@ -1,6 +1,6 @@
 """+ 879 (parallel hunt round).
 
-W878 (HIGH): Anthropic /v1/messages/count_tokens dropped image tokens — a text tokenizer
+(HIGH): Anthropic /v1/messages/count_tokens dropped image tokens — a text tokenizer
 renders an image_url block to ~0 tokens, but the real /messages path routes to the VLM
 engine and bills _estimate_image_tokens() per image, so count_tokens grossly undercounted
 (defeating client budgeting). Plus a MEDIUM: the chat-template fallback did

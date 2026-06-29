@@ -121,7 +121,7 @@ class TestTeaCacheHook:
         result = hook.should_compute(inp2)
         assert result is True, "Very different inputs should recompute"
 
-    def test_w1024_cnt_increments_on_cache_hit_path(self):
+    def test_cnt_increments_on_cache_hit_path(self):
         """cnt must advance on BOTH the slow (miss) and fast (hit) paths,
         so it is a true step index (the cache-hit early return used to skip it → cnt
         counted only misses)."""

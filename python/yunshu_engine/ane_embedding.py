@@ -24,7 +24,7 @@ Graceful degradation:
 References:
   - Core ML Tools: https://coremltools.readme.io/
   - Apple Neural Engine: https://developer.apple.com/documentation/coreml
-  - Phase 0 platform validation (W0-W2)
+  - Phase 0 platform validation
 """
 
 import logging

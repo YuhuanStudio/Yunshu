@@ -36,7 +36,7 @@ import subprocess
 import sys
 import time
 
-# scripts/bench/bench_serve.py → repo root is THREE levels up (Wave 688 reorg).
+# scripts/bench/bench_serve.py → repo root is THREE levels up (reorg).
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # perf_history lives at scripts/ (one level up); make it importable.
 sys.path.insert(0, os.path.join(REPO, "scripts"))
@@ -80,7 +80,7 @@ def _gpu_tflops(seconds: float = 2.5) -> float:
 
     A self-calibrating thermal-state signal that needs no temp sensor / sudo.
     NOTE: this is a 30-core M3 Max (36GB). Its COOL MLX fp16 ceiling for 8192³ is
-    ~9.5 TFLOP/s — verified the GENUINE peak (Wave 657): it plateaus N=4096→8192 (so
+    ~9.5 TFLOP/s — verified the GENUINE peak: it plateaus N=4096→8192 (so
     not a cache wall) and holds steady with no decay; the ~21 'theoretical' fp16 is
     not MLX-achievable here. A run reading well below ~9.5 indicates thermal throttle
     from sustained CONCURRENT load (multiple servers + warmup matmuls at once); a
@@ -178,7 +178,7 @@ def _launch_spec(fw: str, model_path: str, port: int):
         # server (vllm_mlx.cli serve <model> --host --port; auth disabled by
         # default). No __main__/console-script in our venv, so drive cli.main()
         # with a constructed argv. Importable via PYTHONPATH. The all-external
-        # comparison (Wave 688) keeps vllm-mlx fair by serving it like the rest.
+        # comparison keeps vllm-mlx fair by serving it like the rest.
         vdir = os.path.join(REPO, "reference", "vllm-mlx")
         if not os.path.isdir(vdir):
             return None

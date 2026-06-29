@@ -1,5 +1,4 @@
-"""/v1/video/generations had NO client-disconnect cancellation — the W758/W845
-cancel keystone (audio/images had it, OCR closed in W859), and video was the last
+"""/v1/video/generations had NO client-disconnect cancellation — the cancel keystone (audio/images had it, OCR closed), and video was the last
 single-shot-media sibling (grep: video.py 0 cancel refs). Video generation is expensive
 (frames × diffusion steps), so an abandoned request kept the GPU busy to completion.
 

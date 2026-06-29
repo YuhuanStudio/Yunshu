@@ -4,11 +4,11 @@ model-load await window.
 create_response resolves/loads the model (`await get_engine_for_model(...)`) BEFORE it
 registers the request with the request_tracker. A POST /v1/responses/{id}/cancel during
 that window finds no tracker entry (tracker.cancel→False) and the cancel handler persists
-status="cancelled" directly (the W947 branch, for status in queued|in_progress). But the
+status="cancelled" directly (the branch, for status in queued|in_progress). But the
 request is NOT registered, so _ns_cancel_event is never set → the status map resolved
 "completed" → the terminal store CLOBBERED the cancel marker. The client received a
 cancelled envelope, yet a later GET returned "completed" with full output and the GPU work
-ran to completion. (W947 covered the pure-`queued` window; this is the `in_progress`
+ran to completion. (covered the pure-`queued` window; this is the `in_progress`
 sibling during model load.)
 
 Fix: before the terminal store, re-read and honor a pre-existing terminal "cancelled" — do

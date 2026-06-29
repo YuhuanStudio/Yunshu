@@ -1,4 +1,4 @@
-"""Wave 658: verify the LLM KV prefix cache is FAITHFUL on the production config
+"""verify the LLM KV prefix cache is FAITHFUL on the production config
 for this 30-core M3 Max — i.e. QUANTIZED models (the real lever: 4-bit weights
 decode ~3x faster, see memory hardware_ceiling_m3max30).
 
@@ -15,7 +15,7 @@ reuse changes the attention reduction order by sub-ULP (vLLM/SGLang document the
 So we pass when: warm == cold (byte-lossless), OR the first divergence is a genuine
 near-tie in the COLD distribution (top-2 gap < TIE_GAP) — proving the reused KV is
 numerically faithful and not corrupted (a corrupted KV would shift logits a LOT, not
-tip a tie). Verified live (Wave 658): bf16 byte-lossless; 4-bit flips one exact tie
+tip a tie). Verified live: bf16 byte-lossless; 4-bit flips one exact tie
 (gen-pos 35: cold top-2 both -0.798) into equally-coherent text.
 
 Greedy (temp 0, seed 0). CTX-sharing prompts so the warm run reuses a long prefix.

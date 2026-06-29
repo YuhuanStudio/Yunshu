@@ -1,13 +1,13 @@
 """(HIGH): VLMEngine._format_prompt (the text-only chat path served by a VLM
 model) was a stale clone missing three BatchedEngine chat-template fixes:
 
-1. W821 assistant-prefill: it hardcoded add_generation_prompt=True, so a trailing
+1. assistant-prefill: it hardcoded add_generation_prompt=True, so a trailing
    assistant message (Anthropic/OpenAI prefill) had its turn CLOSED and the model
    restarted the answer instead of continuing the prefilled text.
-2. W666 developer/function role normalization: a `developer` (OpenAI's current system
+2. developer/function role normalization: a `developer` (OpenAI's current system
    alias) or `function` role reached the template as an unknown role → apply_chat_template
    raised → collapsed to the lossy plaintext fallback (chat structure + special tokens lost).
-3. W848 family adapter: no adapt_messages, so a mid-conversation system message raised
+3. family adapter: no adapt_messages, so a mid-conversation system message raised
    ("System message must be at the beginning") → same lossy fallback.
 
 Mirrors BatchedEngine._apply_chat_template.
@@ -44,7 +44,7 @@ def test_developer_role_remapped_to_system():
     assert out == "RENDERED"
     roles = [m["role"] for m in tok.last_clean]
     assert "developer" not in roles
-    assert "system" in roles  # developer → system (W666)
+    assert "system" in roles  # developer → system
 
 
 def test_assistant_prefill_uses_continue_final_message():
@@ -54,7 +54,7 @@ def test_assistant_prefill_uses_continue_final_message():
         {"role": "assistant", "content": "Roses are red,"},
     ])
     assert tok.last_kwargs.get("continue_final_message") is True
-    assert "add_generation_prompt" not in tok.last_kwargs  # turn kept open (W821)
+    assert "add_generation_prompt" not in tok.last_kwargs  # turn kept open
 
 
 def test_normal_trailing_user_uses_add_generation_prompt():
@@ -66,7 +66,7 @@ def test_normal_trailing_user_uses_add_generation_prompt():
 
 def test_tool_calls_only_assistant_is_not_a_prefill():
     # trailing assistant with empty string content (tool_calls-only turn, the canonical
-    # agent-loop shape) is a COMPLETED turn → normal add_generation_prompt (W848).
+    # agent-loop shape) is a COMPLETED turn → normal add_generation_prompt.
     tok = _FakeTok()
     _engine(tok)._format_prompt([
         {"role": "user", "content": "weather?"},
@@ -80,7 +80,7 @@ def test_tool_calls_only_assistant_is_not_a_prefill():
 
 def test_continue_final_message_rejection_retries_without_it():
     # If the template raises ValueError on continue_final_message, retry without it
-    # rather than collapsing to the plaintext fallback (W848).
+    # rather than collapsing to the plaintext fallback.
     class _RejectTok:
         def __init__(self):
             self.calls = []

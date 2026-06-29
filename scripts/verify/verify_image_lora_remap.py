@@ -1,9 +1,9 @@
-"""Wave 729 — verify the W718 image-LoRA key remap against the REAL production
+"""— verify the image-LoRA key remap against the REAL production
 Z-Image LoRA (the product's primary feature).
 
 The ComfyUI/Flux/Z-Image attention output projection is named
 `...attention.to_out.0` (a Sequential whose [0] is the Linear), but our
-_DiTAttention.to_out is a FLAT nn.Linear. Before W718 the un-collapsed `.to_out.0`
+_DiTAttention.to_out is a FLAT nn.Linear. Before the un-collapsed `.to_out.0`
 path made _resolve_lora_module treat the trailing `0` as a list index →
 getattr(linear,"0")=None → the projection was SILENTLY skipped on all 30 DiT
 layers, badly weakening every image LoRA with no error.
@@ -64,7 +64,7 @@ def main() -> int:
         return 1
 
     print(f"PASS: all {len(to_out_raw)} to_out projections remap to a resolvable "
-          f"flat-Linear path (W718).")
+          f"flat-Linear path.")
     return 0
 
 

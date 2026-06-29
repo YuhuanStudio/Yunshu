@@ -1,11 +1,11 @@
 """(MED): realtime never enforced tool_choice — a response.create with
 tool_choice="none" still parsed the model's text for tool calls and emitted function_call
 items, so a client asking for a plain-text turn got a tool call anyway. This is the realtime
-sibling of the anthropic W945 / chat tool_choice enforcement, which realtime lacked.
+sibling of the anthropic / chat tool_choice enforcement, which realtime lacked.
 
 Fix: SessionConfig gains a tool_choice field (so session.update can set a session default),
 and _generate_response snapshots a per-response tool_choice (override → session) and skips
-tool-call parsing/emission when it is "none" (still stripping any stray markup, W942 class).
+tool-call parsing/emission when it is "none" (still stripping any stray markup, class).
 "auto"/"required"/named keep parsing — post-gen forcing of required/named isn't feasible here.
 """
 from __future__ import annotations
@@ -49,5 +49,5 @@ def test_generate_response_snapshots_and_gates_on_tool_choice():
     gate = src.index('_snap_tool_choice != "none"', snap)
     parse = src.index("parse_tool_calls(full_text", gate)
     assert snap < gate < parse, "parse must be gated on _snap_tool_choice != 'none'"
-    # and the none path still strips stray markup (W942 class)
+    # and the none path still strips stray markup (class)
     assert '_snap_tool_choice == "none"' in src

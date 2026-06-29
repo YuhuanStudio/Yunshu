@@ -5095,7 +5095,7 @@ class BatchedEngine:
 
         # normalize eos ids — some tokenizers (Qwen3.6-27B) expose eos_token_ids
         # as a BARE INT, which crashed stop_ids.update(...) with "'int' object is not
-        # iterable". The non-streaming _generate_fast got this fix in W687; the streaming
+        # iterable". The non-streaming _generate_fast got this fix; the streaming
         # twin was missed → every streaming request on that tokenizer raised → client got
         # finish_reason="error", no content. Accept both shapes.
         stop_ids = set()
@@ -5143,7 +5143,7 @@ class BatchedEngine:
         # which is @mx.compile(inputs=mx.random.state) — the PRNG-cache trap that
         # makes `seed` a no-op (non-reproducible) and collapses concurrent/n>1 temp>0
         # STREAMING requests to identical token streams. This streaming path was the
-        # un-propagated sibling of the W748/W752 non-streaming fix.
+        # un-propagated sibling of the non-streaming fix.
         if temperature is not None and temperature > 1e-6:
             sampler = _build_temp_sampler(
                 temperature=temperature,
@@ -5249,7 +5249,7 @@ class BatchedEngine:
                 return logits
             logits_processors.append(_suppress_proc)
         # skip min_tokens EOS-masking when a JSON/grammar constraint is
-        # active — the un-propagated streaming sibling of the W756 non-streaming
+        # active — the un-propagated streaming sibling of the non-streaming
         # fix (3336). The constraint already enforces a structural minimum, and
         # masking EOS at its DONE state leaves the constrained sampler an
         # all-(-inf) allowed set → its argmax fallback emits an INVALID non-EOS
@@ -5418,7 +5418,7 @@ class BatchedEngine:
             # to None end-to-end, yet Qwen3/Qwen3.5/DeepSeek-R1 chat templates are
             # default-ON: they inject the OPENING <think> into the PROMPT, so a plain
             # default-param request still generates a chain-of-thought. With the old gate,
-            # think_end_token stayed None → the W758 pre-seed below was skipped →
+            # think_end_token stayed None → the pre-seed below was skipped →
             # _in_thinking never flipped → the ENTIRE CoT leaked into visible delta.content
             # and reasoning_tokens stayed 0 (streaming diverged from the non-streaming fast
             # path, which recovers via the post-hoc closing-only reasoning parser). The
@@ -7089,7 +7089,7 @@ class BatchedEngine:
         block ~4456) never fires. The documented "spec-stream multi-token stop-prefix
         leak" therefore is NOT a live bug — it lives only here in dead code. The LIVE
         streaming path is _stream_generate_fast, which routes deltas through
-        StopHoldbackBuffer (W667/W669) so no stop prefix leaks. Retrofitting hold-back into
+        StopHoldbackBuffer so no stop prefix leaks. Retrofitting hold-back into
         this complex verify-loop would be risky churn on an unreachable path; if spec
         streaming is ever re-enabled, wrap the per-step emit through StopHoldbackBuffer
         (the _stream_generate_fast _hb pattern) BEFORE shipping.
@@ -7834,7 +7834,7 @@ class BatchedEngine:
             prefix_cache = self._kv_prefix_cache
             # bypass the KV prefix cache when a LoRA adapter is active — it is keyed
             # on token ids + model name but NOT the adapter, so reusing/storing KV here would
-            # decode on a different adapter's KV (the W833 keystone, un-propagated to this
+            # decode on a different adapter's KV (the keystone, un-propagated to this
             # n-gram spec path; the two live fast paths bypass it at 3571 / 5230). Setting it
             # to None disables BOTH the get and the post-generation add below. Latent today
             # (a LoRA request fails _gemma4_spec_eligible → spec_decode forced off → this path
@@ -10316,7 +10316,7 @@ class BatchedEngine:
                 # the template keeps the turn open. Gated on trailing-assistant only, so
                 # the normal case (last msg user/tool) is byte-identical to before.
                 # prefill ONLY when the trailing assistant has non-empty STRING
-                # content to continue. The W821 gate (any trailing assistant) also matched
+                # content to continue. The gate (any trailing assistant) also matched
                 # the canonical OpenAI agent-loop shape {"role":"assistant","content":null,
                 # "tool_calls":[...]}, where continue_final_message makes the Jinja template
                 # raise ValueError ("no content to continue") → not caught (only TypeError

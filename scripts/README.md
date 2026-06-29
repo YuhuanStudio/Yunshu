@@ -1,6 +1,6 @@
 # scripts/ layout
 
-Sub-scripts are grouped by role (Wave 688 reorg). Only the **orchestrators** live at
+Sub-scripts are grouped by role (reorg). Only the **orchestrators** live at
 the top level; everything they invoke lives in a subfolder.
 
 ```

@@ -36,7 +36,7 @@ def test_24bit_decode_recovers_a_loud_tone():
     b[:, 2] = (u >> 16) & 0xFF
     pcm = b.tobytes()
 
-    # apply the W903 decode logic
+    # apply the decode logic
     _n24 = len(pcm) // 3
     _b = np.frombuffer(pcm[: _n24 * 3], dtype=np.uint8).reshape(_n24, 3).astype(np.int32)
     _i24 = _b[:, 0] | (_b[:, 1] << 8) | (_b[:, 2] << 16)

@@ -5,7 +5,7 @@ int8-quantizing at store, and applied the f32 scale in fp16 at load. Any element
 |x| > 65504 (attention sinks / outlier channels routinely exceed this) became inf → scale =
 max(inf)/127 = inf → round(x/inf)=0 → the whole block stored as garbage; on the read side the
 fp16 multiply could overflow to inf → NaN attention. The sibling ssd_kv_cache.py already casts
-to float32 (W843); these cold-tier paths were never swept. Fix: float32 at both store and load.
+to float32; these cold-tier paths were never swept. Fix: float32 at both store and load.
 """
 from __future__ import annotations
 

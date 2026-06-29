@@ -7,7 +7,7 @@ the router's has_active_requests pre-check and the manager's locked re-check) or
 model was already gone. unload_model now returns the bool; the router 409s on False.
 
 LOW-3: the public GET /v1/models leaked global registry stats (total_entries/
-active_owners) to UNauthenticated callers (the W801 gate only fired for a scoped key).
+active_owners) to UNauthenticated callers (the gate only fired for a scoped key).
 
 LOW-2: unload didn't resolve aliases/case, so unloading an id that ran chat 404'd.
 """

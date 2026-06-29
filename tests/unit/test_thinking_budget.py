@@ -139,7 +139,7 @@ class TestDetectNeedsThinkPrefix:
             think_start_id = 42
         assert detect_needs_think_prefix([], MockTok()) is False
 
-    def test_w1031_real_tokenizer_fallback_uses_bracketed_marker(self):
+    def test_real_tokenizer_fallback_uses_bracketed_marker(self):
         # real HF tokenizers have NO think_start_id attr → the function falls
         # back to convert_tokens_to_ids("<think>"). The old slash typo "<think/>" mapped to
         # None on a real tokenizer (→ returns False), so the streaming pre-seed never fired
@@ -158,7 +158,7 @@ class TestDetectNeedsThinkPrefix:
         # no <think> in the tail → not thinking
         assert detect_needs_think_prefix([THINK, 1, 2, 3], RealishTok()) is False
 
-    def test_w1031_no_slash_markers_in_code(self):
+    def test_no_slash_markers_in_code(self):
         import inspect
 
         from yunshu_engine import thinking_budget as tb

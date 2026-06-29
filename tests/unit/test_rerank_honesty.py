@@ -1,5 +1,5 @@
-"""a grounded rerank/scoring hunt found the subsystem CORRECT (W690 dot/euclidean,
-W812 NaN-sort, W850 fallback backbone, W801/W823 model-isolation all genuinely hold;
+"""a grounded rerank/scoring hunt found the subsystem CORRECT (dot/euclidean,
+NaN-sort, fallback backbone, model-isolation all genuinely hold;
 ranking sort/index/top_n correct). The one real issue was an honesty overclaim: the module
 docstring advertised /v1/rerank as "cross-encoder reranking", but the implementation is a
 BI-ENCODER (embeds query and each document separately, ranks by cosine) — there is no joint

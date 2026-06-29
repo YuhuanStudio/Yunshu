@@ -2,7 +2,7 @@
 of the FULL (unaligned) prompt, but _get_no_trim_unlocked probed only 64-aligned prefixes
 (_token_hash(q[:b]) for b in {64,128,...}). So a snapshot for, say, a 100-token prompt was
 written to disk but NEVER restorable (the keys agree only when len % block == 0) — the
-W843/W851-class "wrote N MB / restored 0". Fix: probe the EXACT stored token-counts via a
+class "wrote N MB / restored 0". Fix: probe the EXACT stored token-counts via a
 new candidate_token_counts(), which resolves disk-discovered (post-restart) counts from a
 cheap safetensors-header read.
 """

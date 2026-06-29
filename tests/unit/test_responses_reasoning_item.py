@@ -2,7 +2,7 @@
 reasoning, rs_ id, output_index 0) PRECEDING the message (output_index 1 when reasoning
 present) — across non-stream, the VLM path, AND the main streaming path — instead of a
 reasoning content part nested in the message. Stream and non-stream stay consistent
-(the W817 invariant): the message's output_item.added is emitted lazily so a leading
+(the invariant): the message's output_item.added is emitted lazily so a leading
 reasoning item can take output_index 0."""
 from __future__ import annotations
 

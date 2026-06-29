@@ -797,7 +797,7 @@ class RealtimeSession:
             return
         # bound a single item's content size. content is taken verbatim into the
         # prompt history, so an arbitrarily large client item is a memory / prompt-cost DoS
-        # vector (sibling of the W799 audio cap). Cap the serialized content bytes.
+        # vector (sibling of the audio cap). Cap the serialized content bytes.
         _content = item_data.get("content", [])
         try:
             _csize = len(str(_content))
@@ -1076,7 +1076,7 @@ class RealtimeSession:
             # per-response field), snapshotted like voice. _encode_output_audio used to read
             # self.session.output_audio_format LIVE, so a per-response override (e.g. session
             # pcm16 + response.create output_audio_format=g711_ulaw) was silently dropped and
-            # the audio was encoded at the wrong format/rate (the W935 class). An invalid value
+            # the audio was encoded at the wrong format/rate (the class). An invalid value
             # falls back to the session format (mirrors SessionConfig.update validation).
             _snap_out_fmt = config.get("output_audio_format")
             if _snap_out_fmt not in self.session.SUPPORTED_AUDIO_FORMATS:
@@ -1258,7 +1258,7 @@ class RealtimeSession:
             _visible_text = full_text
             # the realtime streaming path never separates reasoning, so an
             # enable_thinking session would replay the whole <think>…</think> chain-of-thought
-            # into the next turn's prompt (and TTS it) — the W758/W832 leak class,
+            # into the next turn's prompt (and TTS it) — the leak class,
             # un-propagated here. Strip it from the stored transcript (no-op without markup).
             if "<think" in full_text:
                 from ..streaming import extract_thinking
@@ -1268,7 +1268,7 @@ class RealtimeSession:
                     _visible_text = full_text
             # honor tool_choice="none" — the client explicitly wants a plain-text
             # turn, so do NOT parse/emit tool calls even when tools are present. The realtime
-            # path previously parsed unconditionally (the sibling of the anthropic W945 / chat
+            # path previously parsed unconditionally (the sibling of the anthropic / chat
             # tool_choice enforcement, which realtime lacked) → a function_call leaked out when
             # the client asked for none. "auto"/"required"/a named-function dict keep parsing
             # (post-gen "required"/named forcing isn't feasible here — it stays prompt-advised).
@@ -1290,7 +1290,7 @@ class RealtimeSession:
             elif _snap_tools and _snap_tool_choice == "none" and "<tool_call" in full_text:
                 # tool_choice="none" forbids EMITTING tool calls, but if the model
                 # emitted <tool_call> markup anyway, still strip it from the visible transcript
-                # so it doesn't leak into the next prompt / get TTS'd (W942 class). No
+                # so it doesn't leak into the next prompt / get TTS'd (class). No
                 # function_call items are produced (tool_calls stays None).
                 from ..streaming import clean_tool_call_markup
                 with contextlib.suppress(Exception):
@@ -1837,8 +1837,7 @@ class RealtimeSession:
 
             for entry in manager.list_entries():
                 if entry.is_loaded and hasattr(entry.engine, 'synthesize'):
-                    # SECURITY: per-key model access (sibling of W762/W785
-                    # model-isolation, un-propagated to the TTS engine loop). Skip
+                    # SECURITY: per-key model access (sibling of                     # model-isolation, un-propagated to the TTS engine loop). Skip
                     # engines this session's key may not drive.
                     if not self._key_allows(getattr(entry, 'model_id', None)):
                         continue
@@ -2204,7 +2203,7 @@ class RealtimeSession:
                 for entry in manager.list_entries():
                     if entry.is_loaded and hasattr(entry.engine, 'transcribe'):
                         # SECURITY: per-key model access (sibling of
-                        # W762/W785 model-isolation, un-propagated to the ASR loop).
+                        # model-isolation, un-propagated to the ASR loop).
                         if not self._key_allows(getattr(entry, 'model_id', None)):
                             continue
                         asr_found = True
@@ -2354,9 +2353,8 @@ class RealtimeSession:
         per-model check a key scoped away from a model (e.g. a USER-role key, which can
         access NO models) could still drive any loaded model over the socket — bypassing
         the isolation every REST route enforces. Shared by the text engine resolution AND
-        the ASR/TTS audio engine-selection loops (W853 — those iterated list_entries() and
-        grabbed the first transcribe/synthesize engine with no key check, the W762/W785
-        model-isolation keystone un-propagated to audio).
+        the ASR/TTS audio engine-selection loops (— those iterated list_entries() and
+        grabbed the first transcribe/synthesize engine with no key check, the         model-isolation keystone un-propagated to audio).
         """
         _key = getattr(self, "_api_key", None)  # getattr: robust to __new__ test instances
         if _key is None:

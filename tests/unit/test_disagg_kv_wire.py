@@ -3,10 +3,10 @@
 The HTTP /prefill→/decode split only delivers value if the prefilled KV cache crosses to the
 decode node and is REUSED, not re-prefilled. The wire (_serialize_prefill_result) deliberately
 dropped KV ("kv_cache is always None after deserialization") so decode always re-prefilled —
-defeating the entire split. W970 serializes the KV blocks + first-token logits into the prefill
+defeating the entire split. serializes the KV blocks + first-token logits into the prefill
 wire; decode reconstructs (make_prompt_cache + load_kv_blocks_into_cache) and reuses via
 generate_with_kv. The serialize→reconstruct→reuse round-trip is verified lossless against
-reference greedy in scripts/realmodel/smoke_disagg_kv_roundtrip_w970.py. These fast unit tests
+reference greedy in scripts/realmodel/smoke_disagg_kv_roundtrip.py. These fast unit tests
 cover the wire FRAMING (no model needed).
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ def test_empty_kv_blocks():
 
 
 def test_prefill_wire_carries_kv_blocks():
-    # a result WITH serialized KV blocks survives the prefill wire (the W970 fix)
+    # a result WITH serialized KV blocks survives the prefill wire (the fix)
     [KVBlockData(block_hash=7, token_count=4, layer_data={0: b"k0v0", 1: b"k1v1"})]
     # simulate what _serialize would attach by going through the public wire with a
     # pre-extracted blocks payload embedded via a fake cache marker is overkill; instead

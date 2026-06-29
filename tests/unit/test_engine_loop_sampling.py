@@ -1,10 +1,10 @@
-"""Waves 892-893: bring the opt-in engine-loop sampler to parity with the fast path.
+"""bring the opt-in engine-loop sampler to parity with the fast path.
 
-W892: the engine-loop branch of BatchedEngine.generate dropped min_tokens / ignore_eos /
+the engine-loop branch of BatchedEngine.generate dropped min_tokens / ignore_eos /
 suppress_tokens, and engine_core.add_request never forwarded them into SamplingParams, so
 all three were silently ignored under YUNSHU_ENGINE_LOOP=1.
 
-W893: the engine loop built frequency/presence penalties via mlx-lm's make_logits_processors
+the engine loop built frequency/presence penalties via mlx-lm's make_logits_processors
 (a 20-token sliding window) while _LogitsProcessorSampler._tokens is seeded with the FULL
 prompt — so the penalty was computed over the prompt tail and only a 20-token window,
 materially diverging from the fast path (which counts the GENERATED completion only, over

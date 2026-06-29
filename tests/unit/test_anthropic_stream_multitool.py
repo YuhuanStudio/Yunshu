@@ -1,11 +1,11 @@
-"""the W858 multi-tool-call fix was never propagated to the DEFAULT Anthropic
+"""the multi-tool-call fix was never propagated to the DEFAULT Anthropic
 streaming path.
 
 Default serving uses the legacy Engine (is_batched=False). That branch still had a `break`
 after emitting a complete tool_call, so when a single token carried multiple
 <tool_call>…</tool_call> blocks (forced-grammar / one-shot parallel output) every call after
 the first — and any trailing text — was silently dropped. The batched path removed this
-break in W858; the non-batched path must match.
+break; the non-batched path must match.
 """
 from __future__ import annotations
 

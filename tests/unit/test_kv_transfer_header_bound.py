@@ -1,5 +1,5 @@
 """a grounded disagg KV-transfer wire hunt found the framing core sound
-(partial-read/readexactly, bf16 dtype round-trip, compression fallback, W786 loop-binding
+(partial-read/readexactly, bf16 dtype round-trip, compression fallback, loop-binding
 all correct). One MEDIUM DoS: read_frame bounds-checked the PAYLOAD length but not
 header_len (a !I, up to 4 GiB) — a corrupt/malicious peer connecting to the 0.0.0.0-bound
 KVTransferServer could send magic + 0xFFFFFFFF and force a multi-GB readexactly buffer →

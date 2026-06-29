@@ -1,7 +1,7 @@
 """(MED): completions stop-correction stripped req.suffix from the
 ACTUAL completion → completion_tokens (ct) undercount (billing bug).
 
-Since W943 the OpenAI `suffix` (FIM context) is NEVER appended to `text` (this
+Since the OpenAI `suffix` (FIM context) is NEVER appended to `text` (this
 engine has no FIM template). The stop-sequence overcount-correction block, however,
 still chopped `len(req.suffix)` chars off `_raw` BEFORE searching for the stop
 string — truncating real generated content, so the recomputed `ct` was wrong.

@@ -7,7 +7,7 @@ informative message, and that a normal prompt is unaffected.
   - a prompt exceeding max_ctx → HTTP 400 with a "too long" / context message
   - a normal short prompt → HTTP 200 (control: the guard is not over-eager)
 
-The under-window-but-over-prefill-budget case (the Wave 634 prefill guard) is
+The under-window-but-over-prefill-budget case (the prefill guard) is
 covered separately + cheaply by verify_prefill_guard.py (across all protocols).
 
 Run: PYTHONPATH=. uv run python scripts/verify_context_overflow.py

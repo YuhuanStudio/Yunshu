@@ -1,7 +1,7 @@
 """two chat-template-boundary bugs (both collapsed the DEFAULT path to the
 structureless plaintext fallback via a swallowed template raise).
 
-HIGH (regression from W821): the prefill gate matched ANY trailing assistant message,
+HIGH (regression): the prefill gate matched ANY trailing assistant message,
 including the canonical OpenAI agent-loop shape {"role":"assistant","content":null,
 "tool_calls":[...]}. continue_final_message then made the Jinja template raise ValueError
 ("no content to continue") — caught only TypeError → fell through to the plaintext

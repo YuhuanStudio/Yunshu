@@ -1,6 +1,6 @@
-"""Wave 751 real-model smoke: jump-forward decoding (YUNSHU_JUMP_FORWARD=1) via
+"""real-model smoke: jump-forward decoding (YUNSHU_JUMP_FORWARD=1) via
 the engine path — valid schema-conforming JSON, fewer forwards than tokens.
-Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_jump_forward_w751.py
+Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_jump_forward.py
 """
 import asyncio, json, os
 MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"

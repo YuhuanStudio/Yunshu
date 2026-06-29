@@ -1,6 +1,6 @@
-"""Wave 748 real-model smoke: on-GPU temp>0 sampler (YUNSHU_GPU_SAMPLER=1) —
+"""real-model smoke: on-GPU temp>0 sampler (YUNSHU_GPU_SAMPLER=1) —
 coherent output, no n>1 collapse, and faster (removes the per-token GPU sync).
-Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_gpu_sampler_w748.py
+Run: PYTHONPATH=. uv run python scripts/realmodel/smoke_gpu_sampler.py
 """
 import asyncio, os, time
 MODEL = "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
@@ -32,6 +32,6 @@ async def main():
     print(f"[GPU n>1 distinct] seed11!=seed22: {a != b}")
     assert a != b, "GPU sampler collapsed (different seeds gave identical text)"
     print(f"\nspeedup (GPU/numpy) = {g_tps/n_tps:.2f}x")
-    print("W748 GPU sampler smoke: PASS")
+    print("GPU sampler smoke: PASS")
 
 asyncio.run(main())

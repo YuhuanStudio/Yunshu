@@ -1,4 +1,4 @@
-# VLM text-path 4-tier KV prefix cache (Wave 613)
+# VLM text-path 4-tier KV prefix cache
 
 ## Status: DEFAULT ON — `YUNSHU_VLM_KV_PREFIX=0` to disable
 
@@ -15,7 +15,7 @@ hierarchy, now applied to multimodal models' text path.
 ## What makes reuse lossless (the three hard-won fixes)
 
 KV prefix reuse on this stack is lossless only when the cache is resumable AND
-positions are handled correctly. Wave 613b/d nailed three independent issues:
+positions are handled correctly. nailed three independent issues:
 
 1. **Store at the prompt boundary.** `add()` runs right after prefill (before the
    decode loop), capturing clean prompt-only KV. A post-generation `add()` would
@@ -25,7 +25,7 @@ positions are handled correctly. Wave 613b/d nailed three independent issues:
    cache holds every prompt token; re-prefill the last block (≤128 tokens) as a
    multi-token call. A 1-token refeed computes attention in a different numerical
    context and flips the greedy argmax.
-3. **mRoPE native rope-state priming (Wave 613h, the unlock).** mRoPE backbones
+3. **mRoPE native rope-state priming (the unlock).** mRoPE backbones
    (GLM-OCR, Qwen-VL, Qwen3-Omni) track position OUTSIDE the KV cache and
    `clear_rope_state()` resets it to None each request — so on a reused prefix the
    model recomputes the suffix's positions from 0, producing wrong-context output
@@ -60,14 +60,14 @@ Reuse is enabled only when BOTH pass:
    even MISSES Qwen3-Omni's rope nested under `thinker_config.text_config`) can't
    classify safety — so we VERIFY empirically.
    - GLM-OCR (simple mRoPE) AND Qwen3-Omni-30B (interleaved mRoPE): probe PASSES
-     with native rope-state priming → **lossless reuse** (Wave 613h/i).
+     with native rope-state priming → **lossless reuse**.
 
 ## Verification matrix (greedy, temp=0, M3 Max, max_tokens=150)
 
 | model | cache | mRoPE | gate that fires | result |
 |-------|-------|-------|-----------------|--------|
 | GLM-OCR (VLM) | KVCache | simple | both pass | **byte-lossless** — HOT 12.6× (full + partial + streaming) |
-| Qwen3-Omni-30B (VLM) | KVCache | interleaved | both pass (rope-state primed) | **byte-lossless** — HOT 13.1× (Wave 613h/i) |
+| Qwen3-Omni-30B (VLM) | KVCache | interleaved | both pass (rope-state primed) | **byte-lossless** — HOT 13.1× |
 | gemma-4 (VLM) | RotatingKVCache (sw=512) | no | capability bypass | bypassed (output == cache-off) |
 | Qwen3.5/3.6-VL | KVCache + ArraysCache | — | capability bypass (hybrid) | bypassed |
 | Qwen2.5-3B (LLM) | KVCache | no | n/a | lossless via separate BatchedEngine path |
@@ -98,7 +98,7 @@ also proven bit-identical in engine-free logit tests (0.0 Δ).
    guards (the load-time probe is length-independent). Not worth the complexity →
    gemma stays bypassed.
 2. **Hybrid VLM (Qwen3.5/3.6-VL) boundary-snapshot reuse — IMPLEMENTED + probe-gated
-   (Wave 613v).** Ported the LLM fast path's `_capture_hybrid_prefix` to VLMEngine
+.** Ported the LLM fast path's `_capture_hybrid_prefix` to VLMEngine
    (`_capture_vlm_hybrid_prefix` + no_trim boundary snapshots + `_probe_hybrid_reuse`,
    `YUNSHU_VLM_HYBRID_PREFIX`). BUT the greedy probe finds it is NOT lossless on the
    only available hybrid VLM (Qwen3.5-2B via VLMEngine / mlx_vlm.qwen3_5): mlx_vlm's
@@ -113,7 +113,7 @@ also proven bit-identical in engine-free logit tests (0.0 Δ).
 3. Validate on more mRoPE VLMs (Qwen2.5-VL / Qwen3-VL) when available — same
    native-rope-state mechanism, expected lossless.
 
-**SSD net-negative guard (Wave 613o):** `YUNSHU_SSD_RESTORE_MIN_TOKENS` (default 0)
+**SSD net-negative guard:** `YUNSHU_SSD_RESTORE_MIN_TOKENS` (default 0)
 skips the disk restore when the candidate prefix is below N tokens — fast-prefill
 models (e.g. GLM-OCR) where reading from SSD is slower than re-prefilling can set
 this to e.g. 512. Default 0 preserves prior behaviour.

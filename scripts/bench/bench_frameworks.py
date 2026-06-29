@@ -2,7 +2,7 @@
 single-request (TTFT, decode tok/s) + batched (N=8/16/32 aggregate). All SEQUENTIAL,
 batch hard-capped at 32. oMLX runs in its native venv via OMLX_PYTHON.
 
-Wave 688 (methodology): the PRIMARY cross-framework comparison is the EXTERNAL one
+(methodology): the PRIMARY cross-framework comparison is the EXTERNAL one
 (scripts/bench/bench_serve.py — every framework's real OpenAI HTTP server; only real
 servers are a fair production measure). This internal bench is the OTHER half of the
 pair: every framework is measured both internally (here) and externally (serve) so the
@@ -15,7 +15,7 @@ import json, os, re, subprocess, sys
 REPO=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MODELS=["./models/Qwen3.5-0.8B-MLX-bf16","./models/Qwen3.5-2B-MLX-bf16",
         "./models/Qwen2.5-3B-Instruct-bf16","./models/gemma-4-e4b-it-bf16"]
-# Wave 687: per-framework timeout was 1200s (20min). The real killer was that
+# per-framework timeout was 1200s (20min). The real killer was that
 # vllm-mlx (CUDA — does NOT run on Apple Silicon) and oMLX (needs a separate venv
 # via OMLX_PYTHON) were tried for EVERY model and each hung to that 20-min
 # timeout → ~80 min wasted on frameworks that can't run here, so --tier full never
@@ -32,7 +32,7 @@ def run(cmd, env):
         except Exception: return {"status":"PARSE ERR"}
     return {"status":"NO RESULT"}
 def bench(model):
-    # Wave 688 (methodology): this is the IN-PROCESS (internal) leg. Every framework
+    # (methodology): this is the IN-PROCESS (internal) leg. Every framework
     # is measured BOTH internally (here) and externally (bench_serve.py, real HTTP).
     # The PRIMARY cross-framework comparison is the external one (only real servers
     # are a fair production measure); the internal numbers exist so the report can

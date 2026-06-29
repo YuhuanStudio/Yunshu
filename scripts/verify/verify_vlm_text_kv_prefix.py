@@ -1,4 +1,4 @@
-"""Wave 613/613d: verify the VLM text 4-tier KV prefix cache.
+"""verify the VLM text 4-tier KV prefix cache.
 
 For mRoPE full-attention VLMs (GLM-OCR, Qwen-VL) reuse is now BYTE-LOSSLESS — the
 text path supplies explicit sequential position_ids so a reused prefix resumes at
@@ -70,7 +70,7 @@ async def check(model_path):
     await gen(eng, FULL); wf = await gen(eng, FULL)          # full match (ns)
     await gen(eng, FULL); wp = await gen(eng, PROBE)         # partial match (ns)
     await stream(eng, FULL); wfs = await stream(eng, FULL)   # full match (stream)
-    await stream(eng, FULL); wps = await stream(eng, PROBE)  # partial match (stream) — Wave 656 #1
+    await stream(eng, FULL); wps = await stream(eng, PROBE)  # partial match (stream) — #1
     hits = eng._text_kv_prefix_cache._total_hits if eng._text_kv_prefix_cache else 0
     await eng.stop()
 
@@ -88,7 +88,7 @@ async def check(model_path):
 DEFAULT_PATHS = [
     "/Volumes/P5Plus/models/GLM-OCR-bf16",          # mRoPE full-attn (lossless reuse)
     "/Volumes/P5Plus/models/gemma-4-e4b-it-bf16",   # sliding-window (bypassed safely)
-    "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16",  # HYBRID GatedDeltaNet (A2 boundary-snapshot, Wave 655)
+    "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16",  # HYBRID GatedDeltaNet (A2 boundary-snapshot)
 ]
 
 
@@ -105,7 +105,7 @@ def main():
     # loads each model ~3x (probe + cache-off controls + cache-on); doing three
     # bf16 VLMs (GLM-OCR + gemma-4 + Qwen3.5) in one process accumulated GPU
     # memory → signal 6 (Metal abort) on the 36GB Mac. Same fix as the modality
-    # smoke (Wave 672). Set VLM_KV_NO_ISOLATE=1 for the legacy single process.
+    # smoke. Set VLM_KV_NO_ISOLATE=1 for the legacy single process.
     if os.environ.get("VLM_KV_NO_ISOLATE") in ("1", "true", "yes") or len(paths) == 1:
         results = [asyncio.run(check(p)) for p in paths]
     else:

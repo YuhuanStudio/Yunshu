@@ -1,7 +1,7 @@
-"""/v1/video/generations had the W818/W823/W824 wrong-model keystone, unswept.
+"""/v1/video/generations had the wrong-model keystone, unswept.
 After matching req.model and a get_engine fallback, it grabbed the FIRST loaded
 VideoEngine — ignoring req.model. Since _check_model_access(req.model) is verified above,
-that served a model the key may NOT be authorized for (W801 isolation class). Now: when
+that served a model the key may NOT be authorized for (isolation class). Now: when
 video models ARE loaded but none matches, 404 (don't serve a different one); only fall
 back to the standalone default engine when NO video model is registered."""
 from __future__ import annotations
@@ -76,7 +76,7 @@ def test_single_model_mismatch_not_404(monkeypatch):
 def test_source_has_keystone_guard():
     from yunshu_gateway.routers import video
     src = inspect.getsource(video.create_video)
-    # ≥2 loaded + no match → 404; exactly 1 loaded → served (W835 single-model fallback)
+    # ≥2 loaded + no match → 404; exactly 1 loaded → served (single-model fallback)
     assert "_loaded_video" in src
     assert "len(_loaded_video) == 1" in src
     assert "len(_loaded_video) >= 2" in src

@@ -3,7 +3,7 @@
 (1) The CoreML trace + inference both clamped to min(max_seq_length, 128), so an operator
 setting YUNSHU_ANE_MAX_SEQ_LENGTH=512 still got 128-token truncation, and ANE produced worse
 vectors than the MLX fallback (which uses the FULL sequence). Now both honor the configured
-max_seq_length (and stay equal to each other — the W772 traced-shape invariant).
+max_seq_length (and stay equal to each other — the traced-shape invariant).
 (2) benchmark_ane_vs_gpu pointed _compiled_path at a .mlmodelc, which ct.models.MLModel can't
 load → silent MLX fallback → measured MLX-vs-MLX (bogus speedup≈1.0). Now points at the
 .mlpackage that compile_model stores and serving loads.

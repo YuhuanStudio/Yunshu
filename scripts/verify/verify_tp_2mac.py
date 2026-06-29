@@ -1,4 +1,4 @@
-"""Turnkey Tensor-Parallel correctness validation (W979) — the final 2-Mac step for TP.
+"""Turnkey Tensor-Parallel correctness validation — the final 2-Mac step for TP.
 
 TP shards a model's attention/MLP weights across ranks and all-reduces. It has only ever run
 at world_size=1 (an identity no-op that proves nothing). This validates the REAL property:

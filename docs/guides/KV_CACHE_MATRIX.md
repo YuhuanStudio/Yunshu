@@ -1,7 +1,7 @@
-# Unified KV-cache matrix — all models × all tiers (Wave 613f)
+# Unified KV-cache matrix — all models × all tiers
 
 Reproduces the model × cache-tier matrix from `scripts/bench_all.py`, now extended
-to the **VLM text path** (Wave 613). Each measure is its own subprocess, run
+to the **VLM text path**. Each measure is its own subprocess, run
 sequentially (no concurrency) so numbers don't interfere. M3 Max, greedy, in-process
 (no gateway/HTTP). Regenerate with:
 
@@ -22,13 +22,13 @@ GLM-OCR-bf16               vlm-mrope  1565  5596   169.2   280      12.59x  8.44
 Qwen3-Omni-30B-A3B-4bit    vlm-imrope 1239  866    59.7   1431      13.27x 12.35x   2.05x✓   3.56x   n/a    n/a      Y
 ```
 
-> **LOOP (engine-loop reuse) roughly doubled** after the Wave 613r detokenizer fix
+> **LOOP (engine-loop reuse) roughly doubled** after the detokenizer fix
 > (9B 9.3→18.5×, 2B 3.2→7.0×, Qwen2.5-3B 5.8→8.2×) — the per-request detok rebuild
 > was a big part of the engine-loop's per-step cost. Qwen3-Omni-30B is now measured
-> (Wave 613h/i) and stable under load (Wave 613s). Numbers have ±10-20% run-to-run
+> and stable under load. Numbers have ±10-20% run-to-run
 > variance (e.g. gemma's cold prefill drifts with thermal state).
 
-> **Qwen3-Omni-30B is now MEASURED** (Wave 613h/i). It was bypassing because (a)
+> **Qwen3-Omni-30B is now MEASURED**. It was bypassing because (a)
 > its INTERLEAVED mRoPE needs the model's native rope state primed for reuse (not
 > our own position_ids — that only worked for GLM-OCR's simple mRoPE), and (b) the
 > probe's single-logit `<1e-2` gate was too strict for a 30B MoE (routing noise
@@ -36,7 +36,7 @@ Qwen3-Omni-30B-A3B-4bit    vlm-imrope 1239  866    59.7   1431      13.27x 12.35
 > both mRoPE variants) + a greedy-token-sequence probe. → HOT **13.08×**, WARM
 > **10.90×**, SSD 1.84×, all lossless.
 
-> **decode tps is now PURE decode** (Wave 613g) — two-point timing (t41−t1)
+> **decode tps is now PURE decode** — two-point timing (t41−t1)
 > cancels prefill. The earlier column reported `40 tokens / (prefill-of-1400 +
 > decode)` which understated decode ~2.5× (0.8B looked like 56 tok/s; real pure
 > decode is ~155). There was **no decode regression** — the engine matches
@@ -73,7 +73,7 @@ mlx-lm lacks the `model_type` (`importlib.util.find_spec("mlx_lm.models.{type}")
 | qwen3_5, qwen2, gemma4, qwen3_vl | BatchedEngine (LLM fast path) | mlx-lm implements it (a `vision_config` stub alone does NOT make it a VLM) |
 | glm_ocr, qwen3_omni_moe, qwen2_5_vl | VLMEngine (text path) | mlx-lm lacks it → mlx-vlm |
 
-## VLM cache-tier reality (Wave 613)
+## VLM cache-tier reality
 
 The VLM text path gets the SAME 4-tier KV hierarchy as the LLM fast path, gated by a
 two-step safety check (`_text_prefix_reuse_safe`): the cache must be resumable AND an
@@ -96,7 +96,7 @@ vllm-mlx vs oMLX (native venv), LLM models, batch hard-capped at 32. Regenerate:
 `PYTHONPATH=. OMLX_PYTHON=/tmp/omlxenv/bin/python uv run python scripts/bench_frameworks.py`.
 
 ```
-                 TTFT ms   dec t/s  batch8  batch16  batch32   (Wave 613r: detok fix)
+                 TTFT ms   dec t/s  batch8  batch16  batch32   (detok fix)
 Qwen3.5-0.8B
   yunshu-fast    173.9     138.3    94.6    94.7     96.9
   yunshu-loop     85.0     142.2   346.6   490.6    578.0
@@ -123,9 +123,9 @@ gemma-4-e4b
   oMLX           (LOAD FAIL — pinned mlx-vlm too old for gemma-4)
 ```
 
-**Findings (Wave 613r CLOSED the batching gap):**
+**Findings (CLOSED the batching gap):**
 - **Engine-loop batched now MATCHES raw mlx-lm static batch** — 2B N=32 266.3 vs
-  266.7; 3B 180.4 vs 180.1; 0.8B 578 vs 628. The "1.5–2.5× gap" Wave 603 flagged
+  266.7; 3B 180.4 vs 180.1; 0.8B 578 vs 628. The "1.5–2.5× gap" flagged
   as reclaimable was the **per-request detokenizer rebuild** (~145ms on Qwen's
   151k vocab), not async orchestration. Now we match static batch *while keeping*
   streaming + mid-flight add/remove + per-request stop. Engine-loop TTFT also
@@ -141,19 +141,19 @@ gemma-4-e4b
 
 **IMPORTANT — compare LIKE-FOR-LIKE.** The HOT-reuse speedup depends on the PATH
 (fast-path 4-tier vs engine-loop radix) and the COLD baseline. An earlier version
-of this table compared W590's *engine-loop* 9.90× against the current *fast-path*
+of this table compared *engine-loop* 9.90× against the current *fast-path*
 6.22× — apples-to-oranges, which looked like a regression but is a column mismatch.
 
 | metric (matched path) | past | now | verdict |
 |---|---|---|---|
-| 9B hybrid — ENGINE-LOOP reuse | 9.90× (W590, loop) | LOOP 9.32× | consistent |
-| 9B hybrid — FAST-PATH reuse | 6.26× (W596, fast) | F-HOT 6.22× | consistent |
-| 2B hybrid — FAST-PATH reuse | 4.23× (W596, fast) | F-HOT 3.06–3.18× | **ratio LOWER** ↓ — but COLD got ~40% faster (1162→711ms) and abs HOT improved (275→224ms); smaller ratio because the baseline shrank, not because reuse got slower |
-| Qwen2.5-3B — FAST-PATH reuse | 5.57× (W596, fast) | F-HOT 5.97× | consistent/better |
+| 9B hybrid — ENGINE-LOOP reuse | 9.90× (loop) | LOOP 9.32× | consistent |
+| 9B hybrid — FAST-PATH reuse | 6.26× (fast) | F-HOT 6.22× | consistent |
+| 2B hybrid — FAST-PATH reuse | 4.23× (fast) | F-HOT 3.06–3.18× | **ratio LOWER** ↓ — but COLD got ~40% faster (1162→711ms) and abs HOT improved (275→224ms); smaller ratio because the baseline shrank, not because reuse got slower |
+| Qwen2.5-3B — FAST-PATH reuse | 5.57× (fast) | F-HOT 5.97× | consistent/better |
 | WARM 4-bit RAM saving | 3.56× | 3.56× | identical |
 | oMLX hybrid reuse | ≤1.06× (no reuse) | ≤1.02× | consistent |
-| single-req decode (3B, pure) | ~36–38 t/s (W603) | ~42 t/s | within variance / faster |
-| batched N=32 (3B, mlx-lm) | 143 t/s (W603) | 181 t/s | faster |
+| single-req decode (3B, pure) | ~36–38 t/s | ~42 t/s | within variance / faster |
+| batched N=32 (3B, mlx-lm) | 143 t/s | 181 t/s | faster |
 
 **Honest verdict — is anything genuinely WORSE?** No time-regression found: every
 LIKE-FOR-LIKE pair is consistent or faster in absolute latency. The one cell that
@@ -180,7 +180,7 @@ JSON: `docs/comprehensive_sweep_results.json`.
 TTFT and prefill tok/s rise with length (longer prompts prefill more efficiently
 per token); pure decode tok/s falls as the KV context grows (attention over more
 tokens) — clearest on GLM-OCR (143→35) and the 9B. (Decode probe rewritten in
-Wave 613n to a robust single-point TTFT-based measure — the earlier 0.0/`*` cells
+to a robust single-point TTFT-based measure — the earlier 0.0/`*` cells
 are gone.)
 
 ```
@@ -234,20 +234,20 @@ QUALITATIVE structure, which IS consistent with past runs:
 | claim (LIKE-FOR-LIKE path) | past | now | verdict |
 |---|---|---|---|
 | HOT reuse scales with model size | 0.8B<2B<9B | 2.1<3.1<6.2× | consistent |
-| Qwen2.5-3B fast-path HOT | 5.57× (W596) | 5.97× | consistent/better |
-| **2B fast-path HOT (ratio)** | **4.23× (W596)** | **3.06–3.18×** | **ratio ↓ — but COLD 1162→711ms & HOT 275→224ms both FASTER; smaller ratio = faster baseline, not slower reuse** |
-| 9B ENGINE-LOOP reuse | 9.90× (W590) | 9.32× | consistent |
+| Qwen2.5-3B fast-path HOT | 5.57× | 5.97× | consistent/better |
+| **2B fast-path HOT (ratio)** | **4.23×** | **3.06–3.18×** | **ratio ↓ — but COLD 1162→711ms & HOT 275→224ms both FASTER; smaller ratio = faster baseline, not slower reuse** |
+| 9B ENGINE-LOOP reuse | 9.90× | 9.32× | consistent |
 | WARM 4-bit RAM saving | 3.56× | 3.56× | identical |
 | oMLX does NOT reuse hybrid Qwen3.5 | ≤1.06× | ≤1.02× | consistent |
-| single-req decode ≈ across frameworks | within ~5% (W603) | within ~5% | consistent |
-| engine-loop vs raw mlx-lm batch | mlx-lm 1.5-2.5× ahead (W603) | **MATCHED** (2B 266 vs 266, 3B 180 vs 180) | **gap closed (Wave 613r detok fix)** |
+| single-req decode ≈ across frameworks | within ~5% | within ~5% | consistent |
+| engine-loop vs raw mlx-lm batch | mlx-lm 1.5-2.5× ahead | **MATCHED** (2B 266 vs 266, 3B 180 vs 180) | **gap closed (detok fix)** |
 
 **Honest bottom line:** no genuine time-regression — every like-for-like pair is
 consistent or faster in *absolute* latency. Speedup RATIOS are baseline-relative,
 so a few dropped (notably 2B fast-path 4.23×→3.18×) purely because the COLD prefill
 baseline got faster — NOT because reuse got slower. The earlier "much slower"
 alarm was the fixed decode-metric bug. (My first draft of this table also wrongly
-matched W590's engine-loop 9.90× against the current fast-path — corrected above.)
+matched engine-loop 9.90× against the current fast-path — corrected above.)
 GENUINELY NEW vs the past LLM-only matrix: the **VLM text-path tiers** (GLM-OCR
 12.6× / Qwen3-Omni 13.1× HOT) and these length/hit-ratio/concurrency sweeps.
 
@@ -293,7 +293,7 @@ pattern (huge TTFT win) and **57–73%** for incremental multi-turn (modest win 
 short prefixes). See `docs/PROMPT_CACHING_APIS.md` for how clients drive this
 explicitly (OpenAI auto / Anthropic cache_control / Gemini cachedContents).
 
-## Cache-subsystem audit (Wave 613g)
+## Cache-subsystem audit
 
 A 6-point audit of `kv_prefix_cache.py`, `ssd_kv_cache.py`,
 `hybrid_ssd_snapshot.py`, `kv_migration.py`. Verdicts:

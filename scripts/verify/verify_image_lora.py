@@ -3,7 +3,7 @@
 Verifies the engine can load a ComfyUI/diffusion-format Z-Image LoRA (.safetensors
 with lora_down/lora_up/alpha), that it MEASURABLY changes the output, produces a
 valid (non-garbage) image, and UNLOADS to a byte-identical restore. Covers the
-diffusion-LoRA loader added in Wave 613ah.
+diffusion-LoRA loader added.
 
 Run: PYTHONPATH=. uv run python scripts/verify_image_lora.py
 """

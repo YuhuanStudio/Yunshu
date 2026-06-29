@@ -555,7 +555,7 @@ async def upload_batch_csv(
     # (ValueError, TypeError) guards do NOT catch → an uncaught 500 that aborts the WHOLE
     # upload on a realistic CSV mistake (a trailing optional column omitted on some rows).
     # restval="" makes every missing cell an empty string, so .strip() is always safe and a
-    # short row defaults its cells instead of crashing. (Same W966 class — non-UTF8/
+    # short row defaults its cells instead of crashing. (Same class — non-UTF8/
     # max_concurrent already hardened; this ragged-row case was missed.)
     reader = csv.DictReader(io.StringIO(text_content), restval="")
 

@@ -2,7 +2,7 @@
 
 A client may send {"type":"image_url","image_url":"https://…"} (a bare string, not the
 {"url":…} object). The engine's _extract_images does part["image_url"].get("url") →
-AttributeError → opaque 500. W937 coerced this only in _check_has_media (the SSRF pre-check),
+AttributeError → opaque 500. coerced this only in _check_has_media (the SSRF pre-check),
 NOT in _normalize_image_part on the path that actually feeds the engine. Now the gateway
 normalizes the bare string to the canonical object, and the engine extraction guards against
 a non-dict image_url defensively.
@@ -30,7 +30,7 @@ def test_object_form_image_url_unchanged():
 
 
 def test_image_and_image_data_types_still_normalized():
-    # the pre-existing W724 behavior must be preserved
+    # the pre-existing behavior must be preserved
     assert _normalize_image_part(
         {"type": "image", "url": "https://e/x.png"})["image_url"]["url"] == "https://e/x.png"
     assert "abc" in _normalize_image_part(

@@ -27,5 +27,5 @@ def test_promote_fails_closed_on_unbound_hot_cache():
     first_guard = src.index("if self.hot._key_cache is None:")
     first_register = src.index("Register in prefix cache")
     assert first_guard < first_register
-    # the Wave-872 rationale is recorded
+    # the rationale is recorded
     assert "FAIL-CLOSED" in src

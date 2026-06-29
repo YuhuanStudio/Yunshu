@@ -1,15 +1,15 @@
-"""Waves 935-938: realtime audio-out sample-rate, ANE non-mean refusal, chat string image_url,
+"""realtime audio-out sample-rate, ANE non-mean refusal, chat string image_url,
 data:audio subtype.
 
-W935 (HIGH): realtime audio output hardcoded 24 kHz, ignoring the TTS engine's real
+(HIGH): realtime audio output hardcoded 24 kHz, ignoring the TTS engine's real
   sample_rate → a non-24 kHz model (dia=44.1k) played at the wrong pitch/speed. Resample from
   the engine's real rate to the format target (24 kHz pcm16 / 8 kHz g711).
-W936 (HIGH): the ANE traced wrapper bakes MEAN pooling; a CLS/LAST model served via ANE was
+(HIGH): the ANE traced wrapper bakes MEAN pooling; a CLS/LAST model served via ANE was
   silently mean-pooled (wrong embedding space). Refuse ANE compilation for non-mean models so
   they use the correct MLX path.
-W937: a bare-string image_url part ({"image_url": "https://…"}) crashed _has_images with an
+a bare-string image_url part ({"image_url": "https://…"}) crashed _has_images with an
   AttributeError → opaque 500 (now coerced → clean handling).
-W938: a subtype-less data:audio URL raised IndexError → 500 (W894 image fix not swept to
+a subtype-less data:audio URL raised IndexError → 500 (image fix not swept to
   audio).
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ import struct
 from yunshu_gateway.routers.realtime import RealtimeSession
 
 
-def test_w935_resample_converts_rate_streaming():
+def test_resample_converts_rate_streaming():
     s = RealtimeSession.__new__(RealtimeSession)
     s._pcm16_lin_state = None
     n = 44100
@@ -32,13 +32,13 @@ def test_w935_resample_converts_rate_streaming():
     assert 23900 < got < 24100, got  # 44100 input @44.1k → ~24000 @24k
 
 
-def test_w935_passthrough_when_rate_equal():
+def test_passthrough_when_rate_equal():
     s = RealtimeSession.__new__(RealtimeSession)
     pcm = b"\x01\x02\x03\x04"
     assert s._resample_pcm16_linear(pcm, 24000, 24000, "_x") == pcm
 
 
-def test_w935_encode_output_threads_rate():
+def test_encode_output_threads_rate():
     import inspect
     src = inspect.getsource(RealtimeSession._encode_output_audio)
     assert "in_rate" in src and "_resample_pcm16_linear" in src
@@ -47,7 +47,7 @@ def test_w935_encode_output_threads_rate():
     assert 'getattr(engine, "sample_rate", 24000)' in syn
 
 
-def test_w936_ane_refuses_non_mean(tmp_path):
+def test_ane_refuses_non_mean(tmp_path):
     import json
 
     from yunshu_engine.ane_embedding import _model_is_mean_pooled
@@ -65,7 +65,7 @@ def test_w936_ane_refuses_non_mean(tmp_path):
     assert "_model_is_mean_pooled(model_path)" in src
 
 
-def test_w937_chat_string_image_url_no_crash():
+def test_chat_string_image_url_no_crash():
     import inspect
 
     from yunshu_gateway.routers import chat
@@ -74,7 +74,7 @@ def test_w937_chat_string_image_url_no_crash():
     assert '_iu = {"url": _iu}' in src
 
 
-def test_w938_data_audio_subtype_guard():
+def test_data_audio_subtype_guard():
     import inspect
 
     from yunshu_engine import vlm_engine

@@ -1,4 +1,4 @@
-"""the W735 vLLM/SGLang-parity sampling controls (min_tokens / ignore_eos /
+"""the vLLM/SGLang-parity sampling controls (min_tokens / ignore_eos /
 suppress_tokens) were honored on /v1/chat/completions + /v1/completions but were never
 declared or plumbed on /v1/responses or /v1/messages (Anthropic) — so a request setting
 them got them SILENTLY ignored. They must now be accepted and forwarded."""

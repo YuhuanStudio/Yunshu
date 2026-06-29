@@ -184,7 +184,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 # B008 function-call-in-default-arg: mandatory FastAPI DI pattern (Depends/Query/Path/Body/Header/Form/File/Security)
 # B023 function-uses-loop-variable: call-site false positives in
 #      python/yunshu_engine/batched_engine.py — see scheduler.py:1593 etc.
-# --- Wave 459: documented intentional style categories ---
+# --- documented intentional style categories ---
 # N801/N802 invalid-class/function-name: camelCase mirrors JSON-schema keywords
 #      (_flatten_allOf, _process_anyOf) + dunder methods defined inside monkey-patch
 #      functions (mtp_patch.py) which ruff misreads.

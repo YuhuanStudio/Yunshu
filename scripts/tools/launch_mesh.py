@@ -54,7 +54,7 @@ def main():
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run")
     args = parser.parse_args()
 
-    # Wave 449 fix: the docstring shows `launch_mesh.py -n 2 -- python worker.py`
+    # fix: the docstring shows `launch_mesh.py -n 2 -- python worker.py`
     # form, but the original check `args.command[0] == "--"` rejected that
     # exact usage. Strip the `--` separator first, then check emptiness.
     command = args.command

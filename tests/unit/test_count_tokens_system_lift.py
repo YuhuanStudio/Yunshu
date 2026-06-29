@@ -17,7 +17,7 @@ from yunshu_gateway.routers import (
 
 
 def _merge_system_like_w1033(top_system, msgs):
-    """Faithful replica of the W1033 lift: collect top-level + in-message system parts into
+    """Faithful replica of the lift: collect top-level + in-message system parts into
     ONE block, and the surviving non-system messages separately (mirrors generation)."""
     parts = []
     if top_system:

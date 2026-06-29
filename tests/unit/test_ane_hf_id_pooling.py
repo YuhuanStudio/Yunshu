@@ -1,10 +1,10 @@
-"""(HIGH): the ANE W936 CLS/LAST pooling-refusal guard was bypassed for every HF id.
+"""(HIGH): the ANE CLS/LAST pooling-refusal guard was bypassed for every HF id.
 
 _model_is_mean_pooled read a LOCAL model_path/1_Pooling/config.json. The default + documented
 ANE embedding models are HF ids (intfloat/e5-small-v2, BAAI/bge-small-en-v1.5), not local dirs,
 so os.path.isfile() was always False → the guard returned True (assume mean) → a CLS-pooled
-model (bge) was compiled+served with MEAN pooling: the wrong embedding space W936 claimed to
-close, on the HF-id sibling the local-tmp-only W936 test never covered. Now non-local ids
+model (bge) was compiled+served with MEAN pooling: the wrong embedding space claimed to
+close, on the HF-id sibling the local-tmp-only test never covered. Now non-local ids
 resolve the pooling spec from the hub; only an explicit non-mean spec refuses.
 """
 from __future__ import annotations

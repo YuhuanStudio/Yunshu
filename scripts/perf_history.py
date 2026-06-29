@@ -27,7 +27,7 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Wave 688 docs reorg: all machine-generated reports live under docs/reports/.
+# docs reorg: all machine-generated reports live under docs/reports/.
 HIST_DIR = os.path.join(REPO, "docs", "reports", "perf_history")
 REPORT_JSON = os.path.join(REPO, "docs", "reports", "regression_report.json")
 TREND_MD = os.path.join(REPO, "docs", "reports", "PERF_TREND.md")
@@ -66,7 +66,7 @@ def _gpu_tflops(seconds: float = 2.0) -> float | None:
     25-40% across ALL frameworks (incl. external mlx-lm/vLLM/oMLX) — that is a hot,
     memory-pressured machine, NOT a code regression. Without a per-snapshot thermal
     reading there is no way to tell the two apart, so an honest trend MUST tag each
-    run. This M3 Max's COOL ceiling for 8192³ fp16 is ~9.5 TFLOP/s (Wave 657); a
+    run. This M3 Max's COOL ceiling for 8192³ fp16 is ~9.5 TFLOP/s; a
     snapshot reading well below that means its perf numbers were thermally
     suppressed and should be read in that light, not as regressions.
     """
