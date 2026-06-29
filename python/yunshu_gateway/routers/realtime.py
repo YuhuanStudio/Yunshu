@@ -1851,8 +1851,11 @@ class RealtimeSession:
                             )
                         )
                 elif ch.kind == "audio" and "audio" in modalities:
-                    pcm = _f32_to_pcm16_bytes(ch.data)  # Talker outputs 24 kHz f32
-                    out, _csz = self._encode_output_audio(pcm, 24000, fmt=_snap_out_fmt)
+                    pcm = _f32_to_pcm16_bytes(ch.data)  # Talker f32 @ eng.sample_rate
+                    _omni_sr = getattr(eng, "sample_rate", 24000)
+                    out, _csz = self._encode_output_audio(
+                        pcm, _omni_sr, fmt=_snap_out_fmt
+                    )
                     offset = 0
                     while offset < len(out):
                         sub = out[offset : offset + _csz]

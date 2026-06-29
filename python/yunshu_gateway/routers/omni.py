@@ -108,7 +108,7 @@ async def omni_speech_stream(req: OmniSpeechRequest) -> StreamingResponse:
                         {
                             "type": "audio",
                             "delta": _pcm16_b64(ch.data),
-                            "sr": AUDIO_SAMPLE_RATE,
+                            "sr": eng.sample_rate,
                         }
                     )
                 elif ch.kind == "done":

@@ -51,15 +51,24 @@ _VOICE_ALIASES = {
 }
 
 
-def _resolve_speaker(requested: str | None, default: str) -> str:
+def _resolve_speaker(
+    requested: str | None,
+    default: str,
+    valid_speakers: set[str] = _OMNI_SPEAKERS,
+) -> str:
     """Map a requested voice/speaker to a valid Talker speaker, falling back to
-    ``default`` (never raising) so a stray voice name can't crash generation."""
+    ``default`` (never raising) so a stray voice name can't crash generation.
+
+    ``valid_speakers`` is the model's own speaker set (lowercased); it defaults
+    to the Qwen3-Omni set so the module-level helper stays usable without a
+    loaded model, but ``OmniEngine`` passes the set it derived at load time so
+    other Talker models with different speakers work too."""
     if not requested:
         return default
     key = requested.strip().lower()
-    if key in _OMNI_SPEAKERS:
+    if key in valid_speakers:
         return key.capitalize()
-    if key in _VOICE_ALIASES:
+    if key in _VOICE_ALIASES and _VOICE_ALIASES[key] in valid_speakers:
         return _VOICE_ALIASES[key].capitalize()
     logger.debug("Unknown omni speaker %r — using default %s", requested, default)
     return default
@@ -93,6 +102,7 @@ class OmniEngine:
         talker_max_new_tokens: int = 1024,
         talker_temperature: float = 0.9,
         chunk_size: int = 10,
+        sample_rate: int = AUDIO_SAMPLE_RATE,
     ) -> None:
         self.model_path = model_path
         self.speaker = speaker
@@ -100,9 +110,16 @@ class OmniEngine:
         self.talker_max = talker_max_new_tokens
         self.talker_temp = talker_temperature
         self.chunk_size = chunk_size
+        # Talker output rate — single source of truth consumers (the SSE endpoint
+        # and the realtime resampler) read instead of hardcoding 24000. Derived
+        # from the model at load() when possible; 24 kHz is the Qwen3-Omni rate.
+        self.sample_rate = sample_rate
         self.model: Any = None  # mlx-vlm omni model (dynamic)
         self.processor: Any = None
         self._prev_text_ids: list[int] = []
+        # Valid Talker speakers — defaults to the Qwen3-Omni set, replaced at
+        # load() with the loaded model's own speaker map (model-agnostic).
+        self._valid_speakers: set[str] = set(_OMNI_SPEAKERS)
         self._busy = asyncio.Lock()
 
     def is_loaded(self) -> bool:
@@ -121,6 +138,14 @@ class OmniEngine:
                 f"{self.model_path} has no Talker — not a unified-omni model. "
                 "OmniEngine requires a Thinker+Talker model (e.g. Qwen3-Omni)."
             )
+        # Derive the model's own speaker set (model-agnostic, not the hardcoded
+        # Qwen names) from config.talker_config.speaker_id; keep the default set
+        # as a fallback for models that don't publish one.
+        talker_cfg = getattr(getattr(self.model, "config", None), "talker_config", None)
+        speaker_map = getattr(talker_cfg, "speaker_id", None) if talker_cfg else None
+        if speaker_map:
+            self._valid_speakers = {str(s).lower() for s in speaker_map}
+            logger.info("OmniEngine speakers: %s", sorted(self._valid_speakers))
         self._compile_kernels()
         logger.info("OmniEngine ready (talker present).")
 
@@ -241,7 +266,9 @@ class OmniEngine:
         """
         self.load()
         async with self._busy:  # one generation at a time
-            spk = _resolve_speaker(speaker or self.speaker, self.speaker)
+            spk = _resolve_speaker(
+                speaker or self.speaker, self.speaker, self._valid_speakers
+            )
             tmax = (
                 thinker_max_new_tokens
                 if thinker_max_new_tokens is not None
@@ -297,7 +324,7 @@ class OmniEngine:
                 "done",
                 {
                     "first_audio_s": first_audio,
-                    "audio_seconds": audio_samples / AUDIO_SAMPLE_RATE,
+                    "audio_seconds": audio_samples / self.sample_rate,
                     "total_s": asyncio.get_running_loop().time() - start,
                 },
                 asyncio.get_running_loop().time() - start,
