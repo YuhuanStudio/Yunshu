@@ -13,6 +13,8 @@ in ~1.4 s — no cloud, no ASR + LLM + TTS cascade, the model speaks with its ow
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/YuhuanStudio/Yunshu/actions/workflows/ci.yml)
 
+**English** · [简体中文](./README.zh-CN.md) · [繁體中文](./README.zh-TW.md)
+
 </div>
 
 ---
