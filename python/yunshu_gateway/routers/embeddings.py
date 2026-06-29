@@ -44,12 +44,18 @@ class EmbeddingRequest(BaseModel):
     # We accept all four; token IDs are decoded to text via the model's
     # tokenizer before embedding so the existing embedding path can reuse
     # its tokenize+pool pipeline.
-    input: str | list[str] | list[int] | list[list[int]]
+    # Plus a multimodal form for VL embedders (Qwen3-VL-Embedding): each item is
+    # a {"text"?: str, "image"?: url|path|data-uri, "instruction"?: str} object,
+    # embedded into the SAME space as text (cross-modal retrieval).
+    input: str | list[str] | list[int] | list[list[int]] | list[dict]
     encoding_format: str = "float"  # float, base64
     dimensions: int | None = None
     # explicit pooling override (MEAN / CLS / LAST). When unset, the
     # engine auto-detects from the model's 1_Pooling/config.json.
     pooling_type: str | None = None
+    # Optional retrieval instruction applied to items without their own
+    # (multimodal/VL embedders only; ignored by plain text embedders).
+    instruction: str | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -144,6 +150,16 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
                 status_code=422,
                 detail=f"input: too many inputs ({len(req.input)} > {_MAX_TOTAL_INPUTS})",
             )
+
+    # Multimodal (Qwen3-VL) embedding path: a dedicated VL embedder takes
+    # text / image / cross-modal items and pools them into one shared space.
+    # Resolve the engine first; if it's a VL embedder, take the multimodal route
+    # (the text path below re-resolves from the manager's cache — cheap).
+    from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
+
+    _vl = await _resolve_embedding_engine(req.model)
+    if isinstance(_vl, VLEmbeddingEngine):
+        return await _embed_multimodal(req, _vl)
 
     # Normalize input to a list[str] by decoding any token-id forms first.
     # OpenAI spec: list[int] = single text as tokens, list[list[int]] = batch.
@@ -372,6 +388,88 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
             "prompt_tokens": total_tokens,
             "total_tokens": total_tokens,
         },
+    }
+
+
+def _finalize_embedding(emb: list[float], req: EmbeddingRequest):
+    """Sanitize (NaN/Inf→0) → optional Matryoshka truncation+renorm → encode.
+
+    Shared by the multimodal path; mirrors the text path's per-vector handling.
+    """
+    if any(not math.isfinite(x) for x in emb):
+        emb = [x if math.isfinite(x) else 0.0 for x in emb]
+    if req.dimensions is not None and req.dimensions > 0:
+        if len(emb) < req.dimensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Requested dimensions {req.dimensions} exceeds model's "
+                f"native embedding dimension {len(emb)}",
+            )
+        emb = emb[: req.dimensions]
+        norm = math.sqrt(sum(x * x for x in emb))
+        if norm > 0:
+            emb = [x / norm for x in emb]
+    if req.encoding_format == "base64":
+        import base64
+        import struct
+
+        return base64.b64encode(struct.pack(f"{len(emb)}f", *emb)).decode("ascii")
+    return emb
+
+
+async def _embed_multimodal(req: EmbeddingRequest, engine) -> dict:
+    """Embed text / image / cross-modal items via a VL embedder (Qwen3-VL).
+
+    Each input item is a string (text) or a {"text"?, "image"?, "instruction"?}
+    object. Images may be URLs, local paths, or data URIs. Returns the standard
+    OpenAI embeddings response; prompt_tokens is reported as the item count
+    (token counting is not meaningful for image inputs).
+    """
+    raw = req.input if isinstance(req.input, list) else [req.input]
+    items: list = []
+    for i, it in enumerate(raw):
+        if isinstance(it, str):
+            if not it.strip():
+                raise HTTPException(
+                    status_code=422, detail=f"input at index {i} is empty"
+                )
+            items.append(it)
+        elif isinstance(it, dict):
+            if not (it.get("text") or it.get("image")):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"input at index {i} must have a 'text' or 'image' key",
+                )
+            items.append(it)
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"input at index {i} must be a string or a {{text, image}} object",
+            )
+    try:
+        vecs = await engine.embed(items, instruction=req.instruction)
+    except HTTPException:
+        raise
+    except MemoryError:
+        logger.error("VL embedding OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory") from None
+    except Exception as e:
+        logger.error(f"VL multimodal embedding error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Embedding generation failed"
+        ) from None
+
+    data = [
+        {"object": "embedding", "index": i, "embedding": _finalize_embedding(v, req)}
+        for i, v in enumerate(vecs)
+    ]
+    n = len(items)
+    _record_embedding_metrics(n)
+    return {
+        "object": "list",
+        "data": data,
+        "model": req.model,
+        "usage": {"prompt_tokens": n, "total_tokens": n},
     }
 
 

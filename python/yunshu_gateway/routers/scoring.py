@@ -154,6 +154,9 @@ class RerankRequest(BaseModel):
     documents: list[str]
     top_n: int | None = None
     return_documents: bool = True
+    # Optional retrieval instruction — used by a true cross-encoder reranker
+    # (Qwen3-VL-Reranker); ignored by the bi-encoder cosine fallback.
+    instruction: str | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -373,6 +376,56 @@ async def create_score(req: ScoreRequest, request: Request):
 # ── /v1/rerank ───────────────────────────────────────────────────────────────
 
 
+async def _rerank_cross_encoder(
+    req: RerankRequest, engine, truncated_docs: list[str]
+) -> JSONResponse:
+    """Rerank via a true cross-encoder (Qwen3-VL-Reranker).
+
+    Scores each (query, document) pair jointly rather than comparing separate
+    embeddings — higher accuracy than the bi-encoder cosine fallback. Returns the
+    same response shape as the cosine path so clients see no difference.
+    """
+    try:
+        scores = await engine.rerank(
+            req.query, truncated_docs, instruction=req.instruction
+        )
+    except MemoryError:
+        logger.error("Cross-encoder rerank OOM", exc_info=True)
+        raise HTTPException(status_code=507, detail="Out of GPU memory") from None
+    except Exception as e:
+        logger.error(f"Cross-encoder rerank error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Reranking failed") from None
+
+    scored: list[tuple[int, float]] = []
+    for i, s in enumerate(scores):
+        s = float(s)
+        if not math.isfinite(s):  # guard NaN/Inf so it can't corrupt the sort
+            s = 0.0
+        scored.append((i, s))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    if req.top_n is not None and req.top_n > 0:
+        scored = scored[: req.top_n]
+
+    results: list[dict[str, Any]] = []
+    for idx, score in scored:
+        item: dict[str, Any] = {"index": idx, "relevance_score": round(score, 6)}
+        if req.return_documents:
+            item["document"] = {"text": req.documents[idx]}
+        results.append(item)
+
+    # Token counting isn't meaningful for a cross-encoder pass; report item count.
+    n = len(truncated_docs) + 1
+    return JSONResponse(
+        {
+            "id": f"rerank-{int(time.time())}",
+            "object": "list",
+            "model": req.model,
+            "results": results,
+            "usage": {"prompt_tokens": n, "total_tokens": n},
+        }
+    )
+
+
 @router.post("/rerank", response_model=None)
 async def create_rerank(req: RerankRequest, request: Request):
     _check_permission(request, "can_infer")
@@ -393,6 +446,16 @@ async def create_rerank(req: RerankRequest, request: Request):
     engine = await _resolve_engine(req.model)
     if engine is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")
+
+    # True cross-encoder rerank: a dedicated Qwen3-VL-Reranker scores each
+    # (query, document) PAIR jointly (yes/no token-logit gap), which is more
+    # accurate than embedding the query and documents separately and taking
+    # cosine. Use it when such a model is loaded; otherwise fall through to the
+    # bi-encoder cosine path below.
+    from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
+
+    if isinstance(engine, VLEmbeddingEngine):
+        return await _rerank_cross_encoder(req, engine, truncated_docs)
 
     try:
         # Compute normalized embeddings for query and documents

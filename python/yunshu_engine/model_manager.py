@@ -44,6 +44,8 @@ class ModelType(Enum):
     OCR = auto()
     STS = auto()
     VIDEO = auto()
+    EMBEDDING = auto()  # dedicated multimodal embedder (Qwen3-VL-Embedding)
+    RERANKER = auto()  # cross-encoder reranker (Qwen3-VL-Reranker)
 
 
 # mlx-lm's MODEL_REMAPPING (subset we need to replicate for probing)
@@ -107,6 +109,22 @@ def _detect_model_type(model_path: str) -> ModelType:
     model_type = config.get("model_type", "").lower().replace("-", "_")
     architectures = config.get("architectures", [])
     name_lower = p.name.lower()
+
+    # Qwen3-VL retrieval models (Qwen3-VL-Embedding / Qwen3-VL-Reranker): these
+    # share model_type=qwen3_vl + Qwen3VLForConditionalGeneration with a normal
+    # generation VLM, so structure can't distinguish them — key off the name.
+    # They serve POOLED embeddings / cross-encoder scores, NOT generation, so they
+    # need VLEmbeddingEngine (mlx_embeddings), not VLMEngine. Checked before the
+    # generic vision_config→VLM path below.
+    # Match the FULL path, not just p.name — an HF-cache path ends in a snapshot
+    # hash dir (…/models--mlx-community--Qwen3-VL-Embedding-2B-8bit/snapshots/<hash>),
+    # so p.name is the hash; the readable repo name lives upstream in the path.
+    _path_lower = str(model_path).lower()
+    _is_vl = "vl" in model_type or "vision_config" in config
+    if "reranker" in _path_lower and _is_vl:
+        return ModelType.RERANKER
+    if "embedding" in _path_lower and _is_vl:
+        return ModelType.EMBEDDING
 
     # Lance dual-expert tower models (ByteDance): config.json has
     # model_type=qwen2_5_vl + vision_config because LLM_UND is based on
@@ -598,6 +616,14 @@ class ModelManager:
             from .image_engine import ImageGenEngine
 
             engine = ImageGenEngine(entry.model_path, config)
+            await engine.start()
+            return engine
+
+        elif entry.model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
+            # Qwen3-VL multimodal embedder / cross-encoder reranker.
+            from .vl_embedding_engine import VLEmbeddingEngine
+
+            engine = VLEmbeddingEngine(entry.model_path, config)
             await engine.start()
             return engine
 
