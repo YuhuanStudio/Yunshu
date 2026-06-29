@@ -173,11 +173,17 @@ class TestAudioBufferCommit:
 
     @pytest.mark.asyncio
     async def test_omni_realtime_commit_without_asr_emits_no_error(self, monkeypatch):
-        """With native-omni realtime ON, a missing ASR engine is NORMAL: the model
-        consumes the raw audio (stashed as speech-in) and answers natively. The
-        commit must NOT emit a no_asr_engine error in that mode."""
+        """With native-omni realtime ACTIVE (env on AND a Talker model loadable), a
+        missing ASR engine is NORMAL: the model consumes the raw audio (stashed as
+        speech-in) and answers natively. The commit must NOT emit a no_asr_engine
+        error in that mode."""
         monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/fake/omni")
         monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "1")
+        # Simulate a genuinely omni-capable model (Talker present) without loading
+        # one — the capability probe is what _omni_realtime_active() gates on.
+        monkeypatch.setattr(
+            "yunshu_gateway.routers.realtime._omni_speech_ready", lambda: True
+        )
         session = _make_session()
         session._audio_buffer = bytearray(b"\x00\x01\x02\x03\x04\x05")
         await session._handle_input_audio_buffer_commit({}, vad_trim=True)
@@ -191,6 +197,32 @@ class TestAudioBufferCommit:
         assert not errors, "native-omni realtime must not error on absent ASR"
         # the raw audio was stashed for the omni model to consume as speech-in
         assert session._last_user_audio is not None
+
+    @pytest.mark.asyncio
+    async def test_omni_env_on_but_no_talker_falls_back_to_cascade(self, monkeypatch):
+        """B1 fallback: omni is env-enabled but the configured model has no Talker
+        (probe returns False). The realtime path must behave as the ASR→LLM→TTS
+        cascade — so a missing ASR engine IS an error, and the raw audio is NOT
+        stashed for an omni model that can't consume it."""
+        monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/fake/non-omni")
+        monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "1")
+        # Model can't speak natively → not active → cascade semantics.
+        monkeypatch.setattr(
+            "yunshu_gateway.routers.realtime._omni_speech_ready", lambda: False
+        )
+        session = _make_session()
+        session._audio_buffer = bytearray(b"\x00\x01\x02\x03\x04\x05")
+        await session._handle_input_audio_buffer_commit({}, vad_trim=True)
+        ws: MockWebSocket = session.ws  # type: ignore[assignment]
+        errors = [
+            e
+            for e in ws.sent
+            if e.get("type") == "error"
+            and e.get("error", {}).get("code") == "no_asr_engine"
+        ]
+        assert errors, "cascade fallback must surface the missing-ASR error"
+        # not stashed for omni — the cascade path holds no extra audio refs
+        assert session._last_user_audio is None
 
 
 # ── TestSynthesizeAudio ──

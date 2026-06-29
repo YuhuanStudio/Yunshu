@@ -105,6 +105,49 @@ def _omni_realtime_enabled() -> bool:
     )
 
 
+# Cached native-omni speech capability. None = not yet probed.
+_OMNI_SPEECH_READY: bool | None = None
+
+
+def _omni_speech_ready() -> bool:
+    """True iff the configured omni model is actually loadable AND has a Talker.
+
+    ``_omni_realtime_enabled()`` only checks the env flags; the configured
+    ``YUNSHU_OMNI_MODEL`` may be a non-omni model (no Talker) or fail to load. In
+    that case the realtime path must fall back to the ASR→LLM→TTS cascade rather
+    than erroring — so ``YUNSHU_REALTIME_OMNI=1`` is safe to leave on with any
+    model. The capability doesn't change at runtime, so the result is cached
+    process-wide. ``load()`` runs on the calling thread (the same context the
+    omni stream path already loads in) and is a cached no-op once the boot-time
+    preload has run; in the no-Talker fallback it loads once, then caches False."""
+    global _OMNI_SPEECH_READY
+    if _OMNI_SPEECH_READY is not None:
+        return _OMNI_SPEECH_READY
+    try:
+        from .omni import _get_omni_engine
+
+        eng = _get_omni_engine()
+        eng.load()  # idempotent; raises ValueError if the model has no Talker
+        _OMNI_SPEECH_READY = getattr(eng, "model", None) is not None
+    except Exception as e:
+        logger.warning(
+            "Native-omni speech unavailable (%s) — realtime will use the "
+            "ASR→LLM→TTS cascade instead of native speech-to-speech.",
+            e,
+        )
+        _OMNI_SPEECH_READY = False
+    return _OMNI_SPEECH_READY
+
+
+def _omni_realtime_active() -> bool:
+    """The single predicate the realtime request paths branch on: env opted-in
+    AND a Talker model is actually loadable. When env-enabled but the model can't
+    speak, this is False and the path gracefully uses the ASR→LLM→TTS cascade.
+    ``_omni_realtime_enabled()`` is checked first so the (cheap) env gate
+    short-circuits before the (one-time, heavier) load probe."""
+    return _omni_realtime_enabled() and _omni_speech_ready()
+
+
 def _messages_to_omni_prompt(messages: list[dict]) -> str:
     """Flatten the chat-message list into a single prompt for the omni model.
 
@@ -1089,8 +1132,10 @@ class RealtimeSession:
         # Native-omni path: one unified Qwen3-Omni model produces the reply text
         # AND its speech in a single shared-context pass (Thinker+Talker), instead
         # of the LLM→(separate)TTS cascade below. Opt-in via YUNSHU_REALTIME_OMNI;
-        # off by default so the cascade behaviour is untouched.
-        if _omni_realtime_enabled():
+        # off by default so the cascade behaviour is untouched. When omni is
+        # env-enabled but the model can't actually speak (no Talker / load fails),
+        # _omni_realtime_active() is False → fall through to the cascade below.
+        if _omni_realtime_active():
             await self._generate_response_omni(response_id, item_id, modalities, config)
             return
         # Create cancel_event so engine can check for cancellation
@@ -2560,7 +2605,7 @@ class RealtimeSession:
         # + its sample rate; _generate_response_omni consumes it. ASR below still runs
         # for the displayed transcript / history. Only stash when omni is enabled so the
         # cascade path never holds extra audio refs.
-        if _omni_realtime_enabled():
+        if _omni_realtime_active():
             _omni_in_fmt = str(
                 getattr(self.session, "input_audio_format", "pcm16") or "pcm16"
             ).lower()
@@ -2625,7 +2670,7 @@ class RealtimeSession:
                                 )
                             )
                         break
-            if not asr_found and not _omni_realtime_enabled():
+            if not asr_found and not _omni_realtime_active():
                 # No transcribe-capable engine loaded — emit an error event so
                 # the client knows the audio buffer was committed but cannot be
                 # transcribed.

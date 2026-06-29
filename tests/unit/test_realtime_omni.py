@@ -75,6 +75,21 @@ def test_gate_off_by_default(monkeypatch):
     assert rt._omni_realtime_enabled() is True
 
 
+def test_realtime_active_requires_loadable_talker(monkeypatch):
+    """_omni_realtime_active() = env enabled AND a Talker model actually loadable.
+    Env-on but the probe failing (no Talker / load error) → inactive, so the path
+    falls back to the ASR→LLM→TTS cascade instead of erroring (B1)."""
+    monkeypatch.setenv("YUNSHU_OMNI_MODEL", "/x")
+    monkeypatch.setenv("YUNSHU_REALTIME_OMNI", "1")
+    monkeypatch.setattr(rt, "_omni_speech_ready", lambda: False)
+    assert rt._omni_realtime_active() is False
+    monkeypatch.setattr(rt, "_omni_speech_ready", lambda: True)
+    assert rt._omni_realtime_active() is True
+    # env gate short-circuits before the probe: flag off → inactive even if ready
+    monkeypatch.delenv("YUNSHU_REALTIME_OMNI", raising=False)
+    assert rt._omni_realtime_active() is False
+
+
 def test_messages_to_omni_prompt_prepends_system():
     msgs = [
         {"role": "system", "content": "You are Yun."},
