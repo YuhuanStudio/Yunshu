@@ -7127,19 +7127,49 @@ class BatchedEngine:
 
             self._adaptive_spec = AdaptiveSpecController.from_env()
 
-        # SpecPrefill for long prompts (requires YUNSHU_SPEC_PREFILL=1)
+        # SpecPrefill: sparse (lossy) prefill for long prompts — keeps only the
+        # most "important" prompt tokens (scored by a small draft model) to cut
+        # TTFT on very long contexts. Opt-in via YUNSHU_SPEC_PREFILL=1 AND a draft
+        # model (YUNSHU_SPEC_PREFILL_DRAFT_MODEL, falling back to YUNSHU_DRAFT_MODEL).
+        # The fast-path block that consumes this REQUIRES _spec_prefill_draft_model
+        # to be non-None — without a draft model the flag would silently do nothing,
+        # so we either wire a real draft here or warn loudly that it stays inactive.
         if os.environ.get("YUNSHU_SPEC_PREFILL", "").strip() in ("1", "true", "yes"):
-            self._spec_prefill_enabled = True
             self._spec_prefill_threshold = int(
                 os.environ.get("YUNSHU_SPEC_PREFILL_THRESHOLD", "8192")
             )
             self._spec_prefill_keep_rate = float(
                 os.environ.get("YUNSHU_SPEC_PREFILL_KEEP_RATE", "0.20")
             )
-            logger.info(
-                f"SpecPrefill enabled: threshold={self._spec_prefill_threshold}, "
-                f"keep_rate={self._spec_prefill_keep_rate}"
-            )
+            sp_draft_path = os.environ.get(
+                "YUNSHU_SPEC_PREFILL_DRAFT_MODEL", ""
+            ).strip() or os.environ.get("YUNSHU_DRAFT_MODEL", "").strip()
+            if sp_draft_path:
+                try:
+                    from mlx_lm.utils import load as load_model
+
+                    self._spec_prefill_draft_model, _ = load_model(sp_draft_path)
+                    self._spec_prefill_enabled = True
+                    logger.info(
+                        "SpecPrefill active: draft=%s threshold=%d keep_rate=%.2f",
+                        sp_draft_path,
+                        self._spec_prefill_threshold,
+                        self._spec_prefill_keep_rate,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "SpecPrefill requested but draft model %r failed to load "
+                        "(%s) — SpecPrefill stays INACTIVE.",
+                        sp_draft_path,
+                        e,
+                    )
+            else:
+                logger.warning(
+                    "YUNSHU_SPEC_PREFILL=1 but no draft model set "
+                    "(YUNSHU_SPEC_PREFILL_DRAFT_MODEL / YUNSHU_DRAFT_MODEL) — "
+                    "SpecPrefill needs one to score token importance and stays "
+                    "INACTIVE. The fast path runs normal full prefill."
+                )
 
         # Gemma-4 assistant drafter (external EAGLE-style drafter, KV-shared with
         # target). Independent of target spec heads, so initialize before the
