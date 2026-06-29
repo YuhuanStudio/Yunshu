@@ -393,6 +393,7 @@ def _build_noncached_sampler_text(
     seed: int | None,
     xtc_probability: float = 0.0,
     xtc_threshold: float = 0.0,
+    top_n_sigma: float = 0.0,
 ):
     """Numpy-backed sampler that bypasses mlx-lm's @mx.compile cache.
 
@@ -426,6 +427,11 @@ def _build_noncached_sampler_text(
     # output (the streaming path applied it, so behavior diverged by the `stream` flag).
     _xtc_p = float(xtc_probability) if xtc_probability else 0.0
     _xtc_thr = float(xtc_threshold) if xtc_threshold else 0.0
+    # top-nσ (ACL 2025): keep only tokens whose RAW logit is within n·σ of the max
+    # logit (σ = std of the logit row). Temperature-invariant (operates on logits,
+    # not the tempered distribution); a pure-quality reasoning filter applied FIRST,
+    # before the prob-based nucleus/min_p filters.
+    _nsig = float(top_n_sigma) if top_n_sigma and top_n_sigma > 0 else 0.0
 
     def _sampler(logits):
         import mlx.core as _mx
@@ -447,6 +453,16 @@ def _build_noncached_sampler_text(
             l = raw - _np.max(raw)
             p = _np.exp(l)
             p = p / p.sum()
+            # top-nσ FIRST (logit-statistics filter): drop tokens whose raw logit
+            # is more than n·σ below the max logit. σ is the std of the full logit
+            # row; the threshold is temperature-independent.
+            if _nsig > 0:
+                thr = raw.max() - _nsig * raw.std()
+                m = (raw >= thr).astype(_np.float64)
+                p = p * m
+                _s = p.sum()
+                if _s > 0:
+                    p = p / _s
             # Apply filters in mlx-lm make_sampler's ORDER — top_p → min_p →
             # XTC → top_k — so this non-streaming temp>0 sampler produces the SAME
             # distribution as the streaming path (which uses make_sampler) for the same
@@ -513,6 +529,7 @@ def _build_gpu_sampler_text(
     seed: int | None,
     xtc_probability: float = 0.0,
     xtc_threshold: float = 0.0,
+    top_n_sigma: float = 0.0,
 ):
     """On-GPU temp>0 sampler (opt-in via YUNSHU_GPU_SAMPLER=1).
 
@@ -544,6 +561,7 @@ def _build_gpu_sampler_text(
     )
 
     _t_ = float(temperature)
+    _nsig = float(top_n_sigma) if top_n_sigma and float(top_n_sigma) > 0 else 0.0
     methods = []
     if top_p and 0 < float(top_p) < 1.0:
         _tp = float(top_p)
@@ -577,6 +595,13 @@ def _build_gpu_sampler_text(
 
     def _sampler(logprobs):
         lp = logprobs
+        # top-nσ FIRST: mask tokens > n·σ below the max. log_softmax is logits minus
+        # a per-row constant, so max/std (hence the mask) match the raw-logit form.
+        if _nsig > 0:
+            _mu = lp.mean(axis=-1, keepdims=True)
+            _sd = (((lp - _mu) ** 2).mean(axis=-1, keepdims=True)) ** 0.5
+            _thr = lp.max(axis=-1, keepdims=True) - _nsig * _sd
+            lp = mx.where(lp >= _thr, lp, -mx.inf)
         for m in methods:
             lp = m(lp)
         if _xtc_on:
@@ -603,12 +628,29 @@ def _build_gpu_sampler_text(
 
 
 def _build_temp_sampler(
-    temperature, top_p, top_k, min_p, seed, xtc_probability=0.0, xtc_threshold=0.0
+    temperature,
+    top_p,
+    top_k,
+    min_p,
+    seed,
+    xtc_probability=0.0,
+    xtc_threshold=0.0,
+    top_n_sigma=0.0,
 ):
     """Pick the temp>0 sampler. Default = numpy (proven, avoids the
     @mx.compile PRNG trap). YUNSHU_GPU_SAMPLER=1 = on-GPU Gumbel-max (no per-token
     GPU→CPU sync, preserves mlx-lm's async pipeline; same distribution)."""
     import os as _os
+
+    # Server-wide top-nσ default: a request that doesn't set it (every path that
+    # hasn't been wired for the per-request param) still picks up YUNSHU_TOP_N_SIGMA.
+    # This is the single chokepoint all 3 fast-path sampler sites pass through, so
+    # the env default fires everywhere without threading it through every router.
+    if not top_n_sigma or float(top_n_sigma) <= 0:
+        try:
+            top_n_sigma = float(_os.environ.get("YUNSHU_TOP_N_SIGMA", "0") or 0)
+        except ValueError:
+            top_n_sigma = 0.0
 
     if _os.environ.get("YUNSHU_GPU_SAMPLER", "").strip().lower() in (
         "1",
@@ -616,10 +658,24 @@ def _build_temp_sampler(
         "yes",
     ):
         return _build_gpu_sampler_text(
-            temperature, top_p, top_k, min_p, seed, xtc_probability, xtc_threshold
+            temperature,
+            top_p,
+            top_k,
+            min_p,
+            seed,
+            xtc_probability,
+            xtc_threshold,
+            top_n_sigma,
         )
     return _build_noncached_sampler_text(
-        temperature, top_p, top_k, min_p, seed, xtc_probability, xtc_threshold
+        temperature,
+        top_p,
+        top_k,
+        min_p,
+        seed,
+        xtc_probability,
+        xtc_threshold,
+        top_n_sigma,
     )
 
 
