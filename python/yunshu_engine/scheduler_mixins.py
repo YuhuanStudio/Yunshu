@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Modular scheduler mixins — composable scheduler components.
 
-Each feature (metrics, profiling, disaggregation, pipeline parallel, data
-parallel, memory pressure) is a composable mixin that can be mixed in
-without modifying the core scheduler loop.
+Each feature (metrics, profiling, spec-decode, memory pressure) is a composable
+mixin that can be mixed in without modifying the core scheduler loop. (Single-node
+only — the former distributed mixins, disaggregation / pipeline / data parallel,
+were removed in the refocus.)
 
 Each mixin wraps one concern and hooks into the scheduler lifecycle:
   - pre_step()   — called before scheduler.step()

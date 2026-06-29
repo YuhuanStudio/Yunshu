@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Yunshu Gateway — Rate limiting middleware.
 
-Token bucket rate limiter per client IP with RBAC per-key override.
-Configurable RPM + token limits.
+Token bucket rate limiter per client IP. Configurable RPM + token limits.
+(The former per-key RBAC override was removed with the multi-tenant machinery —
+this engine serves a single consumer; limiting is purely per-IP now.)
 
 Memory safety: LRU eviction + TTL expiry prevents unbounded growth from
 unique-IP DoS. Configurable via environment:
@@ -221,8 +222,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         response = await call_next(request)
-        # Refund IP-level bucket on auth failure (same DoS guard
-        # as the RBAC path above).
+        # Refund the IP-level bucket on auth failure so failed-auth attempts
+        # don't let an unauthenticated client exhaust a victim IP's quota.
         if response.status_code in (401, 403):
             bucket.refund()
         return response

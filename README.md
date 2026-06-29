@@ -135,12 +135,15 @@ plane, and tiered-KV offload have been removed.
 
 On the default serving path a request gets the **single-request fast path** (mlx-lm `generate_step`) with KV
 prefix + prompt caching, automatic KV-quant (only when the cache would dominate bandwidth), constrained
-decoding (JSON-schema / regex / grammar, when requested), and per-request stop/reasoning state — all on by
-default. The heavier decode optimizations are **opt-in**, not magic-on: speculative decode (cross-model /
-n-gram, `spec_decode=true`, greedy/low-temp only — lossless there), jump-forward (`YUNSHU_JUMP_FORWARD`),
-GPU sampler (`YUNSHU_GPU_SAMPLER`), in-memory MXFP4/NVFP4 weight quant (`YUNSHU_QUANT_MODE`), and sparse
-spec-prefill (`YUNSHU_SPEC_PREFILL` + a draft model). We keep them current, but we don't claim they're
-running when they aren't. Run `just test` for the suite; benchmark trends live in `docs/reports/PERF_TREND.md`.
+decoding (JSON-schema / regex / grammar, when requested), per-request stop/reasoning state, and **n-gram
+speculative decode on greedy requests** (lossless — the verifier accepts only the model's own argmax; opt out
+with `YUNSHU_NGRAM_DEFAULT=0`) — all on by default. The heavier or more situational optimizations are
+**opt-in**, not magic-on: alternative spec proposers (cross-model via `spec_decode=true` + a draft model;
+Suffix Decoding via `YUNSHU_SPEC_PROPOSER=suffix`), the top-nσ sampler (`YUNSHU_TOP_N_SIGMA`), jump-forward
+(`YUNSHU_JUMP_FORWARD`), GPU sampler (`YUNSHU_GPU_SAMPLER`), in-memory MXFP4/NVFP4 weight quant
+(`YUNSHU_QUANT_MODE`), and sparse spec-prefill (`YUNSHU_SPEC_PREFILL` + a draft model). We keep them current,
+but we don't claim they're running when they aren't. Run `just test` for the suite; benchmark trends live in
+`docs/reports/PERF_TREND.md`.
 
 ## Built on
 
