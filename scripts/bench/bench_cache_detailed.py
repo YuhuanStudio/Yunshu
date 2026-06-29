@@ -45,12 +45,6 @@ def _migstats(engine):
     core = getattr(engine, "_engine_core", None)
     out = {}
     if core is not None:
-        m = getattr(core, "_kv_migration", None)
-        if m is not None:
-            try:
-                out["migration"] = m.get_stats()
-            except Exception:
-                pass
         lf = getattr(core, "_kv_lifecycle", None)
         if lf is not None:
             try:

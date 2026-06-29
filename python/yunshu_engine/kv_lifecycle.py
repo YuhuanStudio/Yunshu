@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """KV lifecycle integration — unified KV cache lifecycle management.
 
-Coordinates kv_migration (multi-tier migration), kv_optimizations
+Coordinates kv_optimizations
 (adaptive quantization, eviction prediction, compaction), and
 kv_prefix_compression (prefix compression, sliding window) into a
 coherent pipeline managed by the engine.

@@ -241,13 +241,6 @@ class TestCrossModuleWave43:
         assert "turbo_quant" in stats
         assert isinstance(stats["turbo_quant"], dict)
 
-    def test_kv_migration_wired(self):
-        core = _make_core()
-        assert core._kv_migration is not None
-        core._start_time = None
-        stats = core.get_stats()
-        assert "kv_migration" in stats
-
     def test_hybrid_kv_wired(self):
         core = _make_core()
         assert core._hybrid_kv is not None

@@ -545,11 +545,6 @@ class EngineCore:
         except Exception:
             logger.debug("sliding window detection skipped", exc_info=True)
 
-        # KV migration manager (multi-tier migration with temperature tracking)
-        from .kv_migration import KVMigrationManager
-
-        self._kv_migration = KVMigrationManager()
-
         # Mamba/Hybrid KV cache (SSM state management)
         from .mamba_cache import HybridKVCache
 
@@ -967,12 +962,6 @@ class EngineCore:
 
         self._loop_task.add_done_callback(_loop_done)
 
-        # Start KV migration background thread
-        try:
-            self._kv_migration.start()
-        except Exception:
-            logger.debug("KV migration start failed", exc_info=True)
-
         logger.info("EngineCore started")
 
         # Checkpoint recovery: restore in-flight requests from previous crash
@@ -1039,12 +1028,6 @@ class EngineCore:
         self._running = False
         self._start_time = None  # Reset so get_stats() uptime is 0 after stop
         self._wake_event = None  # Clear stale event; recreated by start()
-
-        # Stop KV migration background thread
-        try:
-            self._kv_migration.stop()
-        except Exception:
-            logger.debug("KV migration stop failed", exc_info=True)
 
         # Stop performance profiler
         if self._profiler_started:
@@ -1790,12 +1773,6 @@ class EngineCore:
                 size_bytes=estimated_kv_bytes,
                 prefix_hash="",
             )
-            # Register block in migration manager for temperature-based tier management
-            from .kv_migration import KVTier
-
-            self._kv_migration.register_block(
-                _block_id, tier=KVTier.HOT, byte_size=estimated_kv_bytes
-            )
         except Exception:
             logger.debug("kv_lifecycle admit failed", exc_info=True)
 
@@ -1864,13 +1841,6 @@ class EngineCore:
                     except Exception:
                         logger.debug(
                             f"kv_lifecycle release failed in mem-aware rejection for {req_id}",
-                            exc_info=True,
-                        )
-                    try:
-                        self._kv_migration.unregister_block(_block_id)
-                    except Exception:
-                        logger.debug(
-                            f"kv_migration unregister failed in mem-aware rejection for {req_id}",
                             exc_info=True,
                         )
                     if self._sliding_window_mgr is not None:
@@ -1968,13 +1938,6 @@ class EngineCore:
                 except Exception:
                     logger.debug(
                         f"kv_lifecycle release failed in memguard rejection for {req_id}",
-                        exc_info=True,
-                    )
-                try:
-                    self._kv_migration.unregister_block(_block_id)
-                except Exception:
-                    logger.debug(
-                        f"kv_migration unregister failed in memguard rejection for {req_id}",
                         exc_info=True,
                     )
                 if self._sliding_window_mgr is not None:
@@ -3939,10 +3902,6 @@ class EngineCore:
                 self._kv_lifecycle.release(_block_id)
             except Exception:
                 logger.debug("kv_lifecycle release failed", exc_info=True)
-            try:
-                self._kv_migration.unregister_block(_block_id)
-            except Exception:
-                logger.debug("kv_migration unregister failed", exc_info=True)
         # Dedup: only the primary request calls complete(). Shadows
         # are fanned-out by the engine loop before reaching here, so
         # calling complete() again would be redundant (and the entry
@@ -4231,7 +4190,6 @@ class EngineCore:
             stats["checkpoint"] = self._checkpoint_mgr.get_stats()
         if self._sliding_window_mgr is not None:
             stats["sliding_window"] = self._sliding_window_mgr.get_stats()
-        stats["kv_migration"] = self._kv_migration.get_stats()
         stats["hybrid_kv"] = self._hybrid_kv.get_stats()
         stats["batch_sampler"] = self._batch_sampler.get_stats()
         stats["model_optimizations"] = {

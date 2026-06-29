@@ -134,7 +134,6 @@ def _make_engine_core():
     core._budget_manager = MagicMock()
     core._memory_aware_scheduler = MagicMock()
     core._kv_lifecycle = MagicMock()
-    core._kv_migration = MagicMock()
     core._request_lora_adapters = {}
     core._request_timestamps = {}
     core._kv_prefix_hashes = {}
