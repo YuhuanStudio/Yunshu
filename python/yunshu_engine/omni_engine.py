@@ -83,7 +83,7 @@ class OmniEngine:
         thinker_max_new_tokens: int = 8,
         talker_max_new_tokens: int = 1024,
         talker_temperature: float = 0.9,
-        chunk_size: int = 300,
+        chunk_size: int = 10,
     ) -> None:
         self.model_path = model_path
         self.speaker = speaker
