@@ -1700,8 +1700,19 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     # Standard LLM chat
     engine = get_engine()
 
-    # Multi-model mode: resolve through model manager
-    if engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model):
+    # Single-model mode (no manager): the global engine IS the only model, so
+    # serve it for ANY requested name — matching Ollama / LM Studio / llama.cpp,
+    # and the quickstart's `model="local"`. Requiring the exact model id here
+    # 404'd every copy-pasted request that didn't echo the on-disk path.
+    if manager is None:
+        if engine is None or not engine.is_loaded:
+            raise HTTPException(
+                status_code=503, detail="No model loaded (set YUNSHU_MODEL)"
+            )
+    # Multi-model mode: resolve the requested model through the manager.
+    elif (
+        engine is None or not engine.is_loaded or not engine.resolve_model_id(req.model)
+    ):
         from ..engine import get_engine_for_model
 
         try:
