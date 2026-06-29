@@ -7301,17 +7301,26 @@ class BatchedEngine:
             self._ngram_proposer = NgramProposer(
                 NgramConfig(max_n=max_n, k=k, mode=mode)
             )
-            # OPT-IN ONLY (default OFF). The n-gram spec path is NOT lossless: the
-            # verify/KV-trim cycle (spec_draft_verifier.verify_with_last_token +
-            # _trim_cache) diverges from plain greedy on real models — verified
-            # same-process on gemma-4-e4b, where it duplicated a token ("…the
-            # average average" vs greedy "…the average speed"). The earlier
-            # "lossless, byte-identical" claim came from ONE Qwen2.5-3B counting
-            # task that didn't exercise the bug. Until the cache-state divergence
-            # is fixed, do NOT default this on. Enable with YUNSHU_NGRAM_DEFAULT=1
-            # (or per-request spec_decode=true) for experimentation.
+            # DEFAULT ON for greedy. The earlier gross corruption (dropped/
+            # duplicated tokens — "2, 4, 6"→"246", "…the average speed"→"…the
+            # average average") was NOT the verifier: it was the prefill+base loop
+            # driving the KV cache with generate_step's prefill-break + per-token
+            # feed while the verify path used direct model() calls — the mixed
+            # access skewed the cache offset. Both loops now use direct model()
+            # forwards (consistent with verify_with_last_token), which is lossless:
+            #   • speculation is exact — full-spec output == base-only (no-spec)
+            #     output, byte-for-byte;
+            #   • byte-identical to the fast path on short/medium greedy gen across
+            #     gemma-4-e4b, Qwen2.5-3B-4bit (spec actually running) and
+            #     Qwen3.5-2B (hybrid cache → spec correctly disabled).
+            # A residual single-token divergence can appear DEEP in long greedy gen
+            # (~1.4k chars in): the n-gram loop (direct model() + mlx sampler) and
+            # the fast loop (generate_step + numpy sampler) break a near-tie argmax
+            # differently. It is FP-level path difference — both are valid greedy
+            # decodes, same class as the cross-process non-determinism this engine
+            # already has — NOT corruption. Set YUNSHU_NGRAM_DEFAULT=0 to opt out.
             self._ngram_greedy_default = os.environ.get(
-                "YUNSHU_NGRAM_DEFAULT", "0"
+                "YUNSHU_NGRAM_DEFAULT", "1"
             ).strip().lower() in ("1", "true", "yes")
             logger.info(
                 "N-gram proposer initialized: max_n=%d, k=%d, mode=%s, greedy_default=%s",
@@ -8908,7 +8917,6 @@ class BatchedEngine:
         resamples on mismatch.
         """
         import mlx.core as mx
-        from mlx_lm.generate import generate_step
         from mlx_lm.models.cache import make_prompt_cache
         from mlx_lm.sample_utils import make_sampler
 
@@ -9215,34 +9223,27 @@ class BatchedEngine:
                 )  # Track full history for N-gram matching
 
                 with _wired_limit_ctx(model):
-                    # Step 1: Prefill
-                    first_logits = None
-                    for token, logits in generate_step(  # noqa: B007 # token used after loop (line ~5650)
-                        ids_to_prefill,
-                        model,
-                        max_tokens=1,
-                        sampler=sampler,
-                        prompt_cache=cache,
-                    ):
-                        first_logits = logits
-                        break
-
-                    if first_logits is None:
-                        return (
-                            tokens,
-                            "",
-                            [],
-                            time.perf_counter() - gen_t0,
-                            matched,
-                            False,
-                            False,
-                        )
+                    # Step 1: Prefill via a DIRECT model() forward — NOT
+                    # generate_step. generate_step's prefill-break + per-token-feed
+                    # pattern corrupts the KV cache when interleaved with the verify
+                    # path's direct model() calls: the cache offset skews and tokens
+                    # get dropped or duplicated (verified — "2, 4, 6"→"246", "the
+                    # average speed"→"the average average"). Driving the WHOLE path
+                    # with direct model() forwards (consistent with
+                    # verify_with_last_token) is lossless. The last produced token
+                    # stays OUT of the cache (it is the next token to feed), matching
+                    # the verify invariant.
+                    _pf_logits = model(ids_to_prefill[None], cache=cache)
+                    if hasattr(_pf_logits, "logits"):
+                        _pf_logits = _pf_logits.logits
 
                     ttft_s = time.perf_counter() - gen_t0
 
-                    # Get first token — use the sampler-applied token from generate_step,
-                    # not argmax (which would ignore temperature/top_p/top_k settings).
-                    first_token = int(token)
+                    # First token via the SAME sampler (honors temperature/top_p/
+                    # top_k/grammar), applied to the last prefill position.
+                    first_token = int(
+                        sampler(_pf_logits[:, -1, :]).reshape(-1)[0].item()
+                    )
                     tokens.append(first_token)
                     all_token_ids.append(first_token)
 
@@ -9286,37 +9287,28 @@ class BatchedEngine:
                         n_draft = min(len(draft_ids), remaining)
 
                         if n_draft == 0:
-                            # No N-gram proposal — generate one token normally.
-                            # tokens[-1] is NOT in the cache (the mlx-lm
-                            # invariant), so generate_step feeds it cleanly and
-                            # yields the next token (also left out of the cache). No
-                            # pre-trim, no extra feed — consistent with the verify
-                            # path, which now also keeps the last token out of cache.
-                            step_input = mx.array(
-                                [tokens[-1]]
-                            )  # 1D — generate_step adds the batch dim
-                            for token, _logits in generate_step(
-                                step_input,
-                                model,
-                                max_tokens=1,
-                                sampler=sampler,
-                                prompt_cache=cache,
-                            ):
-                                token_id = int(token)
-                                tokens.append(token_id)
-                                all_token_ids.append(token_id)
-                                remaining -= 1
-                                if token_id in stop_ids:
-                                    tokens.pop()
-                                    _stopped_by_stop_id = True
-                                    break
+                            # No N-gram proposal — generate one token via a DIRECT
+                            # model() forward (NOT generate_step — see the prefill
+                            # note). tokens[-1] is NOT in the cache (the verify
+                            # invariant), so this forward feeds it and predicts the
+                            # next token, leaving the result out of the cache.
+                            _bl = model(mx.array([tokens[-1]])[None], cache=cache)
+                            if hasattr(_bl, "logits"):
+                                _bl = _bl.logits
+                            token_id = int(sampler(_bl[:, -1, :]).reshape(-1)[0].item())
+                            tokens.append(token_id)
+                            all_token_ids.append(token_id)
+                            remaining -= 1
+                            if token_id in stop_ids:
+                                tokens.pop()
+                                _stopped_by_stop_id = True
+                            else:
                                 detokenizer.add_token(token_id)
                                 if stop_suffixes and any(
                                     detokenizer.text.endswith(s) for s in stop_suffixes
                                 ):
-                                    tokens.pop()  # Exclude suffix-triggering token from count
+                                    tokens.pop()  # Exclude suffix-triggering token
                                     _stopped_by_suffix = True
-                                    break
                             continue
 
                         # C10: Batch verify all K draft tokens via SpecDraftVerifier
