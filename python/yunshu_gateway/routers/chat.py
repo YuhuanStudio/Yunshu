@@ -1520,12 +1520,6 @@ async def _build_multi_choice(
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     _check_permission(request, "can_infer")
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
 
     # Fast path: max_tokens=0 returns prompt_tokens only (OpenAI API behavior).
     # Estimate prompt tokens from tokenizer if available.

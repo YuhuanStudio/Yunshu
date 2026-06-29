@@ -777,24 +777,14 @@ async def _tool_generate_image(args: dict, req_id: int | str | None) -> dict:
         )
 
 
-async def _handle_resources_list(
-    params: dict | None, req_id: int | str | None, rbac_key: Any = None
-) -> dict:
-    """List available resources.
-
-    SECURITY: a model-scoped RBAC key must NOT see (id/type/size of) models it
-    can't use — mirror the per-key isolation that /v1/models already applies. The MCP
-    resources surface enumerated EVERY model behind only can_infer, leaking the existence,
-    type, and size of inaccessible models.
-    """
+async def _handle_resources_list(params: dict | None, req_id: int | str | None) -> dict:
+    """List available resources."""
     from ..engine import get_model_manager
 
     resources = []
     manager = get_model_manager()
     if manager:
         for model_info in manager.list_models():
-            if rbac_key is not None and not rbac_key.can_access_model(model_info["id"]):
-                continue
             resources.append(
                 {
                     "uri": f"yunshu://models/{model_info['id']}",
@@ -1133,13 +1123,7 @@ async def mcp_endpoint(request: Request):
         )
 
     try:
-        # resources/list must filter by the caller's per-key model access.
-        if req.method == "resources/list":
-            result = await _handle_resources_list(
-                req.params, req.id, getattr(request.state, "rbac_key", None)
-            )
-        else:
-            result = await handler(req.params, req.id)
+        result = await handler(req.params, req.id)
         if is_notification:
             return JSONResponse(content=None, status_code=204)
         return JSONResponse(result)

@@ -814,12 +814,6 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Model '{req.model}' not accessible with this API key",
-        )
     # OpenAI background mode: return a queued response immediately and run the
     # full (non-stream) generation asynchronously under the same id. Streaming +
     # background is not supported here (would require resumable SSE), so it only

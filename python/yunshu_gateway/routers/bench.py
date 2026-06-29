@@ -35,29 +35,6 @@ def _check_permission(request: Request) -> None:
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    # RBAC key set by TenantAuthMiddleware (ys_-prefixed API keys)
-    rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is not None:
-        if not rbac_key.has_permission("can_benchmark"):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions for benchmark endpoints",
-            )
-        return
-    # Tenant set by TenantAuthMiddleware (legacy tenant auth)
-    tenant = getattr(request.state, "tenant", None)
-    if tenant is not None:
-        # benchmarks are GPU-heavy, all-users-degrading admin-class ops
-        # (can_benchmark — a permission USER RBAC keys lack). The blanket tenant-allow
-        # let any legacy tenant trigger them (privesc keystone). Require admin role.
-        _role = str(getattr(request.state, "role", "") or "")
-        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith(
-            "ADMIN"
-        ):
-            return
-        raise HTTPException(
-            status_code=403, detail="Insufficient permissions for benchmark endpoints"
-        )
     # Static token auth — must verify the request actually provides it
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token:

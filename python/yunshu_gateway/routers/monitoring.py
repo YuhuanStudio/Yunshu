@@ -37,29 +37,6 @@ def _check_permission(request: Request) -> None:
         return
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    # RBAC key set by TenantAuthMiddleware (ys_-prefixed API keys).
-    rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is not None:
-        if not rbac_key.has_permission("can_view_system"):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions for monitoring endpoints",
-            )
-        return
-    # Tenant set by TenantAuthMiddleware for static tokens.
-    tenant = getattr(request.state, "tenant", None)
-    if tenant is not None:
-        # The Tenant dataclass has NO `role` field (only `tier`), so the old
-        # getattr(tenant,'role') was always None → legacy tenants ALWAYS got 403 (dead,
-        # misleading branch). Use request.state.role — the canonical role set by the
-        # auth middleware (e.g. "admin" for static tokens) — as the source of truth.
-        tenant_role = str(getattr(request.state, "role", "") or "").lower()
-        if tenant_role not in ("admin", "system", "owner"):
-            raise HTTPException(
-                status_code=403,
-                detail="Insufficient permissions for monitoring endpoints",
-            )
-        return
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if not auth_token:
         # No auth configured — deny access.

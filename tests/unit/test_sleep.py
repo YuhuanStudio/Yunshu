@@ -49,7 +49,7 @@ def _clean_state(monkeypatch):
 
 
 class TestSleepStatus:
-    """/sleep/status must be RBAC-gated by can_view_system."""
+    """/sleep/status returns the current sleep snapshot."""
 
     def test_status_default_state(self, monkeypatch):
         """With auth disabled, /sleep/status should return the awake snapshot."""
@@ -77,43 +77,6 @@ class TestSleepStatus:
         body = r.json()
         assert body["sleeping"] is True
         assert body["level"] == 1
-
-    def test_status_denied_without_can_view_system(self):
-        """insufficient RBAC permission -> 403."""
-        app = _make_app_with_sleep_router()
-
-        # Attach an RBAC key middleware that has no can_view_system permission
-        class FakeRBACKey:
-            def has_permission(self, perm: str) -> bool:
-                return False  # Deny all
-
-        @app.middleware("http")
-        async def inject_rbac(request, call_next):
-            request.state.rbac_key = FakeRBACKey()
-            return await call_next(request)
-
-        client = TestClient(app)
-        r = client.get("/v1/sleep/status")
-        assert r.status_code == 403, r.text
-        assert "can_view_system" in r.text
-
-    def test_status_allowed_with_can_view_system(self):
-        """with the permission granted, /sleep/status returns 200."""
-        app = _make_app_with_sleep_router()
-
-        class FakeRBACKey:
-            def has_permission(self, perm: str) -> bool:
-                return perm == "can_view_system"
-
-        @app.middleware("http")
-        async def inject_rbac(request, call_next):
-            request.state.rbac_key = FakeRBACKey()
-            return await call_next(request)
-
-        client = TestClient(app)
-        r = client.get("/v1/sleep/status")
-        assert r.status_code == 200, r.text
-        assert "sleeping" in r.json()
 
 
 class TestSleepHelpers:

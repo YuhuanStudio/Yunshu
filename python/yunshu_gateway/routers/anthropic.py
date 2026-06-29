@@ -946,18 +946,6 @@ def _resolve_cached_content_text(
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Anthropic Messages API endpoint."""
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "type": "error",
-                "error": {
-                    "type": "permission_error",
-                    "message": f"Model '{req.model}' not accessible with this API key",
-                },
-            },
-        )
     # Build messages list. The canonical system text (top-level `system` field +
     # any role="system" lifted from messages[]) is prepended once AFTER the lift
     # block below — do NOT add it here, or it gets lifted back out and the merge
@@ -2746,18 +2734,6 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
       {"type": "error", "error": {"type": "...", "message": "..."}}
     """
     _check_permission(request, "can_infer")
-    _rbac_key = getattr(request.state, "rbac_key", None)
-    if _rbac_key is not None and not _rbac_key.can_access_model(req.model):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "type": "error",
-                "error": {
-                    "type": "permission_error",
-                    "message": f"Model '{req.model}' not accessible",
-                },
-            },
-        )
     try:
         engine, _ = await _resolve_engine(req.model)
     except HTTPException as e:

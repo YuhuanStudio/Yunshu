@@ -123,10 +123,7 @@ class _LRUBucketCache:
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Per-IP rate limiting with RBAC per-key override.
-
-    If an RBAC API key has `requests_per_minute` set, use that instead
-    of the global default. Falls back to per-IP buckets otherwise.
+    """Per-IP rate limiting.
 
     Memory-safe: LRU eviction prevents unbounded bucket growth from unique-IP
     DoS. Buckets also expire after a configurable TTL of inactivity.
@@ -173,9 +170,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             max_buckets=max_buckets,
             ttl=ttl,
         )
-        self._key_buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
-        self._max_key_buckets = max_buckets
-        self._key_lock = threading.Lock()
         # Parse trusted proxies for X-Forwarded-For validation
         trusted_raw = os.environ.get("YUNSHU_TRUSTED_PROXIES", "").strip()
         self._trusted_proxies: set[str] = (
@@ -183,29 +177,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if trusted_raw
             else set()
         )
-
-    def _get_key_bucket(self, key_name: str, rpm: int) -> _TokenBucket:
-        with self._key_lock:
-            if key_name in self._key_buckets:
-                if self._key_buckets[key_name].capacity != rpm:
-                    old_bucket = self._key_buckets[key_name]
-                    new_bucket = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
-                    # Read old bucket state under its own lock to avoid
-                    # racing with concurrent consume() on another thread.
-                    with old_bucket._lock:
-                        old_cap = old_bucket.capacity
-                        old_tok = old_bucket.tokens
-                    if old_cap > 0:
-                        ratio = min(old_tok / old_cap, 1.0)
-                        new_bucket.tokens = ratio * rpm
-                    self._key_buckets[key_name] = new_bucket
-                else:
-                    self._key_buckets.move_to_end(key_name)
-                return self._key_buckets[key_name]
-            if len(self._key_buckets) >= self._max_key_buckets:
-                self._key_buckets.popitem(last=False)
-            self._key_buckets[key_name] = _TokenBucket(rate=rpm / 60.0, capacity=rpm)
-            return self._key_buckets[key_name]
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.PUBLIC_PATHS:
@@ -222,35 +193,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Apply rate limiting to WebSocket upgrade requests as well
         is_websocket = request.headers.get("upgrade", "").lower() == "websocket"
 
-        # Check RBAC key-level rate limit first
-        rbac_key = getattr(request.state, "rbac_key", None)
-        if rbac_key is not None and rbac_key.requests_per_minute is not None:
-            bucket = self._get_key_bucket(rbac_key.name, rbac_key.requests_per_minute)
-            if not bucket.consume():
-                retry_after = int(60 / max(rbac_key.requests_per_minute, 1)) + 1
-                if is_websocket:
-                    # WebSocket upgrades can't return JSON bodies; return HTTP 429
-                    return Response(status_code=429, content="Rate limit exceeded")
-                # Path-aware envelope (OpenAI / Anthropic / JSON-RPC for /v1/mcp).
-                from ..error_envelope import format_error_response
-
-                return format_error_response(
-                    request.url.path,
-                    "API key rate limit exceeded",
-                    429,
-                    retry_after=retry_after,
-                )
-            # Key-level rate limit passed — skip IP-level rate limiting.
-            # RBAC keys have their own per-key bucket; applying IP-level too
-            # would be redundant and could waste the RBAC token if IP bucket rejects.
-            response = await call_next(request)
-            # Refund the bucket on auth failure so a leaked-key
-            # third party can't exhaust a victim's quota by spamming 401/403.
-            if response.status_code in (401, 403):
-                bucket.refund()
-            return response
-
-        # Per-IP rate limiting (LRU + TTL safe) — only for non-RBAC requests
+        # Per-IP rate limiting (LRU + TTL safe).
         # Security: only trust X-Forwarded-For when the direct client is a
         # configured trusted proxy. This prevents header spoofing attacks.
         direct_ip = request.client.host if request.client else "unknown"

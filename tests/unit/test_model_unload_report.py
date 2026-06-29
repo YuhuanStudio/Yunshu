@@ -63,4 +63,4 @@ def test_registry_stats_gated_on_auth():
         if hasattr(MODELS, "list_models")
         else inspect.getsource(MODELS)
     )
-    assert "if _authenticated and not _filtered:" in src
+    assert "if _authenticated:" in src

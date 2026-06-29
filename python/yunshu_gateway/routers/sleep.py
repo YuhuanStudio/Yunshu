@@ -24,38 +24,15 @@ from yunshu_control.audit_log import log_operation, resolve_actor
 
 
 def _check_permission(request: Request, permission: str) -> None:
-    """Check RBAC permission on sleep/wake endpoints.
+    """Check auth on sleep/wake endpoints (deny-by-default).
 
-    Security (deny-by-default):
+    Single-consumer model: enforces the static-token contract.
     1. If YUNSHU_AUTH_DISABLED=true, allow (dev opt-in, logged at startup)
-    2. If rbac_key is set (from TenantAuthMiddleware), check has_permission()
-    3. If tenant is set (from TenantAuthMiddleware), allow (legacy tenant auth)
-    4. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
-    5. If no auth configured and not disabled — DENY access (secure default)
+    2. If YUNSHU_AUTH_TOKEN is set, verify request actually presents it
+    3. If no auth configured and not disabled — DENY access (secure default)
     """
     if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() in ("true", "1", "yes"):
         return
-    rbac_key = getattr(request.state, "rbac_key", None)
-    if rbac_key is not None:
-        if not rbac_key.has_permission(permission):
-            raise HTTPException(status_code=403, detail="Insufficient permissions")
-        return
-    # Tenant set by TenantAuthMiddleware (legacy tenant auth)
-    tenant = getattr(request.state, "tenant", None)
-    if tenant is not None:
-        # Don't let a legacy tenant inherit admin-class permissions via the
-        # blanket tenant-allow. Sleep/wake guard can_unload_models, which is
-        # privileged → require a real admin role.
-        from .models import _TENANT_DENIED_PERMISSIONS
-
-        if permission not in _TENANT_DENIED_PERMISSIONS:
-            return
-        _role = str(getattr(request.state, "role", "") or "")
-        if _role.lower() in ("admin", "system", "owner") or _role.upper().endswith(
-            "ADMIN"
-        ):
-            return
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
     # Static token auth — must verify the request actually provides it
     auth_token = os.environ.get("YUNSHU_AUTH_TOKEN")
     if auth_token is not None and auth_token:
@@ -290,17 +267,9 @@ async def wake_up_server(request: Request):
 async def sleep_status(request: Request):
     """Check current sleep state.
 
-    SECURITY: gated by `can_view_system` so unauthenticated callers cannot
-    fingerprint operational state.
+    Single-consumer model: no per-key RBAC scoping remains; auth is enforced by
+    the gateway's static-token middleware.
     """
-    import os
-
-    if os.environ.get("YUNSHU_AUTH_DISABLED", "").lower() not in ("true", "1", "yes"):
-        rbac_key = getattr(request.state, "rbac_key", None)
-        if rbac_key is not None and not rbac_key.has_permission("can_view_system"):
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=403, detail="Requires can_view_system")
     return {
         "sleeping": _sleeping,
         "level": _sleep_level if _sleeping else -1,

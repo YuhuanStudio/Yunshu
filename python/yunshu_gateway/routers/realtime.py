@@ -669,12 +669,8 @@ class RealtimeSession:
         )
         return pcm24, self._AUDIO_CHUNK_BYTES
 
-    def __init__(self, ws: WebSocket, api_key=None):
+    def __init__(self, ws: WebSocket):
         self.ws = ws
-        # SECURITY: the authenticated RBAC key (None for static-token /
-        # auth-disabled). Used to enforce per-key model access in _resolve_engine —
-        # the WS endpoint previously authenticated but never checked model scope.
-        self._api_key = api_key
         self.session = SessionConfig()
         self.conversation = Conversation(f"conv_{uuid.uuid4().hex[:16]}")
         self._active_response: asyncio.Task | None = None
@@ -2147,9 +2143,9 @@ class RealtimeSession:
         self._g711_resample_remainder = b""
         # guarantee EXACTLY ONE terminal response.audio.done. The old code only
         # emitted it inside the synthesis loop (before break) and in the except handler — so
-        # when manager is None, no entry has synthesize, or every candidate is skipped by
-        # _key_allows, the loop fell through with NO audio.done and an OpenAI-SDK client
-        # tracking per-turn audio state waited forever for the terminal event.
+        # when manager is None or no entry has synthesize, the loop fell through with NO
+        # audio.done and an OpenAI-SDK client tracking per-turn audio state waited forever
+        # for the terminal event.
         _audio_done_sent = False
 
         async def _send_audio_done():
@@ -2181,10 +2177,6 @@ class RealtimeSession:
 
             for entry in manager.list_entries():
                 if entry.is_loaded and hasattr(entry.engine, "synthesize"):
-                    # SECURITY: per-key model access (sibling of                     # model-isolation, un-propagated to the TTS engine loop). Skip
-                    # engines this session's key may not drive.
-                    if not self._key_allows(getattr(entry, "model_id", None)):
-                        continue
                     engine = entry.engine
 
                     # Prefer streaming synthesis for token-level audio
@@ -2292,8 +2284,8 @@ class RealtimeSession:
             # for a terminal audio event that will never arrive.
             await _send_audio_done()
         finally:
-            # covers the no-engine / all-skipped-by-_key_allows / manager-None
-            # fall-through paths that previously emitted no terminal event.
+            # covers the no-engine / manager-None fall-through paths that
+            # previously emitted no terminal event.
             await _send_audio_done()
 
     async def _handle_input_audio_buffer_append(self, event: dict) -> None:
@@ -2607,10 +2599,6 @@ class RealtimeSession:
             if manager is not None:
                 for entry in manager.list_entries():
                     if entry.is_loaded and hasattr(entry.engine, "transcribe"):
-                        # SECURITY: per-key model access (sibling of
-                        # model-isolation, un-propagated to the ASR loop).
-                        if not self._key_allows(getattr(entry, "model_id", None)):
-                            continue
                         asr_found = True
                         transcript = await entry.engine.transcribe(tmp_path)
                         text = (
@@ -2782,32 +2770,9 @@ class RealtimeSession:
                 )
         return messages
 
-    def _key_allows(self, model_id) -> bool:
-        """Whether this session's API key may drive ``model_id``.
-
-        SECURITY: the WS endpoint only authenticates the key; without a
-        per-model check a key scoped away from a model (e.g. a USER-role key, which can
-        access NO models) could still drive any loaded model over the socket — bypassing
-        the isolation every REST route enforces. Shared by the text engine resolution AND
-        the ASR/TTS audio engine-selection loops (— those iterated list_entries() and
-        grabbed the first transcribe/synthesize engine with no key check, the         model-isolation keystone un-propagated to audio).
-        """
-        _key = getattr(
-            self, "_api_key", None
-        )  # getattr: robust to __new__ test instances
-        if _key is None:
-            return True
-        try:
-            return bool(_key.can_access_model(model_id))
-        except Exception:
-            return False
-
     def _resolve_engine(self):
         """Resolve the inference engine for this session."""
         from ..engine import get_engine, get_model_manager
-
-        def _allowed(model_id) -> bool:
-            return self._key_allows(model_id)
 
         # Try multi-model
         manager = get_model_manager()
@@ -2817,22 +2782,16 @@ class RealtimeSession:
                 for entry in manager.list_entries():
                     if entry.is_loaded and entry.engine is not None:
                         if getattr(entry, "model_id", None) == self.session.model:
-                            return (
-                                entry.engine if _allowed(self.session.model) else None
-                            )
+                            return entry.engine
             # Fall back to first loaded engine
             for entry in manager.list_entries():
                 if entry.is_loaded and entry.engine is not None:
-                    return (
-                        entry.engine
-                        if _allowed(getattr(entry, "model_id", None))
-                        else None
-                    )
+                    return entry.engine
 
         # Single engine
         engine = get_engine()
         if engine and engine.is_loaded:
-            return engine if _allowed(self.session.model) else None
+            return engine
 
         return None
 
@@ -2910,7 +2869,7 @@ async def realtime_endpoint(ws: WebSocket):
             await ws.close(code=4001, reason="Invalid token")
             return
         # Static-token holders are the single owner; no per-key model scoping.
-        session = RealtimeSession(ws, api_key=None)
+        session = RealtimeSession(ws)
         await session.run()
         return
     session = RealtimeSession(ws)

@@ -29,10 +29,9 @@ def test_simplified_middleware_stamps_owner_identity():
     assert 'request.state.role = "owner"' in src
 
 
-def test_resolve_actor_tenant_compat_branch_kept():
-    # resolve_actor still honors a request.state.tenant attribute (kept for
-    # backward compat with test stubs that set it), so existing call sites
-    # that attach a tenant-like object keep returning a stable identity.
+def test_resolve_actor_returns_single_owner():
+    # Single-consumer model: resolve_actor always returns the constant owner
+    # identity (per-tenant/RBAC actor resolution removed).
     from yunshu_control.audit_log import resolve_actor
 
     class _T:
@@ -46,7 +45,7 @@ def test_resolve_actor_tenant_compat_branch_kept():
     class _Req:
         state = _State()
 
-    assert resolve_actor(_Req()) == "tenant:acme"
+    assert resolve_actor(_Req()) == "owner"
 
 
 def test_nullable_number_terminates_but_nested_does_not():

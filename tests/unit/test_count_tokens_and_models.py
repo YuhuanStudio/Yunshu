@@ -7,10 +7,6 @@ engine and bills _estimate_image_tokens() per image, so count_tokens grossly und
 str.join([m["content"] ...]) which TypeError'd (→500) when a content was a LIST (image
 message). Now: add 576 (== IMAGE_TOKEN_ESTIMATE == VLM default) per converted image, and
 coerce non-str content to text in the fallback.
-
-single-engine /v1/models list+retrieve skipped can_access_model (the multi-model
-branch gates it), leaking the model name to an out-of-scope key. Both single-engine
-branches now gate it.
 """
 
 from __future__ import annotations
@@ -20,9 +16,6 @@ import inspect
 from yunshu_control.token_counter import IMAGE_TOKEN_ESTIMATE
 from yunshu_gateway.routers import (
     anthropic as A,  # noqa: N812  # intentional short module alias
-)
-from yunshu_gateway.routers import (
-    models as M,  # noqa: N812  # intentional short module alias
 )
 
 
@@ -40,12 +33,3 @@ def test_count_tokens_fallback_coerces_list_content():
     # the fallback no longer does a raw str.join over possibly-list content
     assert 'text_parts = [m["content"] for m in messages]' not in src
     assert '_extract_text_from_content(m["content"])' in src
-
-
-def test_models_single_engine_gates_can_access_model():
-    list_src = inspect.getsource(M.list_models)
-    get_src = inspect.getsource(M.get_model)
-    # the single-engine LIST branch gates the model name
-    assert "_rbac_key.can_access_model(engine.model_name)" in list_src
-    # the single-engine RETRIEVE branch gates + 404s out-of-scope
-    assert "_rbac_key.can_access_model(engine.model_name)" in get_src

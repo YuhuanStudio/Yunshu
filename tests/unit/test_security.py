@@ -149,12 +149,12 @@ class TestCachedContentReadPathIDOR:
     management routes. Otherwise tenant B prepends tenant A's private context by guessing
     the handle and exfiltrates it via the model output."""
 
-    def _fake_request(self, actor_name):
+    def _fake_request(self):
         import types
 
-        key = types.SimpleNamespace(name=actor_name, key_prefix=actor_name)
-        state = types.SimpleNamespace(rbac_key=key)
-        return types.SimpleNamespace(state=state)
+        # Single-consumer model: every request resolves to the "owner" actor
+        # (per-key RBAC actor identity removed); resolve_actor ignores state.
+        return types.SimpleNamespace(state=types.SimpleNamespace(role="owner"))
 
     def _entry(self, owner):
         import types
@@ -173,18 +173,18 @@ class TestCachedContentReadPathIDOR:
         monkeypatch.setattr(
             "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
         )
-        # tenant "bob" tries to use alice's handle → context must NOT be prepended
+        # a handle owned by someone other than the single owner → NOT prepended
         msgs = [{"role": "user", "content": "hi"}]
         out = chat_mod._prepend_cached_content(
-            list(msgs), "cachedContents/x", "m", self._fake_request("bob")
+            list(msgs), "cachedContents/x", "m", self._fake_request()
         )
-        assert out == msgs  # alice's SECRET CONTEXT not leaked into bob's prompt
+        assert out == msgs  # alice's SECRET CONTEXT not leaked into owner's prompt
 
     def test_owner_can_use_own_handle(self, monkeypatch):
         from yunshu_gateway.routers import chat as chat_mod
 
         store = type("S", (), {"use": lambda self, n: self._e})()
-        store._e = self._entry(owner="alice")
+        store._e = self._entry(owner="owner")
         monkeypatch.setattr(
             "yunshu_gateway.explicit_cache.get_store", lambda: store, raising=False
         )
@@ -192,7 +192,7 @@ class TestCachedContentReadPathIDOR:
             [{"role": "user", "content": "hi"}],
             "cachedContents/x",
             "m",
-            self._fake_request("alice"),
+            self._fake_request(),
         )
         assert any(m.get("content") == "SECRET CONTEXT" for m in out)  # owner gets it
 
@@ -208,6 +208,6 @@ class TestCachedContentReadPathIDOR:
             [{"role": "user", "content": "hi"}],
             "cachedContents/x",
             "m",
-            self._fake_request("bob"),
+            self._fake_request(),
         )
         assert any(m.get("content") == "SECRET CONTEXT" for m in out)
