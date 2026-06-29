@@ -47,14 +47,17 @@ uv pip install "yunshu[all]"       # everything: text + vision + audio + omni + 
 yunshu serve -m /path/to/Qwen3-Omni-30B-A3B-Instruct-4bit --port 8000
 # Any 4-bit Qwen3-Omni variant from mlx-community works
 
-# 3. Send audio, receive audio
-curl -s -X POST http://localhost:8000/v1/omni/speech/stream \
+# 3. Stream a spoken reply (Server-Sent Events: text deltas + base64 PCM16 @ 24kHz)
+curl -N -X POST http://localhost:8000/v1/omni/speech/stream \
   -H "Content-Type: application/json" \
-  -d '{"audio_path": "question.wav", "speaker": "Ethan"}' \
-  --output response.wav
+  -d '{"text": "Say hello in one sentence.", "speaker": "Ethan"}'
+# For speech-IN, add "audio_path": "question.wav" (the spoken turn);
+# "text" then carries any system instruction.
 ```
 
-Text/vision/ASR/TTS endpoints are also available — see [examples/quickstart.py](examples/quickstart.py).
+The endpoint streams SSE events, not a WAV file. For a ready-made client that consumes the
+stream and writes `omni_out.wav`, see [examples/quickstart.py](examples/quickstart.py) — which
+also shows the text/vision/ASR/TTS endpoints.
 
 > **Dev checkout**: `just setup` then `YUNSHU_MODEL=<model> just dev`.
 
