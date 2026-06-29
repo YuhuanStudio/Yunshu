@@ -98,7 +98,7 @@ If you need production multi-tenant serving or multi-node sharding, look at
 
 | Modality | Endpoint | Backend | Extra |
 |---|---|---|---|
-| **Native speech-to-speech** (Qwen3-Omni, streaming; ~1.3s first-audio speech-in, ~1.1s text-in) | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
+| **Native speech-to-speech** (Qwen3-Omni, streaming; ~1.3s first-audio speech-in, ~1.2s text-in, warm) | `POST /v1/omni/speech/stream` | `mlx-vlm` Thinker+Talker | `omni` |
 | Text (tool-calling, JSON-schema, streaming, logprobs) | `/v1/chat/completions`, `/v1/messages` | `mlx-lm` | _(core)_ |
 | Vision / OCR | `/v1/chat/completions` (image content) | `mlx-vlm` | `vision` |
 | ASR | `/v1/audio/transcriptions` | `mlx-audio` / Whisper | `audio` |
